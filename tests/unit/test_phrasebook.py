@@ -13,6 +13,8 @@ from typing import ClassVar
 
 import pytest
 
+from course_supporter.config import get_settings
+from course_supporter.language import get_language_registry
 from course_supporter.phrasebook import (
     SOURCE_LANGUAGE,
     Phrase,
@@ -292,3 +294,46 @@ class TestPlaceholderCheck:
         partial = {"section.fixed": Phrase("Fixed", reviewed=False)}
 
         assert placeholder_faults(source, partial, code="eng") == []
+
+
+class TestTask10Keys:
+    """The two phrases of the course links (task 10, K4, lock g).
+
+    The boot refuses a phrasebook in which one language lacks a key of the
+    source. These pin that the shipped files pass with the two new keys, and
+    that the same files with a new key in the source alone do not.
+    """
+
+    KEYS = ("link.later_in_course", "position.audio")
+
+    def test_the_shipped_phrasebook_passes_the_startup_check(self) -> None:
+        validate_phrasebook(
+            get_settings().phrasebook_dir, get_language_registry().languages
+        )
+
+    def test_every_language_carries_both_keys(self) -> None:
+        book = load_phrasebook(get_settings().phrasebook_dir)
+
+        missing = [
+            f"{code}: {key}"
+            for code in book
+            for key in self.KEYS
+            if key not in book[code]
+        ]
+        assert missing == []
+        assert len(book) == len(get_language_registry().languages)
+
+    @pytest.mark.parametrize("key", KEYS)
+    def test_a_key_in_the_source_alone_stops_the_boot(
+        self, tmp_path: Path, key: str
+    ) -> None:
+        for path in sorted(get_settings().phrasebook_dir.glob("*.yaml")):
+            lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+            if path.stem != SOURCE_LANGUAGE:
+                lines = [line for line in lines if not line.startswith(f"{key}:")]
+            (tmp_path / path.name).write_text("".join(lines), encoding="utf-8")
+
+        with pytest.raises(ValueError) as exc_info:
+            validate_phrasebook(tmp_path, get_language_registry().languages)
+
+        assert f"'eng' is missing the phrase '{key}'" in str(exc_info.value)

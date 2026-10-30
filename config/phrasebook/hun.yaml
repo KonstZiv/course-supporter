@@ -37,3 +37,5 @@ test.score: 'Pontszám: {number} %'
 test.try_again: Próbálja meg újra kitölteni a tesztet.
 test.no_explanation: Ehhez a kérdéshez nincs magyarázat.
 test.explanations_in_course_language: A magyarázat a kurzus nyelvén olvasható.
+position.audio: hanganyag, {time}
+link.later_in_course: Bővebben — a kurzus későbbi részében

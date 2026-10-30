@@ -64,9 +64,13 @@ reply.answer: Відповідь
 
 # --- Where to read: the place inside the material (remark.read) ---
 position.video: відео, {time}
+position.audio: аудіо, {time}
 position.slide: слайд {number}
 position.paragraph: абзац {number}
 position.file: файл {name}
+
+# --- A course link to a place the course reaches later than the task (task 10) ---
+link.later_in_course: Докладніше — далі в курсі
 
 # --- The document itself: the markdown the webhook and the bridge page carry ---
 review.title: Рецензія

@@ -37,3 +37,5 @@ test.score: 'Puntuació: {number} %'
 test.try_again: Intenteu tornar a fer el test.
 test.no_explanation: No hi ha cap explicació per a aquesta pregunta.
 test.explanations_in_course_language: L'explicació es proporciona en l'idioma del curs.
+position.audio: àudio, {time}
+link.later_in_course: Més detalls — més endavant al curs

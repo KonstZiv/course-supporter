@@ -37,3 +37,5 @@ test.score: 'மதிப்பெண்: {number} %'
 test.try_again: தேர்வை மீண்டும் முயற்சிக்கவும்.
 test.no_explanation: இந்தக் கேள்விக்கு விளக்கம் இல்லை.
 test.explanations_in_course_language: விளக்கம் பாடத்தின் மொழியில் கொடுக்கப்பட்டுள்ளது.
+position.audio: ஒலிப்பதிவு, {time}
+link.later_in_course: மேலும் விவரம் — பாடநெறியில் பின்னர்

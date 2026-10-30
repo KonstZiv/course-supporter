@@ -36,6 +36,7 @@ from course_supporter.storage.orm import (
     CourseNode,
     HomeworkSubmission,
     Student,
+    SubmissionCourseLinkCandidates,
     SubmissionCriterionVerdict,
     SubmissionExplanation,
     Tenant,
@@ -706,3 +707,110 @@ class TestTheExplanation:
         )
         assert stored is not None
         assert (stored.language, stored.body) == ("ukr", {"why": "своє"})
+
+
+_FOUND = {
+    "criteria": [
+        {
+            "item_id": "c2",
+            "candidates": [
+                {"segment_id": "s-1", "title": "Змінні середовища", "position": None}
+            ],
+        }
+    ]
+}
+
+
+class TestTheCourseLinkCandidates:
+    """Lock h (task 10, K4): one row per submission, replaced, gone with it."""
+
+    async def test_what_is_stored_is_read_back(
+        self, db_session: AsyncSession, first: HomeworkSubmission
+    ) -> None:
+        repo = SubmissionVerdictRepository(db_session)
+        await repo.store_candidates(
+            tenant_id=first.tenant_id, submission_id=first.id, body=_FOUND
+        )
+
+        stored = await repo.get_candidates(
+            tenant_id=first.tenant_id, submission_id=first.id
+        )
+
+        assert stored is not None
+        assert stored.body == _FOUND
+
+    async def test_nothing_stored_reads_as_none(
+        self, db_session: AsyncSession, first: HomeworkSubmission
+    ) -> None:
+        assert (
+            await SubmissionVerdictRepository(db_session).get_candidates(
+                tenant_id=first.tenant_id, submission_id=first.id
+            )
+            is None
+        )
+
+    async def test_a_repeat_store_replaces_the_row(
+        self, db_session: AsyncSession, first: HomeworkSubmission
+    ) -> None:
+        repo = SubmissionVerdictRepository(db_session)
+        await repo.store_candidates(
+            tenant_id=first.tenant_id, submission_id=first.id, body=_FOUND
+        )
+        await repo.store_candidates(
+            tenant_id=first.tenant_id, submission_id=first.id, body={"criteria": []}
+        )
+
+        stored = await repo.get_candidates(
+            tenant_id=first.tenant_id, submission_id=first.id
+        )
+        count = await db_session.scalar(
+            select(func.count())
+            .select_from(SubmissionCourseLinkCandidates)
+            .where(SubmissionCourseLinkCandidates.submission_id == first.id)
+        )
+
+        assert count == 1
+        assert stored is not None
+        assert stored.body == {"criteria": []}
+
+    async def test_another_tenants_row_is_never_overwritten_nor_read(
+        self, db_session: AsyncSession, first: HomeworkSubmission
+    ) -> None:
+        repo = SubmissionVerdictRepository(db_session)
+        await repo.store_candidates(
+            tenant_id=first.tenant_id, submission_id=first.id, body=_FOUND
+        )
+        stranger, _ = await _other_tenant(db_session)
+
+        with pytest.raises(NoResultFound):
+            await repo.store_candidates(
+                tenant_id=stranger.id, submission_id=first.id, body={"criteria": []}
+            )
+
+        assert (
+            await repo.get_candidates(tenant_id=stranger.id, submission_id=first.id)
+            is None
+        )
+        stored = await repo.get_candidates(
+            tenant_id=first.tenant_id, submission_id=first.id
+        )
+        assert stored is not None
+        assert stored.body == _FOUND
+
+    async def test_a_hard_delete_of_the_submission_takes_the_row(
+        self, db_session: AsyncSession, first: HomeworkSubmission
+    ) -> None:
+        await SubmissionVerdictRepository(db_session).store_candidates(
+            tenant_id=first.tenant_id, submission_id=first.id, body=_FOUND
+        )
+
+        await db_session.execute(
+            delete(HomeworkSubmission).where(HomeworkSubmission.id == first.id)
+        )
+
+        count = await db_session.scalar(
+            select(func.count())
+            .select_from(SubmissionCourseLinkCandidates)
+            .where(SubmissionCourseLinkCandidates.submission_id == first.id)
+        )
+        assert count == 0

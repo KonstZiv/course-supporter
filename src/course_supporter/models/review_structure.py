@@ -81,10 +81,12 @@ contract. The test's questions come second, right under the verdict and its
 score (task 07, decision 13): the order of §2.13 holds for a test too.
 """
 
-PositionKind = Literal["video", "slide", "paragraph", "file"]
-"""Where in the material a remark points. Each has its own phrase and its own
-placeholder: a time for video, a number for a slide or a paragraph, a name for
-a file."""
+PositionKind = Literal["video", "audio", "slide", "paragraph", "file"]
+"""Where in the material a remark or a course link points. Each has its own
+phrase and its own placeholder: a time for video and audio, a number for a
+slide or a paragraph, a name for a file. ``audio`` came with the course links of
+task 10: a recording is not a video, and the student should not be told to look
+for one."""
 
 ReplyKind = Literal["question", "objection", "comment"]
 """What the student's remark was. The three are answered alike but named apart:
@@ -107,7 +109,7 @@ class Position(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: PositionKind = Field(description="Which of the four kinds of place.")
+    kind: PositionKind = Field(description="Which of the five kinds of place.")
     value: str = Field(
         min_length=1,
         description=(
@@ -119,17 +121,61 @@ class Position(BaseModel):
 
 
 class Reference(BaseModel):
-    """Something to read, resolved to a link by code before it is stored.
+    """Something to read: an outside link, or a course link to a place in the course.
 
     The model names an identifier from its input; code turns it into this
-    (§2.12). By the time a reference is here it has a destination -- which is
-    why the assembler never has to decide what to do with a bare id.
+    (§2.12), so the assembler never has to decide what to do with a bare id.
+
+    A course link (task 10) points at a fragment of a course material: the
+    material's title, where in it (``position``), the fragment's identifier and
+    a short excerpt. Its address in the portal is not this service's to know —
+    the portal builds it from ``segment_id`` — so ``url`` is optional, and a
+    link without one is printed as plain text. ``excerpt`` is for the portal to
+    show; the markdown leaves it out.
+
+    Every field added by task 10 has a default, so a review stored before them
+    reads back unchanged.
+
+    >>> Reference(title="Змінні середовища",
+    ...           position=Position(kind="audio", value="12:05"),
+    ...           later_in_course=True).url is None
+    True
     """
 
     model_config = ConfigDict(extra="forbid")
 
     title: str = Field(min_length=1, description="What the student will read.")
-    url: str = Field(min_length=1, description="Where it is, resolved by code.")
+    url: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Where it is, resolved by code. None for a course link, whose "
+            "address the portal builds from segment_id."
+        ),
+    )
+    position: Position | None = Field(
+        default=None,
+        description="Where in the material, for a course link that has a place.",
+    )
+    excerpt: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "A few words of the fragment, for the portal to show. Not printed "
+            "in the markdown."
+        ),
+    )
+    segment_id: str | None = Field(
+        default=None,
+        description="The fragment of the course material the link points at.",
+    )
+    later_in_course: bool = Field(
+        default=False,
+        description=(
+            "True when the fragment comes later in the course than the task, "
+            "which the review then says."
+        ),
+    )
 
 
 class Remark(BaseModel):

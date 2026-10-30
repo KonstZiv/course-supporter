@@ -318,3 +318,84 @@ class TestTheOutcomeOfATextTask:
 
         assert webhook == (passed, expected)
         assert portal == PortalVerdict(passed=passed, correctness=expected)
+
+
+# A version-1 review as the database holds it before task 10, key for key as
+# the old model dumped it: a reference is a title and a url, nothing else.
+_STORED_REMARK: dict[str, Any] = {
+    "what": "Пароль записано у вихідному коді.",
+    "why": "Його побачить кожен, хто відкриє файл.",
+    "todo": "Перенести пароль до змінної середовища.",
+    "read": [{"title": "Секрети в коді", "url": "https://example.test/secrets"}],
+    "position": {"kind": "video", "value": "03:41"},
+}
+STORED_BEFORE_TASK_10: dict[str, Any] = {
+    "schema_version": "1",
+    "language": "ukr",
+    "verdict": {"passed": False, "why": "Дві з трьох вимог виконано."},
+    "test": None,
+    "fixed": [],
+    "new_remarks": [_STORED_REMARK],
+    "open": [],
+    "broken": [],
+    "mentor_voice": None,
+    "replies": [],
+    "verification": None,
+    "progress": "Третє завдання поспіль без зауважень до стилю.",
+}
+
+
+class TestAReviewStoredBeforeTask10:
+    """Lock a (task 10, K4): both surfaces read a stored review as before."""
+
+    def test_it_passes_the_projection(self) -> None:
+        structure = curated_structure(STORED_BEFORE_TASK_10)
+
+        assert structure is not None
+        assert structure.new_remarks[0].read[0].url == "https://example.test/secrets"
+
+    def test_the_webhook_carries_it(self) -> None:
+        student = MagicMock()
+        student.external_id = "e-1"
+
+        payload = build_reviewed_payload(_submission(STORED_BEFORE_TASK_10), student)
+
+        assert payload.structure == curated_structure(STORED_BEFORE_TASK_10)
+        assert (payload.review.passed, payload.review.correctness) == (
+            False,
+            "partially_correct",
+        )
+
+    def test_without_references_the_webhook_sends_the_same_keys(self) -> None:
+        """Every review stored today: no builder writes a reference yet, so the
+        payload of each is the stored structure, key for key."""
+        remark = {key: value for key, value in _STORED_REMARK.items() if key != "read"}
+        stored = {**STORED_BEFORE_TASK_10, "new_remarks": [{**remark, "read": []}]}
+        student = MagicMock()
+        student.external_id = "e-1"
+
+        sent = build_reviewed_payload(_submission(stored), student).model_dump(
+            mode="json"
+        )
+
+        assert sent["structure"] == stored
+
+    def test_a_stored_reference_keeps_its_keys_and_gains_only_defaults(self) -> None:
+        """The additive change in full: what was there is sent as it was, and
+        the four new fields arrive with their defaults."""
+        student = MagicMock()
+        student.external_id = "e-1"
+
+        sent = build_reviewed_payload(
+            _submission(STORED_BEFORE_TASK_10), student
+        ).model_dump(mode="json")
+
+        (reference,) = sent["structure"]["new_remarks"][0]["read"]
+        assert reference == {
+            "title": "Секрети в коді",
+            "url": "https://example.test/secrets",
+            "position": None,
+            "excerpt": None,
+            "segment_id": None,
+            "later_in_course": False,
+        }

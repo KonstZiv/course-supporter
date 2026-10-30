@@ -37,3 +37,5 @@ test.score: 'Poäng: {number} %'
 test.try_again: Försök göra testet igen.
 test.no_explanation: Förklaring saknas.
 test.explanations_in_course_language: Förklaringar på kursspråket.
+position.audio: ljud, {time}
+link.later_in_course: Mer om detta senare i kursen

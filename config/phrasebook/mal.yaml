@@ -37,3 +37,5 @@ test.score: 'സ്കോർ: {number} %'
 test.try_again: ടെസ്റ്റ് വീണ്ടും ശ്രമിക്കുക.
 test.no_explanation: ഈ ചോദ്യത്തിന് വിശദീകരണമില്ല.
 test.explanations_in_course_language: വിശദീകരണം കോഴ്‌സിൻ്റെ ഭാഷയിലാണ് നൽകിയിരിക്കുന്നത്.
+position.audio: ഓഡിയോ, {time}
+link.later_in_course: കൂടുതൽ വിവരങ്ങൾ — കോഴ്സിന്റെ തുടർഭാഗത്ത്

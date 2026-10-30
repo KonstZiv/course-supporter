@@ -37,3 +37,5 @@ test.score: 'Score : {number} %'
 test.try_again: Essayez de refaire le test.
 test.no_explanation: Aucune explication pour cette question.
 test.explanations_in_course_language: Les explications sont dans la langue du cours.
+position.audio: audio, {time}
+link.later_in_course: Plus de détails — plus loin dans le cours

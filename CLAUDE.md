@@ -39,7 +39,7 @@ docker compose up -d                 # Postgres + S3-compatible storage (dev: Se
 # DB migrations
 make db-upgrade
 make db-downgrade
-make migrate msg="description"
+make migrate msg="description"      # empty revision template, written by hand
 
 # Run
 uv run uvicorn course_supporter.api:app --reload
@@ -55,8 +55,8 @@ arq course_supporter.worker.WorkerSettings
 When adding/renaming a model:
 1. Confirm it matches vision §2.2 (Layer contracts) and the relevant KD.
 2. Write the SQLAlchemy model.
-3. `make migrate msg="<stage>-<short-name>"` — Alembic autogenerate.
-4. **Review the autogenerate output** — alembic often misses enum renames, check constraints, indexes. Hand-edit the migration file if needed.
+3. `make migrate msg="<stage>-<short-name>"` — an **empty** revision template (`alembic revision -m`, no `--autogenerate`).
+4. **Write the migration by hand** — never with `--autogenerate` (`DD-L4-A`): it misses enum renames, check constraints, indexes and comments. Copy column and table comments from the ORM; set `revision`/`down_revision` to the current single head (`uv run alembic heads`).
 5. `make db-upgrade` locally, run tests with fresh DB.
 6. Migration file is **not** final until tests pass with a clean DB.
 

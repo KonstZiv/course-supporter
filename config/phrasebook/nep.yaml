@@ -37,3 +37,5 @@ test.score: 'अङ्क: {number} %'
 test.try_again: फेरि परीक्षा दिन प्रयास गर्नुहोस्।
 test.no_explanation: यस प्रश्नको लागि कुनै स्पष्टीकरण छैन।
 test.explanations_in_course_language: स्पष्टीकरण पाठ्यक्रमको भाषामा दिइएको छ।
+position.audio: अडियो, {time}
+link.later_in_course: थप विवरण — पाठ्यक्रममा पछि

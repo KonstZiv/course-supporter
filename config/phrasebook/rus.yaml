@@ -37,3 +37,5 @@ test.score: 'Балл: {number} %'
 test.try_again: Попробуйте пройти тест ещё раз.
 test.no_explanation: К этому вопросу нет объяснения.
 test.explanations_in_course_language: Объяснение дано на языке курса.
+position.audio: аудио, {time}
+link.later_in_course: Подробнее — далее в курсе

@@ -37,3 +37,5 @@ test.score: 'الدرجة: {number}%'
 test.try_again: حاول إجراء الاختبار مرة أخرى.
 test.no_explanation: لا يوجد شرح لهذا السؤال.
 test.explanations_in_course_language: الشرح مقدم بلغة الدورة.
+position.audio: صوت، {time}
+link.later_in_course: التفاصيل لاحقًا في الدورة

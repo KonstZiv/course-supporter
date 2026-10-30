@@ -37,3 +37,5 @@ test.score: 分数：{number} %
 test.try_again: 请再试一次。
 test.no_explanation: 本题没有解释。
 test.explanations_in_course_language: 解释以课程语言提供。
+position.audio: 音频, {time}
+link.later_in_course: 详见课程后续内容

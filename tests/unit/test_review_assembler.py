@@ -25,6 +25,7 @@ from __future__ import annotations
 import doctest
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -211,7 +212,11 @@ class TestAcceptance:
             language="ukr",
             verdict=Verdict(passed=True, why="Everything asked for is there."),
         )
-        rendered = assemble_review(full_review("ukr")) + assemble_review(passed)
+        rendered = (
+            assemble_review(full_review("ukr"))
+            + assemble_review(passed)
+            + assemble_review(review_with_a_course_link("ukr"))
+        )
 
         unused = [
             key
@@ -333,6 +338,132 @@ class TestTheTestSection:
         )
 
 
+def review_with_a_course_link(
+    language: str, *, url: str | None = None, later_in_course: bool = True
+) -> ReviewStructureV1:
+    """A remark whose reading is a course link (task 10): a recording, a time,
+    an excerpt the markdown must not print, and a place later in the course.
+
+    The snapshots above stay as they were: they hold no course link, which is
+    lock a's other half — a review without the new fields prints as before.
+    """
+    return ReviewStructureV1(
+        schema_version=REVIEW_SCHEMA_VERSION,
+        language=language,
+        new_remarks=[
+            Remark(
+                what="The password is written in the source.",
+                why="Everyone who opens the file can see it.",
+                todo="Move it into an environment variable.",
+                read=[
+                    Reference(
+                        title="Environment variables",
+                        url=url,
+                        position=Position(kind="audio", value="1:02:05"),
+                        excerpt="A password is never written in the code.",
+                        segment_id="0192f6a0-0000-7000-8000-000000000001",
+                        later_in_course=later_in_course,
+                    )
+                ],
+            )
+        ],
+    )
+
+
+# A version-1 review as the database holds it before task 10: a reference is a
+# title and a url, nothing else. ``review_v1_stored_ukr.md`` is what the
+# assembler of main printed for it BEFORE the change — generated once from the
+# old code, never by this file.
+STORED_BEFORE_TASK_10: dict[str, Any] = {
+    "schema_version": "1",
+    "language": "ukr",
+    "verdict": {"passed": False, "why": "Дві з трьох вимог виконано."},
+    "test": None,
+    "fixed": [],
+    "new_remarks": [
+        {
+            "what": "Пароль записано у вихідному коді.",
+            "why": "Його побачить кожен, хто відкриє файл.",
+            "todo": "Перенести пароль до змінної середовища.",
+            "read": [
+                {"title": "Секрети в коді", "url": "https://example.test/secrets"},
+                {"title": "Змінні середовища", "url": "https://example.test/env"},
+            ],
+            "position": {"kind": "video", "value": "03:41"},
+        }
+    ],
+    "open": [],
+    "broken": [],
+    "mentor_voice": None,
+    "replies": [],
+    "verification": None,
+    "progress": "Третє завдання поспіль без зауважень до стилю.",
+}
+
+
+class TestAStoredVersion1Review:
+    """Lock a: a review stored before task 10 prints byte for byte as before."""
+
+    def test_it_prints_as_the_old_assembler_printed_it(self) -> None:
+        review = ReviewStructureV1.model_validate(STORED_BEFORE_TASK_10)
+
+        expected = (SNAPSHOTS / "review_v1_stored_ukr.md").read_text(encoding="utf-8")
+        assert assemble_review(review) == expected
+
+
+class TestCourseLinks:
+    """Lock b: a course link prints its title, its place, and "later" when so."""
+
+    def test_without_an_address_the_title_is_plain_text(self) -> None:
+        assembled = assemble_review(review_with_a_course_link("ukr"))
+
+        assert (
+            "- **Де почитати:** Environment variables "
+            "(аудіо, 1:02:05; Докладніше — далі в курсі)"
+        ) in assembled.splitlines()
+        assert "](" not in assembled
+
+    def test_with_an_address_the_title_is_a_link(self) -> None:
+        assembled = assemble_review(
+            review_with_a_course_link(
+                "eng", url="https://example.test/env", later_in_course=False
+            )
+        )
+
+        assert (
+            "- **Where to read:** [Environment variables](https://example.test/env) "
+            "(audio, 1:02:05)"
+        ) in assembled.splitlines()
+        assert "later in the course" not in assembled
+
+    def test_later_in_course_alone(self) -> None:
+        review = review_with_a_course_link("eng")
+        remark = review.new_remarks[0]
+        no_place = remark.read[0].model_copy(update={"position": None})
+        review = review.model_copy(
+            update={"new_remarks": [remark.model_copy(update={"read": [no_place]})]}
+        )
+
+        assert (
+            "- **Where to read:** Environment variables "
+            "(More on this later in the course)"
+        ) in assemble_review(review).splitlines()
+
+    def test_the_excerpt_and_the_fragment_id_are_not_printed(self) -> None:
+        """The portal shows the excerpt; the markdown names the place only."""
+        assembled = assemble_review(review_with_a_course_link("ukr"))
+
+        assert "never written in the code" not in assembled
+        assert "0192f6a0" not in assembled
+
+    @pytest.mark.parametrize("language", SNAPSHOT_LANGUAGES)
+    def test_no_brace_survives_in_any_language(self, language: str) -> None:
+        assembled = assemble_review(review_with_a_course_link(language))
+
+        assert "{" not in assembled
+        assert "}" not in assembled
+
+
 class TestPurity:
     def test_the_same_structure_gives_the_same_bytes(self) -> None:
         review = full_review("ukr")
@@ -400,6 +531,7 @@ class TestPlaceholders:
         ("kind", "value", "expected"),
         [
             ("video", "03:41", "*video, 03:41*"),
+            ("audio", "03:41", "*audio, 03:41*"),
             ("slide", "12", "*slide 12*"),
             ("paragraph", "7", "*paragraph 7*"),
             ("file", "main.py", "*file main.py*"),

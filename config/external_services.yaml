@@ -43,14 +43,18 @@
 #   - deepseek-v4-flash: legacy name, billed at the deepseek-flash price since
 #     2026-09-10 (0.00022/0.00066 -> 0.00015/0.0006 per 1k).
 #   - cached-input prices on every model whose page lists one; price dates on
-#     DeepSeek (2026-09-10 / 2026-08-16) and on gemini-3.6/3.8-flash
-#     (2027-01-01: the pinned durable rate is not yet in force); prompt-size
-#     ceilings on tiered models (gemini-2.5-pro, qwen*); nova-3 billed per
-#     second.
+#     DeepSeek (2026-09-10 / 2026-08-16); prompt-size ceilings on tiered
+#     models (gemini-2.5-pro, qwen*); nova-3 billed per second.
 #   Base token/minute prices of every other model are unchanged.
 #   Not re-established (left as they were): gemini-3.5-flash (gone from the
 #   pricing page), qwen3-vl-32b-instruct (gone from the pricing page),
 #   scribe_v1 (the page prices only Scribe v2).
+# 2026-10-30 BIL-PRICES (catalog 2026-10-30.2), operator decision of
+#   2026-10-30: gemini-3.6-flash / gemini-3.8-flash pinned at Google's
+#   introductory price (0.0015/0.0075 -> 0.00075/0.00375 per 1k, cached
+#   0.000075), which ends 2026-12-31. The Gemini price revision is due by
+#   2026-12-20; a dated test turns red from that day while either model still
+#   carries the introductory price (TestGeminiIntroductoryPriceGuard).
 #
 # ── Capabilities (task 09a, 2026-10-01) ──
 # The former ``structured_output`` label is split in two wire facts:
@@ -75,8 +79,8 @@
 # a pricing rule or a tariff therefore means: give the catalog a new version,
 # and paste the fingerprint the loader's error message prints.
 catalog:
-  version: "2026-10-30.1"
-  pricing_sha256: "5b9e21482b00dbcbd95b8c44ade9a6ed0c15f2f5b02fb65f926d6d55660aa990"
+  version: "2026-10-30.2"
+  pricing_sha256: "086a5a5ecd87b36c89ba35c7078e5cc05595b08c6e7a1e0560cdb90f3179d649"
 
 # ── Time-of-day tariffs (BIL-C, decision 3) ──
 # A model names its tariff with ``tariff:``; its cost_per_1k_* are then the
@@ -209,44 +213,47 @@ providers:
         price_effective_from: null
         price_holds_to_input_tokens: 200000
       - id: gemini-3.6-flash
-        # ai.google.dev/gemini-api/docs/pricing + model page, verified
-        # 2026-08-28. $1.50 / $7.50 per 1M is the durable list rate; an
-        # introductory discount ($0.75 / $3.75 per 1M) is live through
-        # 2026-12-31 and reverts to list on 2027-01-01 — registry pins the
-        # durable rate to avoid a self-reverting stamp.
-        # 2026-10-30: unchanged — "$0.75 through December 31, 2026. / $1.50
-        # starting January 1, 2027." (cached $0.075 / $0.15). The pinned durable
-        # prices are in force from 2027-01-01, so rows before it are estimated.
+        # INTRODUCTORY PRICE (operator decision 2026-10-30). The pricing page,
+        # re-read 2026-10-30: "$0.75 through December 31, 2026." / "$1.50
+        # starting January 1, 2027." (output $3.75 / $7.50, context caching
+        # $0.075 / $0.15 per 1M). The catalog carries the introductory price,
+        # in force through 2026-12-31; register rows are priced exact at it
+        # until the next revision. From 2027-01-01 Google bills $1.50 / $7.50
+        # (cached $0.15), so the Gemini price revision is due by 2026-12-20 —
+        # TestGeminiIntroductoryPriceGuard turns red from that day. Neither the
+        # pricing page nor the model page names the day the introductory price
+        # started, so price_effective_from stays empty.
         capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
-        cost_per_1k_in: 0.0015
-        cost_per_1k_out: 0.0075
-        cost_per_1k_in_cached: 0.00015
-        price_effective_from: 2027-01-01
+        cost_per_1k_in: 0.00075
+        cost_per_1k_out: 0.00375
+        cost_per_1k_in_cached: 0.000075
+        price_effective_from: null
         price_holds_to_input_tokens: null
       - id: gemini-3.8-flash
         # Registered 2026-09-30 as the replacement for gemini-2.5-pro rungs
-        # (unavailable to our key). ai.google.dev/gemini-api/docs/pricing
-        # (page updated 2026-09-24), per the audit of 2026-09-30. $1.50 / $7.50
-        # per 1M is the durable list rate from 2027-01-01; an introductory
-        # discount ($0.75 / $3.75 per 1M) is live through 2026-12-31. The
-        # registry has no dated prices, so it pins the durable (higher) rate —
-        # ceilings computed from it stay safe after the discount ends; bills
-        # before 2027 read up to 2x lower. Thinking model: reasoning is billed
-        # inside max_output_tokens and the connector cannot limit it.
-        # 2026-10-30: unchanged (same dated pair as gemini-3.6-flash, cached
-        # $0.075 / $0.15). The pinned durable prices are in force from
-        # 2027-01-01, so rows before it are estimated.
+        # (unavailable to our key). Thinking model: reasoning is billed inside
+        # max_output_tokens and the connector cannot limit it.
+        # INTRODUCTORY PRICE (operator decision 2026-10-30). The pricing page,
+        # re-read 2026-10-30: "$0.75 through December 31, 2026." / "$1.50
+        # starting January 1, 2027." (output $3.75 / $7.50, context caching
+        # $0.075 / $0.15 per 1M). The catalog carries the introductory price,
+        # in force through 2026-12-31; register rows are priced exact at it
+        # until the next revision. From 2027-01-01 Google bills $1.50 / $7.50
+        # (cached $0.15), so the Gemini price revision is due by 2026-12-20 —
+        # TestGeminiIntroductoryPriceGuard turns red from that day. Neither the
+        # pricing page nor the model page names the day the introductory price
+        # started, so price_effective_from stays empty.
         capabilities: [vision, json_mode, schema_strict, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
-        cost_per_1k_in: 0.0015
-        cost_per_1k_out: 0.0075
-        cost_per_1k_in_cached: 0.00015
-        price_effective_from: 2027-01-01
+        cost_per_1k_in: 0.00075
+        cost_per_1k_out: 0.00375
+        cost_per_1k_in_cached: 0.000075
+        price_effective_from: null
         price_holds_to_input_tokens: null
       - id: gemini-3.5-flash-lite
         # ai.google.dev/gemini-api/docs/pricing + model page, verified

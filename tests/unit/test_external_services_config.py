@@ -11,6 +11,8 @@ bad edit is caught at load time.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -200,6 +202,10 @@ _NOT_ESTABLISHED: dict[tuple[str, str], str] = {
     ("gpt-4o-mini-transcribe", "price_effective_from"): _NO_DATE,
     ("nova-3", "price_effective_from"): _NO_DATE,
     ("scribe_v1", "price_effective_from"): _NO_DATE,
+    ("gemini-3.8-flash", "price_effective_from"): (
+        "the pricing page and the model page give only the end of the "
+        "introductory price ('through December 31, 2026'), not its start"
+    ),
     ("mistral-large-2512", "cost_per_1k_in_cached"): (
         "mistral.ai/pricing only says cached input tokens 'reduce input cost by "
         "up to 90%'; no per-model price"
@@ -290,3 +296,37 @@ class TestCalledModelPricesAreFilledOrMarked:
         assert _NOT_APPLICABLE.keys() & _NOT_ESTABLISHED.keys() == set()
         reasons = [*_NOT_APPLICABLE.values(), *_NOT_ESTABLISHED.values()]
         assert all(reason.strip() for reason in reasons)
+
+
+# ── Guard: the Gemini 3.6/3.8 Flash introductory price is revised in time ──
+#
+# By operator decision of 2026-10-30 the catalog carries Google's introductory
+# price for these two models; it ends 2026-12-31, and from 2027-01-01 Google
+# bills $1.50 / $7.50 per 1M. From the day the revision is due, this test is
+# red while either model still carries an introductory price.
+
+_GEMINI_INTRO_MODELS = ("gemini-3.6-flash", "gemini-3.8-flash")
+_GEMINI_INTRO_IN_PER_1K = Decimal("0.00075")
+_GEMINI_INTRO_OUT_PER_1K = Decimal("0.00375")
+_GEMINI_REVISION_DUE = date(2026, 12, 20)
+
+
+def _still_introductory(registry: ModelRegistryConfig) -> list[str]:
+    return [
+        model_id
+        for model_id in _GEMINI_INTRO_MODELS
+        if registry.models[model_id].prices.in_per_1k == _GEMINI_INTRO_IN_PER_1K
+        or registry.models[model_id].prices.out_per_1k == _GEMINI_INTRO_OUT_PER_1K
+    ]
+
+
+class TestGeminiIntroductoryPriceGuard:
+    def test_the_introductory_price_is_revised_before_it_ends(
+        self, registry: ModelRegistryConfig
+    ) -> None:
+        if datetime.now(UTC).date() < _GEMINI_REVISION_DUE:
+            return
+        assert _still_introductory(registry) == [], (
+            "Вступна ціна Gemini 3.6/3.8 Flash закінчується 2026-12-31 — "
+            "потрібна ревізія цін (борг BIL-PRICES)"
+        )

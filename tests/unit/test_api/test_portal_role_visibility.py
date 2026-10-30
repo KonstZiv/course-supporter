@@ -8,7 +8,10 @@ decision at the enum, not a silent default that leaks a new role to students.
 
 from __future__ import annotations
 
-from course_supporter.api.routes._portal_shared import role_visible_to_student
+from course_supporter.material_visibility import (
+    role_visible_to_student,
+    student_visible_roles,
+)
 from course_supporter.models.source import MaterialRole
 
 # Explicit visibility verdict per role. Adding a MaterialRole member WITHOUT a
@@ -34,3 +37,10 @@ def test_predicate_matches_expected_verdict() -> None:
 def test_unknown_role_value_is_hidden() -> None:
     """A value outside the vocabulary is hidden (allowlist safety-by-default)."""
     assert role_visible_to_student("some_future_role") is False
+
+
+def test_sql_side_roles_are_the_rule_asked_per_role() -> None:
+    """The SQL allowlist the search filters by is the predicate, per role."""
+    assert student_visible_roles() == [
+        role.value for role, visible in _EXPECTED_VISIBILITY.items() if visible
+    ]

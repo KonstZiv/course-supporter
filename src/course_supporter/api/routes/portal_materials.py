@@ -31,9 +31,9 @@ from course_supporter.api.deps import (
     get_s3_client,
     get_session,
 )
-from course_supporter.api.routes._portal_shared import role_visible_to_student
 from course_supporter.api.schemas import PortalMediaResponse
 from course_supporter.auth.context import StudentContext
+from course_supporter.material_visibility import role_visible_to_student
 from course_supporter.models.source import SourceType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,

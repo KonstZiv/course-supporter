@@ -42,7 +42,6 @@ from course_supporter.api.routes._portal_shared import (
     curated_presentation,
     curated_verdict,
     material_label,
-    role_visible_to_student,
 )
 from course_supporter.api.schemas import (
     PortalAttemptResult,
@@ -54,6 +53,7 @@ from course_supporter.api.schemas import (
 )
 from course_supporter.auth.context import StudentContext
 from course_supporter.homework.test_doors import new_path_serves_tests
+from course_supporter.material_visibility import role_visible_to_student
 from course_supporter.models.source import AssignmentType, SourceType
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.homework_repository import HomeworkRepository

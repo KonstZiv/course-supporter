@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -484,6 +485,9 @@ async def _seed_material(
     source_type: str = "text",
     order: int = 0,
     filename: str | None = "material.txt",
+    material_role: str = "educational",
+    task_type: str | None = None,
+    deleted: bool = False,
 ) -> AuthoredDocument:
     """Create an AuthoredDocument on ``node`` rooted at ``root``."""
     doc = AuthoredDocument(
@@ -493,7 +497,11 @@ async def _seed_material(
         source_url="https://example.com/search",
         order=order,
         filename=filename,
+        material_role=material_role,
+        task_type=task_type,
     )
+    if deleted:
+        doc.deleted_at = datetime.now(UTC)
     session.add(doc)
     await session.flush()
     return doc
@@ -505,14 +513,18 @@ async def _seed_summary(
     root: CourseNode,
     *,
     title: str = "Material Title",
+    status: str = "ready",
+    deleted: bool = False,
 ) -> DocumentSummary:
-    """Create the active DocumentSummary for ``doc``."""
+    """Create the DocumentSummary for ``doc`` (active unless ``deleted``)."""
     summary = DocumentSummary(
         authored_document_id=doc.id,
         course_root_id=root.id,
         title=title,
-        status="ready",
+        status=status,
     )
+    if deleted:
+        summary.deleted_at = datetime.now(UTC)
     session.add(summary)
     await session.flush()
     return summary
@@ -642,28 +654,28 @@ class TestSearchByConcepts:
         )
         assert missing == []
 
-    async def test_include_secondary_broadens_and_projects(
+    async def test_secondary_concepts_projected_never_matched(
         self, db_session: AsyncSession, seed_tenant: Tenant
     ) -> None:
-        """include_secondary widens the match and fills secondary_concepts."""
+        """A hit carries its secondary concepts; they never make a hit.
+
+        Task 10 (decision Б) dropped ``include_secondary``: a candidate is
+        matched on its main concepts only.
+        """
         root, seg = await _one_segment_course(
             db_session, seed_tenant, main=["loops"], secondary=["iterables"]
         )
 
         repo = DocumentSegmentRepository(db_session)
-        # Secondary-only term is invisible by default.
-        narrow = await repo.search_by_concepts(
-            course_root_id=root.id, concepts=["iterables"]
+        assert (
+            await repo.search_by_concepts(
+                course_root_id=root.id, concepts=["iterables"]
+            )
+            == []
         )
-        assert narrow == []
-        # With include_secondary it matches and projects secondary_concepts.
-        wide = await repo.search_by_concepts(
-            course_root_id=root.id,
-            concepts=["iterables"],
-            include_secondary=True,
-        )
-        assert [h.segment_id for h in wide] == [seg.id]
-        assert wide[0].secondary_concepts == ["iterables"]
+        hits = await repo.search_by_concepts(course_root_id=root.id, concepts=["loops"])
+        assert [h.segment_id for h in hits] == [seg.id]
+        assert hits[0].secondary_concepts == ["iterables"]
 
     async def test_include_content_projection(
         self, db_session: AsyncSession, seed_tenant: Tenant
@@ -1015,3 +1027,97 @@ class TestSearchLearningOrder:
             *root_mat,  # the root's own, last
         ]
         assert [h.segment_id for h in hits] == [s.id for s in expected]
+
+
+# One case per candidate condition (task 10, decision Б): the overrides break
+# exactly that condition and nothing else, on a segment that teaches ``nav``.
+_NOT_A_CANDIDATE: dict[str, dict[str, dict[str, Any]]] = {
+    "methodological_role": {"material": {"material_role": "methodological"}},
+    "task_type_test": {"material": {"task_type": "test"}},
+    "task_type_short_task": {"material": {"task_type": "short_task"}},
+    "task_type_task": {"material": {"task_type": "task"}},
+    "task_type_project": {"material": {"task_type": "project"}},
+    "test_object": {"material": {"source_type": "test_object"}},
+    "document_deleted": {"material": {"deleted": True}},
+    "summary_pending": {"summary": {"status": "pending"}},
+    "summary_failed": {"summary": {"status": "failed"}},
+    "summary_inactive": {"summary": {"deleted": True}},
+    "segment_deleted": {"segment": {"deleted": True}},
+    "concept_only_secondary": {"segment": {"main": [], "secondary": ["nav"]}},
+}
+
+
+async def _seed_case(
+    session: AsyncSession,
+    root: CourseNode,
+    overrides: dict[str, dict[str, Any]],
+) -> DocumentSegment:
+    """A material on the root teaching ``nav``, with ``overrides`` applied."""
+    doc = await _seed_material(session, root, root, **overrides.get("material", {}))
+    summary = await _seed_summary(session, doc, root, **overrides.get("summary", {}))
+    segment = {"main": ["nav"], **overrides.get("segment", {})}
+    return await _seed_segment(session, summary, root, **segment)
+
+
+class TestSearchCandidateFilters:
+    """Lock 2 (task 10): only candidates are found, by the portal's rule."""
+
+    @pytest.mark.parametrize("case", sorted(_NOT_A_CANDIDATE))
+    async def test_each_condition_cuts_its_own_case(
+        self, db_session: AsyncSession, seed_tenant: Tenant, case: str
+    ) -> None:
+        """The broken condition drops its segment; the candidate beside stays."""
+        root = await _seed_root(db_session, seed_tenant)
+        candidate = await _seed_case(db_session, root, {})
+        await _seed_case(db_session, root, _NOT_A_CANDIDATE[case])
+
+        repo = DocumentSegmentRepository(db_session)
+        hits = await repo.search_by_concepts(course_root_id=root.id, concepts=["nav"])
+
+        assert [h.segment_id for h in hits] == [candidate.id]
+
+    async def test_visibility_is_the_portal_rule(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Search and portal read visibility from one source.
+
+        The portal routes hold the very function of ``material_visibility``,
+        and changing the rule there changes what the search selects.
+        """
+        from course_supporter import material_visibility
+        from course_supporter.api.routes import (
+            portal_courses,
+            portal_materials,
+            portal_submissions,
+        )
+
+        for portal_route in (portal_courses, portal_materials, portal_submissions):
+            assert (
+                portal_route.role_visible_to_student
+                is material_visibility.role_visible_to_student
+            )
+
+        root = await _seed_root(db_session, seed_tenant)
+        educational = await _seed_case(db_session, root, {})
+        methodological = await _seed_case(
+            db_session, root, {"material": {"material_role": "methodological"}}
+        )
+        repo = DocumentSegmentRepository(db_session)
+
+        async def found() -> list[uuid.UUID]:
+            hits = await repo.search_by_concepts(
+                course_root_id=root.id, concepts=["nav"]
+            )
+            return [h.segment_id for h in hits]
+
+        assert await found() == [educational.id]
+
+        monkeypatch.setattr(
+            material_visibility,
+            "role_visible_to_student",
+            lambda role: role == "methodological",
+        )
+        assert await found() == [methodological.id]

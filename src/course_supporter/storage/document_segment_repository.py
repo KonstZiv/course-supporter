@@ -17,7 +17,9 @@ GIN-indexed concept columns (KD-gamma), resolving each hit's lineage
 (material + node names) in a single JOIN so the Mentor agent does not
 dereference names one-by-one. Task 10 puts the hits in the course's
 learning order (:func:`course_supporter.learning_order.in_learning_order`)
-instead of comparing sibling numbers across the whole tree.
+instead of comparing sibling numbers across the whole tree, and returns
+only candidates -- segments a student may be pointed at
+(:func:`_candidate_filters`).
 
 Standalone class (not a SoftDeleteRepository subclass) per the existing
 repository convention (matches ``DocumentSummaryRepository`` shape).
@@ -29,11 +31,13 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from sqlalchemy import Row, or_, select
+from sqlalchemy import ColumnElement, Row, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.ingestion.base import ProcessingError
 from course_supporter.learning_order import MaterialPlace, TreeNode, in_learning_order
+from course_supporter.material_visibility import student_visible_roles
+from course_supporter.models.source import SourceType
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -89,8 +93,8 @@ class ConceptSearchHit:
     single JOIN by :meth:`DocumentSegmentRepository.search_by_concepts`).
 
     The raw ``content`` is opt-in (``include_content``); the default hit is
-    a pointer without segment text. ``secondary_concepts`` is populated
-    only when ``include_secondary`` widened the query, else an empty list.
+    a pointer without segment text. ``secondary_concepts`` is informational:
+    the match reads ``main_concepts`` only (task 10, decision Б).
     """
 
     segment_id: uuid.UUID
@@ -131,6 +135,41 @@ def _resolve_anchor(source_type: str, row: Row[Any]) -> SegmentAnchor:
         # paragraph ordinals (may be None at the KD-C edge).
         return SegmentAnchor("paragraph", row.start_paragraph, row.end_paragraph)
     raise ValueError(f"no anchor mapping for source_type {source_type!r}")
+
+
+def _candidate_filters(course_root_id: uuid.UUID) -> tuple[ColumnElement[bool], ...]:
+    """What makes a segment of the course a candidate (task 10, decision Б).
+
+    A candidate is a segment a student may be pointed at. One definition for
+    every reader of the course's candidates; the predicates name
+    ``DocumentSummary`` and ``AuthoredDocument``, so the statement joins the
+    segment's lineage. The concept match is the reader's own and is not here
+    -- it reads ``main_concepts`` only, secondary concepts never count.
+
+    - the segment and its document are live, and the summary is the
+      document's active one in ``ready`` (each ``deleted_at`` is checked:
+      the cascade normally keeps them in step, a candidate does not rely on
+      it);
+    - the document's role is one a student may see -- the portal's own rule
+      (:func:`~course_supporter.material_visibility.student_visible_roles`),
+      not a copy of its condition;
+    - the document is not a task (any ``task_type``) and not a test the
+      author wrote in the system (``test_object``).
+
+    Service code files (configs, dependencies) are NOT excluded here: the
+    one per-segment flag, ``is_auxiliary``, is set only by the author's hand
+    and does not cover them (task 10, decision Г -- an open question).
+    """
+    return (
+        DocumentSegment.course_root_id == course_root_id,
+        DocumentSegment.deleted_at.is_(None),
+        DocumentSummary.deleted_at.is_(None),
+        DocumentSummary.status == "ready",
+        AuthoredDocument.deleted_at.is_(None),
+        AuthoredDocument.material_role.in_(student_visible_roles()),
+        AuthoredDocument.task_type.is_(None),
+        AuthoredDocument.source_type != SourceType.TEST_OBJECT.value,
+    )
 
 
 def _material_place(row: Row[Any]) -> MaterialPlace:
@@ -277,16 +316,17 @@ class DocumentSegmentRepository:
         *,
         course_root_id: uuid.UUID,
         concepts: list[str],
-        include_secondary: bool = False,
         include_content: bool = False,
     ) -> list[ConceptSearchHit]:
-        """Find segments teaching every concept in ``concepts`` (vision §4).
+        """Find candidate segments teaching every concept in ``concepts`` (§4).
 
         Concept-navigation primitive for the Mentor agent: "where in the
         course is concept X explained?". Matches via JSONB ``@>``
-        containment over the GIN-indexed concept columns (KD-gamma), so
-        every term in ``concepts`` must be present in the segment (AND
-        semantics; a single-term query is a list of one).
+        containment over the GIN-indexed ``main_concepts`` column
+        (KD-gamma), so every term in ``concepts`` must be among the
+        segment's main concepts (AND semantics; a single-term query is a
+        list of one). Secondary concepts never match (task 10, decision Б),
+        and only candidates are searched (:func:`_candidate_filters`).
 
         The query JOINs up the lineage chain
         (``DocumentSegment`` -> ``DocumentSummary`` -> ``AuthoredDocument``
@@ -302,12 +342,6 @@ class DocumentSegmentRepository:
                 Bilingual-key aware -- a term matches the exact stored
                 string with no query expansion (§4 amendment v0.20.10). An
                 empty list returns ``[]`` (it does NOT scan the course).
-            include_secondary: When ``True``, broaden the match to
-                ``secondary_concepts`` as well (``main @> arr OR secondary
-                @> arr``). Known limitation: a query split across columns
-                (one term in main, another in secondary of the same
-                segment) will not hit -- forward-note, acceptable for MVP.
-                Also populates each hit's ``secondary_concepts``.
             include_content: When ``True``, add the raw segment ``content``
                 column to the SELECT and project it; otherwise the heavy
                 text column is never read from the DB and each hit's
@@ -324,13 +358,6 @@ class DocumentSegmentRepository:
         """
         if not concepts:
             return []
-
-        main_match = DocumentSegment.main_concepts.contains(concepts)
-        match_predicate = (
-            or_(main_match, DocumentSegment.secondary_concepts.contains(concepts))
-            if include_secondary
-            else main_match
-        )
 
         # Narrow projection: exactly the columns ConceptSearchHit needs, never
         # whole entities. Whole-entity SELECT would pull the heavy
@@ -378,13 +405,8 @@ class DocumentSegmentRepository:
             )
             .join(CourseNode, AuthoredDocument.course_node_id == CourseNode.id)
             .where(
-                DocumentSegment.course_root_id == course_root_id,
-                # Active segments only. A soft-deleted summary/material
-                # cascade-soft-deletes its segments (CascadeDeleteService),
-                # so this single predicate also excludes reprocess history
-                # without joining deleted_at on every ancestor.
-                DocumentSegment.deleted_at.is_(None),
-                match_predicate,
+                *_candidate_filters(course_root_id),
+                DocumentSegment.main_concepts.contains(concepts),
             )
         )
 
@@ -409,9 +431,7 @@ class DocumentSegmentRepository:
                 # projection yields a fresh per-row object (not a shared ORM
                 # attribute), so no defensive copy is needed (reviewer 3.3b).
                 main_concepts=row.main_concepts,
-                secondary_concepts=(
-                    row.secondary_concepts if include_secondary else []
-                ),
+                secondary_concepts=row.secondary_concepts,
                 char_count=row.char_count,
                 # content column is present only when include_content widened
                 # the SELECT; guard the attribute access accordingly.

@@ -15,7 +15,9 @@ Phase 3.3b adds the read side: :meth:`DocumentSegmentRepository
 explained?" (vision §4) via JSONB ``@>`` containment over the
 GIN-indexed concept columns (KD-gamma), resolving each hit's lineage
 (material + node names) in a single JOIN so the Mentor agent does not
-dereference names one-by-one.
+dereference names one-by-one. Task 10 puts the hits in the course's
+learning order (:func:`course_supporter.learning_order.in_learning_order`)
+instead of comparing sibling numbers across the whole tree.
 
 Standalone class (not a SoftDeleteRepository subclass) per the existing
 repository convention (matches ``DocumentSummaryRepository`` shape).
@@ -31,6 +33,7 @@ from sqlalchemy import Row, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.ingestion.base import ProcessingError
+from course_supporter.learning_order import MaterialPlace, TreeNode, in_learning_order
 from course_supporter.storage.content_hash import ContentHashService
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -128,6 +131,17 @@ def _resolve_anchor(source_type: str, row: Row[Any]) -> SegmentAnchor:
         # paragraph ordinals (may be None at the KD-C edge).
         return SegmentAnchor("paragraph", row.start_paragraph, row.end_paragraph)
     raise ValueError(f"no anchor mapping for source_type {source_type!r}")
+
+
+def _material_place(row: Row[Any]) -> MaterialPlace:
+    """The learning-order place of a result row (its node, document, segment)."""
+    return MaterialPlace(
+        course_node_id=row.course_node_id,
+        document_order=row.document_order,
+        document_created_at=row.document_created_at,
+        document_id=row.authored_document_id,
+        segment_order=row.segment_order,
+    )
 
 
 class DocumentSegmentRepository:
@@ -300,10 +314,13 @@ class DocumentSegmentRepository:
                 ``content`` is ``None``.
 
         Returns:
-            Hits in course reading order: ``CourseNode.order`` (NULLS LAST)
-            -> ``CourseNode.created_at`` -> ``AuthoredDocument.order`` ->
-            ``DocumentSegment.order``. No relevance score (Phase 3.3b is
-            position-ordered; relevance is the FD4/pgvector axis).
+            Hits in the course's learning order
+            (:func:`~course_supporter.learning_order.in_learning_order`):
+            nested nodes in sibling order, a node's own materials after
+            everything nested in it, the root's materials last; inside a
+            node, by ``AuthoredDocument.order`` then ``DocumentSegment.order``.
+            No relevance score (position-ordered; relevance is the
+            FD4/pgvector axis).
         """
         if not concepts:
             return []
@@ -343,6 +360,10 @@ class DocumentSegmentRepository:
             DocumentSegment.start_paragraph.label("start_paragraph"),
             DocumentSegment.end_paragraph.label("end_paragraph"),
             DocumentSegment.file_path.label("file_path"),
+            # Learning-order place, read by _material_place.
+            AuthoredDocument.order.label("document_order"),
+            AuthoredDocument.created_at.label("document_created_at"),
+            DocumentSegment.order.label("segment_order"),
         )
         if include_content:
             stmt = stmt.add_columns(DocumentSegment.content.label("content"))
@@ -365,15 +386,14 @@ class DocumentSegmentRepository:
                 DocumentSegment.deleted_at.is_(None),
                 match_predicate,
             )
-            .order_by(
-                CourseNode.order.asc().nulls_last(),
-                CourseNode.created_at.asc(),
-                AuthoredDocument.order.asc(),
-                DocumentSegment.order.asc(),
-            )
         )
 
-        result = await self._session.execute(stmt)
+        rows = (await self._session.execute(stmt)).all()
+        if not rows:
+            return []
+        rows = in_learning_order(
+            rows, await self._course_tree(course_root_id), place=_material_place
+        )
         return [
             ConceptSearchHit(
                 segment_id=row.segment_id,
@@ -396,6 +416,37 @@ class DocumentSegmentRepository:
                 # content column is present only when include_content widened
                 # the SELECT; guard the attribute access accordingly.
                 content=row.content if include_content else None,
+            )
+            for row in rows
+        ]
+
+    async def _course_tree(self, course_root_id: uuid.UUID) -> list[TreeNode]:
+        """Every node of the course, as the learning order reads it.
+
+        Soft-deleted nodes are walked too: the tree only places a hit, it never
+        decides whether a segment is one -- that is the WHERE clause's job.
+        """
+        columns = (
+            CourseNode.id,
+            CourseNode.parent_id,
+            CourseNode.order,
+            CourseNode.created_at,
+        )
+        tree = (
+            select(*columns)
+            .where(CourseNode.id == course_root_id)
+            .cte(name="course_tree", recursive=True)
+        )
+        tree = tree.union_all(
+            select(*columns).join(tree, CourseNode.parent_id == tree.c.id)
+        )
+        result = await self._session.execute(select(tree))
+        return [
+            TreeNode(
+                id=row.id,
+                parent_id=row.parent_id,
+                order=row.order,
+                created_at=row.created_at,
             )
             for row in result.all()
         ]

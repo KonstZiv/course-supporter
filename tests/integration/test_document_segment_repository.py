@@ -902,12 +902,16 @@ class TestSearchByConcepts:
         (hit,) = await repo.search_by_concepts(course_root_id=root.id, concepts=["nav"])
         assert hit.anchor == SegmentAnchor("paragraph", None, None)
 
-    async def test_results_in_course_reading_order(
+    async def test_in_node_order_and_unnumbered_child_before_root(
         self, db_session: AsyncSession, seed_tenant: Tenant
     ) -> None:
-        """Order = CourseNode.order (NULLS LAST), then doc.order, seg.order."""
+        """Inside a node: doc.order, then seg.order; the root's materials last.
+
+        Task 10 (decision A) reversed the old expectation here: a child node's
+        materials come BEFORE the root's own, even when the child has no
+        ``order`` -- the root's materials open only after everything nested.
+        """
         root = await _seed_root(db_session, seed_tenant, title="Root", order=0)
-        # Child node with NULL order → sorts after the root node.
         child = await _seed_child(
             db_session, seed_tenant, root, title="Late", order=None
         )
@@ -921,7 +925,7 @@ class TestSearchByConcepts:
         doc_b = await _seed_material(db_session, root, root, order=1, filename="b")
         sum_b = await _seed_summary(db_session, doc_b, root, title="B")
         seg_b = await _seed_segment(db_session, sum_b, root, order=0, main=["nav"])
-        # Child node (NULL order) → last.
+        # Child node (NULL order) -> nested, so before the root's materials.
         doc_c = await _seed_material(db_session, child, root, order=0, filename="c")
         sum_c = await _seed_summary(db_session, doc_c, root, title="C")
         seg_c = await _seed_segment(db_session, sum_c, root, order=0, main=["nav"])
@@ -930,8 +934,84 @@ class TestSearchByConcepts:
         hits = await repo.search_by_concepts(course_root_id=root.id, concepts=["nav"])
 
         assert [h.segment_id for h in hits] == [
-            seg_a0.id,  # node order 0, doc order 0, seg order 0
-            seg_a1.id,  # node order 0, doc order 0, seg order 1
-            seg_b.id,  # node order 0, doc order 1
-            seg_c.id,  # node order NULL → last
+            seg_c.id,  # nested node first
+            seg_a0.id,  # root, doc order 0, seg order 0
+            seg_a1.id,  # root, doc order 0, seg order 1
+            seg_b.id,  # root, doc order 1
         ]
+
+
+async def _seed_taught(
+    session: AsyncSession,
+    node: CourseNode,
+    root: CourseNode,
+    *,
+    order: int = 0,
+    segments: int = 1,
+) -> list[DocumentSegment]:
+    """A material on ``node`` with ``segments`` segments teaching ``nav``.
+
+    Segments are inserted in reverse ``order`` so the result's order is the
+    sort's doing, not the insertion's.
+    """
+    doc = await _seed_material(session, node, root, order=order)
+    summary = await _seed_summary(session, doc, root)
+    created = [
+        await _seed_segment(session, summary, root, order=i, main=["nav"])
+        for i in reversed(range(segments))
+    ]
+    return list(reversed(created))
+
+
+class TestSearchLearningOrder:
+    """Lock 1 (task 10, decision A): hits follow the course's learning order."""
+
+    async def test_three_level_tree_children_first_root_last(
+        self, db_session: AsyncSession, seed_tenant: Tenant
+    ) -> None:
+        """Lessons of block 1, block 1, lessons of block 2, block 2, root.
+
+        Sibling numbers repeat across levels (blocks 1-2, lessons 1-2 in each
+        block), which is what the old cross-tree ``CourseNode.order`` sort got
+        wrong: it put lesson 1 of block 2 before lesson 2 of block 1. Nodes
+        are created out of order, and the unnumbered lesson first, so neither
+        insertion order nor ``created_at`` can pass for the rule.
+        """
+        root = await _seed_root(db_session, seed_tenant, title="Course", order=0)
+        block_2 = await _seed_child(db_session, seed_tenant, root, order=2)
+        block_1 = await _seed_child(db_session, seed_tenant, root, order=1)
+        lesson_1_none = await _seed_child(db_session, seed_tenant, block_1, order=None)
+        lesson_1_12 = await _seed_child(db_session, seed_tenant, block_1, order=12)
+        lesson_1_02 = await _seed_child(db_session, seed_tenant, block_1, order=2)
+        lesson_2_02 = await _seed_child(db_session, seed_tenant, block_2, order=2)
+        lesson_2_01 = await _seed_child(db_session, seed_tenant, block_2, order=1)
+
+        # Materials on every level; block 1 has two documents, created in
+        # reverse order, the first with two segments.
+        root_mat = await _seed_taught(db_session, root, root)
+        block_2_mat = await _seed_taught(db_session, block_2, root)
+        block_1_doc_1 = await _seed_taught(db_session, block_1, root, order=1)
+        block_1_doc_0 = await _seed_taught(
+            db_session, block_1, root, order=0, segments=2
+        )
+        l_2_01 = await _seed_taught(db_session, lesson_2_01, root)
+        l_2_02 = await _seed_taught(db_session, lesson_2_02, root)
+        l_1_none = await _seed_taught(db_session, lesson_1_none, root)
+        l_1_12 = await _seed_taught(db_session, lesson_1_12, root)
+        l_1_02 = await _seed_taught(db_session, lesson_1_02, root)
+
+        repo = DocumentSegmentRepository(db_session)
+        hits = await repo.search_by_concepts(course_root_id=root.id, concepts=["nav"])
+
+        expected = [
+            *l_1_02,  # block 1: lessons by order ...
+            *l_1_12,
+            *l_1_none,  # ... the unnumbered one after the numbered
+            *block_1_doc_0,  # block 1's own: doc order 0 (seg 0, seg 1) ...
+            *block_1_doc_1,  # ... then doc order 1
+            *l_2_01,  # block 2: lessons by order
+            *l_2_02,
+            *block_2_mat,  # block 2's own
+            *root_mat,  # the root's own, last
+        ]
+        assert [h.segment_id for h in hits] == [s.id for s in expected]

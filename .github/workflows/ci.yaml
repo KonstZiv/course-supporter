@@ -54,6 +54,28 @@ jobs:
       - name: Mypy
         run: uv run mypy
 
+  docs:
+    name: Docs build
+    # Pinned like the other jobs.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install docs dependencies
+        run: uv sync --frozen --only-group docs
+
+      # Strict and WITHOUT -q: with -q the warnings are not counted, and a link
+      # to a missing anchor or page passes silently (verified). The site is
+      # public and publishes itself on every merge to main, so a broken link
+      # must stop here.
+      - name: Build the site (strict)
+        run: uv run --no-sync mkdocs build --strict -d "$RUNNER_TEMP/site"
+
   test:
     name: Tests
     # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.

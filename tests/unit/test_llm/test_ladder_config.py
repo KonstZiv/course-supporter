@@ -426,7 +426,8 @@ class TestRealConfigs:
         # measurement of what a run costs — across two pages. The ceiling and
         # the $6 cost ceiling of a run are one multiplication apart: 60 calls x
         # 8192 x $0.0075 per 1k = $3.69 of output (gemini-3.8-flash since
-        # 2026-09-30). A second rung, or a different
+        # 2026-09-30, at its list price from 2027-01-01; the catalog carries the
+        # introductory $0.00375 through 2026-12-31). A second rung, or a different
         # ceiling, breaks this test before it breaks the arithmetic.
         config = load_ladder_config(Path("config"))
         stage = config.get_stage("dictionary_translation")

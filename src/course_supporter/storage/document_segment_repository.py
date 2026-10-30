@@ -19,7 +19,10 @@ dereference names one-by-one. Task 10 puts the hits in the course's
 learning order (:func:`course_supporter.learning_order.in_learning_order`)
 instead of comparing sibling numbers across the whole tree, and returns
 only candidates -- segments a student may be pointed at
-(:func:`_candidate_filters`).
+(:func:`_candidate_filters`). :meth:`DocumentSegmentRepository.list_candidates`
+reads all of a course's candidates in the same order, for a reader that
+matches concepts in Python (the course-link finder,
+``homework/course_links.py``).
 
 Standalone class (not a SoftDeleteRepository subclass) per the existing
 repository convention (matches ``DocumentSummaryRepository`` shape).
@@ -28,10 +31,11 @@ repository convention (matches ``DocumentSummaryRepository`` shape).
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
-from sqlalchemy import ColumnElement, Row, select
+from sqlalchemy import ColumnElement, Label, Row, Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.ingestion.base import ProcessingError
@@ -115,6 +119,40 @@ class ConceptSearchHit:
     content: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class CandidateSegment:
+    """One candidate of a course, for a reader that matches in Python (task 10).
+
+    A narrow projection of a segment a student may be pointed at
+    (:func:`_candidate_filters`): identity, material, anchor, main concepts and
+    the segment's learning-order place -- no segment text, no node title. The
+    text of the few a reader picks is read apart
+    (:meth:`DocumentSegmentRepository.read_contents`).
+    """
+
+    segment_id: uuid.UUID
+    authored_document_id: uuid.UUID
+    material_title: str
+    source_type: str
+    anchor: SegmentAnchor
+    main_concepts: tuple[str, ...]
+    place: MaterialPlace
+
+
+@dataclass(frozen=True, slots=True)
+class CourseCandidates:
+    """Every candidate of a course, in learning order, and the tree that orders them.
+
+    ``segments`` are in the order
+    :func:`~course_supporter.learning_order.in_learning_order` gives over
+    ``tree``. The tree is handed back so a reader places something else -- a
+    task's document -- in the SAME order, without reading the course twice.
+    """
+
+    segments: tuple[CandidateSegment, ...]
+    tree: tuple[TreeNode, ...]
+
+
 def _resolve_anchor(source_type: str, row: Row[Any]) -> SegmentAnchor:
     """Build the SegmentAnchor for a result row from its ``source_type``.
 
@@ -178,6 +216,52 @@ def _candidate_filters(course_root_id: uuid.UUID) -> tuple[ColumnElement[bool], 
         AuthoredDocument.state.in_(student_visible_states()),
         AuthoredDocument.task_type.is_(None),
         AuthoredDocument.source_type != SourceType.TEST_OBJECT.value,
+    )
+
+
+def _over_candidates(stmt: Select[Any], course_root_id: uuid.UUID) -> Select[Any]:
+    """``stmt`` over the course's candidates: the lineage the filters name, joined.
+
+    The one place the candidate statement is built, so every reader of the
+    course's candidates gets the same rows; a reader adds its own predicate
+    (the concept match) or joins (the node title) on top.
+    """
+    return (
+        stmt.join(
+            DocumentSummary,
+            DocumentSegment.document_summary_id == DocumentSummary.id,
+        )
+        .join(
+            AuthoredDocument,
+            DocumentSummary.authored_document_id == AuthoredDocument.id,
+        )
+        .where(*_candidate_filters(course_root_id))
+    )
+
+
+def _anchor_columns() -> tuple[Label[Any], ...]:
+    """The seven anchor scalars :func:`_resolve_anchor` reads (cheap, always)."""
+    return (
+        DocumentSegment.start_time_sec.label("start_time_sec"),
+        DocumentSegment.end_time_sec.label("end_time_sec"),
+        DocumentSegment.start_slide.label("start_slide"),
+        DocumentSegment.end_slide.label("end_slide"),
+        DocumentSegment.start_paragraph.label("start_paragraph"),
+        DocumentSegment.end_paragraph.label("end_paragraph"),
+        DocumentSegment.file_path.label("file_path"),
+    )
+
+
+def _place_columns() -> tuple[Label[Any], ...]:
+    """The learning-order place :func:`_material_place` reads.
+
+    It also reads ``course_node_id`` and ``authored_document_id``, which every
+    reader projects for its own use.
+    """
+    return (
+        AuthoredDocument.order.label("document_order"),
+        AuthoredDocument.created_at.label("document_created_at"),
+        DocumentSegment.order.label("segment_order"),
     )
 
 
@@ -386,37 +470,17 @@ class DocumentSegmentRepository:
             DocumentSegment.main_concepts.label("main_concepts"),
             DocumentSegment.secondary_concepts.label("secondary_concepts"),
             DocumentSegment.content_char_count.label("char_count"),
-            # Seven anchor scalars are always selected (cheap);
             # _resolve_anchor reads the one(s) matching the
             # source_type-derived kind.
-            DocumentSegment.start_time_sec.label("start_time_sec"),
-            DocumentSegment.end_time_sec.label("end_time_sec"),
-            DocumentSegment.start_slide.label("start_slide"),
-            DocumentSegment.end_slide.label("end_slide"),
-            DocumentSegment.start_paragraph.label("start_paragraph"),
-            DocumentSegment.end_paragraph.label("end_paragraph"),
-            DocumentSegment.file_path.label("file_path"),
-            # Learning-order place, read by _material_place.
-            AuthoredDocument.order.label("document_order"),
-            AuthoredDocument.created_at.label("document_created_at"),
-            DocumentSegment.order.label("segment_order"),
+            *_anchor_columns(),
+            *_place_columns(),
         )
         if include_content:
             stmt = stmt.add_columns(DocumentSegment.content.label("content"))
         stmt = (
-            stmt.join(
-                DocumentSummary,
-                DocumentSegment.document_summary_id == DocumentSummary.id,
-            )
-            .join(
-                AuthoredDocument,
-                DocumentSummary.authored_document_id == AuthoredDocument.id,
-            )
+            _over_candidates(stmt, course_root_id)
             .join(CourseNode, AuthoredDocument.course_node_id == CourseNode.id)
-            .where(
-                *_candidate_filters(course_root_id),
-                DocumentSegment.main_concepts.contains(concepts),
-            )
+            .where(DocumentSegment.main_concepts.contains(concepts))
         )
 
         rows = (await self._session.execute(stmt)).all()
@@ -448,6 +512,74 @@ class DocumentSegmentRepository:
             )
             for row in rows
         ]
+
+    async def list_candidates(self, *, course_root_id: uuid.UUID) -> CourseCandidates:
+        """Every candidate segment of the course, in learning order (task 10).
+
+        For a reader that matches in Python what SQL containment cannot -- the
+        course-link finder compares concepts by their normalisation key -- and
+        so reads the course's candidates once and decides itself. The rows and
+        their order are :meth:`search_by_concepts`'s, without the concept
+        predicate: the same :func:`_over_candidates` statement, the same
+        learning order over the same tree. The projection is narrow -- no
+        segment text, no node title; the text of the segments a reader keeps
+        comes from :meth:`read_contents`.
+
+        Args:
+            course_root_id: Denormalised root scope handle (KD-delta).
+
+        Returns:
+            The candidates and the course tree that orders them; ``segments``
+            is empty for a course without candidates, the tree is still read.
+        """
+        stmt = _over_candidates(
+            select(
+                DocumentSegment.id.label("segment_id"),
+                DocumentSummary.authored_document_id.label("authored_document_id"),
+                AuthoredDocument.course_node_id.label("course_node_id"),
+                DocumentSummary.title.label("material_title"),
+                AuthoredDocument.source_type.label("source_type"),
+                DocumentSegment.main_concepts.label("main_concepts"),
+                *_anchor_columns(),
+                *_place_columns(),
+            ),
+            course_root_id,
+        )
+        rows = (await self._session.execute(stmt)).all()
+        tree = await self._course_tree(course_root_id)
+        return CourseCandidates(
+            segments=tuple(
+                CandidateSegment(
+                    segment_id=row.segment_id,
+                    authored_document_id=row.authored_document_id,
+                    material_title=row.material_title,
+                    source_type=row.source_type,
+                    anchor=_resolve_anchor(row.source_type, row),
+                    main_concepts=tuple(row.main_concepts),
+                    place=_material_place(row),
+                )
+                for row in in_learning_order(rows, tree, place=_material_place)
+            ),
+            tree=tuple(tree),
+        )
+
+    async def read_contents(
+        self, segment_ids: Collection[uuid.UUID]
+    ) -> dict[uuid.UUID, str]:
+        """The text of each of ``segment_ids``, by id.
+
+        A narrow read for the few segments a reader kept out of
+        :meth:`list_candidates`: the heavy ``content`` column of exactly these
+        rows. It filters nothing -- the ids come from a candidate read.
+        """
+        if not segment_ids:
+            return {}
+        rows = await self._session.execute(
+            select(DocumentSegment.id, DocumentSegment.content).where(
+                DocumentSegment.id.in_(segment_ids)
+            )
+        )
+        return dict(rows.tuples().all())
 
     async def _course_tree(self, course_root_id: uuid.UUID) -> list[TreeNode]:
         """Every node of the course, as the learning order reads it.

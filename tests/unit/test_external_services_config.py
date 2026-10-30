@@ -10,9 +10,14 @@ bad edit is caught at load time.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
 from course_supporter.homework.path_config import (
     load_path_config,
@@ -24,6 +29,7 @@ from course_supporter.llm.ladder_config import (
 )
 from course_supporter.llm.registry import (
     Capability,
+    ModelConfig,
     ModelRegistryConfig,
     load_registry,
 )
@@ -124,4 +130,203 @@ class TestOutputCapabilities:
             registry,
             ladder_stage_names=ladders.stages.keys(),
             prompt_base_path=config_dir.parent,
+        )
+
+
+# ── Lock: a called model's price fields are filled or marked (BIL-PRICES) ──
+#
+# An empty price field of a model a ladder, a submission path or the
+# ``transcribe`` chain actually calls is allowed only when it is listed below
+# with its reason: either the provider has no such rule for the model (not
+# applicable), or the official page did not state the number at the last
+# revision (not established, 2026-10-30). A mark on a field that is filled, or
+# on a model nothing calls, fails too, so the lists cannot outlive the gap.
+
+_CONFIG_DIR = _REGISTRY_PATH.parent
+
+# Read from the raw YAML, so a ladder file no loader knows yet is covered too.
+_ROUTING_FILES = sorted(
+    [*_CONFIG_DIR.glob("ladders_*.yaml"), _CONFIG_DIR / "submission_paths.yaml"]
+)
+
+_TOKEN_PRICE_FIELDS = (
+    "cost_per_1k_in",
+    "cost_per_1k_out",
+    "cost_per_1k_in_cached",
+    "price_effective_from",
+    "price_holds_to_input_tokens",
+)
+_MINUTE_PRICE_FIELDS = (
+    "cost_per_minute",
+    "billing_granularity_sec",
+    "price_effective_from",
+)
+
+_NO_TIERS_DEEPSEEK = (
+    "no prompt-size tiers on api-docs.deepseek.com/quick_start/pricing/"
+)
+_NO_TIERS_GEMINI = (
+    "one price for every prompt size on ai.google.dev/gemini-api/docs/pricing"
+)
+_NO_TIERS_MISTRAL = "one price for every prompt size on the docs.mistral.ai model card"
+
+_NOT_APPLICABLE: dict[tuple[str, str], str] = {
+    ("deepseek-flash", "price_holds_to_input_tokens"): _NO_TIERS_DEEPSEEK,
+    ("deepseek-v4-pro", "price_holds_to_input_tokens"): _NO_TIERS_DEEPSEEK,
+    ("gemini-3-flash-preview", "price_holds_to_input_tokens"): _NO_TIERS_GEMINI,
+    ("gemini-3.1-flash-lite", "price_holds_to_input_tokens"): _NO_TIERS_GEMINI,
+    ("gemini-3.5-flash-lite", "price_holds_to_input_tokens"): _NO_TIERS_GEMINI,
+    ("gemini-3.8-flash", "price_holds_to_input_tokens"): _NO_TIERS_GEMINI,
+    ("mistral-large-2512", "price_holds_to_input_tokens"): _NO_TIERS_MISTRAL,
+    ("mistral-small-latest", "price_holds_to_input_tokens"): _NO_TIERS_MISTRAL,
+    ("qwen3.5-flash", "cost_per_1k_in_cached"): (
+        "Frankfurt / Global scope has the explicit cache only for this model "
+        "(model-studio/context-cache); our connector never creates one"
+    ),
+    ("gpt-4o-mini-transcribe", "billing_granularity_sec"): (
+        "billed by audio tokens; the pricing page calls $0.003/minute an "
+        "'Estimated cost', so there is no rounding step in seconds"
+    ),
+}
+
+_NO_DATE = "the official page gives no date the price is in force from"
+
+_NOT_ESTABLISHED: dict[tuple[str, str], str] = {
+    ("gemini-3-flash-preview", "price_effective_from"): _NO_DATE,
+    ("gemini-3.1-flash-lite", "price_effective_from"): _NO_DATE,
+    ("gemini-3.5-flash-lite", "price_effective_from"): _NO_DATE,
+    ("mistral-large-2512", "price_effective_from"): _NO_DATE,
+    ("mistral-small-latest", "price_effective_from"): _NO_DATE,
+    ("qwen3.5-flash", "price_effective_from"): _NO_DATE,
+    ("qwen3.7-max", "price_effective_from"): _NO_DATE,
+    ("gpt-4o-mini-transcribe", "price_effective_from"): _NO_DATE,
+    ("nova-3", "price_effective_from"): _NO_DATE,
+    ("scribe_v1", "price_effective_from"): _NO_DATE,
+    ("gemini-3.8-flash", "price_effective_from"): (
+        "the pricing page and the model page give only the end of the "
+        "introductory price ('through December 31, 2026'), not its start"
+    ),
+    ("mistral-large-2512", "cost_per_1k_in_cached"): (
+        "mistral.ai/pricing only says cached input tokens 'reduce input cost by "
+        "up to 90%'; no per-model price"
+    ),
+    ("mistral-small-latest", "cost_per_1k_in_cached"): (
+        "mistral.ai/pricing only says cached input tokens 'reduce input cost by "
+        "up to 90%'; no per-model price"
+    ),
+    ("scribe_v1", "billing_granularity_sec"): (
+        "elevenlabs.io/pricing/api: 'Speech to Text is billed per audio minute' "
+        "names the unit, not a rounding step"
+    ),
+}
+
+
+def _rung_models(node: Any) -> Iterator[str]:
+    """The model of every mapping in a YAML tree that names a provider and a model."""
+    if isinstance(node, dict):
+        if "provider" in node and "model" in node:
+            yield node["model"]
+        for value in node.values():
+            yield from _rung_models(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _rung_models(item)
+
+
+def _called_models(registry: ModelRegistryConfig) -> set[str]:
+    called = {
+        model
+        for path in _ROUTING_FILES
+        for model in _rung_models(yaml.safe_load(path.read_text(encoding="utf-8")))
+    }
+    for chain in registry.actions["transcribe"].chain.values():
+        called.update(chain)
+    return called
+
+
+def _price_field(model: ModelConfig, name: str) -> object:
+    return {
+        "cost_per_1k_in": model.prices.in_per_1k,
+        "cost_per_1k_out": model.prices.out_per_1k,
+        "cost_per_1k_in_cached": model.prices.in_cached_per_1k,
+        "cost_per_minute": model.prices.per_minute,
+        "price_effective_from": model.price_effective_from,
+        "price_holds_to_input_tokens": model.price_holds_to_input_tokens,
+        "billing_granularity_sec": model.billing_granularity_sec,
+    }[name]
+
+
+def _empty_price_fields(registry: ModelRegistryConfig) -> set[tuple[str, str]]:
+    empty = set()
+    for model_id in _called_models(registry):
+        model = registry.models[model_id]
+        by_minute = model.unit_type == "minutes"
+        fields = _MINUTE_PRICE_FIELDS if by_minute else _TOKEN_PRICE_FIELDS
+        empty.update(
+            (model_id, name) for name in fields if _price_field(model, name) is None
+        )
+    return empty
+
+
+class TestCalledModelPricesAreFilledOrMarked:
+    """BIL-PRICES lock on the price fields of the models we actually call."""
+
+    def test_called_models_are_found_in_the_registry(
+        self, registry: ModelRegistryConfig
+    ) -> None:
+        called = _called_models(registry)
+        # Guards the discovery: an empty set would pass the lock vacuously.
+        assert len(_ROUTING_FILES) >= 9
+        assert {"deepseek-flash", "scribe_v1", "nova-3"} <= called
+        assert called <= set(registry.models)
+
+    def test_every_empty_price_field_is_marked(
+        self, registry: ModelRegistryConfig
+    ) -> None:
+        marked = _NOT_APPLICABLE.keys() | _NOT_ESTABLISHED.keys()
+        assert sorted(_empty_price_fields(registry) - marked) == []
+
+    def test_every_mark_names_an_empty_field_of_a_called_model(
+        self, registry: ModelRegistryConfig
+    ) -> None:
+        marked = _NOT_APPLICABLE.keys() | _NOT_ESTABLISHED.keys()
+        assert sorted(marked - _empty_price_fields(registry)) == []
+
+    def test_a_field_is_marked_once_and_with_a_reason(self) -> None:
+        assert _NOT_APPLICABLE.keys() & _NOT_ESTABLISHED.keys() == set()
+        reasons = [*_NOT_APPLICABLE.values(), *_NOT_ESTABLISHED.values()]
+        assert all(reason.strip() for reason in reasons)
+
+
+# ── Guard: the Gemini 3.6/3.8 Flash introductory price is revised in time ──
+#
+# By operator decision of 2026-10-30 the catalog carries Google's introductory
+# price for these two models; it ends 2026-12-31, and from 2027-01-01 Google
+# bills $1.50 / $7.50 per 1M. From the day the revision is due, this test is
+# red while either model still carries an introductory price.
+
+_GEMINI_INTRO_MODELS = ("gemini-3.6-flash", "gemini-3.8-flash")
+_GEMINI_INTRO_IN_PER_1K = Decimal("0.00075")
+_GEMINI_INTRO_OUT_PER_1K = Decimal("0.00375")
+_GEMINI_REVISION_DUE = date(2026, 12, 20)
+
+
+def _still_introductory(registry: ModelRegistryConfig) -> list[str]:
+    return [
+        model_id
+        for model_id in _GEMINI_INTRO_MODELS
+        if registry.models[model_id].prices.in_per_1k == _GEMINI_INTRO_IN_PER_1K
+        or registry.models[model_id].prices.out_per_1k == _GEMINI_INTRO_OUT_PER_1K
+    ]
+
+
+class TestGeminiIntroductoryPriceGuard:
+    def test_the_introductory_price_is_revised_before_it_ends(
+        self, registry: ModelRegistryConfig
+    ) -> None:
+        if datetime.now(UTC).date() < _GEMINI_REVISION_DUE:
+            return
+        assert _still_introductory(registry) == [], (
+            "Вступна ціна Gemini 3.6/3.8 Flash закінчується 2026-12-31 — "
+            "потрібна ревізія цін (борг BIL-PRICES)"
         )

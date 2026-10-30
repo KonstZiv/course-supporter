@@ -34,6 +34,27 @@
 #   values are the operator's next revision (DeepSeek changed its lineup and
 #   prices on 2026-09-10, so the numbers in the comments may be stale). NO
 #   price number changed.
+# 2026-10-30 BIL-PRICES (catalog 2026-10-30.1): every model and service
+#   re-read on the official provider pages on 2026-10-30 (URLs per entry).
+#   The optional pricing fields are filled where a page states the number; an
+#   empty field is either "not applicable" or "not established" — the list of
+#   which is which, with the reason, is the lock test in
+#   tests/unit/test_external_services_config.py. Changes:
+#   - deepseek-v4-flash: legacy name, billed at the deepseek-flash price since
+#     2026-09-10 (0.00022/0.00066 -> 0.00015/0.0006 per 1k).
+#   - cached-input prices on every model whose page lists one; price dates on
+#     DeepSeek (2026-09-10 / 2026-08-16); prompt-size ceilings on tiered
+#     models (gemini-2.5-pro, qwen*); nova-3 billed per second.
+#   Base token/minute prices of every other model are unchanged.
+#   Not re-established (left as they were): gemini-3.5-flash (gone from the
+#   pricing page), qwen3-vl-32b-instruct (gone from the pricing page),
+#   scribe_v1 (the page prices only Scribe v2).
+# 2026-10-30 BIL-PRICES (catalog 2026-10-30.2), operator decision of
+#   2026-10-30: gemini-3.6-flash / gemini-3.8-flash pinned at Google's
+#   introductory price (0.0015/0.0075 -> 0.00075/0.00375 per 1k, cached
+#   0.000075), which ends 2026-12-31. The Gemini price revision is due by
+#   2026-12-20; a dated test turns red from that day while either model still
+#   carries the introductory price (TestGeminiIntroductoryPriceGuard).
 #
 # ── Capabilities (task 09a, 2026-10-01) ──
 # The former ``structured_output`` label is split in two wire facts:
@@ -58,8 +79,8 @@
 # a pricing rule or a tariff therefore means: give the catalog a new version,
 # and paste the fingerprint the loader's error message prints.
 catalog:
-  version: "2026-10-29.1"
-  pricing_sha256: "58c806cf2e2cb963768962f3af571aefbab2d073f376e93e486974454de1be50"
+  version: "2026-10-30.2"
+  pricing_sha256: "086a5a5ecd87b36c89ba35c7078e5cc05595b08c6e7a1e0560cdb90f3179d649"
 
 # ── Time-of-day tariffs (BIL-C, decision 3) ──
 # A model names its tariff with ``tariff:``; its cost_per_1k_* are then the
@@ -71,7 +92,11 @@ tariffs:
     # DeepSeek peak/off-peak billing (since 2026-08-16; rule verified
     # vision-side 2026-10-29): peak 01:00-04:00 and 06:00-10:00 UTC,
     # Monday-Friday; every other hour and the weekends are off-peak; the
-    # off-peak price is half the peak price.
+    # off-peak price is half the peak price. Re-read 2026-10-30 on
+    # api-docs.deepseek.com/quick_start/pricing/: hours and ratio unchanged.
+    # The page also makes Chinese public holidays off-peak in full; this
+    # tariff has no holiday calendar, so a holiday call inside the hours above
+    # is priced at peak (BIL-PRICES, open debt).
     timezone: UTC
     catalog_prices: off_peak
     peak_multiplier: 2
@@ -99,8 +124,18 @@ providers:
     models:
       # Pricing verified 2026-08-28 against ai.google.dev/gemini-api/docs/pricing
       # (paid tier, text input). Registry uses per-1k = per-1M / 1000.
+      # Re-read 2026-10-30 (page "Last updated 2026-10-28"): Standard paid
+      # tier, text / image / video input (the Gemini connector sends text and
+      # images only, never audio). cost_per_1k_in_cached = the page's "Context
+      # caching price", which covers implicit cache hits too
+      # (ai.google.dev/gemini-api/docs/caching). Thinking tokens are billed as
+      # output ("Output price (including thinking tokens)").
       - id: gemini-3.5-flash
         # Latest Gemini flash (registered 2026-05-23). $1.50 / $9.00 per 1M.
+        # 2026-10-30: NOT on the pricing page any more; the deprecations page
+        # says the endpoint "automatically routes API requests to
+        # gemini-3.6-flash" and does not say at which price. Numbers left as
+        # they were (not re-established); no ladder calls this id.
         capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -113,14 +148,16 @@ providers:
       - id: gemini-3.1-flash-lite
         # Cost-tier flash — audio Pass 2a/2c primary rung (registered
         # 2026-05-23; was callable but unregistered → no cost-tracking).
-        # $0.25 / $1.50 per 1M.
+        # $0.25 / $1.50 per 1M. 2026-10-30: unchanged; cached $0.025 per 1M
+        # (audio input would be $0.50 / cached $0.05 — not sent by us). Shutdown
+        # date May 7, 2027, replacement gemini-3.5-flash-lite (deprecations).
         capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
         cost_per_1k_in: 0.00025
         cost_per_1k_out: 0.0015
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.000025
         price_effective_from: null
         price_holds_to_input_tokens: null
       - id: gemini-3-flash-preview
@@ -130,10 +167,11 @@ providers:
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
-        # Official rate: $0.50 / $3.00 per 1M.
+        # Official rate: $0.50 / $3.00 per 1M. 2026-10-30: unchanged; cached
+        # $0.05 per 1M. Still a preview, no shutdown date announced.
         cost_per_1k_in: 0.0005
         cost_per_1k_out: 0.003
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.00005
         price_effective_from: null
         price_holds_to_input_tokens: null
       - id: gemini-2.5-flash
@@ -148,9 +186,10 @@ providers:
         unit_type: tokens
         # Corrected 2026-05-23 (was 0.00015 / 0.0006 — a gpt-4o-mini rate that
         # understated output ~4×): official $0.30 / $2.50 per 1M.
+        # 2026-10-30: unchanged; cached $0.03 per 1M.
         cost_per_1k_in: 0.0003
         cost_per_1k_out: 0.0025
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.00003
         price_effective_from: null
         price_holds_to_input_tokens: null
       - id: gemini-2.5-pro
@@ -165,43 +204,55 @@ providers:
         # Corrected 2026-05-23 (out was 0.005, understated 2×): official
         # $1.25 / $10.00 per 1M (≤200k-prompt tier). >200k tier is
         # $2.50 / $15.00 per 1M (re-confirmed live 2026-08-28).
+        # 2026-10-30: unchanged; cached $0.125 per 1M (<= 200k). The page says
+        # "prompts <= 200k tokens"; 200000 is the reading that never marks a
+        # dearer-tier prompt exact.
         cost_per_1k_in: 0.00125
         cost_per_1k_out: 0.010
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.000125
         price_effective_from: null
-        price_holds_to_input_tokens: null
+        price_holds_to_input_tokens: 200000
       - id: gemini-3.6-flash
-        # ai.google.dev/gemini-api/docs/pricing + model page, verified
-        # 2026-08-28. $1.50 / $7.50 per 1M is the durable list rate; an
-        # introductory discount ($0.75 / $3.75 per 1M) is live through
-        # 2026-12-31 and reverts to list on 2027-01-01 — registry pins the
-        # durable rate to avoid a self-reverting stamp.
+        # INTRODUCTORY PRICE (operator decision 2026-10-30). The pricing page,
+        # re-read 2026-10-30: "$0.75 through December 31, 2026." / "$1.50
+        # starting January 1, 2027." (output $3.75 / $7.50, context caching
+        # $0.075 / $0.15 per 1M). The catalog carries the introductory price,
+        # in force through 2026-12-31; register rows are priced exact at it
+        # until the next revision. From 2027-01-01 Google bills $1.50 / $7.50
+        # (cached $0.15), so the Gemini price revision is due by 2026-12-20 —
+        # TestGeminiIntroductoryPriceGuard turns red from that day. Neither the
+        # pricing page nor the model page names the day the introductory price
+        # started, so price_effective_from stays empty.
         capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
-        cost_per_1k_in: 0.0015
-        cost_per_1k_out: 0.0075
-        cost_per_1k_in_cached: null
+        cost_per_1k_in: 0.00075
+        cost_per_1k_out: 0.00375
+        cost_per_1k_in_cached: 0.000075
         price_effective_from: null
         price_holds_to_input_tokens: null
       - id: gemini-3.8-flash
         # Registered 2026-09-30 as the replacement for gemini-2.5-pro rungs
-        # (unavailable to our key). ai.google.dev/gemini-api/docs/pricing
-        # (page updated 2026-09-24), per the audit of 2026-09-30. $1.50 / $7.50
-        # per 1M is the durable list rate from 2027-01-01; an introductory
-        # discount ($0.75 / $3.75 per 1M) is live through 2026-12-31. The
-        # registry has no dated prices, so it pins the durable (higher) rate —
-        # ceilings computed from it stay safe after the discount ends; bills
-        # before 2027 read up to 2x lower. Thinking model: reasoning is billed
-        # inside max_output_tokens and the connector cannot limit it.
+        # (unavailable to our key). Thinking model: reasoning is billed inside
+        # max_output_tokens and the connector cannot limit it.
+        # INTRODUCTORY PRICE (operator decision 2026-10-30). The pricing page,
+        # re-read 2026-10-30: "$0.75 through December 31, 2026." / "$1.50
+        # starting January 1, 2027." (output $3.75 / $7.50, context caching
+        # $0.075 / $0.15 per 1M). The catalog carries the introductory price,
+        # in force through 2026-12-31; register rows are priced exact at it
+        # until the next revision. From 2027-01-01 Google bills $1.50 / $7.50
+        # (cached $0.15), so the Gemini price revision is due by 2026-12-20 —
+        # TestGeminiIntroductoryPriceGuard turns red from that day. Neither the
+        # pricing page nor the model page names the day the introductory price
+        # started, so price_effective_from stays empty.
         capabilities: [vision, json_mode, schema_strict, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
-        cost_per_1k_in: 0.0015
-        cost_per_1k_out: 0.0075
-        cost_per_1k_in_cached: null
+        cost_per_1k_in: 0.00075
+        cost_per_1k_out: 0.00375
+        cost_per_1k_in_cached: 0.000075
         price_effective_from: null
         price_holds_to_input_tokens: null
       - id: gemini-3.5-flash-lite
@@ -210,14 +261,15 @@ providers:
         # $0.30 / $2.50 per 1M. Unchanged per the 2026-09-30 audit (page
         # updated 2026-09-24). Since 2026-09-30 the third rung of the
         # classifier ladders (safety / sanity / attempt_classifier), of
-        # pass_2a_mapping rung 2 and of code_summary.
+        # pass_2a_mapping rung 2 and of code_summary. 2026-10-30: unchanged;
+        # cached $0.03 per 1M.
         capabilities: [vision, json_mode, schema_strict, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
         cost_per_1k_in: 0.0003
         cost_per_1k_out: 0.0025
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.00003
         price_effective_from: null
         price_holds_to_input_tokens: null
 
@@ -226,37 +278,48 @@ providers:
     # Date-pinned snapshot IDs (reproducibility). Live pricing (Sonnet 4.5,
     # Haiku 4.5) verified 2026-08-28 against
     # platform.claude.com/docs/en/about-claude/pricing (both unchanged).
+    # Re-read 2026-10-30: base prices unchanged; cached = "Hits and
+    # refreshes". No ladder calls Anthropic. Status per
+    # platform.claude.com/docs/en/about-claude/model-deprecations.
     models:
       - id: claude-sonnet-4-5-20250929
         # Sonnet 4.5 — current Sonnet snapshot (registered 2026-05-23;
         # replaces the retired 2025-05-14 Sonnet snapshot). $3 / $15 per 1M.
         # (claude-sonnet-4-6 is newer + same price but ships only as a
         # non-date-pinned alias, against the snapshot convention.)
+        # 2026-10-30: DEPRECATED (2026-09-30), retirement November 30, 2026,
+        # replacement claude-sonnet-5-5. Cache hits $0.30 per 1M.
         capabilities: [long_context]
         max_context: 200000
         max_output_tokens: 16384
         unit_type: tokens
         cost_per_1k_in: 0.003
         cost_per_1k_out: 0.015
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.0003
         price_effective_from: null
         price_holds_to_input_tokens: null
       - id: claude-haiku-4-5-20251001
         # Haiku 4.5 — cost tier; audio Pass 2a/2c rung 3 (registered
         # 2026-05-23 → closes DD-2.3-Z; was callable but unregistered).
-        # $1 / $5 per 1M.
+        # $1 / $5 per 1M. 2026-10-30: Active, retirement "Not sooner than
+        # October 15, 2026". Cache hits $0.10 per 1M.
         capabilities: [long_context]
         max_context: 200000
         max_output_tokens: 16384
         unit_type: tokens
         cost_per_1k_in: 0.001
         cost_per_1k_out: 0.005
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.0001
         price_effective_from: null
         price_holds_to_input_tokens: null
 
   openai:
     type: llm
+    # Re-read 2026-10-30 on the model pages
+    # developers.openai.com/api/docs/models/<id> (Standard, text tokens):
+    # base prices unchanged, cached input added. All three are deprecated
+    # (2026-10-14 notice): shutdown January 14, 2027, replacement gpt-6-luna
+    # (developers.openai.com/api/docs/deprecations). No ladder calls them.
     models:
       - id: gpt-4o-mini
         # $0.15/$0.60 per 1M; legacy models absent from the main
@@ -268,7 +331,7 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.00015
         cost_per_1k_out: 0.0006
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.000075
         price_effective_from: null
         price_holds_to_input_tokens: null
       - id: gpt-4.1
@@ -281,7 +344,7 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.002
         cost_per_1k_out: 0.008
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.0005
         price_effective_from: null
         price_holds_to_input_tokens: null
       - id: gpt-4o
@@ -293,7 +356,7 @@ providers:
         unit_type: tokens
         cost_per_1k_in: 0.0025
         cost_per_1k_out: 0.01
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.00125
         price_effective_from: null
         price_holds_to_input_tokens: null
 
@@ -304,6 +367,14 @@ providers:
     # were retired by DeepSeek 2026-07-24 (they mapped to the non-thinking /
     # thinking modes of deepseek-v4-flash / v4-pro; retirement re-confirmed
     # 2026-08-28). Pricing per api-docs.deepseek.com/quick_start/pricing.
+    # Re-read 2026-10-30 on api-docs.deepseek.com/quick_start/pricing/ (the
+    # trailing slash matters: without it the host serves "Your First API
+    # Call"), the change log api-docs.deepseek.com/updates/ and the news
+    # api-docs.deepseek.com/news/news260910/. Model versions now served:
+    # deepseek-flash -> DeepSeek-V4.1-Flash-1017, deepseek-v4-pro ->
+    # DeepSeek-V4-Pro-0813. Thinking tokens are output tokens ("We bill model
+    # usage based on the total number of input and output tokens"). No
+    # prompt-size tiers.
     models:
       - id: deepseek-flash
         # Registered 2026-09-30: the current name of the flash tier (since
@@ -314,6 +385,10 @@ providers:
         # Peak hours, context and output maximum are carried over from the
         # deepseek-v4-flash entry: peak = 01:00-04:00 & 06:00-10:00 UTC
         # Mon-Fri, context 1M, output maximum 384K. Classifier rungs pin 8192.
+        # 2026-10-30: unchanged (off-peak $0.15 / $0.6, peak $0.3 / $1.2);
+        # cache hit off-peak $0.003 / peak $0.006. In force since 04:00 UTC on
+        # 2026-09-10 (news260910); the field holds the date only. The
+        # 2026-10-17 upgrade to V4.1-Flash-1017 left "pricing unchanged".
         capabilities: [json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 384000
@@ -325,8 +400,8 @@ providers:
         #   this base rate, so for peak-hour calls they are a lower bound.
         cost_per_1k_in: 0.00015
         cost_per_1k_out: 0.0006
-        cost_per_1k_in_cached: null
-        price_effective_from: null
+        cost_per_1k_in_cached: 0.000003
+        price_effective_from: 2026-09-10
         price_holds_to_input_tokens: null
       - id: deepseek-v4-flash
         # DEPRECATED NAME (2026-09-30): since 2026-09-10 DeepSeek routes it
@@ -350,6 +425,14 @@ providers:
         # provider's published output maximum; stages needing a tighter cap
         # pin it on the rung — the three classifier rungs in
         # ladders_mentor.yaml pin 8192.
+        # 2026-10-30 (BIL-PRICES): REPRICED to the flash price. The pricing
+        # page: "The legacy names deepseek-v4-flash and
+        # deepseek-v4-flash-vision-exp are still accepted, but the
+        # corresponding models have been retired, their requests are served by
+        # the DeepSeek-V4.1-Flash-1017 model and billed at the Flash price."
+        # The $0.22 / $0.66 above is history (2026-08-16 .. 2026-09-10); a
+        # register row keeps the prices it was priced at, so old rows do not
+        # move.
         capabilities: [json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 384000
@@ -361,10 +444,10 @@ providers:
         #   2026-08-16). The register prices peak-hour calls at 2× (BIL-C);
         #   money ceilings still estimate with this base rate, so for
         #   peak-hour calls they are a lower bound.
-        cost_per_1k_in: 0.00022
-        cost_per_1k_out: 0.00066
-        cost_per_1k_in_cached: null
-        price_effective_from: null
+        cost_per_1k_in: 0.00015
+        cost_per_1k_out: 0.0006
+        cost_per_1k_in_cached: 0.000003
+        price_effective_from: 2026-09-10
         price_holds_to_input_tokens: null
       - id: deepseek-v4-pro
         # "Smart" / deep-reasoning tier — Methodist ladder PRIMARY (bottomup +
@@ -390,6 +473,14 @@ providers:
         # 2a) so the thinking-on default is preserved; the ``deepseek`` provider
         # (KD-2.4-S) still applies thinking-disabled for schema-bound consumers
         # and can be used with this model when that contract is required.
+        # 2026-10-30: unchanged (off-peak $0.66 / $1.98, peak $1.32 / $3.96);
+        # cache hit off-peak $0.022 / peak $0.044. Served by
+        # DeepSeek-V4-Pro-0813. The 2026-09-10 news announced routing this id
+        # to V4.1-Flash from 2026-09-14; the change log of the same date
+        # withdrew it: "continue providing API services for DeepSeek V4 Pro
+        # after September 14, 2026, with the billing method remaining
+        # unchanged". In force since 16:00 UTC on 2026-08-16 (change log
+        # 2026-08-13); the field holds the date only.
         capabilities: [json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -403,8 +494,8 @@ providers:
         #   peak-hour calls they are a lower bound.
         cost_per_1k_in: 0.00066
         cost_per_1k_out: 0.00198
-        cost_per_1k_in_cached: null
-        price_effective_from: null
+        cost_per_1k_in_cached: 0.000022
+        price_effective_from: 2026-08-16
         price_holds_to_input_tokens: null
 
   mistral:
@@ -416,6 +507,10 @@ providers:
         # verified 2026-08-28; unchanged per the 2026-09-30 audit. Previous $2/$6 was the Large 2 rate.
         # max_output_tokens left at 8192: first-party ceiling is not published
         # (Bedrock's 32K is a different platform).
+        # 2026-10-30: unchanged, $0.5 / $1.5 per 1M on the model card
+        # docs.mistral.ai/models/mistral-large-3-25-12 (names mistral-large-2512,
+        # mistral-large-latest). No cached-input price per model: mistral.ai/
+        # pricing only says cached input "reduce input cost by up to 90%".
         capabilities: [json_mode, long_context]
         max_context: 262144
         max_output_tokens: 8192
@@ -428,6 +523,10 @@ providers:
       - id: mistral-small-latest
         # Alias now resolves to Mistral Small 4; rates per mistral.ai/pricing/api,
         # verified 2026-08-28.
+        # 2026-10-30: unchanged, $0.15 / $0.6 per 1M on the model card
+        # docs.mistral.ai/models/mistral-small-4-0-26-03 (names
+        # mistral-small-2603, mistral-small-latest). No cached-input price per
+        # model (see mistral-large-2512).
         #
         # LIVE, and load-bearing: rung 1 of both homework gates —
         # ``safety_check`` and ``sanity_check`` in config/ladders_mentor.yaml.
@@ -476,6 +575,15 @@ providers:
     # flagship generation has advanced to qwen3.8-max / qwen3.7-plus /
     # qwen3.8-flash (qwen3.8-max shares qwen3.7-max's $1.65/$4.951 Global rate);
     # the entries below remain listed + priced but are a generation behind.
+    # Re-read 2026-10-30 on www.alibabacloud.com/help/en/model-studio/
+    # model-pricing ("Last Updated: Oct 29, 2026"), Germany (Frankfurt), scope
+    # Global: base prices unchanged. "K means 1,000 and M means 1,000,000", and
+    # "All tokens in the request are billed at the unit price of the
+    # corresponding tier", so price_holds_to_input_tokens = the first tier's
+    # ceiling. Cache (www.alibabacloud.com/help/en/model-studio/context-cache,
+    # "Last Updated: Oct 27, 2026"): in Frankfurt/Global the implicit cache
+    # covers qwen3.7-max only; the other models here have the explicit cache
+    # only, which our connector never creates.
     models:
       - id: qwen3.7-max
         # Latest Qwen flagship "Max" (text reasoning; released 2026-05-20).
@@ -492,15 +600,19 @@ providers:
         # higher rate ($2.50/$7.50) — do NOT use it; aggregators (OpenRouter)
         # also quote non-Global numbers. Canonical alias resolves to the dated
         # snapshot per the console card; the alias may advance silently.
+        # 2026-10-30: unchanged, "Currently equivalent to
+        # qwen3.7-max-2026-05-20", one tier 0<Token≤1M. Cached = implicit cache
+        # hit: "The unit price of cached_token is 20% of the input_token unit
+        # price" (qwen3.7-max is not among the page's exceptions) = $0.33 per 1M.
         capabilities: [json_mode, schema_strict, long_context]
         max_context: 1048576
         max_output_tokens: 65536
         unit_type: tokens
         cost_per_1k_in: 0.00165
         cost_per_1k_out: 0.004951
-        cost_per_1k_in_cached: null
+        cost_per_1k_in_cached: 0.00033
         price_effective_from: null
-        price_holds_to_input_tokens: null
+        price_holds_to_input_tokens: 1000000
       - id: qwen3-vl-32b-instruct
         # Phase 2.3 Pass 1 R1 (multimodal) per SPIKE-RESULTS-v2.md §3.
         # Pricing verified 2026-08-28 against DashScope Model Studio (workspace
@@ -514,6 +626,8 @@ providers:
         # qwen3.5-flash; entry kept as the rollback target while the
         # replacement accrues production mileage. Remove at the first
         # 15-day registry revision after 2026-10-10.
+        # 2026-10-30: NOT on the pricing page any more (no row in any region);
+        # numbers left as they were (not re-established). No ladder calls it.
         capabilities: [vision, json_mode, long_context]
         max_context: 131072
         max_output_tokens: 8192
@@ -531,6 +645,9 @@ providers:
         # calls occupy; higher tiers in this comment. Tiers 128k–256k
         # $0.115/$1.147, 256k–1M $0.172/$1.72; alias ≡ snapshot
         # qwen3.5-flash-2026-02-23.
+        # 2026-10-30: unchanged (Global row, first tier 0<Token≤128K). The EU
+        # scope row in Frankfurt ($0.1 / $0.4, with cache) is a different
+        # deployment scope, not ours.
         capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -539,13 +656,15 @@ providers:
         cost_per_1k_out: 0.000287
         cost_per_1k_in_cached: null
         price_effective_from: null
-        price_holds_to_input_tokens: null
+        price_holds_to_input_tokens: 128000
       - id: qwen3.6-flash
         # Workspace scope Global; Global pricing tab / model card, console
         # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
         # Output 64K (console binary shorthand = 1048576/65536), Maximum Input
         # 991K. No separate thinking-mode tariff. Registry rate = the tier our
         # calls occupy; higher tiers in this comment. Tier 256k–1M $0.66/$3.961.
+        # 2026-10-30: unchanged, ≡ qwen3.6-flash-2026-04-16, first tier
+        # 0<Token≤256K.
         capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -554,7 +673,7 @@ providers:
         cost_per_1k_out: 0.00099
         cost_per_1k_in_cached: null
         price_effective_from: null
-        price_holds_to_input_tokens: null
+        price_holds_to_input_tokens: 256000
       - id: qwen3.5-plus
         # Workspace scope Global; Global pricing tab / model card, console
         # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
@@ -562,6 +681,8 @@ providers:
         # 991K. No separate thinking-mode tariff. Registry rate = the tier our
         # calls occupy; higher tiers in this comment. Tiers 128k–256k
         # $0.287/$1.72, 256k–1M $0.573/$3.44.
+        # 2026-10-30: unchanged, ≡ qwen3.5-plus-2026-02-15, first tier
+        # 0<Token≤128K.
         capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -570,7 +691,7 @@ providers:
         cost_per_1k_out: 0.000688
         cost_per_1k_in_cached: null
         price_effective_from: null
-        price_holds_to_input_tokens: null
+        price_holds_to_input_tokens: 128000
       - id: qwen3.6-plus
         # Workspace scope Global; Global pricing tab / model card, console
         # eu-central-1, verified 2026-08-28. Card: Context Window 1M, Maximum
@@ -578,6 +699,7 @@ providers:
         # 991K. No separate thinking-mode tariff. Registry rate = the tier our
         # calls occupy; higher tiers in this comment. Tier 256k–1M
         # $1.101/$6.602; alias ≡ snapshot qwen3.6-plus-2026-04-02.
+        # 2026-10-30: unchanged, first tier 0<Token≤256K.
         capabilities: [vision, json_mode, long_context]
         max_context: 1048576
         max_output_tokens: 65536
@@ -586,7 +708,7 @@ providers:
         cost_per_1k_out: 0.001651
         cost_per_1k_in_cached: null
         price_effective_from: null
-        price_holds_to_input_tokens: null
+        price_holds_to_input_tokens: 256000
 
   whisper:
     type: transcription
@@ -608,6 +730,12 @@ providers:
         # changelog announced removal 2026-07-09 but the id persists). Migrating
         # the transcribe chain id scribe_v1 → scribe_v2 is a pending follow-up
         # (routing change, out of scope for a price-only revision).
+        # 2026-10-30: the pricing page still prices only "Scribe v2" ($0.22 per
+        # hour); elevenlabs.io/docs/overview/models lists scribe_v1 under
+        # "Deprecated models" (replacement scribe_v2). The scribe_v1 price is
+        # therefore NOT re-established and left as it was. "Speech to Text is
+        # billed per audio minute" names the unit, not a rounding step, so the
+        # granularity stays empty.
         unit_type: minutes
         cost_per_minute: 0.0037
         billing_granularity_sec: null
@@ -618,6 +746,11 @@ providers:
       - id: gpt-4o-mini-transcribe
         # $0.003/min per the official pricing page (developers.openai.com),
         # verified 2026-08-28 ($1.25/$5 per 1M tokens).
+        # 2026-10-30: unchanged. The page bills this model by tokens and calls
+        # $0.003/minute an "Estimated cost", so there is no per-second rounding
+        # step and the granularity stays empty (rows are estimated). Deprecated
+        # (2026-08-26 notice): shutdown Feb 26, 2027, replacement
+        # gpt-live-transcribe or gpt-transcribe.
         unit_type: minutes
         cost_per_minute: 0.003
         billing_granularity_sec: null
@@ -630,9 +763,13 @@ providers:
         # applies to Ukrainian audio. deepgram.com/pricing, verified 2026-08-28:
         # $0.0052/min (was $0.0058/min at 2026-07-26 — price drop). Adjacent
         # tier for reference: monolingual/English pre-recorded $0.0043/min.
+        # 2026-10-30: unchanged ($0.0052 in the page's Pre-recorded / Pay as you
+        # go offer for Nova-3 Multilingual). Granularity 1 s: "Billing is per
+        # second of processed audio, so a 14-second file bills as 14 seconds.
+        # There is no minimum duration and no rounding up to the next block."
         unit_type: minutes
         cost_per_minute: 0.0052
-        billing_granularity_sec: null
+        billing_granularity_sec: 1
 
 strategies:
   transcription:

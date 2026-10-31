@@ -31,6 +31,11 @@ nav:
   - Головна: uk/index.md
   - Для авторів:
       - Огляд: uk/authors/index.md
+      - Як платформа розуміє ваш курс: uk/authors/how-it-works.md
+      - Вхід і перший курс: uk/authors/first-course.md
+      - Структура курсу: uk/authors/structure.md
+      - Матеріали: uk/authors/materials.md
+      - Завдання: uk/authors/tasks.md
       - Тести: uk/authors/tests.md
       - Тести й критерії через API: uk/authors/api.md
   - Для студентів: uk/students/index.md

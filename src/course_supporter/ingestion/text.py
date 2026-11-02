@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from course_supporter.cost_estimate.hooks import shadow_parsed_document
 from course_supporter.ingestion.base import (
     MaterialProcessor,
     UnsupportedFormatError,
@@ -83,12 +84,16 @@ class TextProcessor(MaterialProcessor):
             chunk_count=len(chunks),
         )
 
-        return SourceDocument(
+        doc = SourceDocument(
             source_type=SourceType.TEXT,
             source_url=source.source_url,
             title=source.filename or path.stem,
             chunks=chunks,
         )
+        # Shadow price estimate (BIL-D); the safety check after process_raw is
+        # the first paid step. Never raises.
+        await shadow_parsed_document(doc, kind="text", source=source)
+        return doc
 
     def _process_markdown(self, path: Path) -> list[ContentChunk]:
         """Parse Markdown file into heading/paragraph chunks.

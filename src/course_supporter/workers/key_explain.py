@@ -39,6 +39,7 @@ Order of the body, and why each step is where it is:
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -54,6 +55,7 @@ from course_supporter.agents.key_explainer import (
     KeyExplainerAgent,
 )
 from course_supporter.call_outcome import FundsDecision
+from course_supporter.cost_estimate.hooks import shadow_task_preparation
 from course_supporter.funds_port import (
     AlwaysEnoughFundsPort,
     FundsPort,
@@ -145,6 +147,15 @@ async def arq_explain_key(
             key.written_text
             if key.written_text is not None
             else await _task_text(session, document.id)
+        )
+        # Shadow price estimate (BIL-D): never raises, its own transaction.
+        await shadow_task_preparation(
+            kind="key_explanation",
+            authored_document_id=document.id,
+            version=str(version.id),
+            task_chars=len(task_text) + len(json.dumps(key.answers, default=str)),
+            tenant_id=context.tenant_id,
+            session_factory=session_factory,
         )
         try:
             written = await KeyExplainerAgent(stage_router).explain(

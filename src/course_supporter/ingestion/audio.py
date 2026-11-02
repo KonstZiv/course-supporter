@@ -92,6 +92,8 @@ from pydantic import ValidationError
 
 from course_supporter.concept_dedup import dedupe_concepts, subtract_by_key
 from course_supporter.config import get_settings
+from course_supporter.cost_estimate.actions import MaterialFactors
+from course_supporter.cost_estimate.hooks import shadow_processing
 from course_supporter.ingestion.base import (
     MaterialProcessor,
     ProcessingError,
@@ -350,11 +352,19 @@ class AudioProcessor(MaterialProcessor):
         # register prices the transcription from it (BIL-C, decision 6) and the
         # provider sizes its timeout by it (task M1). A probe that fails leaves
         # it unknown -- the attempt row then says "unknown" rather than guess.
+        duration_sec = await _probe_duration(source.source_url)
+        # Shadow price estimate (BIL-D): the duration is the cost driver, and
+        # the transcription below is the first paid step. Never raises.
+        await shadow_processing(
+            kind="audio",
+            factors=lambda: MaterialFactors(duration_sec=duration_sec),
+            source=source,
+        )
         result = await self._stt_router.transcribe(
             "transcribe",
             source.source_url,
             language=None,
-            duration_sec=await _probe_duration(source.source_url),
+            duration_sec=duration_sec,
         )
 
         if not result.words:

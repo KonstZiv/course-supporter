@@ -74,6 +74,7 @@ import structlog
 from sqlalchemy import func, select
 
 from course_supporter.agents.criteria_decomposer import CriteriaDecomposerAgent
+from course_supporter.cost_estimate.hooks import shadow_task_preparation
 from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.criteria_list_state import CriteriaListState
 from course_supporter.homework.criteria_form import (
@@ -398,6 +399,7 @@ class CriteriaListService:
         heartbeat_interval: timedelta = HEARTBEAT_INTERVAL,
         wait_limit: timedelta = CLAIM_WAIT_LIMIT,
         poll_interval: timedelta = CLAIM_POLL_INTERVAL,
+        shadow_estimate: bool = False,
     ) -> None:
         """Wire the service.
 
@@ -410,6 +412,9 @@ class CriteriaListService:
             heartbeat_interval: How often a claimer renews its claim.
             wait_limit: How long after a claim a submission waits for it.
             poll_interval: How often a waiting submission re-reads the claim.
+            shadow_estimate: Write the shadow price estimate of a composition
+                before its model call (BIL-D). Only the new review path asks
+                for it; today's Mentor composes without one.
         """
         self._session_factory = session_factory
         self._composer = composer
@@ -417,6 +422,7 @@ class CriteriaListService:
         self._heartbeat_interval = heartbeat_interval
         self._wait_limit = wait_limit
         self._poll_interval = poll_interval
+        self._shadow_estimate = shadow_estimate
 
     async def get_or_compose(
         self, authored_document_id: uuid.UUID
@@ -595,6 +601,18 @@ class CriteriaListService:
                     root_concepts=root_concepts,
                     prompt_hash=self._composer.prompt_hash(),
                 )
+                if self._shadow_estimate:
+                    # Never raises; its own transaction (cost_estimate/shadow.py).
+                    await shadow_task_preparation(
+                        kind="criteria_decomposition",
+                        authored_document_id=document.id,
+                        version=snapshot.content_hash,
+                        task_chars=sum(
+                            len(part or "")
+                            for part in (title, description, text, node_description)
+                        ),
+                        session_factory=self._session_factory,
+                    )
                 composition = await self._composer.compose(
                     task_title=title,
                     task_description=description,
@@ -787,7 +805,17 @@ async def _latest_row_id(
 
 
 def build_criteria_list_service(
-    session_factory: async_sessionmaker[AsyncSession], stage_router: StageRouter
+    session_factory: async_sessionmaker[AsyncSession],
+    stage_router: StageRouter,
+    *,
+    shadow_estimate: bool = False,
 ) -> CriteriaListService:
-    """Wire the service with the production composer and the default timings."""
-    return CriteriaListService(session_factory, CriteriaDecomposerAgent(stage_router))
+    """Wire the service with the production composer and the default timings.
+
+    ``shadow_estimate``: see :class:`CriteriaListService` (BIL-D).
+    """
+    return CriteriaListService(
+        session_factory,
+        CriteriaDecomposerAgent(stage_router),
+        shadow_estimate=shadow_estimate,
+    )

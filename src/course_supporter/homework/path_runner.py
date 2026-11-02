@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from course_supporter.cost_estimate.hooks import shadow_review
 from course_supporter.funds_port import (
     AlwaysEnoughFundsPort,
     SubmissionContext,
@@ -320,6 +321,17 @@ async def _run_path(
         # The doors refused and persisted their own refusal, as they do today.
         return
     submission_text = reading.text
+    # ── Shadow price estimate (BIL-D): written beside the run, never in its way ──
+    await shadow_review(
+        session_factory=ctx["session_factory"],
+        submission_id=submission.id,
+        tenant_id=submission.tenant_id,
+        job_id=job_id,
+        path_key=str(choice.key),
+        stage_names=choice.stages,
+        path_stages=config.stages,
+        submission_chars=len(submission_text),
+    )
     try:
         # ── The first funds question, before anything is paid for ──
         context = SubmissionContext(

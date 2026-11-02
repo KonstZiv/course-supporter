@@ -49,6 +49,7 @@ import structlog
 from pydantic import ValidationError
 
 from course_supporter.concept_dedup import dedupe_concepts, subtract_by_key
+from course_supporter.cost_estimate.hooks import shadow_parsed_document
 from course_supporter.ingestion.base import (
     CategorisedProcessingError,
     MaterialProcessor,
@@ -325,7 +326,7 @@ class CodeProcessor(MaterialProcessor):
             excluded_count=len(self._excluded),
         )
 
-        return SourceDocument(
+        doc = SourceDocument(
             source_type=SourceType.CODE,
             source_url=source.source_url,
             title=source.filename or path.stem,
@@ -339,6 +340,10 @@ class CodeProcessor(MaterialProcessor):
                 "file_roles": role_map,
             },
         )
+        # Shadow price estimate (BIL-D): the files are read, every model call
+        # comes after process_raw. Never raises.
+        await shadow_parsed_document(doc, kind="code", source=source, files=len(chunks))
+        return doc
 
     def _load_members(
         self, source: AuthoredDocument, path: Path

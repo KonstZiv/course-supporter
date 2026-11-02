@@ -45,6 +45,8 @@ from typing import TYPE_CHECKING
 import structlog
 
 from course_supporter.config import get_settings
+from course_supporter.cost_estimate.actions import MaterialFactors
+from course_supporter.cost_estimate.hooks import shadow_processing
 from course_supporter.ingestion.base import MaterialProcessor, ProcessingError
 from course_supporter.ingestion.video_pipeline import steps
 from course_supporter.ingestion.video_pipeline.schemas import STT_RESULT_KEY_TMPL
@@ -125,6 +127,16 @@ class VideoProcessor(MaterialProcessor):
                 "video.step_1_ingest.done",
                 elapsed_ms=int((time.perf_counter() - step_start) * 1000),
                 duration_ms=file_metadata.duration_ms,
+            )
+
+            # Shadow price estimate (BIL-D): the duration is known, the STT
+            # below is the first paid step. Never raises.
+            await shadow_processing(
+                kind="video",
+                factors=lambda: MaterialFactors(
+                    duration_sec=file_metadata.duration_ms / 1000
+                ),
+                source=source,
             )
 
             step_start = time.perf_counter()

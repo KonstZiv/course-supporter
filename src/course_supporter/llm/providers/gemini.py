@@ -15,6 +15,14 @@ from course_supporter.llm.json_extract import strip_markdown_json
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse, SchemaMode
 
+# One attempt, no SDK retry (BIL-D): the ladder owns every retry. Spelled out
+# although ``retry_options=None`` also means one attempt today, so that a new
+# SDK default cannot switch retries on unseen. ``attempts=1``, never 0: the SDK
+# reads 0 as "not set" and falls back to its default of 5 attempts.
+_NO_SDK_RETRIES = types.HttpOptions(
+    retry_options=types.HttpRetryOptions(attempts=1),
+)
+
 # Gemini surfaces context overflow as ClientError code=400 with a
 # message describing the limit; HTTP 413 is also possible. Pattern
 # matches both Google API phrasing variants.
@@ -194,7 +202,9 @@ class GeminiProvider(LLMProvider):
 
     def __init__(self, api_keys: Sequence[str], default_model: str) -> None:
         super().__init__()
-        self._clients = tuple(genai.Client(api_key=k) for k in api_keys)
+        self._clients = tuple(
+            genai.Client(api_key=k, http_options=_NO_SDK_RETRIES) for k in api_keys
+        )
         self._client_cycle: Iterator[genai.Client] = itertools.cycle(self._clients)
         self._default_model = default_model
 

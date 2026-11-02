@@ -83,6 +83,12 @@ def _reasoning_output(usage: CompletionUsage) -> int | None:
 # escalates instead of hanging the ARQ event loop (TASK-2.4.18).
 _DEFAULT_HTTP_TIMEOUT = httpx.Timeout(900.0, connect=30.0)
 
+# The SDK retries a failed request twice on its own by default
+# (``openai.DEFAULT_MAX_RETRIES``). Every retry is a call the register never
+# sees and a second bill for one attempt; the ladder (``llm/stage_router.py``,
+# KD16) owns all retries, so the SDK makes none (BIL-D).
+SDK_MAX_RETRIES = 0
+
 
 def _build_vision_content(
     images: list[bytes],
@@ -131,7 +137,10 @@ class OpenAICompatProvider(LLMProvider):
         self._base_url = base_url
         self._clients = tuple(
             openai.AsyncOpenAI(
-                api_key=k, base_url=base_url, timeout=_DEFAULT_HTTP_TIMEOUT
+                api_key=k,
+                base_url=base_url,
+                timeout=_DEFAULT_HTTP_TIMEOUT,
+                max_retries=SDK_MAX_RETRIES,
             )
             for k in api_keys
         )

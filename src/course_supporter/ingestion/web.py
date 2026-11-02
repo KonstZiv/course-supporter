@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import structlog
 
+from course_supporter.cost_estimate.hooks import shadow_parsed_document
 from course_supporter.ingestion.base import (
     MaterialProcessor,
     UnsupportedFormatError,
@@ -89,7 +90,7 @@ class WebProcessor(MaterialProcessor):
             chunk_count=len(chunks),
         )
 
-        return SourceDocument(
+        doc = SourceDocument(
             source_type=SourceType.WEB,
             source_url=url,
             title=source.filename or domain,
@@ -100,6 +101,10 @@ class WebProcessor(MaterialProcessor):
                 "content_snapshot": scraped.raw_html,
             },
         )
+        # Shadow price estimate (BIL-D): the page is fetched and parsed, the
+        # safety check after process_raw is the first paid step. Never raises.
+        await shadow_parsed_document(doc, kind="web", source=source)
+        return doc
 
     @staticmethod
     def _text_to_chunks(text: str) -> list[ContentChunk]:

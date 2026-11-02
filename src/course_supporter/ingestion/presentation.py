@@ -57,6 +57,8 @@ import structlog
 from pydantic import ValidationError
 
 from course_supporter.concept_dedup import dedupe_concepts, subtract_by_key
+from course_supporter.cost_estimate.actions import MaterialFactors
+from course_supporter.cost_estimate.hooks import shadow_processing
 from course_supporter.ingestion.base import (
     CategorisedProcessingError,
     MaterialProcessor,
@@ -273,6 +275,18 @@ class PresentationProcessor(MaterialProcessor):
             source_url=source.source_url,
             slide_count=len(slide_raw),
             emitted_chunk_count=len(chunks),
+        )
+        # Shadow price estimate (BIL-D): slides, image-only slides and text are
+        # known; nothing has been paid for yet. Never raises.
+        await shadow_processing(
+            kind="presentation",
+            factors=lambda: MaterialFactors(
+                slides=len(slide_raw),
+                image_only_slides=sum(1 for sr in slide_raw if not sr.raw_text),
+                text_chars=len(doc.assemble_text()),
+                safety_chars=len(doc.safety_text()),
+            ),
+            source=source,
         )
         return doc
 

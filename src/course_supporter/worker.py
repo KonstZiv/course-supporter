@@ -193,6 +193,10 @@ async def startup(ctx: WorkerCtx) -> None:
 
     ctx["engine"] = engine
     ctx["session_factory"] = session_factory
+    # Shadow price estimates (BIL-D): the processors write through this factory.
+    from course_supporter.cost_estimate.shadow import configure
+
+    configure(session_factory)
     ctx["stage_router"] = stage_router
     ctx["s3_client"] = s3
 

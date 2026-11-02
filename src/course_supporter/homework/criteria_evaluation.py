@@ -131,7 +131,9 @@ async def evaluate_criteria(
     source = (
         criteria_source
         if criteria_source is not None
-        else build_criteria_list_service(context.session_factory, context.router)
+        else build_criteria_list_service(
+            context.session_factory, context.router, shadow_estimate=True
+        )
     )
     listed = await source.get_or_compose(submission.authored_document_id)
     if not isinstance(listed, CriteriaInForce):

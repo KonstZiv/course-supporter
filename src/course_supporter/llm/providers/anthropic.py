@@ -44,7 +44,10 @@ class AnthropicProvider(LLMProvider):
 
     def __init__(self, api_keys: Sequence[str], default_model: str) -> None:
         super().__init__()
-        self._clients = tuple(anthropic.AsyncAnthropic(api_key=k) for k in api_keys)
+        # No SDK retries (default 2): the ladder owns every retry (BIL-D).
+        self._clients = tuple(
+            anthropic.AsyncAnthropic(api_key=k, max_retries=0) for k in api_keys
+        )
         self._client_cycle: Iterator[anthropic.AsyncAnthropic] = itertools.cycle(
             self._clients
         )

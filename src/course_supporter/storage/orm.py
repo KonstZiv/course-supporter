@@ -21,6 +21,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
     case,
     func,
@@ -3894,3 +3895,126 @@ NodeSummaryFinal.__scrub_callable__ = scrub_node_summary_final
 NodeSummaryFinalPreviousSnapshot.__scrub_callable__ = (
     scrub_node_summary_final_previous_snapshot
 )
+
+
+# ── BIL-D: shadow price estimates ──
+
+
+class ActionCostEstimate(Base):
+    """The expected cost of one action, written beside it before it runs (BIL-D).
+
+    Shadow mode: nothing is charged from it and nobody is shown it. The
+    calibration report (``scripts/cost_estimate_report.py``) compares it with
+    the action's actual cost in ``external_service_calls``.
+
+    One row per action — ``(action_kind, action_key)`` is unique, so a second
+    estimate of the same action writes nothing. The row is a record that must
+    outlive what it is about, and must never stand in the way of deleting it:
+    the ids it names are plain indexed columns WITHOUT foreign keys. Not
+    ``ON DELETE SET NULL`` either: one cascading delete (an account) reaches
+    the row by several such paths, and Postgres then fails the delete on the
+    foreign key of a row a sibling action already updated — the estimate
+    would block the account's deletion.
+    """
+
+    __tablename__ = "action_cost_estimates"
+    __table_args__ = (
+        CheckConstraint(
+            "action_kind IN ('review', 'processing', 'task_preparation')",
+            name="ck_action_cost_estimates_action_kind",
+        ),
+        CheckConstraint(
+            "(p_units IS NULL) = (units_per_usd IS NULL) "
+            "AND (reserve_units IS NULL) = (units_per_usd IS NULL)",
+            name="ck_action_cost_estimates_units_need_rate",
+        ),
+        UniqueConstraint(
+            "action_kind", "action_key", name="uq_action_cost_estimates_action"
+        ),
+        {
+            "comment": "Shadow price estimate of one action (BIL-D): expected cost "
+            "E before the action runs, for calibration against the call register. "
+            "One row per action; never deleted with what it is about."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    action_kind: Mapped[str] = mapped_column(
+        String(32),
+        comment="review (one submission with all its jobs) | processing (one "
+        "job) | task_preparation (one task version and kind of preparation).",
+    )
+    action_key: Mapped[str] = mapped_column(
+        String(200),
+        comment="The action's identity as text: the submission id, the job id, "
+        "or '<authored_document_id>:<version>:<kind>'. Kept when the rows it "
+        "names are deleted.",
+    )
+    # No foreign keys on purpose (class docstring): kept after any delete,
+    # never in its way.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        index=True,
+        comment="Tenant the action belongs to. No FK: survives the tenant.",
+    )
+    submission_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        index=True,
+        comment="HomeworkSubmission of a review. No FK: survives the submission.",
+    )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        index=True,
+        comment="Job the estimate was made in. No FK: survives the job.",
+    )
+    authored_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        index=True,
+        comment="AuthoredDocument processed or prepared. No FK: survives the document.",
+    )
+    e_usd: Mapped[Decimal] = mapped_column(
+        Numeric(18, 12),
+        comment="Expected cost E in USD: the first rung of every step, at the "
+        "catalog prices and the tariff window of the estimate's moment.",
+    )
+    p_units: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Price shown: ceil(E * (1 + margin) * units_per_usd). NULL while "
+        "units_per_usd is not set.",
+    )
+    reserve_units: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Reserve: ceil(2 * E * units_per_usd). NULL while units_per_usd "
+        "is not set.",
+    )
+    margin: Mapped[Decimal] = mapped_column(
+        Numeric(8, 4), comment="The margin the price was computed with."
+    )
+    units_per_usd: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6),
+        comment="Units per 1 USD of cost (K) at the time; NULL = not set yet.",
+    )
+    catalog_version: Mapped[str | None] = mapped_column(
+        String(32),
+        comment="Version of config/external_services.yaml the prices came from.",
+    )
+    breakdown: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        comment="The steps: step, model, tokens in/out (or billed seconds), "
+        "prices, peak or not, cost.",
+    )
+    inputs: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        comment="What the estimate was computed from: sizes, durations, counts, "
+        "the path, the moment.",
+    )
+    uncalibrated: Mapped[bool] = mapped_column(
+        Boolean,
+        comment="True when a parameter used is still marked uncalibrated in "
+        "config/cost_estimate.yaml, or units_per_usd is not set.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the estimate was written.",
+    )

@@ -484,6 +484,8 @@ class Settings(BaseSettings):
     mentor_review_config_path: Path = Path("config/mentor_review.yaml")
     sanity_config_path: Path = Path("config/sanity.yaml")
     submission_paths_config_path: Path = Path("config/submission_paths.yaml")
+    # Shadow price estimates (BIL-D): margin, units per dollar, typical lengths.
+    cost_estimate_config_path: Path = Path("config/cost_estimate.yaml")
     # One file per language, named by its ISO 639-3 code: the phrases a review
     # is assembled from (mentor-rebuild task 04).
     phrasebook_dir: Path = Path("config/phrasebook")

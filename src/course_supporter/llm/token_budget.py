@@ -28,7 +28,17 @@ def estimate_tokens(prompt: str, system_prompt: str | None = None) -> int:
     total_chars = len(prompt)
     if system_prompt:
         total_chars += len(system_prompt)
-    return int(total_chars / _CHARS_PER_TOKEN)
+    return tokens_for_chars(total_chars)
+
+
+def tokens_for_chars(chars: int) -> int:
+    """Our token count for ``chars`` characters of text — the same ratio.
+
+    For callers that know a text's length without holding the text: the shadow
+    price estimate (BIL-D) sizes a step's input from lengths, and must count
+    them exactly as the router counts a prompt.
+    """
+    return int(chars / _CHARS_PER_TOKEN)
 
 
 def estimate_request_input_tokens(request: LLMRequest) -> int | None:

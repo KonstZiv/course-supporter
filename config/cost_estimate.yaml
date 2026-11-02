@@ -1,0 +1,114 @@
+# Shadow price estimates of actions (BIL-D). Shape and checks:
+# src/course_supporter/cost_estimate/settings.py. Read once per process.
+#
+# An estimate prices every step of an action once, on the first rung of its
+# ladder the input fits by the router's input_budget_ratio rule, at the catalog
+# prices (config/external_services.yaml) — fallback rungs are not in E. What it
+# cannot read from the material it takes from here.
+#
+# Every number below is "не калібровано" (calibrated: false) and names its
+# source. The calibration report (scripts/cost_estimate_report.py) compares
+# the estimates with the call register; a measured median replaces a number
+# here, one step per line, and its line gets calibrated: true.
+#
+# Prompt sizes "measured": the characters of the step's prompt_ref file
+# (2026-11-02) at the router's 3.5 characters a token
+# (llm/token_budget.py) — the template only, before anything is put in it.
+
+# ── Operator parameters (ratified) ──
+margin: 0.20          # P = E x (1 + margin)
+units_per_usd: null   # K, units per 1 USD of cost: set after calibration
+guard_minutes: 15     # a peak that starts within this many minutes prices as peak
+
+# ── Review on the new path: stages of config/submission_paths.yaml ──
+# input = submission text + prompt_tokens; output = output_tokens per call;
+# calls = expected calls of the stage per submission.
+review:
+  # prompt: prompts/safety_check/v1.md, measured. output: no measured number
+  # in code or fixtures — the stage's output ceiling (8192), стеля.
+  safety:             {prompt_tokens: 2301, output_tokens: 8192, calibrated: false}
+  # prompt: prompts/sanity_check/v1.md, measured. output: стеля (8192).
+  attempt_classifier: {prompt_tokens: 698, output_tokens: 8192, calibrated: false}
+  # prompt: submission_paths.yaml `criteria_evaluation` money comment — 56 021
+  # tokens at the largest input minus the work at its budget (37 449) = 18 572
+  # (task ~20 000 chars, 37 criteria, prompt). output: first-rung pin 16384,
+  # стеля; qwen's reasoning (not in the pin) is not counted. calls: 1 — the
+  # repeat about verdicts that cannot stand starts at 0 (operator, BIL-D).
+  criteria_evaluation: {prompt_tokens: 18572, output_tokens: 16384, calls: 1, calibrated: false}
+  # prompt: submission_paths.yaml `review_explanation` money comment — 59 735
+  # minus the work at its budget (37 449) = 22 286. output: pin 8192, стеля.
+  # calls: 1 — the retry with the reason starts at 0 (operator, BIL-D).
+  review_explanation: {prompt_tokens: 22286, output_tokens: 8192, calls: 1, calibrated: false}
+
+# ── Task preparation: input = the task document + prompt_tokens ──
+task_preparation:
+  # prompt: prompts/criteria_decomposition/v2.md, measured. output: 7696 —
+  # the largest successful output in the prod register (ladders_mentor.yaml,
+  # criteria_decomposition rung 1 comment: 7696, 6345).
+  criteria_decomposition: {prompt_tokens: 1708, output_tokens: 7696, calibrated: false}
+  # prompt: prompts/key_explanation/v2.md, measured. output: no measured
+  # number (ladders_mentor.yaml: "NOT CALIBRATED") — rung-1 pin 32768, стеля.
+  key_explanation: {prompt_tokens: 1059, output_tokens: 32768, calibrated: false}
+
+# ── Processing of an author's material (one job) ──
+processing:
+  speech:
+    # tests/fixtures/audio/scribe_v1_ukrainian_124min.json (124.32 min):
+    # 13 703 words -> 110.2 words a minute; its text 81 809 chars -> 5.97 a
+    # word. Pass 2a input as the code builds it (audio.py, steps.py
+    # `words_json`, spacing entries included): audio 2 159 826 chars -> 157.6 a
+    # word; video (no logprob) 1 262 647 chars -> 92.1 a word.
+    words_per_minute: 110.2
+    chars_per_word: 5.97
+    audio_2a_chars_per_word: 157.6
+    video_2a_chars_per_word: 92.1
+    calibrated: false
+  video:
+    # ladders_video.yaml video_pass_2a_mapping comment: a 10:48 video with 241
+    # visual scenes -> 22.3 a minute.
+    frames_per_minute: 22.3
+    # ingestion/video_pipeline/vision.py `_IMAGE_BUDGET` = 12 images a chunk.
+    frames_per_vision_call: 12
+    calibrated: false
+  denoise:
+    # Pass 2c runs once per segment Pass 2a marks noisy. Segment length:
+    # ladders_audio.yaml audio_pass_2c_denoise comment, "one segment's cleaned
+    # transcript (~15 min ≈ 3.5k tokens)". Noisy share: no number in code or
+    # fixtures — 0.5 (operator, BIL-D).
+    minutes_per_segment: 15
+    noisy_share: 0.5
+    calibrated: false
+  code:
+    # code_skeleton_extraction calls the model only for a file that is not
+    # verbatim, not Python with a clean parse, not a known family — decided per
+    # file after the estimate's point; no number — 0.5 (operator, BIL-D).
+    llm_skeleton_share: 0.5
+    calibrated: false
+  steps:
+    # prompts/safety_check_authored/v1.md, measured; output стеля (registry
+    # max of mistral-small-latest, 8192 — the rung has no pin).
+    safety_check_authored:        {prompt_tokens: 2101, output_tokens: 8192, calibrated: false}
+    # prompt measured; output стеля (gemini-3.1-flash-lite registry max).
+    audio_pass_2a_mapping:        {prompt_tokens: 5456, output_tokens: 65536, calibrated: false}
+    # prompt measured; output 3500 — ladders_audio.yaml (~15 min ≈ 3.5k tokens).
+    audio_pass_2c_denoise:        {prompt_tokens: 1132, output_tokens: 3500, calibrated: false}
+    # prompt measured + 6144 image tokens a chunk (vision.py `_BUDGET_TOKENS`);
+    # output: rung-1 pin 8192, стеля.
+    video_pass_1_vision:          {prompt_tokens: 6583, output_tokens: 8192, calibrated: false}
+    # prompt measured; output 21000 — ladders_video.yaml: 21k reasoning tokens
+    # of the balanced run (the answer itself is not measured).
+    video_pass_2a_mapping:        {prompt_tokens: 3883, output_tokens: 21000, calibrated: false}
+    # prompt measured; output 3500 — ladders_video.yaml (3.5k per ~15 min).
+    video_pass_2c_denoise:        {prompt_tokens: 1222, output_tokens: 3500, calibrated: false}
+    # prompt measured + 2500 image tokens a slide (presentation.py: 1.1-2.5k
+    # a slide, upper end); output стеля (qwen3.5-flash registry max).
+    presentation_pass_1_vision:   {prompt_tokens: 2744, output_tokens: 65536, calibrated: false}
+    # prompt measured; output стеля (mistral-large-2512 registry max).
+    presentation_pass_2a_mapping: {prompt_tokens: 3152, output_tokens: 8192, calibrated: false}
+    # prompt measured; output 1800 — ladders_pipeline.yaml (~1.8k output
+    # tokens for a 10k-char text).
+    pass_2a_mapping:              {prompt_tokens: 4076, output_tokens: 1800, calibrated: false}
+    # prompts measured; outputs: rung-1 pins, стеля.
+    code_skeleton_extraction:     {prompt_tokens: 610, output_tokens: 8192, calibrated: false}
+    code_segment_description:     {prompt_tokens: 563, output_tokens: 4096, calibrated: false}
+    code_summary:                 {prompt_tokens: 359, output_tokens: 8192, calibrated: false}

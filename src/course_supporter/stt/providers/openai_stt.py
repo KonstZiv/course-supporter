@@ -39,7 +39,11 @@ class OpenAISTTProvider(STTProvider):
         default_model: str = "gpt-4o-mini-transcribe",
     ) -> None:
         super().__init__()
-        self._clients = tuple(openai.AsyncOpenAI(api_key=k) for k in api_keys)
+        # No SDK retries (default 2): the STT router retries and writes every
+        # attempt to the register (BIL-D).
+        self._clients = tuple(
+            openai.AsyncOpenAI(api_key=k, max_retries=0) for k in api_keys
+        )
         self._client_cycle: Iterator[openai.AsyncOpenAI] = itertools.cycle(
             self._clients
         )

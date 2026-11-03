@@ -221,16 +221,45 @@ class TestCourseLink:
         assert link.url is None
         assert link.later_in_course is True
 
-    def test_every_new_field_is_optional(self) -> None:
-        link = Reference(title="Змінні середовища")
+    def test_a_course_link_needs_its_fragment_and_nothing_else_new(self) -> None:
+        link = Reference(title="Змінні середовища", segment_id="s-1")
 
-        assert (link.url, link.position, link.excerpt, link.segment_id) == (
-            None,
-            None,
-            None,
-            None,
-        )
+        assert (link.url, link.position, link.excerpt) == (None, None, None)
         assert link.later_in_course is False
+
+
+class TestAReferencePointsSomewhere:
+    """Lock h (task 10, K6, decision 5): an address or a fragment, or refused."""
+
+    def test_an_outside_link_has_its_address(self) -> None:
+        assert Reference(title="The docs", url="https://example.test/d").url
+
+    def test_a_course_link_has_its_fragment(self) -> None:
+        assert Reference(title="Змінні середовища", segment_id="s-1").segment_id
+
+    def test_a_title_alone_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="points somewhere"):
+            Reference(title="Змінні середовища")
+
+    def test_a_stored_review_with_such_a_reference_is_refused(self) -> None:
+        """No builder writes one: a row that holds one is bad data, read as
+        absent by the surfaces (``curated_structure``)."""
+        with pytest.raises(ValidationError, match="points somewhere"):
+            ReviewStructureV1.model_validate(
+                {
+                    "schema_version": REVIEW_SCHEMA_VERSION,
+                    "language": "ukr",
+                    "verdict": {"passed": False, "why": "Not yet."},
+                    "new_remarks": [
+                        {
+                            "what": "Wrong.",
+                            "why": "It matters.",
+                            "todo": "Fix it.",
+                            "read": [{"title": "Nowhere"}],
+                        }
+                    ],
+                }
+            )
 
     def test_an_unknown_field_is_still_refused(self) -> None:
         """``extra="forbid"`` stays: a link that invents a field would have it

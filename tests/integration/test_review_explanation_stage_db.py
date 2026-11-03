@@ -22,6 +22,7 @@ Requires ``docker compose up -d``; run with ``--run-db``.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import uuid
 from collections.abc import AsyncGenerator, Callable
@@ -32,6 +33,7 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
@@ -796,3 +798,47 @@ class TestTheCourseLinks:
         assert kept is not None
         assert [r["links"] for r in kept[1]["remarks"]] == [["c2.l1", "c2.l2"]]
         assert await _traces(session_factory, register_job) == []
+
+    async def test_an_anchor_that_does_not_fit_is_shown_without_a_place(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        """Task 10, K6, lock e: a kept place whose anchor does not fit its
+        material is shown without a position, the log names its fragment, and
+        the stage goes on."""
+        source_id = await _authors_list(db_session, doc)
+        await _verdicts(
+            db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
+        )
+        # A video's place with a paragraph's anchor.
+        misfit = dataclasses.replace(_place("Тести", 3), source_type="video")
+        await SubmissionVerdictRepository(db_session).store_candidates(
+            tenant_id=submission.tenant_id,
+            submission_id=submission.id,
+            body=FoundCourseLinks(
+                criteria=(CriterionLinks(item_id="c2", candidates=(misfit,)),)
+            ).model_dump(mode="json"),
+        )
+        router = _Router(_answer(links=("c2.l1",)))
+
+        with capture_logs() as logs:
+            outcome = await _explain(db_session, router, submission)
+
+        assert outcome == StageOutcome.ok()
+        assert router.requests[0]["render"]["course_links"] == [
+            {
+                "criterion": "c2",
+                "links": [
+                    {
+                        "id": "c2.l1",
+                        "material": "Тести",
+                        "position": None,
+                        "excerpt": "Початок Тести",
+                    }
+                ],
+            }
+        ]
+        skipped = [e for e in logs if e["event"] == "course_link_position_skipped"]
+        assert [e["segment_id"] for e in skipped] == [str(misfit.segment_id)]

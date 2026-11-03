@@ -7,11 +7,13 @@ timed, and the anchors that hold no place to name.
 from __future__ import annotations
 
 import doctest
+import uuid
 
 import pytest
+from structlog.testing import capture_logs
 
 from course_supporter.homework import course_link_position
-from course_supporter.homework.course_link_position import position_of
+from course_supporter.homework.course_link_position import link_position, position_of
 from course_supporter.models.review_structure import Position
 from course_supporter.storage.document_segment_repository import SegmentAnchor
 
@@ -126,3 +128,33 @@ class TestDocstrings:
 
         assert results.failed == 0
         assert results.attempted > 0
+
+
+class TestALinkThatIsKept:
+    """Task 10, K6, lock e: a kept link's misfit is skipped, never raised."""
+
+    def test_a_fitting_anchor_gives_its_position(self) -> None:
+        assert link_position(
+            SegmentAnchor("slide", 4, 6), "presentation", segment_id=_SEGMENT
+        ) == Position(kind="slide", value="4")
+
+    @pytest.mark.parametrize(
+        ("source_type", "anchor"),
+        [
+            ("video", SegmentAnchor("paragraph", 3, 4)),
+            ("hologram", SegmentAnchor("time", 1.0, 2.0)),
+        ],
+        ids=["anchor-of-another-kind", "source-type-with-no-place"],
+    )
+    def test_a_misfit_has_no_position_and_a_warning(
+        self, source_type: str, anchor: SegmentAnchor
+    ) -> None:
+        with capture_logs() as logs:
+            assert link_position(anchor, source_type, segment_id=_SEGMENT) is None
+
+        assert [(e["event"], e["log_level"], e["segment_id"]) for e in logs] == [
+            ("course_link_position_skipped", "warning", str(_SEGMENT))
+        ]
+
+
+_SEGMENT = uuid.UUID("0192f6a0-0000-7000-8000-000000000001")

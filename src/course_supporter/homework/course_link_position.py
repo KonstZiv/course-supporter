@@ -11,9 +11,13 @@ Purpose:
 Interface:
     :func:`position_of` — anchor and source type to a position, or ``None``
     when the anchor holds no place to name.
+    :func:`link_position` — the same for a kept course link, forgiving: an
+    anchor that does not fit its source type leaves the link without a place
+    and a warning in the log, never a failed stage (task 10, K6, decision 7).
 
-Pure: no database, no clock. The source type decides the kind, as it does for
-the anchor itself, so a recording is never called a video.
+:func:`position_of` is pure: no database, no clock. The source type decides
+the kind, as it does for the anchor itself, so a recording is never called a
+video.
 
 >>> from course_supporter.storage.document_segment_repository import SegmentAnchor
 >>> position_of(SegmentAnchor("time", 221.7, 260.0), "audio")
@@ -24,14 +28,19 @@ True
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING
+
+import structlog
 
 from course_supporter.models.review_structure import Position
 
 if TYPE_CHECKING:
     from course_supporter.storage.document_segment_repository import SegmentAnchor
 
-__all__ = ["position_of"]
+__all__ = ["link_position", "position_of"]
+
+logger = structlog.get_logger(__name__)
 
 _SECONDS_IN_HOUR = 3600
 
@@ -100,3 +109,31 @@ def position_of(anchor: SegmentAnchor, source_type: str) -> Position | None:
     if kind in ("video", "audio"):
         return Position(kind=kind, value=_clock(anchor.start))
     return Position(kind=kind, value=str(int(anchor.start)))
+
+
+def link_position(
+    anchor: SegmentAnchor, source_type: str, *, segment_id: uuid.UUID
+) -> Position | None:
+    """:func:`position_of` for a link that is already kept: a misfit is skipped.
+
+    The explanation stage and the review's builder read the anchors of kept
+    candidates, which the search took from the database. An anchor that does
+    not fit its source type there is a defect upstream — and still no reason
+    to fail a student's review over one place in a material: the link keeps
+    its material and loses its place, and the log names the fragment
+    (decision 7 of task 10, K6).
+
+    Returns:
+        The position; ``None`` when the anchor names none or does not fit.
+    """
+    try:
+        return position_of(anchor, source_type)
+    except ValueError as exc:
+        logger.warning(
+            "course_link_position_skipped",
+            segment_id=str(segment_id),
+            source_type=source_type,
+            anchor_kind=anchor.kind,
+            reason=str(exc),
+        )
+        return None

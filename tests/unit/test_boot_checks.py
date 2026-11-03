@@ -35,6 +35,7 @@ from fastapi import FastAPI
 
 from course_supporter import boot, language
 from course_supporter.config import get_settings
+from course_supporter.homework import path_config
 
 # ``import course_supporter.api.app`` binds the package's ``app`` attribute --
 # the FastAPI instance -- not the module. import_module returns the module.
@@ -220,3 +221,23 @@ class TestLifespanActuallyRuns:
         monkeypatch.setattr(get_settings(), "ladders_dir", ladders)
 
         self._boot_fails(monkeypatch, re.escape("v9.md"))
+
+    def test_test_mode_on_a_test_stops_the_boot(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Task 10, K6, lock d: the shipped file with ``test_mode: true`` on
+        ``test`` — test mode is for the types charged for — refuses the start."""
+        real = get_settings().submission_paths_config_path
+        raw = yaml.safe_load(real.read_text(encoding="utf-8"))
+        raw["task_types"]["test"]["test_mode"] = True
+        broken = tmp_path / "submission_paths.yaml"
+        broken.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+        monkeypatch.setattr(get_settings(), "submission_paths_config_path", broken)
+        # The boot reads the file through the per-process cache; an explicit
+        # path replaces it, so the real file is read back afterwards.
+        monkeypatch.setattr(path_config, "_config", None)
+
+        try:
+            self._boot_fails(monkeypatch, re.escape("Task type 'test' is in test mode"))
+        finally:
+            path_config.get_path_config(real)

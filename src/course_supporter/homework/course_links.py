@@ -8,8 +8,11 @@ Purpose:
 
     The path's step that asks it is :func:`look_up_course_links` (the code
     stage ``course_link_lookup``, K5): it keeps what was found for the
-    explanation stage, which shows it to the model. The link's form in the
-    review is the next commit.
+    explanation stage, which shows it to the model under local identifiers
+    (:meth:`FoundCourseLinks.shown`). What the model chose becomes a link of
+    the review when the review is built, checked once more before it is
+    given (``homework/course_link_delivery.py``, K6); what was given is kept
+    beside what was found (:attr:`FoundCourseLinks.settled`).
 
     ``course_link`` names the thing throughout, because "reference" is taken
     by a test's answer key (``TaskReference``, ``reference_service.py``).
@@ -183,6 +186,16 @@ class SubmissionScope:
     course_root_id: uuid.UUID
     task_node_id: uuid.UUID
     task_document_id: uuid.UUID
+
+
+def submission_scope(submission: HomeworkSubmission) -> SubmissionScope:
+    """The scope of ``submission``'s links: its course root, node and task."""
+    return SubmissionScope(
+        tenant_id=submission.tenant_id,
+        course_root_id=submission.course_node_id,
+        task_node_id=submission.node_id,
+        task_document_id=submission.authored_document_id,
+    )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -512,23 +525,60 @@ class CriterionLinks(BaseModel):
     candidates: tuple[LinkCandidate, ...]
 
 
+def local_link_id(item_id: str, rank: int) -> str:
+    """The identifier a place is shown to the model by: ``c3.l1`` — rank from 1.
+
+    Not a database id: it means something only against the kept row it was
+    shown from, which is why the review's builder resolves it there.
+    """
+    return f"{item_id}.l{rank}"
+
+
 class FoundCourseLinks(BaseModel):
     """What the step found for one submission — the body of its kept row.
 
     Attributes:
         criteria: Every failed criterion, in the list's order; empty when no
             criterion failed.
+        settled: The links the review gives, by criterion — what the model
+            chose, checked before delivery (K6) — as the review's first build
+            settled them; ``None`` until then. A later build of the same
+            review gives these and checks nothing again, so a review built
+            twice links the same places. A repeat run of the search replaces
+            the row and so clears them: a new explanation is coming.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     criteria: tuple[CriterionLinks, ...]
+    settled: tuple[CriterionLinks, ...] | None = None
 
     def candidates_of(self, item_id: str) -> tuple[LinkCandidate, ...]:
         """The places kept for ``item_id``; none kept — an empty tuple."""
         for found in self.criteria:
             if found.item_id == item_id:
                 return found.candidates
+        return ()
+
+    def shown(self, item_id: str) -> tuple[tuple[str, LinkCandidate], ...]:
+        """The places of ``item_id`` the model is shown, under their local ids.
+
+        The first :data:`MAX_LINKS` kept for it, best first, as
+        ``(c3.l1, place)``: the one definition of the identifiers, for the
+        stage that shows them and for the builder that resolves the answer.
+        """
+        return tuple(
+            (local_link_id(item_id, rank), candidate)
+            for rank, candidate in enumerate(
+                self.candidates_of(item_id)[:MAX_LINKS], start=1
+            )
+        )
+
+    def settled_of(self, item_id: str) -> tuple[LinkCandidate, ...]:
+        """The links settled for ``item_id``; none, or not settled — empty."""
+        for given in self.settled or ():
+            if given.item_id == item_id:
+                return given.candidates
         return ()
 
 
@@ -569,13 +619,9 @@ async def look_up_course_links(
     if not failed:
         found = FoundCourseLinks(criteria=())
     else:
-        scope = SubmissionScope(
-            tenant_id=submission.tenant_id,
-            course_root_id=submission.course_node_id,
-            task_node_id=submission.node_id,
-            task_document_id=submission.authored_document_id,
+        links = await build_course_link_finder(session).find(
+            submission_scope(submission), failed
         )
-        links = await build_course_link_finder(session).find(scope, failed)
         found = FoundCourseLinks(
             criteria=tuple(
                 CriterionLinks(item_id=c.id, candidates=tuple(links.get(c.id, ())))

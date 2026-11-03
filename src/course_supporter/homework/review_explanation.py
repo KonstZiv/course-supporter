@@ -66,8 +66,8 @@ from course_supporter.agents.review_explainer import (
     ReviewExplainerAgent,
     ShownLink,
 )
-from course_supporter.homework.course_link_position import position_of
-from course_supporter.homework.course_links import MAX_LINKS, FoundCourseLinks
+from course_supporter.homework.course_link_position import link_position
+from course_supporter.homework.course_links import FoundCourseLinks
 from course_supporter.homework.judged_list import read_judged_list
 from course_supporter.homework.path_stages import StageOutcome
 from course_supporter.homework.task_context import load_task_context
@@ -187,24 +187,29 @@ def links_to_show(
 ) -> dict[str, tuple[ShownLink, ...]]:
     """The places of the course the explanation is shown, by criterion id.
 
-    For each criterion of ``unmet``, the first :data:`MAX_LINKS` places the
-    search kept for it, best first, each under a local identifier: the
-    criterion's id, ``.l`` and its rank from 1 (``c3.l1``). The same inputs
-    give the same identifiers, so a later reader of the kept answer resolves
-    them against the same kept places. A criterion without places maps to an
-    empty tuple; places kept for a criterion that is met are not shown.
+    For each criterion of ``unmet``, the first places the search kept for
+    it (``MAX_LINKS`` at most), best first, each under a local identifier:
+    the criterion's id, ``.l`` and its rank from 1 (``c3.l1``;
+    :meth:`~course_supporter.homework.course_links.FoundCourseLinks.shown`).
+    The same inputs give the same identifiers, so a later reader of the kept
+    answer resolves them against the same kept places. A criterion without
+    places maps to an empty tuple; places kept for a criterion that is met
+    are not shown. A place whose anchor does not fit its material is shown
+    without a position (:func:`link_position`), and the stage goes on.
     """
     return {
         criterion_id: tuple(
             ShownLink(
-                id=f"{criterion_id}.l{rank}",
+                id=local_id,
                 material=candidate.material_title,
-                position=position_of(candidate.anchor, candidate.source_type),
+                position=link_position(
+                    candidate.anchor,
+                    candidate.source_type,
+                    segment_id=candidate.segment_id,
+                ),
                 excerpt=candidate.excerpt,
             )
-            for rank, candidate in enumerate(
-                found.candidates_of(criterion_id)[:MAX_LINKS], start=1
-            )
+            for local_id, candidate in found.shown(criterion_id)
         )
         for criterion_id in unmet
     }

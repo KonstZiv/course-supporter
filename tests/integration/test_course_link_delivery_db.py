@@ -12,9 +12,11 @@ search for course links and the real finder:
   even after a place was deleted in between, and searches nothing;
 * lock g — after delivery the review's authenticity is the share of the
   criteria not met whose remark gives a link; with every criterion met there
-  is no row;
+  is no row; a second delivery of the same submission writes no second row;
 * lock e — a kept place whose anchor does not fit its material is given
-  without a place, and the build goes on.
+  without a place, and the build goes on;
+* a place whose material has no title is not given — nor given as a
+  replacement — and the build goes on.
 
 The course: ``lesson1`` holds material A (segments A1, A2), ``lesson2``
 material B (segment B1) and then the task; all three teach recursion. The
@@ -37,7 +39,7 @@ from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -66,6 +68,7 @@ from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
     CourseNode,
     DocumentSegment,
+    DocumentSummary,
     ExternalServiceCall,
     HomeworkSubmission,
     Job,
@@ -241,6 +244,37 @@ async def register_job(
             tenant_id=committed_seeds["tenant_id"],
             course_node_id=committed_seeds["course_node_id"],
             job_type="homework_processing",
+        )
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+
+    yield job_id
+
+    async with session_factory() as session:
+        await session.execute(
+            delete(ExternalServiceCall).where(ExternalServiceCall.job_id == job_id)
+        )
+        await session.execute(delete(Job).where(Job.id == job_id))
+        await session.commit()
+
+
+@pytest.fixture()
+async def submission_job(
+    session_factory: async_sessionmaker[AsyncSession],
+    committed_seeds: dict[str, uuid.UUID],
+    world: _World,
+) -> AsyncGenerator[uuid.UUID]:
+    """A committed job of the world's submission, as the body runs it: the
+    register finds a submission's rows through its jobs' subject (a
+    reference without a foreign key, so the submission may stay in the
+    test's open transaction)."""
+    async with session_factory() as session:
+        job = Job(
+            tenant_id=committed_seeds["tenant_id"],
+            job_type="homework_processing",
+            subject_type="homework_submission",
+            subject_id=world.submission.id,
         )
         session.add(job)
         await session.commit()
@@ -575,6 +609,26 @@ class TestAuthenticity:
 
         assert await self._metrics(session_factory, register_job) == []
 
+    async def test_a_second_delivery_writes_no_second_row(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        submission_job: uuid.UUID,
+        world: _World,
+    ) -> None:
+        """A run re-entered after delivery delivers again: the metrics of
+        the review are already there, once."""
+        await _searched_and_explained(db_session, world, {"c1": ["c1.l1"], "c2": []})
+        await _build(db_session, session_factory, world, submission_job)
+
+        for _ in range(2):
+            with job_scope(submission_job):
+                await TextResultBuilder().after_delivery(
+                    _context(db_session, session_factory, world)
+                )
+
+        assert await self._metrics(session_factory, submission_job) == [(0.5, None)]
+
 
 class TestAnAnchorThatDoesNotFit:
     """Lock e: the place is skipped, the build goes on, the log names it."""
@@ -629,3 +683,66 @@ class TestAnAnchorThatDoesNotFit:
         skipped = [e for e in logs if e["event"] == "course_link_position_skipped"]
         assert [e["segment_id"] for e in skipped] == [str(world.a1.id)]
         assert skipped[0]["log_level"] == "warning"
+
+
+async def _untitled(
+    session: AsyncSession, segment: DocumentSegment, title: str
+) -> None:
+    """The material of ``segment`` loses its title (its summary's)."""
+    await session.execute(
+        update(DocumentSummary)
+        .where(DocumentSummary.id == segment.document_summary_id)
+        .values(title=title)
+    )
+
+
+class TestAMaterialWithoutATitle:
+    """Task 10, K6: a link with nothing to call it by is not given."""
+
+    @pytest.mark.parametrize("title", ["", "   "], ids=["empty", "blank"])
+    async def test_it_is_not_given_and_the_review_is_built(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        world: _World,
+        title: str,
+    ) -> None:
+        """c1.l1 is B1 (titled), c1.l2 is A2 (material A, untitled now)."""
+        await _untitled(db_session, world.a2, title)
+        await _searched_and_explained(
+            db_session, world, {"c1": ["c1.l1", "c1.l2"], "c2": []}
+        )
+
+        with capture_logs() as logs:
+            built = await _build(db_session, session_factory, world, register_job)
+
+        assert _linked(built) == [[str(world.b1.id)], []]
+        untitled = [e for e in logs if e["event"] == "course_link_untitled"]
+        assert [(e["segment_id"], e["log_level"]) for e in untitled] == [
+            (str(world.a2.id), "warning")
+        ]
+        # Not given, so not kept as given either: a second build agrees.
+        row = await SubmissionVerdictRepository(db_session).get_candidates(
+            tenant_id=world.submission.tenant_id,
+            submission_id=world.submission.id,
+        )
+        assert row is not None
+        settled = FoundCourseLinks.model_validate(row.body).settled_of("c1")
+        assert [place.segment_id for place in settled] == [world.b1.id]
+
+    async def test_an_untitled_place_replaces_nothing(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        world: _World,
+    ) -> None:
+        """A2 gone, A1 of its material untitled: the replacement is B1."""
+        await _searched_and_explained(db_session, world, {"c1": ["c1.l2"], "c2": []})
+        await _untitled(db_session, world.a1, "  ")
+        await _gone(db_session, world.a2)
+
+        built = await _build(db_session, session_factory, world, register_job)
+
+        assert _linked(built) == [[str(world.b1.id)], []]

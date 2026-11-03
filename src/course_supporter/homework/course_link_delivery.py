@@ -42,10 +42,22 @@ Steps of :func:`settle_course_links`:
        call register says so without a model call (``action =
        course_link_stale``; the criterion and the local identifiers only,
        nothing the student wrote).
-    5. What is given is kept in the same row
+    5. A place whose material has no title — empty or blank — is not given:
+       the review would print a link with nothing to call it by. The log
+       names its fragment; the review is built without it.
+    6. What is given is kept in the same row
        (:attr:`~course_supporter.homework.course_links.FoundCourseLinks.settled`),
        written in the build's session: committed together with the review it
        belongs to.
+
+What the check does not reach (accepted, task 10, K6):
+    The text of a remark. The explanation may name a place it was shown —
+    by its material's title and position, in ``why`` or ``todo`` — and that
+    text is the model's, kept as written. When the place is replaced or left
+    out here, the text still names the old one while ``read`` points at the
+    new one or at none. The window is the minutes between the search and
+    the review's build, and a place deleted or hidden within it is rare; the
+    discrepancy is accepted rather than mended by rewriting the model's text.
 
 Replacing:
     The rule of a replacement is :func:`replacement_for` alone; the search
@@ -156,8 +168,15 @@ async def settle_course_links(
     settled: dict[str, tuple[LinkCandidate, ...]] = {}
     stale: dict[str, tuple[str, ...]] = {}
     for criterion_id, places in chosen.items():
-        given, left_out = _given(places, live, fresh.get(criterion_id, ()))
-        settled[criterion_id] = given
+        given, left_out = _given(
+            places,
+            live,
+            # A place that cannot be given is no replacement either.
+            [place for place in fresh.get(criterion_id, ()) if _titled(place)],
+        )
+        settled[criterion_id] = _only_titled(
+            given, submission_id=submission.id, criterion_id=criterion_id
+        )
         if left_out:
             stale[criterion_id] = left_out
 
@@ -352,3 +371,26 @@ def _given(
         taken.add(replacement.segment_id)
         given.append(replacement)
     return tuple(given), tuple(left_out)
+
+
+def _titled(place: LinkCandidate) -> bool:
+    """Whether the place's material has a title to call the link by."""
+    return bool(place.material_title.strip())
+
+
+def _only_titled(
+    places: Sequence[LinkCandidate], *, submission_id: uuid.UUID, criterion_id: str
+) -> tuple[LinkCandidate, ...]:
+    """``places`` without those whose material has no title (step 5)."""
+    kept: list[LinkCandidate] = []
+    for place in places:
+        if _titled(place):
+            kept.append(place)
+            continue
+        logger.warning(
+            "course_link_untitled",
+            submission_id=str(submission_id),
+            criterion_id=criterion_id,
+            segment_id=str(place.segment_id),
+        )
+    return tuple(kept)

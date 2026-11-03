@@ -35,7 +35,8 @@ After delivery (task 10, K6):
     link. A review with every criterion met makes no claim to support and
     leaves no row. Completeness is not measured on this path (``None``):
     the explanation's check already refuses an answer without a remark on
-    every criterion not met.
+    every criterion not met. The row is written once per submission: a run
+    re-entered after delivery delivers again, and finds the row there.
 
 The order of the remarks:
     By their criterion's weight — "must" first, then "should", then "may" —
@@ -103,6 +104,7 @@ from course_supporter.review_metrics import (
     ShareMetricsCalculator,
 )
 from course_supporter.service_logging import record_review_metrics
+from course_supporter.storage.repositories import HomeworkCostRepository
 from course_supporter.storage.submission_verdict_repository import (
     SubmissionVerdictRepository,
 )
@@ -261,10 +263,15 @@ class TextResultBuilder:
         """Write the review's authenticity to the call register (module).
 
         Read from what was kept — the verdict rows and the links settled for
-        the review — so a review delivered by a re-entered run, which builds
-        nothing, is measured by what it gave.
+        the review. Once per submission: a run re-entered after delivery
+        (from ``completed``, which builds nothing) finds the row of the
+        first and writes no second.
         """
         submission = context.submission
+        if await HomeworkCostRepository(context.session).has_review_metrics(
+            tenant_id=submission.tenant_id, submission_id=submission.id
+        ):
+            return
         stored = SubmissionVerdictRepository(context.session)
         rows = await stored.list_for_submission(
             tenant_id=submission.tenant_id, submission_id=submission.id

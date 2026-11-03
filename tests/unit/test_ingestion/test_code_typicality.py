@@ -123,6 +123,27 @@ class TestBuildConfig:
             "jest.config.ts",
             "postcss.config.cjs",
             "tailwind.config.js",
+            "pyproject.toml",
+            "setup.cfg",
+            "Pipfile",
+            "requirements.txt",
+            "requirements-dev.txt",
+            "constraints.txt",
+            "tox.ini",
+            "pytest.ini",
+            "mypy.ini",
+            ".flake8",
+            ".pylintrc",
+            ".coveragerc",
+            "ruff.toml",
+            ".ruff.toml",
+            "alembic.ini",
+            ".pre-commit-config.yaml",
+            ".editorconfig",
+            ".gitignore",
+            ".gitattributes",
+            ".dockerignore",
+            ".env.example",
         ],
     )
     def test_build_config_is_description_only(self, name: str) -> None:
@@ -138,3 +159,22 @@ class TestBuildConfig:
         # only the exact names / ``<stem>.config.<ext>`` shapes match.
         assert assess("src/config.ts", 500).is_custom
         assert assess("src/app.component.ts", 500).is_custom
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "project/Dockerfile",
+            "project/docker-compose.yml",
+            "project/compose.yaml",
+            "project/Makefile",
+            "project/setup.py",
+            "src/settings.py",
+            "src/requirements.py",
+            "src/config.py",
+            "notes/requirements.md",
+        ],
+    )
+    def test_lesson_material_stays_custom(self, path: str) -> None:
+        # Doubtful -> include: a lesson may teach these files, and a .py or .md
+        # merely NAMED like a dependency list is ordinary content.
+        assert assess(path, 500).is_custom

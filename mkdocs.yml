@@ -5,6 +5,7 @@ site_description: Документація платформи Course Supporter
 theme:
   name: material
   language: uk            # Ukrainian UI strings; default palette (no palette:)
+  font: false             # system fonts: no requests to Google Fonts
 
 markdown_extensions:
   - attr_list             # stable {#id} anchors (e.g. error codes)
@@ -13,7 +14,12 @@ markdown_extensions:
 
 plugins:
   - search                # built-in Material search
-  - mermaid2              # diagram content (Phase 2)
+  - mermaid2:             # diagram content (Phase 2)
+      # Own copy of mermaid 10.4.0 (MIT), taken from the npm package
+      # dist/mermaid.min.js; sha256 2cf7bb6cdc4a6ea96da3d324a4447d8300d1da703ce5f31311608642c0f86269.
+      # The site must not load scripts from unpkg.com. To upgrade: npm pack
+      # mermaid@<version>, replace the file, update this comment.
+      javascript: javascripts/mermaid.min.js
   - panzoom               # zoomable diagrams/images (Phase 2)
 
 # A link to an anchor its page does not have fails `mkdocs build --strict`

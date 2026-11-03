@@ -76,6 +76,20 @@ jobs:
       - name: Build the site (strict)
         run: uv run --no-sync mkdocs build --strict -d "$RUNNER_TEMP/site"
 
+      # The published site promises that it asks no third-party server for fonts
+      # or scripts. The theme and the diagram plugin load from Google Fonts and
+      # unpkg.com by default; fail if a built page or stylesheet names one of
+      # those hosts again. The theme's own JavaScript bundle holds fallback
+      # addresses that a browser check shows are never requested, so it is not
+      # scanned.
+      - name: No third-party hosts in the built site
+        run: |
+          if grep -rIn -E 'fonts\.googleapis\.com|fonts\.gstatic\.com|unpkg\.com|cdn\.jsdelivr\.net' \
+              --include='*.html' --include='*.css' "$RUNNER_TEMP/site"; then
+            echo '::error::The built site names a third-party host (see the lines above).'
+            exit 1
+          fi
+
   test:
     name: Tests
     # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.

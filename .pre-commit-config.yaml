@@ -27,14 +27,17 @@ repos:
       # trimming a trailing space would make them fixtures of something
       # nobody ever submitted -- end-of-file-fixer did exactly that on the
       # first commit attempt.
+      # docs/javascripts/mermaid.min.js is the unmodified npm file of mermaid (its
+      # sha256 is recorded in mkdocs.yml): it is 2.9 MB and 7 of its lines end in
+      # spaces, so the whitespace fixers and the size check must skip it.
       - id: trailing-whitespace
-        exclude: '^tests/fixtures/security/encodings/'
+        exclude: '^(tests/fixtures/security/encodings/|docs/javascripts/mermaid\.min\.js$)'
       - id: end-of-file-fixer
-        exclude: '^tests/fixtures/security/encodings/'
+        exclude: '^(tests/fixtures/security/encodings/|docs/javascripts/mermaid\.min\.js$)'
       - id: check-yaml
         args: [--unsafe]
       - id: check-toml
       - id: check-added-large-files
         args: [--maxkb=500]
-        exclude: '^tests/fixtures/(audio|presentations)/'
+        exclude: '^(tests/fixtures/(audio|presentations)/|docs/javascripts/mermaid\.min\.js$)'
       - id: debug-statements

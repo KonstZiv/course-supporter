@@ -6,8 +6,15 @@ no session, no repository, no knowledge of the path. What the facts are and
 what an answer must agree with belong to
 :mod:`course_supporter.homework.verdict_explanation`; the stage that reads the
 verdicts and keeps the answer is :mod:`course_supporter.homework.review_explanation`.
-This module renders the request (``prompts/review_explanation/v1.md``), holds
+This module renders the request (``prompts/review_explanation/v2.md``), holds
 the answer's form and returns what the model said.
+
+Since task 10 (K5) the request also shows, for each criterion that is not
+met, up to three places of the course the code found for it
+(:class:`ShownLink`), each under a local identifier (``c3.l1``); the answer
+names the ones it points to. The identifiers the answer was not shown for a
+criterion are cut by the stage, not by the check here
+(:func:`~course_supporter.homework.verdict_explanation.drop_unshown_links`).
 
 The answer is held twice, as the evaluation's is. On the wire, by the strict
 schema of :class:`~course_supporter.homework.verdict_explanation.ExplanationAnswer`
@@ -43,13 +50,36 @@ from course_supporter.homework.verdict_explanation import (
 from course_supporter.llm.error_categories import StructuralRetryError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from course_supporter.llm.stage_router import StageExecution, StageRouter
+    from course_supporter.models.review_structure import Position
 
 logger = structlog.get_logger(__name__)
 
 
 RESPONSE_SCHEMA: Final = wire_schema(ExplanationAnswer)
 """The schema of the answer, as the router puts it on the wire (task 09a)."""
+
+
+@dataclass(frozen=True, slots=True)
+class ShownLink:
+    """One place of the course, as the explanation is shown it (task 10, K5).
+
+    Attributes:
+        id: The local identifier the answer names it by: the criterion's id,
+            ``.l`` and its rank — ``c3.l1`` is the best place for ``c3``. Not
+            a database id: it means something for one request only.
+        material: The material's title, as the course author wrote it.
+        position: Where in the material the place starts; ``None`` when the
+            anchor names none.
+        excerpt: The place's first characters; ``None`` when it has no text.
+    """
+
+    id: str
+    material: str
+    position: Position | None
+    excerpt: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +97,9 @@ class ExplanationInput:
             the input); the facts are what the remark may not contradict.
         language: The language of the explanation by name (``"Ukrainian"``):
             the student's, else the course's (``PRE-FLIGHT.md`` 9.9).
+        course_links: The places of the course shown for each criterion that
+            is not met, by criterion id; a criterion missing here, or mapped
+            to an empty tuple, is shown none.
     """
 
     task_title: str
@@ -75,6 +108,7 @@ class ExplanationInput:
     facts: ExplanationFacts
     submission_text: str
     language: str
+    course_links: Mapping[str, tuple[ShownLink, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +173,30 @@ def render_context(shown: ExplanationInput) -> dict[str, Any]:
         "criteria": [_criterion_for_prompt(c) for c in shown.facts.criteria],
         "submission_text": shown.submission_text,
         "language": shown.language,
+        "course_links": [
+            {
+                "criterion": criterion_id,
+                "links": [
+                    _link_for_prompt(link)
+                    for link in shown.course_links.get(criterion_id, ())
+                ],
+            }
+            for criterion_id in shown.facts.unmet
+        ],
+    }
+
+
+def _link_for_prompt(link: ShownLink) -> dict[str, Any]:
+    """One place of the course, as the model reads it: the four fields alone."""
+    return {
+        "id": link.id,
+        "material": link.material,
+        "position": (
+            None
+            if link.position is None
+            else {"kind": link.position.kind, "value": link.position.value}
+        ),
+        "excerpt": link.excerpt,
     }
 
 

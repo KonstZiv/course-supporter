@@ -9,10 +9,14 @@ import pytest
 import yaml
 
 from course_supporter.homework.path_config import (
+    CodeStage,
+    ModelStage,
     PathKey,
     ServedBy,
     SubmissionState,
+    in_test_mode,
     load_path_config,
+    model_stages,
     path_ceiling_estimate,
     validate_path_config,
 )
@@ -192,6 +196,118 @@ class TestShape:
     def test_missing_file_fails(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             load_path_config(tmp_path / "absent.yaml")
+
+
+_CODE_STAGE: dict[str, Any] = {"code": True, "deterministic": True}
+
+
+def _with_code_stage() -> dict[str, Any]:
+    """The valid file, with a code stage ``lookup`` on the first task path."""
+    data = _config()
+    data["stages"]["lookup"] = dict(_CODE_STAGE)
+    data["task_types"]["task"]["paths"]["first"] = ["safety", "lookup", "classifier"]
+    return data
+
+
+class TestCodeStage:
+    """Task 10, K5 (lock a): a stage of code alone — strict, free, still named."""
+
+    def test_a_code_stage_loads_as_its_own_kind(self, tmp_path: Path) -> None:
+        config = load_path_config(_write(tmp_path, _with_code_stage()))
+        validate_path_config(config, _registry(), prompt_base_path=tmp_path)
+
+        assert config.stages["lookup"] == CodeStage(code=True, deterministic=True)
+        assert isinstance(config.stages["safety"], ModelStage)
+        assert set(model_stages(config)) == {"safety", "classifier"}
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("ladder", [_rung()]),
+            ("prompt_ref", _PROMPT_NAME),
+            ("ceilings", {"tool_steps": 0, "money_usd": 0.05, "output_tokens": 8}),
+            ("requires", []),
+            ("record_output", False),
+            ("input_budget_ratio", None),
+        ],
+    )
+    def test_a_code_stage_with_a_model_stages_field_is_refused(
+        self, tmp_path: Path, field: str, value: Any
+    ) -> None:
+        """A ladder, a prompt or a ceiling on a code stage describes a call it
+        never makes: refused, never ignored."""
+        data = _with_code_stage()
+        data["stages"]["lookup"][field] = value
+
+        msg = _load_error(tmp_path, data)
+
+        assert f"stages.lookup.{field}" in msg
+        assert "Extra inputs are not permitted" in msg
+
+    @pytest.mark.parametrize("value", [False, "yes", 1])
+    def test_code_is_true_or_absent(self, tmp_path: Path, value: Any) -> None:
+        data = _with_code_stage()
+        data["stages"]["lookup"]["code"] = value
+
+        assert "stages.lookup.code" in _load_error(tmp_path, data)
+
+    def test_a_code_stage_without_deterministic_is_a_hole(self, tmp_path: Path) -> None:
+        data = _with_code_stage()
+        del data["stages"]["lookup"]["deterministic"]
+
+        assert "stages.lookup.deterministic" in _load_error(tmp_path, data)
+
+    def test_a_code_stage_may_not_reuse_a_ladder_stage_name(
+        self, tmp_path: Path
+    ) -> None:
+        data = _with_code_stage()
+        config = load_path_config(_write(tmp_path, data))
+
+        with pytest.raises(ValueError, match="Stage 'lookup' reuses the name"):
+            validate_path_config(
+                config,
+                _registry(),
+                ladder_stage_names={"lookup"},
+                prompt_base_path=tmp_path,
+            )
+
+    def test_a_code_stage_adds_nothing_to_the_ceiling(self, tmp_path: Path) -> None:
+        config = load_path_config(_write(tmp_path, _with_code_stage()))
+        key = PathKey(AssignmentType.TASK, SubmissionState.FIRST)
+
+        assert path_ceiling_estimate(config, key) == pytest.approx(0.07)
+
+
+class TestTestMode:
+    """Task 10, K5: the new path without charging — read, never yet acted on."""
+
+    def test_absent_means_charged_as_usual(self, tmp_path: Path) -> None:
+        config = load_path_config(_write(tmp_path, _config()))
+
+        assert not any(in_test_mode(t, config) for t in AssignmentType)
+
+    def test_a_type_on_the_new_path_may_be_in_test_mode(self, tmp_path: Path) -> None:
+        data = _config()
+        data["task_types"]["task"].update(served_by="new_path", test_mode=True)
+        config = load_path_config(_write(tmp_path, data))
+        validate_path_config(config, _registry(), prompt_base_path=tmp_path)
+
+        assert in_test_mode(AssignmentType.TASK, config) is True
+        assert in_test_mode(AssignmentType.TEST, config) is False
+
+    def test_test_mode_on_todays_mentor_is_refused(self, tmp_path: Path) -> None:
+        data = _config()
+        data["task_types"]["task"]["test_mode"] = True
+
+        assert (
+            "Task type 'task' is in test mode but served by 'todays_mentor'"
+        ) in _validation_error(tmp_path, data)
+
+    def test_test_mode_is_a_strict_bool(self, tmp_path: Path) -> None:
+        data = _config()
+        data["task_types"]["task"]["test_mode"] = "yes"
+
+        assert "task_types.task.test_mode" in _load_error(tmp_path, data)
 
 
 class TestValidation:

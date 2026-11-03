@@ -6,8 +6,10 @@ Purpose:
     answers one question about a submission: for each failed criterion, which
     places of the course to point to — at most :data:`MAX_LINKS`, best first.
 
-    Nothing calls the port yet: the path's step that asks it, the prompt that
-    words a link and the link's form in the review are the next commits.
+    The path's step that asks it is :func:`look_up_course_links` (the code
+    stage ``course_link_lookup``, K5): it keeps what was found for the
+    explanation stage, which shows it to the model. The link's form in the
+    review is the next commit.
 
     ``course_link`` names the thing throughout, because "reference" is taken
     by a test's answer key (``TaskReference``, ``reference_service.py``).
@@ -61,6 +63,23 @@ Replacing:
     The production choice is made in one place, :func:`build_course_link_finder`:
     return the new adapter there. Tests of other modules substitute that
     factory, so they keep working whichever adapter it returns.
+
+The step of the path — :func:`look_up_course_links` (task 10, K5):
+    1. The submission's verdict rows; the list they were judged against, by
+       their address (:func:`~course_supporter.homework.judged_list.read_judged_list`)
+       — the same read the explanation stage makes.
+    2. The failed criteria: those whose verdict is "not met", in the list's
+       order, with their texts and concepts.
+    3. None failed — an empty result is kept and the finder is never asked.
+       Otherwise one call of :meth:`CourseLinkFinder.find` for the
+       submission's scope: its course root, its node and its task document.
+    4. The result is kept in the submission's one row
+       (:meth:`~course_supporter.storage.submission_verdict_repository.SubmissionVerdictRepository.store_candidates`),
+       as :class:`FoundCourseLinks` dumps it; a repeat run replaces it. The
+       row is written in the body's session and committed with the
+       checkpoint that marks the stage done.
+
+    No model is called and nothing is paid for: the stage's cost is 0.
 """
 
 from __future__ import annotations
@@ -73,9 +92,12 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 import structlog
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from course_supporter.concept_dedup import normalization_key
+from course_supporter.homework.judged_list import read_judged_list
+from course_supporter.homework.verdict_explanation import explanation_facts
 from course_supporter.learning_order import MaterialPlace, TreeNode, in_learning_order
 from course_supporter.storage.document_segment_repository import (
     CandidateSegment,
@@ -83,9 +105,14 @@ from course_supporter.storage.document_segment_repository import (
     SegmentAnchor,
 )
 from course_supporter.storage.orm import AuthoredDocument
+from course_supporter.storage.submission_verdict_repository import (
+    SubmissionVerdictRepository,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from course_supporter.storage.orm import HomeworkSubmission
 
 logger = structlog.get_logger(__name__)
 
@@ -468,3 +495,103 @@ def build_course_link_finder(session: AsyncSession) -> CourseLinkFinder:
     this factory.
     """
     return ConceptCourseLinkFinder(session)
+
+
+class CriterionLinks(BaseModel):
+    """The places found for one failed criterion, as the step keeps them.
+
+    Attributes:
+        item_id: The criterion, as the list names it (``c3``).
+        candidates: Up to :data:`MAX_LINKS` places, best first; empty when
+            nothing in the course teaches it.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    item_id: str
+    candidates: tuple[LinkCandidate, ...]
+
+
+class FoundCourseLinks(BaseModel):
+    """What the step found for one submission — the body of its kept row.
+
+    Attributes:
+        criteria: Every failed criterion, in the list's order; empty when no
+            criterion failed.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    criteria: tuple[CriterionLinks, ...]
+
+    def candidates_of(self, item_id: str) -> tuple[LinkCandidate, ...]:
+        """The places kept for ``item_id``; none kept — an empty tuple."""
+        for found in self.criteria:
+            if found.item_id == item_id:
+                return found.candidates
+        return ()
+
+
+async def look_up_course_links(
+    session: AsyncSession, submission: HomeworkSubmission
+) -> FoundCourseLinks:
+    """Find and keep the course links of the submission's failed criteria.
+
+    The step of the path (module, "The step of the path"); the row is written
+    in ``session`` and committed by the caller.
+
+    Returns:
+        What was kept.
+
+    Raises:
+        ValueError: The submission has no verdict rows, or rows the list they
+            name does not match — a defect of the path, as for the
+            explanation stage.
+    """
+    verdicts = SubmissionVerdictRepository(session)
+    rows = await verdicts.list_for_submission(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
+    if not rows:
+        msg = (
+            "the search for course links needs the verdicts of the evaluation "
+            "stage, and the submission has none"
+        )
+        raise ValueError(msg)
+    criteria = await read_judged_list(session, submission, rows)
+    unmet = set(explanation_facts(criteria, rows).unmet)
+    failed = [
+        FailedCriterion(id=c.id, text=c.text, concepts=tuple(c.concepts))
+        for c in criteria
+        if c.id in unmet
+    ]
+
+    if not failed:
+        found = FoundCourseLinks(criteria=())
+    else:
+        scope = SubmissionScope(
+            tenant_id=submission.tenant_id,
+            course_root_id=submission.course_node_id,
+            task_node_id=submission.node_id,
+            task_document_id=submission.authored_document_id,
+        )
+        links = await build_course_link_finder(session).find(scope, failed)
+        found = FoundCourseLinks(
+            criteria=tuple(
+                CriterionLinks(item_id=c.id, candidates=tuple(links.get(c.id, ())))
+                for c in failed
+            )
+        )
+
+    await verdicts.store_candidates(
+        tenant_id=submission.tenant_id,
+        submission_id=submission.id,
+        body=found.model_dump(mode="json"),
+    )
+    logger.info(
+        "course_link_lookup_kept",
+        submission_id=str(submission.id),
+        failed=len(failed),
+        linked=sum(1 for c in found.criteria if c.candidates),
+    )
+    return found

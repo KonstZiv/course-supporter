@@ -38,6 +38,7 @@ from course_supporter.agents.methodist import MethodistAgent, OwnDocument
 from course_supporter.agents.review_explainer import (
     ExplanationInput,
     ReviewExplainerAgent,
+    ShownLink,
 )
 from course_supporter.criteria_kinds import VerdictValue
 from course_supporter.homework.criteria_form import Criterion
@@ -47,7 +48,7 @@ from course_supporter.homework.criteria_verdicts import (
     RepeatItem,
     RepeatReason,
 )
-from course_supporter.homework.path_config import load_path_config
+from course_supporter.homework.path_config import ModelStage, load_path_config
 from course_supporter.homework.path_stages import (
     CRITERIA_EVALUATION,
     REVIEW_EXPLANATION,
@@ -69,6 +70,7 @@ from course_supporter.llm.ladder_config import (
 from course_supporter.llm.prompt_json import prompt_json
 from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.llm.stage_router import StageExecution, StageResult
+from course_supporter.models.review_structure import Position
 from course_supporter.models.source import (
     ChunkType,
     ContentChunk,
@@ -698,7 +700,9 @@ def _explanation_reply(context: dict[str, Any]) -> str:
         {
             "passed": True,
             "why": "Добре.",
-            "remarks": [{"id": "c2", "what": "a", "why": "b", "todo": "c"}],
+            "remarks": [
+                {"id": "c2", "what": "a", "why": "b", "todo": "c", "links": ["c2.l1"]}
+            ],
             "mentor_voice": None,
         }
     )
@@ -708,6 +712,7 @@ async def test_review_explanation_prompt() -> None:
     stage = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml").stages[
         REVIEW_EXPLANATION
     ]
+    assert isinstance(stage, ModelStage)
     execution = StageExecution(
         stage=StageConfig(
             prompt_ref=stage.prompt_ref,
@@ -722,6 +727,17 @@ async def test_review_explanation_prompt() -> None:
         facts=_hostile_facts(),
         submission_text="def f(): pass",
         language="Ukrainian",
+        # Task 10, K5: the author's title, position and excerpt of a place.
+        course_links={
+            "c2": (
+                ShownLink(
+                    id="c2.l1",
+                    material=" ".join(_HOSTILE),
+                    position=Position(kind="file", value=" ".join(_HOSTILE)),
+                    excerpt=" ".join(_HOSTILE),
+                ),
+            )
+        },
     )
     router = _CapturingRouter(_explanation_reply)
 
@@ -733,8 +749,14 @@ async def test_review_explanation_prompt() -> None:
     ((_, context),) = router.calls
     rendered = template.render(**context)
     text = (rendered.system or "") + "\n" + (rendered.user or "")
-    for slot, tag in (("result", "result"), ("criteria", "verdicts")):
+    for slot, tag in (
+        ("result", "result"),
+        ("criteria", "verdicts"),
+        ("course_links", "course_links"),
+    ):
         fragment = _expected(context[slot], sort_keys=True)
         assert f"<{tag}>\n{fragment}\n</{tag}>" in text
     criteria_fragment = _expected(context["criteria"], sort_keys=True)
     _assert_fragment(criteria_fragment, context["criteria"])
+    links_fragment = _expected(context["course_links"], sort_keys=True)
+    _assert_fragment(links_fragment, context["course_links"])

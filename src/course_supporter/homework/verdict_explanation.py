@@ -17,6 +17,8 @@ Interface:
     :class:`CriterionRemark`, :class:`ExplanationAnswer` — the model's answer.
     :func:`read_explanation` — the answer, checked against the facts; a
     structural retry otherwise.
+    :func:`drop_unshown_links` — the answer without the course links it was
+    not shown (task 10, K5).
 
 The check (``PRE-FLIGHT.md`` 9.7, the check of facts; ``TASK.md`` lock 7):
 
@@ -34,6 +36,12 @@ accepted" written in ``why`` of a work that is not, in one of sixty languages.
 That residual risk is read by the operator on the live measurement; a
 corrector over the finished text comes only if it shows (decision 5).
 
+Course links (task 10, K5) are not a fact the answer can contradict, and are
+NOT part of the check: a remark that names a link it was not shown for its
+criterion is not retried — a retry would be paid for and would add nothing a
+cut cannot. :func:`drop_unshown_links` cuts such an identifier out of the
+answer that is kept, and names what it cut, so the stage can leave a trace.
+
 Replacing:
     The explanation stage depends on :func:`explanation_facts` and
     :func:`read_explanation` and on the value types; a new rule of agreement
@@ -44,11 +52,17 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Final, Protocol
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    ValidationError,
+    ValidationInfo,
+    model_validator,
+)
 
 from course_supporter.criteria_kinds import VerdictItemKind, VerdictValue
 from course_supporter.homework.criteria_form import CheckMethod, Criterion
@@ -260,23 +274,36 @@ def _judged(row: StoredVerdict) -> JudgedItem:
     )
 
 
+FROM_THE_MODEL: Final = "from_the_model"
+"""The validation-context key :func:`read_explanation` sets on a model's answer.
+
+Only a body stored before task 10 may lack ``links``; an answer of the model
+may not (:meth:`CriterionRemark._kept_before_links`).
+"""
+
+
 class CriterionRemark(BaseModel):
     """The remark on one criterion that is not met, in the contrasting form.
 
     The three parts of ``01-IDEAL-MENTOR.md`` §1: how it is done now, what the
     problem is, how it should be — the parts ``what``, ``why`` and ``todo`` of
     the review's remark (``models/review_structure.Remark``), which the
-    builder fills from this. There is no place for reading: links to the
-    course are resolved by code (task 10), never written by the model.
+    builder fills from this. ``links`` is the reading (task 10, K5): the model
+    CHOOSES among the places of the course the code showed it for this
+    criterion, by their local identifiers (``c3.l1``); what a place is, and
+    where, stays the code's.
 
     Every field is required and none has a default, so the strict schema on
-    the wire lists them all.
+    the wire lists them all; ``links`` may be empty — nothing fits is an
+    answer. A body kept before ``links`` existed reads as having none.
 
     Attributes:
         id: The criterion, as the list names it (``c3``).
         what: How it is done in the work now — or that it is not there.
         why: What the problem is.
         todo: How it should be, and why that solves the problem.
+        links: The identifiers of the places shown for this criterion that
+            explain it, best first; empty when none does.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -285,6 +312,20 @@ class CriterionRemark(BaseModel):
     what: str
     why: str
     todo: str
+    links: tuple[str, ...]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _kept_before_links(cls, data: Any, info: ValidationInfo) -> Any:
+        """A body stored before task 10 has no ``links``: it reads as none.
+
+        Never for an answer of the model (:data:`FROM_THE_MODEL`): there the
+        field is required, as the strict schema on the wire says.
+        """
+        from_the_model = bool(info.context and info.context.get(FROM_THE_MODEL))
+        if isinstance(data, dict) and "links" not in data and not from_the_model:
+            return {**data, "links": ()}
+        return data
 
 
 class ExplanationAnswer(BaseModel):
@@ -337,7 +378,9 @@ def read_explanation(content: str, facts: ExplanationFacts) -> ExplanationAnswer
     passed must be false: ...
     """
     try:
-        answer = ExplanationAnswer.model_validate_json(content)
+        answer = ExplanationAnswer.model_validate_json(
+            content, context={FROM_THE_MODEL: True}
+        )
     except ValidationError as exc:
         first = exc.errors()[0]
         loc = ".".join(str(part) for part in first.get("loc", ()))
@@ -387,3 +430,47 @@ def _disagreements(answer: ExplanationAnswer, facts: ExplanationFacts) -> list[s
     if blank:
         problems.append(f"these texts are empty: {blank}. Write each of them.")
     return problems
+
+
+def drop_unshown_links(
+    answer: ExplanationAnswer, shown: Mapping[str, Collection[str]]
+) -> tuple[ExplanationAnswer, dict[str, tuple[str, ...]]]:
+    """The answer without the links it was not shown, and what was cut.
+
+    A remark keeps an identifier only when it is among those ``shown`` for
+    ITS criterion: one shown for another criterion (``c5.l1`` in the remark
+    on ``c3``) is as made up as one shown for none. A repeat of a kept
+    identifier is dropped silently — it names nothing new.
+
+    Args:
+        answer: An answer that agrees with the facts.
+        shown: The identifiers shown, by criterion id; a criterion missing
+            here was shown none.
+
+    Returns:
+        The answer with every remark's ``links`` cut to what was shown, in
+        the model's order; and, by criterion id, the identifiers cut — only
+        criteria that had one.
+
+    >>> remark = CriterionRemark(
+    ...     id="c3", what="w", why="y", todo="t", links=("c3.l2", "c5.l1")
+    ... )
+    >>> answer = ExplanationAnswer(
+    ...     passed=False, why="w", remarks=(remark,), mentor_voice=None
+    ... )
+    >>> kept, cut = drop_unshown_links(answer, {"c3": {"c3.l1", "c3.l2"}})
+    >>> kept.remarks[0].links, cut
+    (('c3.l2',), {'c3': ('c5.l1',)})
+    """
+    remarks: list[CriterionRemark] = []
+    cut: dict[str, tuple[str, ...]] = {}
+    for remark in answer.remarks:
+        allowed = shown.get(remark.id, ())
+        kept = tuple(dict.fromkeys(i for i in remark.links if i in allowed))
+        unshown = tuple(dict.fromkeys(i for i in remark.links if i not in allowed))
+        if unshown:
+            cut[remark.id] = unshown
+        if kept != remark.links:
+            remark = remark.model_copy(update={"links": kept})
+        remarks.append(remark)
+    return answer.model_copy(update={"remarks": tuple(remarks)}), cut

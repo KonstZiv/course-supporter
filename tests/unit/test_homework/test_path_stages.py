@@ -17,18 +17,22 @@ import pytest
 
 from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_config import (
+    CodeStage,
+    ModelStage,
+    PathConfig,
     PathKey,
-    PathStage,
     SubmissionState,
     load_path_config,
 )
 from course_supporter.homework.path_stages import (
     ATTEMPT_CLASSIFIER,
+    COURSE_LINK_LOOKUP,
     CRITERIA_EVALUATION,
     REVIEW_EXPLANATION,
     SAFETY,
     StageContext,
     StageOutcome,
+    _execution,
     get_stage_executor,
     missing_stage_executors,
     register_stage_executor,
@@ -48,8 +52,8 @@ if TYPE_CHECKING:
 _KEY = PathKey(AssignmentType.TASK, SubmissionState.FIRST)
 
 
-def _stage() -> PathStage:
-    return PathStage.model_validate(
+def _stage() -> ModelStage:
+    return ModelStage.model_validate(
         {
             "deterministic": True,
             "prompt_ref": "prompts/safety_check/v1.md",
@@ -122,17 +126,66 @@ class TestRegistry:
 
     def test_the_shipped_stages_pass_the_check(self) -> None:
         validate_stage_executors(
-            [SAFETY, ATTEMPT_CLASSIFIER, CRITERIA_EVALUATION, REVIEW_EXPLANATION]
+            [
+                SAFETY,
+                ATTEMPT_CLASSIFIER,
+                CRITERIA_EVALUATION,
+                COURSE_LINK_LOOKUP,
+                REVIEW_EXPLANATION,
+            ]
         )
 
     def test_every_stage_the_shipped_file_describes_has_an_executor(self) -> None:
-        """Task 09b: both stages are described before any path uses them."""
+        """Task 09b: both stages are described before any path uses them;
+        task 10: the code stage of the course links too."""
         config = load_path_config(
             Path(__file__).resolve().parents[3] / "config" / "submission_paths.yaml"
         )
         assert CRITERIA_EVALUATION in config.stages
         assert REVIEW_EXPLANATION in config.stages
+        assert isinstance(config.stages[COURSE_LINK_LOOKUP], CodeStage)
         validate_stage_executors(config.stages)
+
+    def test_a_code_stage_without_an_executor_is_refused(self) -> None:
+        """Task 10, lock a: a code stage needs an executor as a model stage does."""
+        config = PathConfig.model_validate(
+            {
+                "stages": {"link_scan": {"code": True, "deterministic": True}},
+                "task_types": {},
+            }
+        )
+
+        with pytest.raises(ValueError, match="'link_scan'"):
+            validate_stage_executors(config.stages)
+
+    def test_a_code_stage_has_no_execution_for_the_router(self) -> None:
+        """Only a model stage is translated for the router; code has no ladder."""
+        context = replace(
+            _context(COURSE_LINK_LOOKUP),
+            stage=CodeStage(code=True, deterministic=True),
+        )
+
+        with pytest.raises(TypeError, match="code stage"):
+            _execution(context)
+
+    async def test_the_course_link_stage_runs_the_lookup_and_carries_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Task 10: the work is ``look_up_course_links``; the router is idle."""
+        lookup = AsyncMock()
+        monkeypatch.setattr(
+            "course_supporter.homework.course_links.look_up_course_links", lookup
+        )
+        context = replace(
+            _context(COURSE_LINK_LOOKUP),
+            stage=CodeStage(code=True, deterministic=True),
+        )
+
+        outcome = await get_stage_executor(COURSE_LINK_LOOKUP)(context)
+
+        assert outcome == StageOutcome.ok()
+        lookup.assert_awaited_once_with(context.session, context.submission)
+        assert context.router.mock_calls == []
 
     async def test_an_executor_can_be_replaced_under_its_name(
         self, _restore_registry: None
@@ -493,6 +546,7 @@ class TestStageOutputCeiling:
         _typical_prompt(monkeypatch)
         registry = load_registry(_REGISTRY_FILE)
         shipped = load_path_config(_PATHS_FILE).stages[SAFETY]
+        assert isinstance(shipped, ModelStage)
         third = shipped.ladder[2]
         assert third.model == "gemini-3.5-flash-lite"
         assert third.max_output_tokens is None

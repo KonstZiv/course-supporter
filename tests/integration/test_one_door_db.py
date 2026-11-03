@@ -48,6 +48,7 @@ from course_supporter.models.mentor_review import (
     Verdict,
 )
 from course_supporter.models.sanity import SanityClassification
+from course_supporter.models.source import AssignmentType
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
@@ -59,6 +60,7 @@ from course_supporter.storage.orm import (
 )
 from course_supporter.storage.s3 import S3Client
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.path_config import shipped_with_todays_mentor_for
 
 pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
 
@@ -465,6 +467,17 @@ async def _run(
                 patch(
                     "course_supporter.homework.path_runner.get_result_builder",
                     return_value=None,
+                )
+            )
+        else:
+            # Since task 10 (K5) the shipped file serves ``task`` on the new
+            # path; today's road takes the way back for the type it submits.
+            stack.enter_context(
+                patch(
+                    "course_supporter.homework.path_runner.get_path_config",
+                    return_value=shipped_with_todays_mentor_for(
+                        AssignmentType(w.task_type)
+                    ),
                 )
             )
         await arq_process_homework(

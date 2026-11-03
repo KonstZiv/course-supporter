@@ -18,13 +18,15 @@ StageRouter, STTRouter, and VD pipeline components.
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from collections import Counter
-from collections.abc import Awaitable, Callable, Coroutine, Iterator
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -346,9 +348,10 @@ async def _persist(
     DB errors are swallowed — call flow is never interrupted.
 
     ``success`` is ``None`` only on rows that record no call: a ladder trace
-    (``outcome`` skipped / abandoned), the per-review metrics row and the
-    funds-port row. The last two leave ``provider`` and ``model_id`` ``None``
-    too; a trace names the rung it skipped or abandoned. Column meanings:
+    (``outcome`` skipped / abandoned), the per-review metrics row, the
+    funds-port row and a course-link trace. The last three leave ``provider``
+    and ``model_id`` ``None`` too; a ladder trace names the rung it skipped or
+    abandoned. Column meanings:
     ``storage.orm.ExternalServiceCall``.
 
     ``priced`` is the price of a paid call (``llm/pricing.py``) and fills every
@@ -493,6 +496,55 @@ async def record_funds_decision(
         funds_decision=answer.decision,
         funds_refusal_reason=answer.refusal_reason,
         path_key=str(path_key) if path_key is not None else None,
+    )
+
+
+# ── Course-link trace rows ──
+
+
+class CourseLinkTrace(StrEnum):
+    """Why a course link left a row in the call register (task 10).
+
+    The value is the row's ``action``. ``FABRICATED`` — the explanation named
+    a link it was not shown for that criterion, and the link was cut from the
+    explanation that is kept (K5).
+    """
+
+    FABRICATED = "course_link_fabricated"
+
+
+async def record_course_link_trace(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    kind: CourseLinkTrace,
+    criterion_id: str,
+    ids: Sequence[str],
+) -> None:
+    """Write a course-link trace row: which criterion, which link identifiers.
+
+    Takes the finished identifiers, never the answer they came from: nothing
+    the student wrote and no text of the model goes into the row. The row
+    records no call — ``provider``, ``model_id``, ``success``, ``cost_usd`` and
+    ``outcome`` are all NULL, so it stays out of every cost sum and out of the
+    canonical failure count — and is found by ``action = kind``. The
+    criterion and the identifiers go to ``output_text`` as compact JSON
+    (``{"criterion_id": "c3", "ids": ["c5.l1"]}``): they are the part of the
+    model's answer the row is about, and no column of their own exists. It
+    inherits :func:`_persist`'s contract: written only inside a job context,
+    DB errors swallowed.
+    """
+    await _persist(
+        session_factory,
+        action=kind.value,
+        strategy="default",
+        provider=None,
+        model_id=None,
+        success=None,
+        output_text=json.dumps(
+            {"criterion_id": criterion_id, "ids": list(ids)},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
     )
 
 

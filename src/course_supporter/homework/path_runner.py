@@ -58,6 +58,7 @@ from course_supporter.homework.path_checkpoint import (
 from course_supporter.homework.path_config import (
     ServedBy,
     get_path_config,
+    model_stages,
     path_ceiling_estimate,
 )
 from course_supporter.homework.path_selection import choose_path
@@ -322,14 +323,17 @@ async def _run_path(
         return
     submission_text = reading.text
     # ── Shadow price estimate (BIL-D): written beside the run, never in its way ──
+    # A code stage calls no model and costs nothing: the estimate prices the
+    # model stages of the path alone.
+    priced = model_stages(config)
     await shadow_review(
         session_factory=ctx["session_factory"],
         submission_id=submission.id,
         tenant_id=submission.tenant_id,
         job_id=job_id,
         path_key=str(choice.key),
-        stage_names=choice.stages,
-        path_stages=config.stages,
+        stage_names=[name for name in choice.stages if name in priced],
+        path_stages=priced,
         submission_chars=len(submission_text),
     )
     try:

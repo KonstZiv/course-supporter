@@ -27,6 +27,7 @@ from course_supporter.api.routes._portal_shared import (
     curated_verdict,
 )
 from course_supporter.api.schemas import PortalVerdict
+from course_supporter.homework.review_assembler import assemble_review
 from course_supporter.homework.webhook import build_reviewed_payload
 from course_supporter.models import review_structure
 from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
@@ -346,7 +347,47 @@ STORED_BEFORE_TASK_10: dict[str, Any] = {
 
 
 class TestAReviewStoredBeforeTask10:
-    """Lock a (task 10, K4): both surfaces read a stored review as before."""
+    """Lock a (task 10, K4): both surfaces read a stored review as before.
+
+    And lock h of K6: after the rule that a reference points somewhere
+    (an address or a fragment), the same stored review still reads, prints
+    and passes the projection unchanged; a reference that points nowhere
+    makes the row bad data, read as absent.
+    """
+
+    def test_after_k6_it_reads_prints_and_passes_as_before(self) -> None:
+        structure = curated_structure(STORED_BEFORE_TASK_10)
+
+        assert structure is not None
+        assert structure.model_dump(mode="json") == STORED_BEFORE_TASK_10 | {
+            "new_remarks": [
+                _STORED_REMARK
+                | {
+                    "read": [
+                        _STORED_REMARK["read"][0]
+                        | {
+                            "position": None,
+                            "excerpt": None,
+                            "segment_id": None,
+                            "later_in_course": False,
+                        }
+                    ]
+                }
+            ]
+        }
+        assert (
+            "- **Де почитати:** [Секрети в коді](https://example.test/secrets)"
+            in assemble_review(structure).splitlines()
+        )
+
+    def test_a_reference_pointing_nowhere_makes_the_row_absent(self) -> None:
+        remark = {**_STORED_REMARK, "read": [{"title": "Секрети в коді"}]}
+        stored = {**STORED_BEFORE_TASK_10, "new_remarks": [remark]}
+
+        with capture_logs() as logs:
+            assert curated_structure(stored) is None
+
+        assert [e["event"] for e in logs] == ["review_structure_invalid"]
 
     def test_it_passes_the_projection(self) -> None:
         structure = curated_structure(STORED_BEFORE_TASK_10)

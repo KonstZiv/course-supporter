@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.cost_kinds import CostKind
 from course_supporter.jobs import JOB_SUBJECT_TYPE, JobType
+from course_supporter.review_metrics import REVIEW_METRICS_ACTION
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
@@ -590,6 +591,10 @@ class HomeworkCostRepository:
     (NOT NULL) — never ``Job.tenant_id`` (nullable) and never through
     ``Student`` (not a tenant boundary). The leak surface is zero.
 
+    One read here is not a cost: :meth:`has_review_metrics`, whether a
+    submission's review already has its metrics row — the same attribution
+    through the job's subject, so every job of the submission is seen.
+
     Soft-delete: enrichment joins (``CourseNode`` / ``AuthoredDocument`` /
     ``Student``) are by id with NO ``deleted_at`` filter, so a soft-deleted
     course, task, or student still resolves its name and keeps its cost. Task
@@ -803,3 +808,25 @@ class HomeworkCostRepository:
             )
             for row in result.all()
         ]
+
+    async def has_review_metrics(
+        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID
+    ) -> bool:
+        """Whether a job of the submission already wrote its review-metrics row.
+
+        The metrics of one review are written once (task 10, K6): a run that
+        re-enters a delivered submission delivers it again but measures
+        nothing new. Any job of the submission counts — the first one and
+        each continuation.
+        """
+        rows = (
+            select(ExternalServiceCall.id)
+            .join(Job, ExternalServiceCall.job_id == Job.id)
+            .join(HomeworkSubmission, _JOB_OF_SUBMISSION)
+            .where(
+                HomeworkSubmission.tenant_id == tenant_id,
+                HomeworkSubmission.id == submission_id,
+                ExternalServiceCall.action == REVIEW_METRICS_ACTION,
+            )
+        )
+        return bool((await self._session.execute(select(rows.exists()))).scalar())

@@ -303,6 +303,28 @@ class TestTestMode:
             "Task type 'task' is in test mode but served by 'todays_mentor'"
         ) in _validation_error(tmp_path, data)
 
+    def test_test_mode_on_a_test_is_refused_at_start(self, tmp_path: Path) -> None:
+        """Lock d (task 10, K6, decision 6): test mode is for the types that
+        are charged for; a test never is. The boot validates the file
+        (``boot.py``), so the refusal stops the start."""
+        data = _config()
+        data["task_types"]["test"].update(served_by="new_path", test_mode=True)
+
+        assert (
+            "Task type 'test' is in test mode: test mode is for the types that "
+            "are charged for, and a test is not"
+        ) in _validation_error(tmp_path, data)
+
+    def test_test_mode_on_a_task_passes_the_start(self, tmp_path: Path) -> None:
+        data = _config()
+        data["task_types"]["task"].update(served_by="new_path", test_mode=True)
+
+        validate_path_config(
+            load_path_config(_write(tmp_path, data)),
+            _registry(),
+            prompt_base_path=tmp_path,
+        )
+
     def test_test_mode_is_a_strict_bool(self, tmp_path: Path) -> None:
         data = _config()
         data["task_types"]["task"]["test_mode"] = "yes"

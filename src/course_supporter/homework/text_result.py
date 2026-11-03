@@ -5,8 +5,13 @@ Purpose:
     (``homework/result_builders.py``). The two stages before it have written
     everything the review says: the evaluation stage a verdict on every
     criterion and point (``homework/criteria_evaluation.py``), the
-    explanation stage the words around them (``homework/review_explanation.py``).
-    The builder reads, counts and lays out — no model call, nothing written.
+    explanation stage the words around them (``homework/review_explanation.py``)
+    and the places of the course it chose to link (task 10). The builder
+    reads, counts and lays out — no model call. It writes one thing: the
+    course links it gives, checked before they are given and kept so that a
+    second build of the same review gives the same
+    (``homework/course_link_delivery.py``); they are committed with the
+    review they belong to.
 
 What is the code's and what is the model's (``PRE-PLAN.md`` decisions 2, 3, 5):
     * The score and the pass are counted here from the stored rows, by the
@@ -18,6 +23,20 @@ What is the code's and what is the model's (``PRE-PLAN.md`` decisions 2, 3, 5):
       (``homework/verdict_explanation.py``); the field a school's platform
       gates on does not rest on that check having held.
     * The reason, the remarks and the Mentor's own word are the explanation's.
+    * The course links are the model's choice among the places the code
+      showed it, resolved and checked by code
+      (:func:`~course_supporter.homework.course_link_delivery.settle_course_links`):
+      a remark reads the places of its criterion, never another's.
+
+After delivery (task 10, K6):
+    The review's authenticity goes to the call register
+    (:func:`~course_supporter.service_logging.record_review_metrics`): the
+    share of the criteria not met whose remark gives at least one course
+    link. A review with every criterion met makes no claim to support and
+    leaves no row. Completeness is not measured on this path (``None``):
+    the explanation's check already refuses an answer without a remark on
+    every criterion not met. The row is written once per submission: a run
+    re-entered after delivery delivers again, and finds the row there.
 
 The order of the remarks:
     By their criterion's weight — "must" first, then "should", then "may" —
@@ -43,10 +62,19 @@ Replacing:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
-from course_supporter.criteria_kinds import VerdictItemKind, WeightCategory
+from course_supporter.criteria_kinds import (
+    VerdictItemKind,
+    VerdictValue,
+    WeightCategory,
+)
+from course_supporter.homework.course_link_delivery import (
+    reference_of,
+    settle_course_links,
+)
+from course_supporter.homework.course_links import FoundCourseLinks
 from course_supporter.homework.criteria_form import WEIGHT_NUMBERS
 from course_supporter.homework.criteria_verdicts import (
     ScoredItem,
@@ -65,15 +93,28 @@ from course_supporter.homework.verdict_explanation import (
 )
 from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
 from course_supporter.models.review_structure import (
+    Reference,
     Remark,
     ReviewStructureV1,
     Verdict,
 )
+from course_supporter.review_metrics import (
+    Claim,
+    ReviewMetrics,
+    ShareMetricsCalculator,
+)
+from course_supporter.service_logging import record_review_metrics
+from course_supporter.storage.repositories import HomeworkCostRepository
 from course_supporter.storage.submission_verdict_repository import (
     SubmissionVerdictRepository,
 )
 
-__all__ = ["REVIEW_PARTS_MISSING", "TextResultBuilder", "build_text_review"]
+__all__ = [
+    "REVIEW_PARTS_MISSING",
+    "TextResultBuilder",
+    "build_text_review",
+    "link_authenticity",
+]
 
 REVIEW_PARTS_MISSING: Final = "review_parts_missing"
 """The code a text task's submission fails with when its review has no parts.
@@ -88,6 +129,7 @@ def build_text_review(
     rows: Sequence[ScoredItem],
     explanation: ExplanationAnswer,
     language: str,
+    reading: Mapping[str, Sequence[Reference]] | None = None,
 ) -> tuple[ReviewStructureV1, int]:
     """A text task's review as a structure, and its score — a pure function.
 
@@ -95,6 +137,8 @@ def build_text_review(
         rows: The submission's verdict rows, criteria and points alike.
         explanation: The explanation stage's answer.
         language: The language the explanation is written in.
+        reading: By criterion id, what its remark gives to read — the course
+            links settled for it; a criterion missing here gives none.
 
     Raises:
         ValueError: The rows have no criterion, or a criterion without a
@@ -108,7 +152,12 @@ def build_text_review(
         language=language,
         verdict=Verdict(passed=is_passed(rows), why=explanation.why),
         new_remarks=[
-            Remark(what=remark.what, why=remark.why, todo=remark.todo)
+            Remark(
+                what=remark.what,
+                why=remark.why,
+                todo=remark.todo,
+                read=list((reading or {}).get(remark.id, ())),
+            )
             for remark in _by_weight(explanation.remarks, rows)
         ],
         # A blank voice is no voice: the assembler would print its block empty.
@@ -137,14 +186,38 @@ def _by_weight(
     return sorted(ordered, key=lambda remark: place[remark.id])
 
 
+def link_authenticity(
+    unmet: Sequence[str], links: Mapping[str, Sequence[object]]
+) -> float | None:
+    """The share of ``unmet`` criteria whose remark gives a course link.
+
+    ``None`` when no criterion is unmet: such a review makes no claim a link
+    could support, and zero would say it made one unsupported.
+
+    >>> link_authenticity(["c1", "c3"], {"c1": ["a link"], "c3": []})
+    0.5
+    >>> link_authenticity([], {}) is None
+    True
+    """
+    claims = [
+        # Every unmet criterion has its remark (the explanation's check).
+        Claim(supported_by_reference=bool(links.get(cid)), covered_by_verdict=True)
+        for cid in unmet
+    ]
+    return ShareMetricsCalculator().calculate(claims).authenticity
+
+
 class TextResultBuilder:
     """The result of a text task: counted by code, worded by the explanation."""
 
     async def build(self, context: BuildContext) -> BuiltResult:
         """Read the verdicts and their explanation, and lay out the review.
 
-        Through the submission's own session, reading only, with the tenant
-        on each read (``impl-rules#9``).
+        Through the submission's own session, with the tenant on each read
+        (``impl-rules#9``). The one write — the course links given, settled
+        (:func:`~course_supporter.homework.course_link_delivery.settle_course_links`)
+        — is flushed into the same session, for the body to commit with the
+        review.
 
         Raises:
             ResultNotBuiltError: :data:`REVIEW_PARTS_MISSING` — no verdict
@@ -169,14 +242,62 @@ class TextResultBuilder:
             raise ResultNotBuiltError(
                 REVIEW_PARTS_MISSING, "the submission has no explanation"
             )
+        answer = ExplanationAnswer.model_validate(explained.body)
+        links = await settle_course_links(
+            context.session, context.session_factory, submission, answer, rows
+        )
         structure, score = build_text_review(
             rows=rows,
-            explanation=ExplanationAnswer.model_validate(explained.body),
+            explanation=answer,
             language=explained.language,
+            reading={
+                criterion_id: [reference_of(place) for place in places]
+                for criterion_id, places in links.items()
+            },
         )
         return BuiltResult(
             structure=structure, markdown=assemble_review(structure), score=score
         )
 
     async def after_delivery(self, context: BuildContext) -> None:
-        """Nothing follows a text task's review: all it says is written before."""
+        """Write the review's authenticity to the call register (module).
+
+        Read from what was kept — the verdict rows and the links settled for
+        the review. Once per submission: a run re-entered after delivery
+        (from ``completed``, which builds nothing) finds the row of the
+        first and writes no second.
+        """
+        submission = context.submission
+        if await HomeworkCostRepository(context.session).has_review_metrics(
+            tenant_id=submission.tenant_id, submission_id=submission.id
+        ):
+            return
+        stored = SubmissionVerdictRepository(context.session)
+        rows = await stored.list_for_submission(
+            tenant_id=submission.tenant_id, submission_id=submission.id
+        )
+        unmet = [
+            row.item_id
+            for row in rows
+            if row.item_kind == VerdictItemKind.CRITERION
+            and row.verdict == VerdictValue.NOT_MET
+        ]
+        if not unmet:
+            return
+        kept = await stored.get_candidates(
+            tenant_id=submission.tenant_id, submission_id=submission.id
+        )
+        found = (
+            FoundCourseLinks.model_validate(kept.body)
+            if kept is not None
+            else FoundCourseLinks(criteria=())
+        )
+        await record_review_metrics(
+            context.session_factory,
+            ReviewMetrics(
+                authenticity=link_authenticity(
+                    unmet, {cid: found.settled_of(cid) for cid in unmet}
+                ),
+                completeness=None,
+            ),
+        )

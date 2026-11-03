@@ -134,12 +134,21 @@ class Reference(BaseModel):
     show; the markdown leaves it out.
 
     Every field added by task 10 has a default, so a review stored before them
-    reads back unchanged.
+    reads back unchanged. What a reference points at is not optional: it has
+    an address (``url``) or a fragment of the course (``segment_id``), or it
+    is refused (task 10, K6) — a title alone sends the student nowhere. A
+    review stored before task 10 has an address on every reference, so it
+    passes as before.
 
     >>> Reference(title="Змінні середовища",
     ...           position=Position(kind="audio", value="12:05"),
+    ...           segment_id="0192f6a0-0000-7000-8000-000000000001",
     ...           later_in_course=True).url is None
     True
+    >>> Reference(title="Змінні середовища")
+    Traceback (most recent call last):
+        ...
+    pydantic_core._pydantic_core.ValidationError: ...points somewhere...
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -176,6 +185,17 @@ class Reference(BaseModel):
             "which the review then says."
         ),
     )
+
+    @model_validator(mode="after")
+    def _points_somewhere(self) -> Self:
+        """An outside link has its address, a course link its fragment."""
+        if self.url is None and self.segment_id is None:
+            msg = (
+                "A reference points somewhere: an address (url) or a fragment "
+                "of the course (segment_id)"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class Remark(BaseModel):

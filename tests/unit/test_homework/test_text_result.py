@@ -11,6 +11,8 @@ pinned through the body in ``tests/integration/test_text_review_e2e_db.py``.
 
 from __future__ import annotations
 
+import doctest
+
 import pytest
 
 from course_supporter.criteria_kinds import (
@@ -18,16 +20,18 @@ from course_supporter.criteria_kinds import (
     VerdictValue,
     WeightCategory,
 )
+from course_supporter.homework import text_result
 from course_supporter.homework.review_assembler import assemble_review
 from course_supporter.homework.text_result import (
     REVIEW_PARTS_MISSING,
     build_text_review,
+    link_authenticity,
 )
 from course_supporter.homework.verdict_explanation import (
     CriterionRemark,
     ExplanationAnswer,
 )
-from course_supporter.models.review_structure import Remark, Verdict
+from course_supporter.models.review_structure import Reference, Remark, Verdict
 from course_supporter.storage.submission_verdict_repository import VerdictRecord
 
 
@@ -234,3 +238,56 @@ class TestTheRestOfTheReview:
 
     def test_the_refusal_code_is_a_short_key(self) -> None:
         assert REVIEW_PARTS_MISSING == "review_parts_missing"
+
+
+class TestTheCourseLinks:
+    """Task 10, K6: each remark reads the links settled for its criterion."""
+
+    def test_a_remark_reads_its_criterions_links_and_no_others(self) -> None:
+        link = Reference(title="Рекурсія", segment_id="s-1")
+        rows = [
+            _criterion("c1", MUST, NOT_MET),
+            _criterion("c2", SHOULD, NOT_MET),
+        ]
+
+        structure, _ = build_text_review(
+            rows=rows,
+            explanation=_explanation("c1", "c2", passed=False),
+            language="ukr",
+            reading={"c2": [link]},
+        )
+
+        assert [remark.read for remark in structure.new_remarks] == [[], [link]]
+
+    def test_without_reading_no_remark_has_any(self) -> None:
+        structure, _ = build_text_review(
+            rows=[_criterion("c1", MUST, NOT_MET)],
+            explanation=_explanation("c1", passed=False),
+            language="ukr",
+        )
+
+        assert structure.new_remarks[0].read == []
+
+
+class TestLinkAuthenticity:
+    """Task 10, K6, lock g: the share of the unmet criteria that are linked."""
+
+    def test_the_share_of_the_linked(self) -> None:
+        assert link_authenticity(
+            ["c1", "c2", "c3"], {"c1": ["a"], "c3": ["b", "c"]}
+        ) == pytest.approx(2 / 3)
+
+    def test_all_and_none(self) -> None:
+        assert link_authenticity(["c1"], {"c1": ["a"]}) == 1.0
+        assert link_authenticity(["c1"], {"c1": []}) == 0.0
+
+    def test_nothing_unmet_is_no_claim(self) -> None:
+        assert link_authenticity([], {"c1": ["a"]}) is None
+
+
+class TestDocstrings:
+    def test_the_examples_in_the_module_run(self) -> None:
+        results = doctest.testmod(text_result, raise_on_error=False)
+
+        assert results.attempted > 0
+        assert results.failed == 0

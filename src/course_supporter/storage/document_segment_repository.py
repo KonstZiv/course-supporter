@@ -563,6 +563,25 @@ class DocumentSegmentRepository:
             tree=tuple(tree),
         )
 
+    async def still_candidates(
+        self, *, course_root_id: uuid.UUID, segment_ids: Collection[uuid.UUID]
+    ) -> set[uuid.UUID]:
+        """Those of ``segment_ids`` that are the course's candidates now (task 10).
+
+        For a reader that kept candidates earlier and checks them before it
+        hands them on -- the review's builder, before a course link is
+        delivered: a segment deleted, or a material hidden, since the search
+        is no candidate any more. The rule is :func:`_over_candidates`'s, the
+        same statement every reader of candidates gets; this adds only the
+        ids. Nothing is ordered and no text is read.
+        """
+        if not segment_ids:
+            return set()
+        stmt = _over_candidates(select(DocumentSegment.id), course_root_id).where(
+            DocumentSegment.id.in_(segment_ids)
+        )
+        return set((await self._session.execute(stmt)).scalars().all())
+
     async def read_contents(
         self, segment_ids: Collection[uuid.UUID]
     ) -> dict[uuid.UUID, str]:

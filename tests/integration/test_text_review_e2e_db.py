@@ -26,9 +26,11 @@ webhook — locks 1 and 2 through the body); the same machine input once more
 (lock 9); a second submission with the same quote (the safeguard, lock 5); a
 submission with no list (held, then exactly one continuation and one review
 once a list appears — lock 6); the language of a review the doors gave none;
-the builder's refusal when either part is missing; and the shipped file, which
+the builder's refusal when either part is missing; the shipped file, which
 since task 10 (K5) serves a text task on the new path in test mode (lock 8,
-rewritten).
+rewritten); and a failed criterion whose topic the course teaches, linked in
+the review to the place that teaches it (task 10, K6, lock a — the course is
+the real one, its search the real finder).
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -91,9 +93,15 @@ from course_supporter.homework.text_result import (
 )
 from course_supporter.llm.ladder_config import StageConfig
 from course_supporter.llm.stage_router import StageResult
-from course_supporter.models.review_structure import Remark, ReviewStructureV1
+from course_supporter.models.review_structure import (
+    Position,
+    Reference,
+    Remark,
+    ReviewStructureV1,
+)
 from course_supporter.models.source import AssignmentType
 from course_supporter.models.webhook import WebhookReviewedPayload
+from course_supporter.review_metrics import REVIEW_METRICS_ACTION
 from course_supporter.service_logging import _persist
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -113,6 +121,13 @@ from course_supporter.storage.task_criteria_list_repository import (
     TaskCriteriaListRepository,
 )
 from tests._helpers.priced import priced_exact
+from tests.integration.test_document_segment_repository import (
+    _seed_child,
+    _seed_material,
+    _seed_root,
+    _seed_segment,
+    _seed_summary,
+)
 
 pytestmark = pytest.mark.requires_db
 
@@ -610,7 +625,11 @@ async def _rows(
 async def _priced(
     session_factory: async_sessionmaker[AsyncSession], submission_id: uuid.UUID
 ) -> list[str]:
-    """The stages the register priced for the submission's jobs, in order."""
+    """The stages the register priced for the submission's jobs, in order.
+
+    The rows that record no call — the funds port's answer, the review's
+    metrics — are not stages.
+    """
     async with session_factory() as session:
         job_ids = select(Job.id).where(Job.subject_id == submission_id)
         rows = (
@@ -618,12 +637,31 @@ async def _priced(
                 select(ExternalServiceCall)
                 .where(
                     ExternalServiceCall.job_id.in_(job_ids),
-                    ExternalServiceCall.action != FUNDS_PORT_ACTION,
+                    ExternalServiceCall.action.not_in(
+                        (FUNDS_PORT_ACTION, REVIEW_METRICS_ACTION)
+                    ),
                 )
                 .order_by(ExternalServiceCall.created_at.asc())
             )
         ).scalars()
         return [row.action for row in rows]
+
+
+async def _metrics(
+    session_factory: async_sessionmaker[AsyncSession], submission_id: uuid.UUID
+) -> list[tuple[float | None, float | None]]:
+    """The submission's review-metrics rows: (authenticity, completeness)."""
+    async with session_factory() as session:
+        job_ids = select(Job.id).where(Job.subject_id == submission_id)
+        rows = (
+            await session.execute(
+                select(ExternalServiceCall).where(
+                    ExternalServiceCall.job_id.in_(job_ids),
+                    ExternalServiceCall.action == REVIEW_METRICS_ACTION,
+                )
+            )
+        ).scalars()
+        return [(row.authenticity, row.completeness) for row in rows]
 
 
 # ── The walks ────────────────────────────────────────────────────────────────
@@ -678,7 +716,13 @@ class TestAFirstSubmissionIsReviewedFromItsVerdicts:
             "criteria": [
                 {"item_id": "c2", "candidates": []},
                 {"item_id": "c3", "candidates": []},
-            ]
+            ],
+            # What the review gave, settled by its build (task 10, K6): the
+            # remarks in the model's order, no place to link.
+            "settled": [
+                {"item_id": "c3", "candidates": []},
+                {"item_id": "c2", "candidates": []},
+            ],
         }
 
         # ── The rows: one per criterion and per point, against the list ──
@@ -733,6 +777,9 @@ class TestAFirstSubmissionIsReviewedFromItsVerdicts:
         assert curated_verdict(
             submission.review_result, score=submission.score
         ) == PortalVerdict(passed=True, correctness="partially_correct")
+
+        # ── After delivery: two criteria not met, neither linked (K6) ──
+        assert await _metrics(session_factory, submission_id) == [(0.0, None)]
 
 
 class TestTheSameMachineInputGivesTheSameReview:
@@ -1112,3 +1159,147 @@ class TestTheShippedFileServesTextTasksOnTheNewPathInTestMode:
         assert await _rows(session_factory, submission_id) != {}
         structure = ReviewStructureV1.model_validate(submission.review_result)
         assert structure.verdict is not None
+
+
+# ── A failed criterion linked to the course (task 10, K6, lock a) ───────────
+
+_TAUGHT = "Рекурсія — це коли функція викликає сама себе, доки не дійде до бази."
+
+# The list of the walks above, with c3 about recursion — which the course
+# below teaches. c1 and c2 name no concept.
+_LINKED_CRITERIA = (
+    _CRITERIA[0],
+    _CRITERIA[1],
+    _CRITERIA[2].model_copy(update={"concepts": ["recursion"]}),
+)
+
+# The model chooses the one place shown for c3; c2 had none to choose from.
+_LINKED_EXPLANATION = json.dumps(
+    {
+        "passed": True,
+        "why": _WHY,
+        "remarks": [{**_remark("c3"), "links": ["c3.l1"]}, _remark("c2")],
+        "mentor_voice": None,
+    },
+    ensure_ascii=False,
+)
+
+
+@pytest.fixture()
+async def linked_world(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: dict[str, Any],
+) -> dict[str, Any]:
+    """A course of its own under ``world``'s tenant: a lesson whose material
+    teaches recursion — paragraph 3 — before its ``task``, and that task's
+    ready model list. ``world``'s student submits; ``world`` cleans up."""
+    async with session_factory() as session:
+        tenant = await session.get(Tenant, world["tenant_id"])
+        assert tenant is not None
+        root = await _seed_root(session, tenant)
+        lesson = await _seed_child(session, tenant, root, title="Рекурсія")
+        material = await _seed_material(session, lesson, root, order=0)
+        summary = await _seed_summary(session, material, root, title="Рекурсія")
+        segment = await _seed_segment(
+            session,
+            summary,
+            root,
+            main=["recursion"],
+            content=_TAUGHT,
+            start_paragraph=3,
+            end_paragraph=4,
+        )
+        task = await _seed_material(
+            session, lesson, root, task_type="task", order=5, filename=None
+        )
+        lists = TaskCriteriaListRepository(session)
+        claimed = await lists.claim(
+            authored_document_id=task.id,
+            source_content_hash="h" * 64,
+            source_task_type="task",
+            form_version=2,
+        )
+        assert claimed is not None
+        assert await lists.mark_ready(
+            claimed.id,
+            claimed_at=claimed.claimed_at,
+            criteria=criteria_to_document(_LINKED_CRITERIA),
+            contradictions=[],
+            concepts_in_input=True,
+            dropped_concept_count=0,
+            input_fingerprint="f" * 64,
+        )
+        await session.commit()
+        return {
+            **world,
+            "node_id": root.id,
+            "lesson_id": lesson.id,
+            "doc_id": task.id,
+            "segment_id": segment.id,
+            "in_force": CriteriaInForce(
+                criteria=_LINKED_CRITERIA,
+                layer=CriteriaLayer.MODEL,
+                source_id=claimed.id,
+            ),
+        }
+
+
+class TestAFailedCriterionIsLinkedToTheCourse:
+    """Lock a (task 10, K6): the place the course teaches a failed criterion
+    is in the review — structure and markdown — with its title and place."""
+
+    async def test_the_chosen_place_is_in_the_structure_and_the_markdown(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        linked_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        router = _RouterDouble(session_factory)
+        router.content[REVIEW_EXPLANATION] = _LINKED_EXPLANATION
+        webhook = _webhook()
+        submission_id, job_id = await _submit(session_factory, linked_world)
+        async with session_factory() as session:
+            # The submission is on the lesson, under the course's root.
+            await session.execute(
+                update(HomeworkSubmission)
+                .where(HomeworkSubmission.id == submission_id)
+                .values(node_id=linked_world["lesson_id"])
+            )
+            await session.commit()
+
+        await _run(
+            session_factory,
+            router,
+            _ListSource(linked_world["in_force"]),
+            webhook,
+            tmp_path,
+            submission_id=submission_id,
+            job_id=job_id,
+        )
+
+        submission = await _submission(session_factory, submission_id)
+        assert submission.status == "delivered"
+        structure = ReviewStructureV1.model_validate(submission.review_result)
+        # Heaviest first: c2 (should) has nothing to read, c3 (may) its place.
+        c2, c3 = structure.new_remarks
+        assert c2.read == []
+        assert c3.read == [
+            Reference(
+                title="Рекурсія",
+                url=None,
+                position=Position(kind="paragraph", value="3"),
+                excerpt=_TAUGHT,
+                segment_id=str(linked_world["segment_id"]),
+                later_in_course=False,
+            )
+        ]
+        assert submission.review_markdown == assemble_review(structure)
+        assert (
+            "- **Де почитати:** Рекурсія (абзац 3)"
+            in (submission.review_markdown or "").splitlines()
+        )
+        [payload] = _reviewed(webhook)
+        assert payload.structure == structure
+
+        # One of the two criteria not met is linked.
+        assert await _metrics(session_factory, submission_id) == [(0.5, None)]

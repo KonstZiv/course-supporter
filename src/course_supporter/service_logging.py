@@ -507,10 +507,14 @@ class CourseLinkTrace(StrEnum):
 
     The value is the row's ``action``. ``FABRICATED`` — the explanation named
     a link it was not shown for that criterion, and the link was cut from the
-    explanation that is kept (K5).
+    explanation that is kept (K5). ``STALE`` — the model chose a place that is
+    no candidate any more when the review is built (deleted or hidden since
+    the search), a new search for its criterion gave no other, and the link
+    was left out of the review (K6).
     """
 
     FABRICATED = "course_link_fabricated"
+    STALE = "course_link_stale"
 
 
 async def record_course_link_trace(

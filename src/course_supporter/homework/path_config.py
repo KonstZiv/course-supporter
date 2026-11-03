@@ -48,9 +48,11 @@ Interface:
     :func:`validate_path_config` checks what the shape cannot — every prompt
     file exists and parses, no stage name repeats a ladder stage's, stage names
     resolve, a type has all three states or none, a type switched to the new
-    path has paths, a type in test mode is on the new path, a ``test`` path
-    lists no stage, pins stay under their stage's output ceiling, rungs are
-    admissible against the model registry and carry what the stage requires —
+    path has paths, a type in test mode is on the new path and is not
+    ``test`` (task 10, K6: test mode means not charging, and a test is never
+    charged for), a ``test`` path lists no stage, pins stay under their
+    stage's output ceiling, rungs are admissible against the model registry
+    and carry what the stage requires —
     and reports every such fault at once. Both raise ``ValueError`` and are
     meant for startup: a hole should stop the boot, not a live submission.
     :func:`path_ceiling_estimate` sums a path's money ceilings; a code stage
@@ -239,6 +241,7 @@ class TaskTypePaths(BaseModel):
     ``test_mode`` — the type is served by the new path, and its submissions are
     not charged for: nobody reads it yet, the funds port is
     ``AlwaysEnoughFundsPort``; the billing adapter will (:func:`in_test_mode`).
+    Refused on ``test`` (:func:`validate_path_config`).
     """
 
     model_config = _STRICT
@@ -406,6 +409,13 @@ def validate_path_config(
                 f"Task type '{task_type.value}' is in test mode but served by "
                 f"'{declared.served_by.value}': test mode is the new path "
                 f"without charging"
+            )
+        # A test makes no model call and is never charged for: test mode on it
+        # would read as a switch that does something, and does nothing.
+        if declared.test_mode and task_type is AssignmentType.TEST:
+            errors.append(
+                f"Task type '{task_type.value}' is in test mode: test mode is "
+                f"for the types that are charged for, and a test is not"
             )
 
         described = set(declared.paths)

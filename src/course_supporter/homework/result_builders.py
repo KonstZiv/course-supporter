@@ -54,9 +54,12 @@ __all__ = [
 class BuildContext:
     """What a builder is handed by the body.
 
-    ``session`` is the submission's own: a builder READS through it and writes
-    nothing, because the body writes the result and a builder's stray write
-    would ride on the same transaction. ``session_factory`` is for
+    ``session`` is the submission's own: a builder READS through it, because
+    the body writes the result and a builder's stray write would ride on the
+    same transaction. The one write that rides on it on purpose is a text
+    task's course links as its review gives them
+    (``homework/course_link_delivery.py``): they belong to that review and
+    are committed with it, or not at all. ``session_factory`` is for
     :meth:`ResultBuilder.after_delivery`, whose writes get sessions of their
     own. ``submission_text`` is what the doors read — for a test, its canonical
     answers. ``review_language`` is the doors' resolution, ``None`` when no

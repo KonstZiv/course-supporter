@@ -82,8 +82,38 @@ _GENERATED_SUFFIXES: Final[tuple[str, ...]] = (
 # A first-approximation dictionary (decision 1: the author corrects a false hit
 # on the confirm screen); core from the defect slice is angular/tsconfig/package.
 _BUILD_CONFIG_NAMES: Final[frozenset[str]] = frozenset(
-    {"angular.json", "package.json", ".babelrc"}
+    {
+        "angular.json",
+        "package.json",
+        ".babelrc",
+        # Python tooling and dependency manifests: matched by name only, the
+        # content is never read. A pyproject.toml left as custom code fed its
+        # dependency names into a course's concept lists.
+        "pyproject.toml",
+        "setup.cfg",
+        "pipfile",
+        "tox.ini",
+        "pytest.ini",
+        "mypy.ini",
+        ".flake8",
+        ".pylintrc",
+        ".coveragerc",
+        "ruff.toml",
+        ".ruff.toml",
+        "alembic.ini",
+        # Repository plumbing.
+        ".pre-commit-config.yaml",
+        ".editorconfig",
+        ".gitignore",
+        ".gitattributes",
+        ".dockerignore",
+        ".env.example",
+    }
 )
+# Dependency lists matched by their name shape: requirements.txt,
+# requirements-dev.txt, constraints.txt, … Dockerfile, compose files,
+# Makefile and setup.py stay custom on purpose: a lesson may teach them.
+_DEPENDENCY_LIST_PREFIXES: Final[tuple[str, ...]] = ("requirements", "constraints")
 # Config files matched by their ``<stem>.config.<ext>`` shape
 # (webpack.config.js, vite.config.ts, rollup.config.mjs, …).
 _BUILD_CONFIG_STEMS: Final[frozenset[str]] = frozenset(
@@ -104,6 +134,8 @@ def _is_build_config(basename: str) -> bool:
     if basename in _BUILD_CONFIG_NAMES:
         return True
     if basename.startswith("tsconfig") and basename.endswith(".json"):
+        return True
+    if basename.endswith(".txt") and basename.startswith(_DEPENDENCY_LIST_PREFIXES):
         return True
     return basename.rsplit(".", 1)[0] in _BUILD_CONFIG_STEMS
 

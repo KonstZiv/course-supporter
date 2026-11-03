@@ -16,7 +16,7 @@ Run with: ``uv run pytest tests/integration/test_homework_pipeline.py --run-db -
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,6 +38,7 @@ from course_supporter.models.mentor_review import (
     Verdict,
 )
 from course_supporter.models.sanity import SanityClassification
+from course_supporter.models.source import AssignmentType
 from course_supporter.security.schemas import SafetyResult
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
@@ -48,10 +49,23 @@ from course_supporter.storage.orm import (
     Student,
     Tenant,
 )
+from tests._helpers.path_config import shipped_with_todays_mentor_for
 
 pytestmark = pytest.mark.requires_db
 
 _WEBHOOK_URL = "https://example.com/homework-hook"
+
+
+@pytest.fixture(autouse=True)
+def _task_on_todays_mentor() -> Iterator[None]:
+    """These walks drive TODAY's Mentor on a ``task``. Since task 10 (K5) the
+    shipped file serves ``task`` on the new path, so the walks take the way
+    back — ``served_by: todays_mentor`` — here alone."""
+    with patch(
+        "course_supporter.homework.path_runner.get_path_config",
+        return_value=shipped_with_todays_mentor_for(AssignmentType.TASK),
+    ):
+        yield
 
 
 # ── seed ──────────────────────────────────────────────────────────

@@ -24,10 +24,10 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import delete, select
@@ -41,6 +41,7 @@ from course_supporter.llm.error_categories import LadderExhaustedError
 from course_supporter.llm.ladder_config import StageConfig, load_ladder_config
 from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.llm.stage_router import StageResult
+from course_supporter.models.source import AssignmentType
 from course_supporter.storage.document_summary_repository import (
     DocumentSummaryRepository,
 )
@@ -58,8 +59,22 @@ from course_supporter.storage.task_criteria_override_repository import (
     TaskCriteriaOverrideRepository,
 )
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.path_config import shipped_with_todays_mentor_for
 
 pytestmark = pytest.mark.requires_db
+
+
+@pytest.fixture(autouse=True)
+def _task_on_todays_mentor() -> Iterator[None]:
+    """These walks drive TODAY's Mentor on a ``task``. Since task 10 (K5) the
+    shipped file serves ``task`` on the new path, so the walks take the way
+    back — ``served_by: todays_mentor`` — here alone."""
+    with patch(
+        "course_supporter.homework.path_runner.get_path_config",
+        return_value=shipped_with_todays_mentor_for(AssignmentType.TASK),
+    ):
+        yield
+
 
 _REPO = Path(__file__).resolve().parents[2]
 _TASK_TEXT = "Write a recursive factorial function. It must handle n = 0."

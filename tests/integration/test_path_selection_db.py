@@ -295,10 +295,12 @@ class TestChoosePath:
         """Without an explicit config the choice reads what the boot validated.
 
         Since task 07 the shipped file puts ``test`` on the new path, and a
-        first submission of it walks ``test/first`` with no stage; the other
-        three types are on today's Mentor and answer ``None``. Before task 07
-        every type answered ``None`` — the production fact of task 03's
-        acceptance criterion 13.
+        first submission of it walks ``test/first`` with no stage. Since task
+        10 (K5) ``task`` and ``short_task`` are on the new path too, in test
+        mode, and a first submission walks their five stages; ``project`` is
+        on today's Mentor and answers ``None``. Before task 07 every type
+        answered ``None`` — the production fact of task 03's acceptance
+        criterion 13.
         """
         student = await StudentRepository(db_session).create(
             tenant_id=seed_tenant.id, external_id="ext-shipped-switch"
@@ -318,7 +320,19 @@ class TestChoosePath:
         assert test_choice is not None, "test is on the new path"
         assert test_choice.key == PathKey(AssignmentType.TEST, SubmissionState.FIRST)
         assert test_choice.stages == ()
-        assert chosen == dict.fromkeys(chosen), "the other three are on today's Mentor"
+        text_path = (
+            "safety",
+            "attempt_classifier",
+            "criteria_evaluation",
+            "course_link_lookup",
+            "review_explanation",
+        )
+        for text_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
+            text_choice = chosen.pop(text_type)
+            assert text_choice is not None, f"{text_type} is on the new path"
+            assert text_choice.key == PathKey(text_type, SubmissionState.FIRST)
+            assert text_choice.stages == text_path
+        assert chosen == {AssignmentType.PROJECT: None}, "project is on today's Mentor"
 
     async def test_first_submission_walks_the_first_path(
         self,

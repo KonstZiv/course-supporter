@@ -13,22 +13,33 @@ Purpose:
 Interface:
     The file (``Settings.submission_paths_config_path``) has two sections:
 
-    * ``stages`` — named stage definitions, each written once: everything the
-      router needs to execute the stage (``prompt_ref``, ``requires``,
-      ``input_budget_ratio``, ``record_output``, a non-empty ``ladder``), plus
-      ``deterministic`` and ``ceilings`` (``tool_steps``, ``money_usd``,
-      ``output_tokens``). A path lists stage names; a stage that needs different
-      ceilings on another path is another name, not an override. The name is the
-      stage's own: it may not repeat a stage of ``ladders_*.yaml``, because the
-      call register keys a call's cost on it.
+    * ``stages`` — named stage definitions, each written once, of two kinds
+      (task 10, K5):
+
+      - a MODEL stage (:class:`ModelStage`): everything the router needs to
+        execute the stage (``prompt_ref``, ``requires``,
+        ``input_budget_ratio``, ``record_output``, a non-empty ``ladder``),
+        plus ``deterministic`` and ``ceilings`` (``tool_steps``,
+        ``money_usd``, ``output_tokens``);
+      - a CODE stage (:class:`CodeStage`): ``code: true`` and
+        ``deterministic`` — nothing else. Code alone runs it: no ladder, no
+        prompt, no ceilings, and a stage that writes one of them is refused.
+
+      A path lists stage names; a stage that needs different ceilings on
+      another path is another name, not an override. The name is the stage's
+      own: it may not repeat a stage of ``ladders_*.yaml``, because the call
+      register keys a call's cost on it.
     * ``task_types`` — every :class:`~course_supporter.models.source.AssignmentType`
       with ``served_by`` and ``paths``: either all three :class:`SubmissionState`
       values, each mapped to a list of stage names (possibly empty, and always
       empty for ``test`` — a test makes no model call), or ``{}`` for a type no
-      path describes yet.
+      path describes yet. ``test_mode: true`` marks a type served by the new
+      path WITHOUT charging for it (:func:`in_test_mode`).
 
-    No field has a default: a description that is missing fails loudly instead
-    of standing in for a guessed value.
+    No field has a default but ``test_mode``: a description that is missing
+    fails loudly instead of standing in for a guessed value. ``test_mode`` is
+    the exception a type opts into beside its switch; without it the type is
+    charged as usual.
 
     :func:`load_path_config` reads the file and checks its shape; every shape
     fault is reported at once. :func:`get_path_config` is the same read, cached
@@ -37,34 +48,40 @@ Interface:
     :func:`validate_path_config` checks what the shape cannot — every prompt
     file exists and parses, no stage name repeats a ladder stage's, stage names
     resolve, a type has all three states or none, a type switched to the new
-    path has paths, a ``test`` path lists no stage, pins stay under their
-    stage's output ceiling, rungs are admissible against the model registry and
-    carry what the stage requires — and reports every such fault at once. Both
-    raise ``ValueError`` and are meant for startup: a hole should stop the boot,
-    not a live submission.
-    :func:`path_ceiling_estimate` sums a path's money ceilings.
+    path has paths, a type in test mode is on the new path, a ``test`` path
+    lists no stage, pins stay under their stage's output ceiling, rungs are
+    admissible against the model registry and carry what the stage requires —
+    and reports every such fault at once. Both raise ``ValueError`` and are
+    meant for startup: a hole should stop the boot, not a live submission.
+    :func:`path_ceiling_estimate` sums a path's money ceilings; a code stage
+    adds nothing. :func:`model_stages` — the stages a model runs, by name.
+    :func:`in_test_mode` — whether a type is served by the new path without
+    charging.
 
     Worked cases, executed: :mod:`tests.unit.test_homework.test_path_config`.
 
 Extending:
     A new stage, or the paths of a declared type, is an edit of the file — and,
-    for a stage, a new prompt file beside it. A new submission state or a new
+    for a model stage, a new prompt file beside it; a code stage needs only its
+    executor (``homework/path_stages.py``). A new submission state or a new
     stage field is a code change here and a reader in the code that walks paths
     (task 03).
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import yaml
 from pydantic import (
+    AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     NonNegativeInt,
@@ -150,8 +167,8 @@ class StageCeilings(BaseModel):
     output_tokens: PositiveInt
 
 
-class PathStage(BaseModel):
-    """A stage definition: everything the router needs, plus the stage's ceilings.
+class ModelStage(BaseModel):
+    """A model stage: everything the router needs, plus the stage's ceilings.
 
     The router-facing fields carry the same names and meanings as on a
     ``ladders_*.yaml`` stage (:class:`~course_supporter.llm.ladder_config.StageConfig`),
@@ -172,13 +189,63 @@ class PathStage(BaseModel):
     ladder: list[PathRung] = Field(min_length=1)
 
 
+def _true_only(value: bool) -> bool:
+    """``code`` is written ``true`` or not at all — never ``false``, never ``1``.
+
+    ``Literal[True]`` would take ``1`` and ``1.0`` for ``true``, and pydantic
+    cannot make a literal strict; a strict bool that must be true can be.
+    """
+    if not value:
+        msg = "a code stage says `code: true`; a model stage has no `code`"
+        raise ValueError(msg)
+    return value
+
+
+class CodeStage(BaseModel):
+    """A code stage: code alone runs it, and it calls no model (task 10, K5).
+
+    ``code: true`` says which kind the stage is; ``deterministic`` keeps its
+    meaning from a model stage — the same input gives the same output. Nothing
+    else is allowed: a ladder, a prompt or a ceiling written on a code stage
+    describes a call it never makes, and is refused rather than ignored.
+    """
+
+    model_config = _STRICT
+
+    code: Annotated[StrictBool, AfterValidator(_true_only)]
+    deterministic: StrictBool
+
+
+def _stage_of_its_kind(value: Any) -> Any:
+    """Validate a raw stage as the kind it declares: with ``code`` — code.
+
+    Each kind is validated on its own, so a fault is reported at the stage's
+    own field (``stages.safety.ladder``) and not twice, once per kind.
+    """
+    if isinstance(value, Mapping):
+        if "code" in value:
+            return CodeStage.model_validate(value)
+        return ModelStage.model_validate(value)
+    return value
+
+
+PathStage = Annotated[ModelStage | CodeStage, BeforeValidator(_stage_of_its_kind)]
+"""A stage definition of either kind (see the module)."""
+
+
 class TaskTypePaths(BaseModel):
-    """How one task type is served, and its paths if any are described."""
+    """How one task type is served, and its paths if any are described.
+
+    ``test_mode`` — the type is served by the new path, and its submissions are
+    not charged for: nobody reads it yet, the funds port is
+    ``AlwaysEnoughFundsPort``; the billing adapter will (:func:`in_test_mode`).
+    """
 
     model_config = _STRICT
 
     served_by: ServedBy
     paths: dict[SubmissionState, list[str]]
+    test_mode: StrictBool = False
 
 
 class PathConfig(BaseModel):
@@ -218,7 +285,7 @@ def _stage_model_errors(
     stage_name: str,
     index: int,
     rung: PathRung,
-    stage: PathStage,
+    stage: ModelStage,
     model: ModelConfig,
 ) -> list[str]:
     """The stage's own checks against one rung's resolved model.
@@ -262,11 +329,13 @@ def validate_path_config(
     :func:`~course_supporter.llm.prompt_loader_md.load_prompt` — ``None`` in
     production, a temporary directory in tests.
 
-    * every stage's prompt file exists and parses (half of ``DD-SP-AP``);
-    * no path stage reuses the name of a stage in the model ladders: the
-      register keys a call's cost on the stage name, so two stages sharing one
-      would have their costs summed together (task 03 probe, question 8);
-    * every stage rung is admissible against the model registry
+    * no path stage — of either kind — reuses the name of a stage in the model
+      ladders: the register keys a call's cost on the stage name, so two stages
+      sharing one would have their costs summed together (task 03 probe,
+      question 8);
+    * every model stage's prompt file exists and parses (half of
+      ``DD-SP-AP``); a code stage has none;
+    * every model stage rung is admissible against the model registry
       (:func:`~course_supporter.llm.rung_registry_check.rung_registry_errors`),
       carries the capabilities the stage requires, and — when the stage declares
       an input-budget ratio — has a context window in the registry;
@@ -277,6 +346,8 @@ def validate_path_config(
     * a declared type describes all three submission states or none — a
       partial set would hide behind the switch until the day it is flipped;
     * a type switched to the new path describes its paths;
+    * a type in test mode is served by the new path: test mode is the new path
+      without charging, and today's Mentor has no such mode;
     * a ``test`` path lists no stage — a test makes no model call;
     * every stage name in a path is defined, and appears once in that path.
 
@@ -292,6 +363,8 @@ def validate_path_config(
                 f"ladders: a path stage needs its own name, because the call "
                 f"register keys a call's cost on it"
             )
+        if isinstance(stage, CodeStage):
+            continue
         try:
             load_prompt(stage.prompt_ref, base_path=prompt_base_path)
         except (FileNotFoundError, InvalidPromptError) as exc:
@@ -327,6 +400,13 @@ def validate_path_config(
                 f"needs served_by and paths"
             )
             continue
+
+        if declared.test_mode and declared.served_by is not ServedBy.NEW_PATH:
+            errors.append(
+                f"Task type '{task_type.value}' is in test mode but served by "
+                f"'{declared.served_by.value}': test mode is the new path "
+                f"without charging"
+            )
 
         described = set(declared.paths)
         if not described:
@@ -398,9 +478,9 @@ def path_ceiling_estimate(config: PathConfig, key: PathKey) -> float:
     """Sum of the money ceilings of the stages on ``key``'s path, in dollars.
 
     Output-token ceilings are not money, and the tool-step ceiling counts steps
-    no model layer can take yet (П8), so neither enters the sum. A path with no
-    model stage estimates ``0.0``. Expects a config that passed
-    :func:`validate_path_config`.
+    no model layer can take yet (П8), so neither enters the sum. A code stage
+    pays for nothing and adds ``0.0``; a path with no model stage estimates
+    ``0.0``. Expects a config that passed :func:`validate_path_config`.
 
     Raises:
         KeyError: when no path is described for ``key``.
@@ -408,6 +488,40 @@ def path_ceiling_estimate(config: PathConfig, key: PathKey) -> float:
     paths = config.task_types[key.task_type].paths
     if key.state not in paths:
         raise KeyError(f"No path is described for '{key}'")
-    return sum(
-        (config.stages[name].ceilings.money_usd for name in paths[key.state]), 0.0
+    return sum((_money_ceiling(config.stages[name]) for name in paths[key.state]), 0.0)
+
+
+def _money_ceiling(stage: ModelStage | CodeStage) -> float:
+    return stage.ceilings.money_usd if isinstance(stage, ModelStage) else 0.0
+
+
+def model_stages(config: PathConfig) -> dict[str, ModelStage]:
+    """The stages a model runs, by name — what has a ladder to run and price.
+
+    A code stage is left out: it has no ladder, and the shadow price estimate
+    of a review (``cost_estimate.actions.estimate_review``) prices the model
+    stages of a path alone.
+    """
+    return {
+        name: stage
+        for name, stage in config.stages.items()
+        if isinstance(stage, ModelStage)
+    }
+
+
+def in_test_mode(task_type: AssignmentType, config: PathConfig | None = None) -> bool:
+    """Is ``task_type`` served by the new path without charging?
+
+    True only for a type on the new path that says ``test_mode: true``; a
+    type the file does not declare is not. The billing adapter of the funds
+    port is the reader this is for: today the port is
+    ``AlwaysEnoughFundsPort`` and nobody asks. ``config`` defaults to the
+    cached file (:func:`get_path_config`); tests pass their own.
+    """
+    cfg = config if config is not None else get_path_config()
+    declared = cfg.task_types.get(task_type)
+    return (
+        declared is not None
+        and declared.served_by is ServedBy.NEW_PATH
+        and declared.test_mode
     )

@@ -2,11 +2,12 @@
 
 ``vision-rules#25``: the criteria of ``TASK.md`` that read end to end are
 proved by one walk, not by the sum of the stages' own suites. Here the type is
-``task``, switched onto the new path inside the test only, and everything
-below the model layer is the real thing — the ARQ task, the seam, the body,
-the four shipped stages with their descriptions from
-``config/submission_paths.yaml``, the verdict repository, the explanation's
-check, the builder, the assembler, the webhook payload.
+``task`` — on the new path in test mode as the shipped file serves it since
+task 10 (K5) — and everything below the model layer is the real thing — the
+ARQ task, the seam, the body, the five shipped stages with their descriptions
+from ``config/submission_paths.yaml`` (the search for course links among
+them, task 10), the verdict repository, the explanation's check, the builder,
+the assembler, the webhook payload.
 
 The doubles, and why each:
 
@@ -26,7 +27,8 @@ webhook — locks 1 and 2 through the body); the same machine input once more
 submission with no list (held, then exactly one continuation and one review
 once a list appears — lock 6); the language of a review the doors gave none;
 the builder's refusal when either part is missing; and the shipped file, which
-leaves a text task with today's Mentor (lock 8).
+since task 10 (K5) serves a text task on the new path in test mode (lock 8,
+rewritten).
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -67,12 +69,13 @@ from course_supporter.homework.criteria_list_service import (
 from course_supporter.homework.path_config import (
     PathConfig,
     ServedBy,
+    in_test_mode,
     load_path_config,
 )
 from course_supporter.homework.path_continuation import resume_awaiting_criteria
-from course_supporter.homework.path_runner import run_new_path_if_switched
 from course_supporter.homework.path_stages import (
     ATTEMPT_CLASSIFIER,
+    COURSE_LINK_LOOKUP,
     CRITERIA_EVALUATION,
     REVIEW_EXPLANATION,
     SAFETY,
@@ -89,6 +92,7 @@ from course_supporter.homework.text_result import (
 from course_supporter.llm.ladder_config import StageConfig
 from course_supporter.llm.stage_router import StageResult
 from course_supporter.models.review_structure import Remark, ReviewStructureV1
+from course_supporter.models.source import AssignmentType
 from course_supporter.models.webhook import WebhookReviewedPayload
 from course_supporter.service_logging import _persist
 from course_supporter.storage.orm import (
@@ -174,12 +178,14 @@ _WHY = "Робота зарахована: функція solve є й подво
 _VOICE = "Назва функції говорить сама за себе."
 
 
-def _remark(cid: str) -> dict[str, str]:
+def _remark(cid: str) -> dict[str, Any]:
     return {
         "id": cid,
         "what": f"Зараз у роботі {cid} не виконано.",
         "why": f"Через це {cid} не працює.",
         "todo": f"Зробіть {cid}.",
+        # The criteria name no concepts, so the search keeps no places.
+        "links": [],
     }
 
 
@@ -207,6 +213,16 @@ _PRICE = {
     CRITERIA_EVALUATION: 0.02,
     REVIEW_EXPLANATION: 0.008,
 }
+
+# The first-submission path of ``task``: the router is asked by every stage but
+# the search for course links, which is code and costs nothing.
+_FIRST_PATH = (
+    SAFETY,
+    ATTEMPT_CLASSIFIER,
+    CRITERIA_EVALUATION,
+    COURSE_LINK_LOOKUP,
+    REVIEW_EXPLANATION,
+)
 
 
 class _RouterDouble:
@@ -320,12 +336,14 @@ class _PortDouble:
         raise AssertionError("the submission path must not use the version operations")
 
 
-def _switched() -> PathConfig:
-    """The shipped file, with ``task`` moved onto the new path — here only."""
-    shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
-    raw = shipped.model_dump(mode="json")
-    raw["task_types"]["task"]["served_by"] = ServedBy.NEW_PATH.value
-    return PathConfig.model_validate(raw)
+def _shipped() -> PathConfig:
+    """The shipped file, read from the repository.
+
+    Since task 10 (K5) it serves ``task`` on the new path itself; the walks
+    hand it to the body explicitly, so a cache another test filled cannot
+    stand in for it.
+    """
+    return load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
 
 # ── The world: a course, a task, its list, a student ────────────────────────
@@ -503,8 +521,8 @@ async def _run(
     arq: Any = None,
     config: PathConfig | None = None,
 ) -> None:
-    """The ARQ task through the seam; ``task`` switched in the test only."""
-    config = config or _switched()
+    """The ARQ task through the seam, on the shipped file unless told otherwise."""
+    config = config or _shipped()
     with (
         patch(
             "course_supporter.homework.path_runner.get_path_config",
@@ -644,8 +662,24 @@ class TestAFirstSubmissionIsReviewedFromItsVerdicts:
             REVIEW_EXPLANATION,
         ]
         assert await _priced(session_factory, submission_id) == router.calls
-        assert port.accounted == [pytest.approx(_PRICE[name]) for name in router.calls]
+        # The search for course links is accounted for too — at nothing.
+        assert port.accounted == [
+            pytest.approx(_PRICE.get(name, 0.0)) for name in _FIRST_PATH
+        ]
         assert port.released == [SubmissionOutcome.COMPLETED]
+
+        # ── The search ran between the verdicts and their explanation ──
+        async with session_factory() as session:
+            found = await SubmissionVerdictRepository(session).get_candidates(
+                tenant_id=world["tenant_id"], submission_id=submission_id
+            )
+        assert found is not None
+        assert found.body == {
+            "criteria": [
+                {"item_id": "c2", "candidates": []},
+                {"item_id": "c3", "candidates": []},
+            ]
+        }
 
         # ── The rows: one per criterion and per point, against the list ──
         rows = await _rows(session_factory, submission_id)
@@ -850,7 +884,7 @@ class TestASubmissionWithoutAListWaitsForOne:
                     arq,
                     tenant_id=world["tenant_id"],
                     authored_document_id=world["doc_id"],
-                    config=_switched(),
+                    config=_shipped(),
                 )
 
         # Two entries in a row — an author's edit, say, then a worker start.
@@ -941,8 +975,8 @@ class TestTheReviewIsInTheExplanationsLanguage:
 
 
 def _path_of(*stages: str) -> PathConfig:
-    """The switched file, with every path of ``task`` cut to ``stages``."""
-    raw = _switched().model_dump(mode="json")
+    """The shipped file, with every path of ``task`` cut to ``stages``."""
+    raw = _shipped().model_dump(mode="json")
     raw["task_types"]["task"]["paths"] = {
         state: list(stages) for state in raw["task_types"]["task"]["paths"]
     }
@@ -1024,24 +1058,57 @@ class TestAReviewWithoutItsPartsFails:
         assert refused.value.code == REVIEW_PARTS_MISSING
 
 
-class TestTheShippedFileLeavesTextTasksWithTodaysMentor:
-    """Lock 8: the paths are described, the switch is not thrown."""
+class TestTheShippedFileServesTextTasksOnTheNewPathInTestMode:
+    """Lock 8, rewritten in task 10 (K5) — was
+    ``TestTheShippedFileLeavesTextTasksWithTodaysMentor``: the text types are
+    on the new path in test mode — the switch is thrown, the charge is not.
+    Nothing reads test mode yet (the funds port is ``AlwaysEnoughFundsPort``);
+    the billing adapter will. ``test`` and ``project`` are as they were."""
 
-    async def test_the_new_path_does_not_take_a_task(
+    def test_the_file_serves_text_types_on_the_new_path_in_test_mode(self) -> None:
+        shipped = _shipped()
+
+        for text_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
+            assert shipped.task_types[text_type].served_by is ServedBy.NEW_PATH
+            assert in_test_mode(text_type, shipped) is True
+        assert shipped.task_types[AssignmentType.TEST].served_by is ServedBy.NEW_PATH
+        assert in_test_mode(AssignmentType.TEST, shipped) is False
+        assert shipped.task_types[AssignmentType.PROJECT].served_by is (
+            ServedBy.TODAYS_MENTOR
+        )
+        assert in_test_mode(AssignmentType.PROJECT, shipped) is False
+
+    async def test_the_new_path_takes_a_task(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         world: dict[str, Any],
         tmp_path: Path,
     ) -> None:
+        """Under the shipped file, as it is, the new path reviews a ``task``:
+        the ARQ task hands it to the body, and today's Mentor never sees it."""
         router = _RouterDouble(session_factory)
         submission_id, job_id = await _submit(session_factory, world)
 
-        handled = await run_new_path_if_switched(
-            _ctx(session_factory, router, tmp_path), job_id, submission_id
+        await _run(
+            session_factory,
+            router,
+            _ListSource(world["in_force"]),
+            _webhook(),
+            tmp_path,
+            submission_id=submission_id,
+            job_id=job_id,
+            config=_shipped(),
         )
 
-        assert handled is False
-        assert router.calls == []
+        # The stages of the new path, and the review its builder lays out.
+        assert router.calls == [
+            SAFETY,
+            ATTEMPT_CLASSIFIER,
+            CRITERIA_EVALUATION,
+            REVIEW_EXPLANATION,
+        ]
         submission = await _submission(session_factory, submission_id)
-        assert submission.status == "received"
-        assert await _rows(session_factory, submission_id) == {}
+        assert submission.status == "delivered"
+        assert await _rows(session_factory, submission_id) != {}
+        structure = ReviewStructureV1.model_validate(submission.review_result)
+        assert structure.verdict is not None

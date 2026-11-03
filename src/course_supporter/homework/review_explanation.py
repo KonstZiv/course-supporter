@@ -19,12 +19,22 @@ Interface:
 Steps:
     1. The submission's verdict rows; the list they were judged against, by
        the address the rows carry — never the list in force now, which an
-       author's edit may have replaced since.
+       author's edit may have replaced since
+       (:func:`~course_supporter.homework.judged_list.read_judged_list`).
     2. The facts
        (:func:`~course_supporter.homework.verdict_explanation.explanation_facts`).
-    3. One request; the answer is checked against the facts on every rung, and
+    3. The course links the search step kept (task 10, K5): for each
+       criterion that is not met, up to three places under local
+       identifiers (:func:`links_to_show`). No row kept — a path that did not
+       search — shows none.
+    4. One request; the answer is checked against the facts on every rung, and
        one that disagrees is retried with the reason (``PRE-FLIGHT.md`` 9.7).
-    4. The answer is kept, in the language it was written in.
+    5. An identifier the answer names that was not shown for that criterion
+       is cut, and each cut leaves a row in the call register without a
+       model call (``action = course_link_fabricated``; identifiers only). It
+       is not a retry: a made-up link is not a fact the answer contradicts,
+       and a retry would be paid for to win nothing the cut does not.
+    6. The answer is kept as cut, in the language it was written in.
 
 Language (``PRE-FLIGHT.md`` 9.9):
     The student's — the path's own resolution: the language asked for on the
@@ -54,18 +64,20 @@ import structlog
 from course_supporter.agents.review_explainer import (
     ExplanationInput,
     ReviewExplainerAgent,
+    ShownLink,
 )
-from course_supporter.criteria_kinds import CriteriaLayer
-from course_supporter.homework.criteria_form import criteria_from_document
+from course_supporter.homework.course_link_position import position_of
+from course_supporter.homework.course_links import MAX_LINKS, FoundCourseLinks
+from course_supporter.homework.judged_list import read_judged_list
 from course_supporter.homework.path_stages import StageOutcome
 from course_supporter.homework.task_context import load_task_context
-from course_supporter.homework.verdict_explanation import explanation_facts
-from course_supporter.language import display_name, resolve_review_language
-from course_supporter.storage.orm import (
-    CourseNode,
-    TaskCriteriaList,
-    TaskCriteriaOverride,
+from course_supporter.homework.verdict_explanation import (
+    drop_unshown_links,
+    explanation_facts,
 )
+from course_supporter.language import display_name, resolve_review_language
+from course_supporter.service_logging import CourseLinkTrace, record_course_link_trace
+from course_supporter.storage.orm import CourseNode
 from course_supporter.storage.submission_verdict_repository import (
     SubmissionVerdictRepository,
 )
@@ -73,15 +85,8 @@ from course_supporter.storage.submission_verdict_repository import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-    from course_supporter.homework.criteria_form import Criterion
     from course_supporter.homework.path_stages import StageContext
     from course_supporter.llm.stage_router import StageExecution
-    from course_supporter.storage.orm import (
-        HomeworkSubmission,
-        SubmissionCriterionVerdict,
-    )
 
 logger = structlog.get_logger(__name__)
 
@@ -117,8 +122,17 @@ async def explain_verdicts(
             "and the submission has none"
         )
         raise ValueError(msg)
-    criteria = await _judged_list(context.session, submission, rows)
+    criteria = await read_judged_list(context.session, submission, rows)
     facts = explanation_facts(criteria, rows)
+    kept_links = await verdicts.get_candidates(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
+    shown_links = links_to_show(
+        facts.unmet,
+        FoundCourseLinks.model_validate(kept_links.body)
+        if kept_links is not None
+        else FoundCourseLinks(criteria=()),
+    )
 
     language = await _explanation_language(context)
     title, description, text = await load_task_context(
@@ -132,62 +146,68 @@ async def explain_verdicts(
             facts=facts,
             submission_text=context.submission_text,
             language=display_name(language),
+            course_links=shown_links,
         ),
         execution=execution,
     )
 
+    answer, fabricated = drop_unshown_links(
+        explained.answer,
+        {cid: {link.id for link in links} for cid, links in shown_links.items()},
+    )
+    for criterion_id, ids in fabricated.items():
+        await record_course_link_trace(
+            context.session_factory,
+            kind=CourseLinkTrace.FABRICATED,
+            criterion_id=criterion_id,
+            ids=ids,
+        )
     await verdicts.store_explanation(
         tenant_id=submission.tenant_id,
         submission_id=submission.id,
         language=language,
-        body=explained.answer.model_dump(mode="json"),
+        body=answer.model_dump(mode="json"),
     )
     log.info(
         "review_explanation_written",
         language=language,
         passed=facts.passed,
-        remarks=len(explained.answer.remarks),
-        mentor_voice=explained.answer.mentor_voice is not None,
+        remarks=len(answer.remarks),
+        linked=sum(1 for remark in answer.remarks if remark.links),
+        fabricated_links=sum(len(ids) for ids in fabricated.values()),
+        mentor_voice=answer.mentor_voice is not None,
         provider=explained.provider,
         model=explained.model,
     )
     return StageOutcome.ok()
 
 
-async def _judged_list(
-    session: AsyncSession,
-    submission: HomeworkSubmission,
-    rows: Sequence[SubmissionCriterionVerdict],
-) -> tuple[Criterion, ...]:
-    """The criteria the rows were judged against, read by the rows' address.
+def links_to_show(
+    unmet: Sequence[str], found: FoundCourseLinks
+) -> dict[str, tuple[ShownLink, ...]]:
+    """The places of the course the explanation is shown, by criterion id.
 
-    A list's rows are written once — an author's new edit is a new row, and
-    the model's list is stored whole when it is ready (task 08) — so the
-    address gives the very list the evaluation used, soft-deleted or not.
-    The list must belong to the submission's own task.
-
-    Raises:
-        ValueError: The rows name more than one list, or a list that is not
-            there, not this task's, or without criteria.
+    For each criterion of ``unmet``, the first :data:`MAX_LINKS` places the
+    search kept for it, best first, each under a local identifier: the
+    criterion's id, ``.l`` and its rank from 1 (``c3.l1``). The same inputs
+    give the same identifiers, so a later reader of the kept answer resolves
+    them against the same kept places. A criterion without places maps to an
+    empty tuple; places kept for a criterion that is met are not shown.
     """
-    addresses = {(row.criteria_layer, row.criteria_source_id) for row in rows}
-    if len(addresses) != 1:
-        msg = f"the verdict rows name {len(addresses)} lists, not one"
-        raise ValueError(msg)
-    ((layer, source_id),) = addresses
-    listed: TaskCriteriaOverride | TaskCriteriaList | None = (
-        await session.get(TaskCriteriaOverride, source_id)
-        if layer == CriteriaLayer.AUTHOR
-        else await session.get(TaskCriteriaList, source_id)
-    )
-    if (
-        listed is None
-        or listed.authored_document_id != submission.authored_document_id
-        or listed.criteria is None
-    ):
-        msg = f"the {layer} list {source_id} of the verdict rows is not this task's"
-        raise ValueError(msg)
-    return criteria_from_document(listed.criteria)
+    return {
+        criterion_id: tuple(
+            ShownLink(
+                id=f"{criterion_id}.l{rank}",
+                material=candidate.material_title,
+                position=position_of(candidate.anchor, candidate.source_type),
+                excerpt=candidate.excerpt,
+            )
+            for rank, candidate in enumerate(
+                found.candidates_of(criterion_id)[:MAX_LINKS], start=1
+            )
+        )
+        for criterion_id in unmet
+    }
 
 
 async def _explanation_language(context: StageContext) -> str:

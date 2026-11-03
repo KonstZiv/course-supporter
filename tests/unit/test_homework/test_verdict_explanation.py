@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import doctest
 import json
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -26,8 +26,11 @@ from course_supporter.homework import verdict_explanation
 from course_supporter.homework.criteria_form import Criterion
 from course_supporter.homework.criteria_verdicts import QuotePlace
 from course_supporter.homework.verdict_explanation import (
+    CriterionRemark,
+    ExplanationAnswer,
     ExplanationFacts,
     JudgedItem,
+    drop_unshown_links,
     explanation_facts,
     read_explanation,
 )
@@ -136,6 +139,7 @@ def _answer(
     remarks: list[str],
     why: str = "Розв'язок працює.",
     mentor_voice: str | None = None,
+    links: dict[str, list[str]] | None = None,
     **overrides: Any,
 ) -> str:
     body: dict[str, Any] = {
@@ -147,6 +151,7 @@ def _answer(
                 "what": "Зараз цього немає.",
                 "why": "Без цього розв'язок не перевірено.",
                 "todo": "Додайте тест на базовий випадок.",
+                "links": (links or {}).get(cid, []),
             }
             for cid in remarks
         ],
@@ -411,12 +416,24 @@ class TestTheForm:
                     {
                         "passed": True,
                         "why": "x",
-                        "remarks": [{"id": "c2", "what": "a", "why": "b"}],
+                        "remarks": [{"id": "c2", "what": "a", "why": "b", "links": []}],
                         "mentor_voice": None,
                     }
                 ),
                 "field: remarks.0.todo",
                 id="a-remark-without-its-third-part",
+            ),
+            pytest.param(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "why": "x",
+                        "remarks": [{"id": "c2", "what": "a", "why": "b", "todo": "c"}],
+                        "mentor_voice": None,
+                    }
+                ),
+                "field: remarks.0.links",
+                id="a-remark-of-the-model-without-its-links",
             ),
         ],
     )
@@ -426,6 +443,126 @@ class TestTheForm:
         facts = explanation_facts(_CRITERIA, _rows())
 
         assert fault in _refusal(content, facts)
+
+
+class TestTheLinks:
+    """Task 10, K5: the course links an answer names, and what is kept of them."""
+
+    def test_links_are_read_as_given(self) -> None:
+        facts = explanation_facts(_CRITERIA, _rows(c1="not_met"))
+
+        answer = read_explanation(
+            _answer(
+                passed=False, remarks=["c1", "c2"], links={"c1": ["c1.l2", "c1.l1"]}
+            ),
+            facts,
+        )
+
+        assert [r.links for r in answer.remarks] == [("c1.l2", "c1.l1"), ()]
+
+    def test_a_made_up_link_is_no_disagreement(self) -> None:
+        """A link is not a fact: it is cut later, never paid for with a retry."""
+        facts = explanation_facts(_CRITERIA, _rows())
+
+        answer = read_explanation(
+            _answer(passed=True, remarks=["c2"], links={"c2": ["c9.l7"]}), facts
+        )
+
+        assert answer.remarks[0].links == ("c9.l7",)
+
+    def test_a_body_kept_before_links_reads_as_none(self) -> None:
+        """A body stored before task 10, read as the review's builder reads it."""
+        kept = {
+            "passed": True,
+            "why": "x",
+            "remarks": [{"id": "c2", "what": "a", "why": "b", "todo": "c"}],
+            "mentor_voice": None,
+        }
+
+        answer = ExplanationAnswer.model_validate(kept)
+
+        assert answer.remarks[0].links == ()
+
+    def test_a_kept_body_round_trips_its_links(self) -> None:
+        remark = CriterionRemark(id="c2", what="a", why="b", todo="c", links=("c2.l1",))
+        answer = ExplanationAnswer(
+            passed=True, why="x", remarks=(remark,), mentor_voice=None
+        )
+
+        assert ExplanationAnswer.model_validate(answer.model_dump(mode="json")) == (
+            answer
+        )
+
+
+def _remark(cid: str, *links: str) -> CriterionRemark:
+    return CriterionRemark(id=cid, what="a", why="b", todo="c", links=links)
+
+
+def _with(*remarks: CriterionRemark) -> ExplanationAnswer:
+    return ExplanationAnswer(passed=False, why="x", remarks=remarks, mentor_voice=None)
+
+
+class TestOnlyShownLinksAreKept:
+    """Lock h (task 10, K5): a link not shown for ITS criterion is cut."""
+
+    _SHOWN: ClassVar[dict[str, set[str]]] = {
+        "c1": {"c1.l1", "c1.l2"},
+        "c2": {"c2.l1"},
+    }
+
+    def test_a_shown_link_is_kept_in_the_models_order(self) -> None:
+        answer = _with(_remark("c1", "c1.l2", "c1.l1"), _remark("c2", "c2.l1"))
+
+        kept, cut = drop_unshown_links(answer, self._SHOWN)
+
+        assert kept == answer
+        assert cut == {}
+
+    def test_a_link_shown_for_another_criterion_is_cut(self) -> None:
+        answer = _with(_remark("c1", "c1.l1", "c2.l1"), _remark("c2"))
+
+        kept, cut = drop_unshown_links(answer, self._SHOWN)
+
+        assert [r.links for r in kept.remarks] == [("c1.l1",), ()]
+        assert cut == {"c1": ("c2.l1",)}
+
+    def test_a_link_shown_for_none_is_cut(self) -> None:
+        answer = _with(_remark("c1", "c1.l3", "c1.l1"), _remark("c2", "c2.l9"))
+
+        kept, cut = drop_unshown_links(answer, self._SHOWN)
+
+        assert [r.links for r in kept.remarks] == [("c1.l1",), ()]
+        assert cut == {"c1": ("c1.l3",), "c2": ("c2.l9",)}
+
+    def test_a_criterion_shown_nothing_keeps_nothing(self) -> None:
+        answer = _with(_remark("c3", "c3.l1"))
+
+        kept, cut = drop_unshown_links(answer, self._SHOWN)
+
+        assert kept.remarks[0].links == ()
+        assert cut == {"c3": ("c3.l1",)}
+
+    def test_a_repeated_link_is_kept_once_and_is_no_fabrication(self) -> None:
+        answer = _with(_remark("c1", "c1.l1", "c1.l1"))
+
+        kept, cut = drop_unshown_links(answer, self._SHOWN)
+
+        assert kept.remarks[0].links == ("c1.l1",)
+        assert cut == {}
+
+    def test_the_texts_are_left_as_they_are(self) -> None:
+        answer = _with(_remark("c1", "c5.l1"))
+
+        kept, _ = drop_unshown_links(answer, self._SHOWN)
+
+        remark = kept.remarks[0]
+        assert (remark.id, remark.what, remark.why, remark.todo) == (
+            "c1",
+            "a",
+            "b",
+            "c",
+        )
+        assert (kept.passed, kept.why, kept.mentor_voice) == (False, "x", None)
 
 
 def test_the_examples_in_the_docstrings_hold() -> None:

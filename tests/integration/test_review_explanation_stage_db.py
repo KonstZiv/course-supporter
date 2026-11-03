@@ -11,7 +11,11 @@ providers (the alternative is a paid call):
   rows' address — not from the list in force now — and rows of another
   task's list, or none at all, are a defect, never an explanation;
 * an explanation that disagrees with the facts is retried on the same rung
-  and never kept (``TASK.md`` lock 7); a ladder that gives none keeps nothing.
+  and never kept (``TASK.md`` lock 7); a ladder that gives none keeps nothing;
+* the places of the course the search step kept are shown under local
+  identifiers, and an identifier the answer names that was not shown for its
+  criterion is cut from what is kept and leaves a ``course_link_fabricated``
+  row in the call register — no retry, no model call (task 10, K5, lock h).
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -20,19 +24,25 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
+)
+from course_supporter.homework.course_links import (
+    CriterionLinks,
+    FoundCourseLinks,
+    LinkCandidate,
 )
 from course_supporter.homework.criteria_form import Criterion, criteria_to_document
 from course_supporter.homework.path_config import (
@@ -55,11 +65,15 @@ from course_supporter.llm.registry import load_registry
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.llm.stage_router import StageResult, StageRouter
 from course_supporter.models.source import AssignmentType
+from course_supporter.service_logging import CourseLinkTrace, job_scope
+from course_supporter.storage.document_segment_repository import SegmentAnchor
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
+    ExternalServiceCall,
     HomeworkSubmission,
+    Job,
     Student,
     Tenant,
 )
@@ -142,7 +156,12 @@ _RECORDS = (
 )
 
 
-def _answer(*, passed: bool = True, remarks: tuple[str, ...] = ("c2",)) -> str:
+def _answer(
+    *,
+    passed: bool = True,
+    remarks: tuple[str, ...] = ("c2",),
+    links: tuple[str, ...] = (),
+) -> str:
     return json.dumps(
         {
             "passed": passed,
@@ -153,6 +172,7 @@ def _answer(*, passed: bool = True, remarks: tuple[str, ...] = ("c2",)) -> str:
                     "what": "Тестів у роботі немає.",
                     "why": "Без них не видно, що базовий випадок працює.",
                     "todo": "Додайте тест для n = 0 і n = 1.",
+                    "links": list(links),
                 }
                 for cid in remarks
             ],
@@ -311,6 +331,7 @@ def _context(
     submission: HomeworkSubmission,
     *,
     language: str | None = "ukr",
+    session_factory: Any = None,
 ) -> StageContext:
     config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
     return StageContext(
@@ -322,7 +343,7 @@ def _context(
         path_key=PathKey(AssignmentType.TASK, SubmissionState.FIRST),
         stage_name=REVIEW_EXPLANATION,
         stage=config.stages[REVIEW_EXPLANATION],
-        session_factory=AsyncMock(),
+        session_factory=session_factory or AsyncMock(),
     )
 
 
@@ -332,8 +353,11 @@ async def _explain(
     submission: HomeworkSubmission,
     *,
     language: str | None = "ukr",
+    session_factory: Any = None,
 ) -> StageOutcome:
-    context = _context(session, router, submission, language=language)
+    context = _context(
+        session, router, submission, language=language, session_factory=session_factory
+    )
     return await explain_verdicts(context, execution=_execution(context))
 
 
@@ -368,7 +392,7 @@ class TestTheExplanationIsKept:
             ("dashscope", "qwen3.7-max"),
             ("deepseek", "deepseek-flash"),
         ]
-        assert request["money_ceiling_usd"] == 0.18
+        assert request["money_ceiling_usd"] == 0.24
         assert request["stop_on_output_ceiling"] is True
         render = request["render"]
         assert render["result"] == {"passed": True, "score": 60}
@@ -379,6 +403,8 @@ class TestTheExplanationIsKept:
         }
         assert render["submission_text"] == _WORK
         assert render["language"] == "Ukrainian"
+        # No search kept anything for this submission: nothing is shown.
+        assert render["course_links"] == [{"criterion": "c2", "links": []}]
         expected = ExplanationAnswer.model_validate_json(_answer())
         assert await _kept(db_session, submission) == (
             "ukr",
@@ -583,3 +609,190 @@ class TestAnExplanationAgainstTheFacts:
             await _explain(db_session, _real_router(qwen, deepseek), submission)
 
         assert await _kept(db_session, submission) is None
+
+
+# ── Course links: shown, chosen, and only the shown ones kept (task 10, K5) ──
+
+
+def _place(title: str, paragraph: int) -> LinkCandidate:
+    return LinkCandidate(
+        segment_id=uuid.uuid4(),
+        authored_document_id=uuid.uuid4(),
+        material_title=title,
+        source_type="text",
+        anchor=SegmentAnchor("paragraph", paragraph, paragraph + 1),
+        excerpt=f"Початок {title}",
+        later_in_course=False,
+        confidence=0.9,
+        matched_concepts=("testing",),
+    )
+
+
+async def _found(session: AsyncSession, submission: HomeworkSubmission) -> None:
+    """What the search step keeps: two places for c2 and — stale, from an
+    earlier run's verdicts — one for c1, which is met now."""
+    found = FoundCourseLinks(
+        criteria=(
+            CriterionLinks(
+                item_id="c2", candidates=(_place("Тести", 3), _place("pytest", 7))
+            ),
+            CriterionLinks(item_id="c1", candidates=(_place("Функції", 1),)),
+        )
+    )
+    await SubmissionVerdictRepository(session).store_candidates(
+        tenant_id=submission.tenant_id,
+        submission_id=submission.id,
+        body=found.model_dump(mode="json"),
+    )
+
+
+@pytest.fixture()
+async def register_job(
+    session_factory: async_sessionmaker[AsyncSession],
+    committed_seeds: dict[str, uuid.UUID],
+) -> AsyncGenerator[uuid.UUID]:
+    """A committed job: register rows are written in their own session."""
+    async with session_factory() as session:
+        job = Job(
+            tenant_id=committed_seeds["tenant_id"],
+            course_node_id=committed_seeds["course_node_id"],
+            job_type="homework_processing",
+        )
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+
+    yield job_id
+
+    async with session_factory() as session:
+        await session.execute(
+            delete(ExternalServiceCall).where(ExternalServiceCall.job_id == job_id)
+        )
+        await session.execute(delete(Job).where(Job.id == job_id))
+        await session.commit()
+
+
+async def _traces(
+    session_factory: async_sessionmaker[AsyncSession], job_id: uuid.UUID
+) -> list[ExternalServiceCall]:
+    async with session_factory() as session:
+        rows = await session.execute(
+            select(ExternalServiceCall)
+            .where(ExternalServiceCall.job_id == job_id)
+            .order_by(ExternalServiceCall.created_at)
+        )
+        return list(rows.scalars())
+
+
+class TestTheCourseLinks:
+    async def test_the_kept_places_are_shown_under_local_identifiers(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        source_id = await _authors_list(db_session, doc)
+        await _verdicts(
+            db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
+        )
+        await _found(db_session, submission)
+        router = _Router(_answer(links=("c2.l2",)))
+
+        await _explain(db_session, router, submission)
+
+        assert router.requests[0]["render"]["course_links"] == [
+            {
+                "criterion": "c2",
+                "links": [
+                    {
+                        "id": "c2.l1",
+                        "material": "Тести",
+                        "position": {"kind": "paragraph", "value": "3"},
+                        "excerpt": "Початок Тести",
+                    },
+                    {
+                        "id": "c2.l2",
+                        "material": "pytest",
+                        "position": {"kind": "paragraph", "value": "7"},
+                        "excerpt": "Початок pytest",
+                    },
+                ],
+            }
+        ]
+        kept = await _kept(db_session, submission)
+        assert kept is not None
+        assert [r["links"] for r in kept[1]["remarks"]] == [["c2.l2"]]
+
+    async def test_a_link_not_shown_for_its_criterion_is_cut_and_traced(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        """Lock h: ``c1.l1`` was kept for c1 — met, so never shown — and
+        ``c2.l9`` was shown to no one; ``c2.l1`` was shown for c2 and stays.
+        One request: a made-up link is cut, never retried."""
+        source_id = await _authors_list(db_session, doc)
+        await _verdicts(
+            db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
+        )
+        await _found(db_session, submission)
+        router = _Router(_answer(links=("c1.l1", "c2.l1", "c2.l9")))
+
+        with job_scope(register_job):
+            outcome = await _explain(
+                db_session, router, submission, session_factory=session_factory
+            )
+
+        assert outcome == StageOutcome.ok()
+        assert len(router.requests) == 1
+        kept = await _kept(db_session, submission)
+        assert kept is not None
+        assert [r["links"] for r in kept[1]["remarks"]] == [["c2.l1"]]
+        (trace,) = await _traces(session_factory, register_job)
+        assert (
+            trace.action
+            == CourseLinkTrace.FABRICATED.value
+            == ("course_link_fabricated")
+        )
+        assert json.loads(trace.output_text or "") == {
+            "criterion_id": "c2",
+            "ids": ["c1.l1", "c2.l9"],
+        }
+        # A row without a call: out of every cost sum and of the failure count.
+        assert (trace.provider, trace.model_id, trace.success) == (None, None, None)
+        assert (trace.cost_usd, trace.error_message, trace.outcome) == (
+            None,
+            None,
+            None,
+        )
+        # Identifiers only: nothing of the student's work, nothing of the texts.
+        assert "fibonacci" not in (trace.output_text or "")
+        assert "Тестів" not in (trace.output_text or "")
+
+    async def test_only_shown_links_leave_no_trace(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        source_id = await _authors_list(db_session, doc)
+        await _verdicts(
+            db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
+        )
+        await _found(db_session, submission)
+        router = _Router(_answer(links=("c2.l1", "c2.l2")))
+
+        with job_scope(register_job):
+            await _explain(
+                db_session, router, submission, session_factory=session_factory
+            )
+
+        kept = await _kept(db_session, submission)
+        assert kept is not None
+        assert [r["links"] for r in kept[1]["remarks"]] == [["c2.l1", "c2.l2"]]
+        assert await _traces(session_factory, register_job) == []

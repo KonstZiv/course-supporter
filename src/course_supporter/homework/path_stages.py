@@ -9,8 +9,9 @@ Purpose:
 
 Interface:
     An executor is ``async (StageContext) -> StageOutcome``. It receives the
-    stage's own description from ``config/submission_paths.yaml`` — ladder,
-    ceilings, prompt, limits — and returns one of three answers: "carry on",
+    stage's own description from ``config/submission_paths.yaml`` — for a
+    model stage its ladder, ceilings, prompt and limits; for a code stage only
+    that it is code (task 10, K5) — and returns one of three answers: "carry on",
     "the path ends here, in this state, for this reason", or "hold the revision
     here, for this reason" (task 09b). It writes its own verdict and nothing
     else: the submission's state and the run's checkpoint are the body's, and
@@ -21,8 +22,9 @@ Interface:
     :func:`register_stage_executor` adds one under a name,
     :func:`get_stage_executor` resolves one, and
     :func:`missing_stage_executors` is the startup check: a stage the
-    configuration lists and nobody can run stops the boot instead of a
-    submission (the same rule as a hole in the file, mentor-rebuild task 02).
+    configuration lists and nobody can run — of either kind — stops the boot
+    instead of a submission (the same rule as a hole in the file,
+    mentor-rebuild task 02).
 
 Replacing one:
     Register a different function under the same name before the first
@@ -36,7 +38,9 @@ Replacing one:
     today's Mentor; their work lives in
     :mod:`course_supporter.homework.criteria_evaluation` and
     :mod:`course_supporter.homework.review_explanation`, each handed the same
-    argument.
+    argument. The search for course links is a code stage, with no router to
+    hand anything to; its work lives in
+    :mod:`course_supporter.homework.course_links`.
 
 Extending:
     A new stage is a definition in the configuration plus a function registered
@@ -53,6 +57,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from course_supporter.homework.path_checkpoint import FreezeReason
+from course_supporter.homework.path_config import ModelStage
 from course_supporter.llm.ladder_config import LadderEntry, StageConfig
 from course_supporter.llm.stage_router import StageExecution
 
@@ -74,6 +79,7 @@ logger = structlog.get_logger(__name__)
 SAFETY = "safety"
 ATTEMPT_CLASSIFIER = "attempt_classifier"
 CRITERIA_EVALUATION = "criteria_evaluation"
+COURSE_LINK_LOOKUP = "course_link_lookup"
 REVIEW_EXPLANATION = "review_explanation"
 
 
@@ -191,7 +197,8 @@ def validate_stage_executors(stage_names: Collection[str]) -> None:
     """Refuse to boot when a described stage has nobody to run it.
 
     The startup twin of the configuration's own checks (mentor-rebuild task 02):
-    a hole stops the boot, never a submission. Called beside
+    a hole stops the boot, never a submission. Every stage the configuration
+    defines needs one, a model stage and a code stage alike. Called beside
     :func:`~course_supporter.homework.path_config.validate_path_config` in both
     processes.
 
@@ -217,8 +224,14 @@ def _execution(context: StageContext) -> StageExecution:
     counterpart on a ladder stage — no descent past a spent output ceiling, the
     money ceiling, and the stage's output ceiling on unpinned rungs — are what
     make it a path stage rather than a copy of one.
+
+    Raises:
+        TypeError: The stage is a code stage — it has no ladder to run.
     """
     stage = context.stage
+    if not isinstance(stage, ModelStage):
+        msg = f"stage {context.stage_name!r} is a code stage: no model runs it"
+        raise TypeError(msg)
     return StageExecution(
         stage=StageConfig(
             prompt_ref=stage.prompt_ref,
@@ -367,6 +380,20 @@ async def run_criteria_evaluation_stage(context: StageContext) -> StageOutcome:
     return await evaluate_criteria(context, execution=_execution(context))
 
 
+async def run_course_link_lookup_stage(context: StageContext) -> StageOutcome:
+    """The search for course links of the failed criteria, as a stage (task 10).
+
+    A code stage: no router, no ladder, nothing paid for. The work is
+    ``course_links.look_up_course_links``; it writes what it found for the
+    explanation stage that follows, and the path carries on whatever it found
+    — no place to point to is an answer, not a stop.
+    """
+    from course_supporter.homework.course_links import look_up_course_links
+
+    await look_up_course_links(context.session, context.submission)
+    return StageOutcome.ok()
+
+
 async def run_review_explanation_stage(context: StageContext) -> StageOutcome:
     """The explanation of a text task's verdicts, as a stage of the path (09b).
 
@@ -381,4 +408,5 @@ async def run_review_explanation_stage(context: StageContext) -> StageOutcome:
 register_stage_executor(SAFETY, run_safety_stage)
 register_stage_executor(ATTEMPT_CLASSIFIER, run_attempt_classifier_stage)
 register_stage_executor(CRITERIA_EVALUATION, run_criteria_evaluation_stage)
+register_stage_executor(COURSE_LINK_LOOKUP, run_course_link_lookup_stage)
 register_stage_executor(REVIEW_EXPLANATION, run_review_explanation_stage)

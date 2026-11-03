@@ -41,6 +41,7 @@ from course_supporter.homework.path_config import (
     PathKey,
     SubmissionState,
     load_path_config,
+    model_stages,
 )
 from course_supporter.llm.ladder_config import StageConfig, load_ladder_config
 from course_supporter.llm.registry import ModelRegistryConfig, load_registry
@@ -88,10 +89,13 @@ def _review(
     chars: int,
     at: datetime = MONDAY_NOON,
 ):
-    stages = paths.task_types[task_type].paths[state]
+    # As the body hands it over (homework/path_runner.py): the model stages
+    # of the path alone — a code stage calls no model and costs nothing.
+    priced = model_stages(paths)
+    stages = [s for s in paths.task_types[task_type].paths[state] if s in priced]
     return estimate_review(
         stage_names=stages,
-        path_stages=paths.stages,
+        path_stages=priced,
         settings=settings,
         catalog=catalog,
         submission_chars=chars,
@@ -254,13 +258,27 @@ class TestReview:
     def test_every_stage_of_every_path_has_settings(
         self, paths: PathConfig, settings: EstimateSettings
     ) -> None:
+        """Every model stage a path lists; a code stage has nothing to price."""
         used = {
             stage
             for declared in paths.task_types.values()
             for stages in declared.paths.values()
             for stage in stages
         }
-        assert used <= set(settings.review)
+        priced = set(model_stages(paths))
+        assert used & priced <= set(settings.review)
+        assert used - priced == {"course_link_lookup"}
+
+    def test_the_course_link_lookup_is_not_priced(
+        self, paths: PathConfig, settings: EstimateSettings, catalog: Catalog
+    ) -> None:
+        """Task 10: on the path, but no step of the estimate."""
+        path = paths.task_types[AssignmentType.TASK].paths[SubmissionState.FIRST]
+        assert "course_link_lookup" in path
+        estimate = _review(
+            paths, settings, catalog, AssignmentType.TASK, SubmissionState.FIRST, 10_000
+        )
+        assert "course_link_lookup" not in [s.step for s in estimate.steps]
 
 
 class TestFirstFittingRung:
@@ -269,7 +287,7 @@ class TestFirstFittingRung:
     ) -> None:
         """safety: 0.5 x 131 072 (mistral-small) = 65 536 tokens; the third rung
         (gemini-3.5-flash-lite) has a million."""
-        stage = paths.stages["safety"]
+        stage = model_stages(paths)["safety"]
         assert first_fitting_rung("safety", stage, registry.models, 65_536).model == (
             "mistral-small-latest"
         )
@@ -282,7 +300,7 @@ class TestFirstFittingRung:
     ) -> None:
         with pytest.raises(EstimateError, match="no rung fits"):
             first_fitting_rung(
-                "safety", paths.stages["safety"], registry.models, 10_000_000
+                "safety", model_stages(paths)["safety"], registry.models, 10_000_000
             )
 
 

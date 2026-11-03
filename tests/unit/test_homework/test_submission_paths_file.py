@@ -9,11 +9,15 @@ import yaml
 
 from course_supporter.config import get_settings
 from course_supporter.homework.path_config import (
+    CodeStage,
+    ModelStage,
     PathConfig,
     PathKey,
     ServedBy,
     SubmissionState,
+    in_test_mode,
     load_path_config,
+    model_stages,
     path_ceiling_estimate,
     validate_path_config,
 )
@@ -68,23 +72,34 @@ class TestCheckedInPaths:
         assert set(config.stages) & ladder_names == set()
 
     def test_every_stage_names_a_prompt_that_exists(self, config: PathConfig) -> None:
-        for name, stage in config.stages.items():
+        for name, stage in model_stages(config).items():
             assert Path(stage.prompt_ref).is_file(), (
                 f"stage {name!r} names a prompt that is not there: {stage.prompt_ref}"
             )
 
-    def test_only_test_is_switched(self, config: PathConfig) -> None:
-        """Task 07 ships with ``test`` on the new path and the other three not.
+    def test_the_text_types_are_on_the_new_path_in_test_mode(
+        self, config: PathConfig
+    ) -> None:
+        """Task 10, K5 (lock g): ``task`` and ``short_task`` move onto the new
+        path in test mode — served by it, not charged for; ``test`` stays on
+        the new path as it was, charged as usual (it costs nothing), and
+        ``project`` stays with today's Mentor.
 
-        Until task 07 every type stood on today's Mentor. A type moves by an
-        edit of this one assertion, beside the file's own line — never as a
-        side effect of some other change.
+        Until task 07 every type stood on today's Mentor; task 07 moved
+        ``test``. A type moves by an edit of these assertions, beside the
+        file's own line — never as a side effect of some other change.
         """
         assert {t: d.served_by for t, d in config.task_types.items()} == {
             AssignmentType.TEST: ServedBy.NEW_PATH,
-            AssignmentType.SHORT_TASK: ServedBy.TODAYS_MENTOR,
-            AssignmentType.TASK: ServedBy.TODAYS_MENTOR,
+            AssignmentType.SHORT_TASK: ServedBy.NEW_PATH,
+            AssignmentType.TASK: ServedBy.NEW_PATH,
             AssignmentType.PROJECT: ServedBy.TODAYS_MENTOR,
+        }
+        assert {t: in_test_mode(t, config) for t in AssignmentType} == {
+            AssignmentType.TEST: False,
+            AssignmentType.SHORT_TASK: True,
+            AssignmentType.TASK: True,
+            AssignmentType.PROJECT: False,
         }
 
     def test_every_type_describes_all_three_paths(self, config: PathConfig) -> None:
@@ -113,12 +128,14 @@ class TestCheckedInPaths:
         self, config: PathConfig, task_type: AssignmentType
     ) -> None:
         """Task 09b: the verdicts, then their explanation, last on each path;
-        the classifier on the first submission only."""
+        the classifier on the first submission only. Task 10: the search for
+        course links between the two, on every path."""
         paths = config.task_types[task_type].paths
         assert paths[SubmissionState.FIRST] == [
             "safety",
             "attempt_classifier",
             "criteria_evaluation",
+            "course_link_lookup",
             "review_explanation",
         ]
         for state in (
@@ -128,19 +145,37 @@ class TestCheckedInPaths:
             assert paths[state] == [
                 "safety",
                 "criteria_evaluation",
+                "course_link_lookup",
                 "review_explanation",
             ]
+
+    def test_the_course_link_lookup_is_deterministic_code(
+        self, config: PathConfig
+    ) -> None:
+        """Task 10: no ladder, no prompt, no ceilings — and no money."""
+        assert config.stages["course_link_lookup"] == CodeStage(
+            code=True, deterministic=True
+        )
+        assert "course_link_lookup" not in model_stages(config)
+
+    def test_the_explanation_reads_prompt_v2(self, config: PathConfig) -> None:
+        """Task 10, K5: v2 carries the course links; v1 stays as history."""
+        stage = config.stages["review_explanation"]
+        assert isinstance(stage, ModelStage)
+        assert stage.prompt_ref == "prompts/review_explanation/v2.md"
+        assert stage.ceilings.money_usd == 0.24
+        assert Path("prompts/review_explanation/v1.md").is_file()
 
     @pytest.mark.parametrize(
         ("task_type", "state", "estimate"),
         [
             (AssignmentType.TEST, SubmissionState.FIRST, 0.0),
-            # 0.05 + 0.05 + 0.55 + 0.18: safety, the classifier, the
-            # evaluation and the explanation.
-            (AssignmentType.TASK, SubmissionState.FIRST, 0.83),
-            (AssignmentType.TASK, SubmissionState.REPEAT_WITH_REPLIES, 0.78),
-            (AssignmentType.SHORT_TASK, SubmissionState.FIRST, 0.83),
-            (AssignmentType.SHORT_TASK, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.78),
+            # 0.05 + 0.05 + 0.55 + 0 + 0.24: safety, the classifier, the
+            # evaluation, the course links (code, free) and the explanation.
+            (AssignmentType.TASK, SubmissionState.FIRST, 0.89),
+            (AssignmentType.TASK, SubmissionState.REPEAT_WITH_REPLIES, 0.84),
+            (AssignmentType.SHORT_TASK, SubmissionState.FIRST, 0.89),
+            (AssignmentType.SHORT_TASK, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.84),
             (AssignmentType.PROJECT, SubmissionState.FIRST, 0.10),
             (AssignmentType.PROJECT, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.05),
         ],
@@ -160,6 +195,7 @@ class TestCheckedInPaths:
         self, config: PathConfig, stage_name: str
     ) -> None:
         stage = config.stages[stage_name]
+        assert isinstance(stage, ModelStage)
         rungs = [(r.provider, r.model, r.max_output_tokens) for r in stage.ladder]
 
         assert rungs == _COPIED_RUNGS

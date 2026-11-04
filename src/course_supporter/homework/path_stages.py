@@ -101,9 +101,11 @@ class StageContext:
     ``door`` is what the doors read (task 11, decision 9): ``submission_text``
     is its text, and the rest -- what was not opened, how the file was read,
     what the signal screen noticed -- is for the safety stage and the trace,
-    never for a stage that reviews the work. ``work`` is the same text file by
-    file, for a stage that has to find a quote in it (task 09b); empty where
-    the doors read no files (a test, a project).
+    never for a stage that reviews the work. The safety stage reads
+    ``door.safety_text`` instead: the same files without the block naming what
+    was not opened, which is written for the reviewing stages. ``work`` is the
+    same text file by file, for a stage that has to find a quote in it (task
+    09b); empty where the doors read no files (a test, a project).
 
     ``arq`` is the queue, for the one thing an executor may do beyond its own
     verdict: put OTHER revisions back in it. The evaluation stage, having got
@@ -268,9 +270,11 @@ async def run_safety_stage(context: StageContext) -> StageOutcome:
     Today's own function does the work — prompt, parse, verdict — through its
     one additive argument, so the new path and today's Mentor cannot end up with
     two ideas of what is safe. It is shown what today's Mentor shows it (task
-    11, decisions 9-10): the course and the topic the work is for, the signal
-    screen's flags and the student's comment; and the verdict carries what the
-    doors read onto the trace. What is this module's is the reaction: an unsafe
+    11, decisions 9-10): the student's files without the block naming what was
+    not opened (``DoorReading.safety_text``), the course and the topic the work
+    is for, the signal screen's flags and the student's comment; and the
+    verdict carries what the doors read onto the trace. What is this module's
+    is the reaction: an unsafe
     verdict ends the submission at ``rejected``, and the reason code the surface
     phrases is the one the read path already knows for a Stage 2 refusal.
     """
@@ -279,7 +283,7 @@ async def run_safety_stage(context: StageContext) -> StageOutcome:
 
     door = context.door
     verdict = await run_stage2_safety_check(
-        context.submission_text,
+        door.safety_text if door is not None else context.submission_text,
         router=context.router,
         course_context=await _course_context(context.session, context.submission),
         execution=_execution(context),

@@ -22,8 +22,10 @@ from course_supporter.llm.ladder_config import load_ladder_config
 from course_supporter.llm.prompt_loader_md import load_prompt
 
 # Repo-CWD-relative path, matching how StageConfig.prompt_ref is resolved
-# in production. Tests run from the backend repo root via pytest.
-_PROMPT_REF = "prompts/safety_check/v1.md"
+# in production. Tests run from the backend repo root via pytest. The shipped
+# prompt: v1 stays in history, held to v2 by tests/unit/security/
+# test_safety_prompt_v2.py.
+_PROMPT_REF = "prompts/safety_check/v2.md"
 _CONFIG_DIR = Path("config")
 
 # 22 target audience languages per vision §KD14. Locked here as a

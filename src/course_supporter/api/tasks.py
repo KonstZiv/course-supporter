@@ -1118,14 +1118,22 @@ async def arq_process_homework(
                         not_opened=len(not_opened),
                     )
 
+                reading = DoorReading(
+                    text=submission_text,
+                    not_opened=not_opened,
+                    recovered_encoding=stage1_recovered_encoding,
+                    flags=door_flags,
+                )
                 # Caller-side observability log (KD-1.2-H Variant A; pairs
                 # with StageRouter's ``stage_router_executing`` line).
                 log.info(
                     "homework_safety_check_executing",
                     policy_context="homework",
                 )
+                # Stage 2 reads the student's files only: the block naming
+                # what was not opened is for the review below, not for it.
                 safety_result = await run_stage2_safety_check(
-                    submission_text=submission_text,
+                    submission_text=reading.safety_text,
                     router=stage_router,
                     course_context=course_ctx,
                     screen_flags=door_flags,
@@ -1136,15 +1144,7 @@ async def arq_process_homework(
                 # still be able to tell the student which files were skipped
                 # and how the file was read -- and the trace keeps what the
                 # screen noticed, for the author and support.
-                carry_door_reading(
-                    safety_result,
-                    DoorReading(
-                        text=submission_text,
-                        not_opened=not_opened,
-                        recovered_encoding=stage1_recovered_encoding,
-                        flags=door_flags,
-                    ),
-                )
+                carry_door_reading(safety_result, reading)
                 await hw_repo.store_safety_result(
                     sid, safety_result.model_dump(mode="json")
                 )

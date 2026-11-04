@@ -21,6 +21,9 @@ Interface:
       the text, what was not opened, how the file was read, and what the
       signal screen noticed (task 11). :func:`carry_door_reading` puts the
       last three onto the Stage 2 verdict, where the read path finds them.
+      :attr:`DoorReading.safety_text` is the one place the safety check's
+      input is cut from the text: the student's files, without the lines the
+      doors add for the models that review the work.
     * :func:`screen_student_note` — the comment through the one text screen,
       for its flags (task 11, decision 10).
     * :func:`persist_door_refusal` — the one shape a refusal at the doors is
@@ -65,8 +68,9 @@ class DoorReading:
     """What the doors read out of one submission, for every stage after them.
 
     Attributes:
-        text: What the models read -- the reviewer, the attempt classifier
-            and Stage 2 alike. Never carries a flag.
+        text: What the models that review the work read -- the reviewer, the
+            attempt classifier, the evaluation of criteria. Never carries a
+            flag. Stage 2 reads :attr:`safety_text`, not this.
         not_opened: What was named and not read, with the reason.
         recovered_encoding: How a single text file was read; ``None`` when the
             question does not apply (archive, document, project, test).
@@ -82,6 +86,22 @@ class DoorReading:
     recovered_encoding: str | None = None
     flags: tuple[ScreenFlag, ...] = ()
     files: tuple[WorkFile, ...] = ()
+
+    @property
+    def safety_text(self) -> str:
+        """What Stage 2 reads: the student's files, and no line of ours.
+
+        ``text`` ends with the block naming what was not opened, written for
+        the models that review the work so that none rests a review on a
+        partial reading unknowingly. It is the platform's, not the student's,
+        and its reason keys read like verdicts to a classifier: on 04.11 a
+        lesson's ``sales.csv`` left in an archive (``forbidden_type``) got a
+        clean submission refused as a policy violation. Stage 2 judges only
+        what the student wrote, so the block is taken off here -- by the very
+        renderer that put it on, so the two cannot drift. With nothing left
+        unopened there is no block, and the text comes back byte for byte.
+        """
+        return self.text.removesuffix(not_opened_block(self.not_opened))
 
 
 def carry_door_reading(verdict: SafetyResult, reading: DoorReading) -> None:
@@ -259,6 +279,10 @@ def not_opened_block(entries: Sequence[NotOpenedEntry]) -> str:
     after each name, so the model cannot mistake the list for more work to
     grade. Reasons stay service keys — the Mentor is a black box here and its
     prompts are not touched; the human wording lives on the portal.
+
+    For the models that review the work only: the safety check never reads it
+    (:attr:`DoorReading.safety_text`), and it stays the LAST thing in the text
+    so that one ``removesuffix`` takes it off again.
     """
     if not entries:
         return ""

@@ -32,7 +32,7 @@ stages:
   # snapshots is tracked as a cross-cutting operational item, not a
   # Phase 2.1 concern.
   safety_check:
-    prompt_ref: "prompts/safety_check/v1.md"
+    prompt_ref: "prompts/safety_check/v2.md"
     requires: [json_mode]
     # Student-chain oversize guard (step E). Declared on every stage the
     # student's submission reaches, so an oversize context skips a rung whose

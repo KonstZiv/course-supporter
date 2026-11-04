@@ -47,7 +47,7 @@ class TestStageRouterFoundation:
         """
         ladder_config = load_ladder_config(settings.ladders_dir)
         stage = ladder_config.get_stage("safety_check")
-        assert stage.prompt_ref == "prompts/safety_check/v1.md"
+        assert stage.prompt_ref == "prompts/safety_check/v2.md"
         assert len(stage.ladder) >= 1
 
     def test_stage_router_instantiates_with_loaded_config(self) -> None:

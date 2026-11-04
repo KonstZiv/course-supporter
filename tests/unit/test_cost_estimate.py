@@ -190,6 +190,20 @@ class TestUnits:
     def test_fact_half_up_with_a_floor_of_one(self, usd: Decimal, units: int) -> None:
         assert fact_units(usd, units_per_usd=Decimal(100)) == units
 
+    def test_the_provisional_rate(self, settings: EstimateSettings) -> None:
+        """K = 1700 (BIL-CAL): the old path's median review, $0.058, is ≈ 100 units.
+
+        ≈ 100 is E x K without the margin (98.6); by the model the same E is
+        priced ceil(0.058 x 1.2 x 1700) = 119 and reserves ceil(2 x 0.058 x
+        1700) = 198.
+        """
+        e = Decimal("0.058")
+        k = settings.units_per_usd
+        assert k is not None
+        assert e * k == Decimal("98.6")
+        assert price_units(e, margin=settings.margin, units_per_usd=k) == 119
+        assert reserve_units(e, units_per_usd=k) == 198
+
     def test_no_rate_no_units(self) -> None:
         assert (
             price_units(Decimal(1), margin=Decimal("0.2"), units_per_usd=None) is None
@@ -220,7 +234,7 @@ class TestReview:
         safety              mistral-small  5158 in, 8192 out  0.0056889
         attempt_classifier  mistral-small  3555 in, 8192 out  0.00544845
         criteria_evaluation qwen3.7-max   21429 in, 16384 out 0.116475034
-        review_explanation  qwen3.7-max   25143 in, 8192 out  0.082044542
+        review_explanation  qwen3.7-max   25586 in, 8192 out  0.082775492
         """
         estimate = _review(
             paths, settings, catalog, AssignmentType.TASK, SubmissionState.FIRST, 10_000
@@ -231,9 +245,9 @@ class TestReview:
             ("safety", "mistral-small-latest", 5158, 8192),
             ("attempt_classifier", "mistral-small-latest", 3555, 8192),
             ("criteria_evaluation", "qwen3.7-max", 21429, 16384),
-            ("review_explanation", "qwen3.7-max", 25143, 8192),
+            ("review_explanation", "qwen3.7-max", 25586, 8192),
         ]
-        assert estimate.e_usd == Decimal("0.209656926")
+        assert estimate.e_usd == Decimal("0.210387876")
         assert estimate.uncalibrated
         assert estimate.catalog_version == catalog.version
         assert estimate.inputs["path_key"] == "task/first"
@@ -529,7 +543,7 @@ class TestSettings:
         self, settings: EstimateSettings
     ) -> None:
         assert settings.margin == Decimal("0.2")
-        assert settings.units_per_usd is None
+        assert settings.units_per_usd == Decimal(1700)
         assert settings.guard_minutes == 15
 
     def test_nothing_is_calibrated_yet(self, settings: EstimateSettings) -> None:

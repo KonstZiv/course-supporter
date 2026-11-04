@@ -17,12 +17,25 @@
 
 # ── Operator parameters (ratified) ──
 margin: 0.20          # P = E x (1 + margin)
-units_per_usd: null   # K, units per 1 USD of cost: set after calibration
+# K, units per 1 USD of cost. Тимчасово (BIL-CAL, operator 2026-11-04):
+# derived from the target "a typical review ≈ 100 units" and the median of a
+# `task` review on the old path, $0.058 (READ-1 2026-11-04, step 10):
+# 0.058 x 1700 = 98.6 ≈ 100 — E x K, without the margin. By the model the
+# same E gives P = ceil(0.058 x 1.2 x 1700) = 119 and a reserve of
+# ceil(2 x 0.058 x 1700) = 198. To be revisited on live data of the new path.
+units_per_usd: 1700
 guard_minutes: 15     # a peak that starts within this many minutes prices as peak
 
 # ── Review on the new path: stages of config/submission_paths.yaml ──
 # input = submission text + prompt_tokens; output = output_tokens per call;
 # calls = expected calls of the stage per submission.
+#
+# Only the model stages of a path are priced: homework/path_runner.py:326-335
+# hands the estimate model_stages(config) (homework/path_config.py:508) and
+# the path's stages among them. A code stage calls no model and has no line
+# here — `course_link_lookup` (config/submission_paths.yaml:165-166, K5: the
+# concept finder over the database, homework/course_links.py) adds 0 to E,
+# and that is right. A path without stages — `test` — gives E = 0.
 review:
   # prompt: prompts/safety_check/v1.md, measured. output: no measured number
   # in code or fixtures — the stage's output ceiling (8192), стеля.
@@ -35,10 +48,19 @@ review:
   # стеля; qwen's reasoning (not in the pin) is not counted. calls: 1 — the
   # repeat about verdicts that cannot stand starts at 0 (operator, BIL-D).
   criteria_evaluation: {prompt_tokens: 18572, output_tokens: 16384, calls: 1, calibrated: false}
-  # prompt: submission_paths.yaml `review_explanation` money comment — 59 735
-  # minus the work at its budget (37 449) = 22 286. output: pin 8192, стеля.
-  # calls: 1 — the retry with the reason starts at 0 (operator, BIL-D).
-  review_explanation: {prompt_tokens: 22286, output_tokens: 8192, calls: 1, calibrated: false}
+  # prompt: 22 286 (BIL-D: submission_paths.yaml `review_explanation` money
+  # comment for prompt v1 — 59 735 minus the work at its budget, 37 449) plus
+  # the template v1 -> v2 (K5), +443 = 22 729. Measured 2026-11-04 (BIL-CAL):
+  # each template rendered by llm/prompt_loader_md.py (load_prompt, render)
+  # with its slots empty — v1 6 132 chars = 1 752 tokens, v2 7 684 chars =
+  # 2 195 — at the router's 3.5 characters a token (llm/token_budget.py:34).
+  # Not in the number: <course_links> at its worst case — all 37 criteria not
+  # met, 3 places each (an excerpt of 300 characters, a title of 120, id and
+  # position), rendered as the slot renders it: 59 016 chars ≈ 16 861 tokens,
+  # ≈ 39 590 with it. A worst case, not a typical size; live data of the new
+  # path calibrates it. output: pin 8192, стеля. calls: 1 — the retry with
+  # the reason starts at 0 (operator, BIL-D).
+  review_explanation: {prompt_tokens: 22729, output_tokens: 8192, calls: 1, calibrated: false}
 
 # ── Task preparation: input = the task document + prompt_tokens ──
 task_preparation:

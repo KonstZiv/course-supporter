@@ -76,7 +76,11 @@ class TestTheWrite:
         assert row.action_kind == "processing"
         assert row.e_usd == Decimal(0)
         assert row.margin == Decimal("0.2")
-        assert (row.units_per_usd, row.p_units, row.reserve_units) == (None, None, None)
+        assert (row.units_per_usd, row.p_units, row.reserve_units) == (
+            Decimal(1700),
+            0,
+            0,
+        )
         assert row.uncalibrated is True
         assert row.breakdown == []
 

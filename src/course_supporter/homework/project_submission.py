@@ -250,7 +250,8 @@ async def process_project_submission(
     # alphabet, and step E removed it rather than keep a dead branch.
     # What was not read is said to the Mentor the way it is for an archive:
     # one block, after the work, so no review rests on a partial reading
-    # unknowingly. Counted against the budget like everything else.
+    # unknowingly. Counted against the budget like everything else. Kept last:
+    # the safety check reads the context without it (DoorReading.safety_text).
     context += not_opened_block(screen.not_opened)
 
     budget_chars = project_context_budget_chars()

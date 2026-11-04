@@ -274,5 +274,5 @@ class TestAuthoredSafetyCheckLadderLoads:
         the existing homework ``safety_check`` stage in the same file."""
         cfg = load_ladder_config(_CONFIG_DIR)
         stage = cfg.get_stage("safety_check")
-        assert stage.prompt_ref == "prompts/safety_check/v1.md"
+        assert stage.prompt_ref == "prompts/safety_check/v2.md"
         assert len(stage.ladder) == 3

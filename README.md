@@ -4,7 +4,7 @@
 
 AI-powered system for transforming course materials into structured learning plans with automated mentoring.
 
-**[API (live)](https://api.pythoncourse.me/docs)**
+**[API (OpenAPI)](https://api.pythoncourse.me/openapi.json)**
 
 ---
 

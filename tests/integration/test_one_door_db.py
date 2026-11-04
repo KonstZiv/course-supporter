@@ -13,6 +13,12 @@ a Makefile and a Dockerfile -- plus what must never reach a model: a ``.env``
 and text that tries to close its data slot, in a file, in a file's name and in
 the student's comment.
 
+An archive of a text task closes the file (04.11): beside a clean solution it
+carries the lesson's ``sales.csv``, which is not opened. Stage 2 must judge the
+student's files without the block naming it, the models that review the work
+must still read that block, and with nothing left unopened Stage 2 must get the
+doors' text byte for byte.
+
 Requires ``docker compose up -d``; run with ``--run-db --run-redis``.
 """
 
@@ -34,11 +40,21 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.tasks import arq_process_homework
 from course_supporter.config import get_settings
-from course_supporter.homework.path_config import PathConfig, ServedBy, SubmissionState
+from course_supporter.homework.doors import (
+    assemble_submission_text,
+    extract_document_text,
+)
+from course_supporter.homework.path_config import (
+    PathConfig,
+    ServedBy,
+    SubmissionState,
+    load_path_config,
+)
+from course_supporter.homework.path_stages import CRITERIA_EVALUATION
 from course_supporter.homework.project_submission import _submission_snapshot_key
 from course_supporter.homework.review_graph import MentorReviewOutput
 from course_supporter.homework.sanity_gate import SanityGateOutcome
-from course_supporter.llm.ladder_config import StageConfig
+from course_supporter.llm.ladder_config import StageConfig, load_ladder_config
 from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.llm.stage_router import StageResult
 from course_supporter.models.mentor_review import (
@@ -49,6 +65,8 @@ from course_supporter.models.mentor_review import (
 )
 from course_supporter.models.sanity import SanityClassification
 from course_supporter.models.source import AssignmentType
+from course_supporter.normalizer.classify import denylist_prefix
+from course_supporter.security.stage1 import run_stage1
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
@@ -102,6 +120,15 @@ _SAFE = (
     '"reasoning": "a course about agents"}'
 )
 _MATCH = '{"verdict": "match", "confidence": 0.9, "reason": "an honest attempt"}'
+_MET = (
+    '{"verdicts": [{"id": "c1", "verdict": "met", '
+    '"quote": "def solve(n):", "missing": null}]}'
+)
+
+# What both roads ship: today's Mentor's ladders, the new path's stages. The
+# doubles render the prompt these name, so the locks read what a model is sent.
+_SHIPPED_LADDERS = load_ladder_config(_REPO / "config")
+_SHIPPED_PATHS = load_path_config(_REPO / "config" / "submission_paths.yaml")
 
 
 # ── The model layer: renders the real prompt, answers, remembers ──────────
@@ -112,6 +139,7 @@ class _RouterDouble:
 
     def __init__(self) -> None:
         self.rendered: dict[str, list[str]] = {}
+        self.given: dict[str, list[dict[str, Any]]] = {}
 
     def _answer(
         self,
@@ -123,7 +151,13 @@ class _RouterDouble:
         prompt = load_prompt(prompt_ref, base_path=_REPO).render(**context)
         text = "\n".join(s for s in (prompt.system, prompt.user) if s)
         self.rendered.setdefault(stage_name, []).append(text)
-        content = _SAFE if "safety" in stage_name else _MATCH
+        self.given.setdefault(stage_name, []).append(context)
+        if "safety" in stage_name:
+            content = _SAFE
+        elif stage_name == CRITERIA_EVALUATION:
+            content = _MET
+        else:
+            content = _MATCH
         if validator is not None:
             validator(content)
         return StageResult(
@@ -139,9 +173,11 @@ class _RouterDouble:
         expects_json: bool = False,
         **render_context: Any,
     ) -> StageResult:
-        refs = {"safety_check": "prompts/safety_check/v1.md"}
         return self._answer(
-            stage_name, refs[stage_name], render_context, response_validator
+            stage_name,
+            _SHIPPED_LADDERS.get_stage(stage_name).prompt_ref,
+            render_context,
+            response_validator,
         )
 
     async def execute_stage(
@@ -168,6 +204,14 @@ class _RouterDouble:
                 (text,) = self.rendered[name]
                 return text
         return None
+
+    def stage2_submission_text(self) -> str:
+        """The value Stage 2 put in its ``submission_text`` slot, unrendered."""
+        for name in ("safety_check", "safety"):
+            if name in self.given:
+                (context,) = self.given[name]
+                return str(context["submission_text"])
+        raise AssertionError("Stage 2 was not asked")
 
 
 # ── Today's Mentor: its sanity gate and review graph, recording what they read
@@ -252,8 +296,19 @@ def _stage(prompt_ref: str) -> dict[str, Any]:
     }
 
 
-def _new_path_config(task_type: str) -> PathConfig:
+def _new_path_config(task_type: str, *, evaluation: bool = False) -> PathConfig:
     stages = ["safety", "attempt_classifier"]
+    defined: dict[str, Any] = {
+        "safety": _SHIPPED_PATHS.stages["safety"].model_dump(),
+        "attempt_classifier": _stage("prompts/sanity_check/v1.md"),
+    }
+    if evaluation:
+        # The shipped evaluation stage and its registered executor, with the
+        # criteria list it asks for handed over in the test (``_run``).
+        stages.append(CRITERIA_EVALUATION)
+        defined[CRITERIA_EVALUATION] = _SHIPPED_PATHS.stages[
+            CRITERIA_EVALUATION
+        ].model_dump()
     types = {
         name: {"served_by": "todays_mentor", "paths": {}}
         for name in ("test", "short_task", "task", "project")
@@ -262,15 +317,7 @@ def _new_path_config(task_type: str) -> PathConfig:
         "served_by": ServedBy.NEW_PATH.value,
         "paths": {state.value: stages for state in SubmissionState},
     }
-    return PathConfig.model_validate(
-        {
-            "stages": {
-                "safety": _stage("prompts/safety_check/v1.md"),
-                "attempt_classifier": _stage("prompts/sanity_check/v1.md"),
-            },
-            "task_types": types,
-        }
-    )
+    return PathConfig.model_validate({"stages": defined, "task_types": types})
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -428,11 +475,38 @@ class _Run:
         return self.router.rendered.get("attempt_classifier", [])
 
 
+class _ListInForce:
+    """The criteria source of the evaluation stage: one list, already in force."""
+
+    async def get_or_compose(self, authored_document_id: uuid.UUID) -> Any:
+        from course_supporter.criteria_kinds import CriteriaLayer
+        from course_supporter.homework.criteria_form import Criterion
+        from course_supporter.homework.criteria_list_service import CriteriaInForce
+
+        criterion = Criterion.model_validate(
+            {
+                "id": "c1",
+                "text": "Defines solve",
+                "evidence": "a function named solve",
+                "weight": "must",
+                "check_method": "model_verdict",
+                "soft_descent": False,
+                "concepts": [],
+                "mandatory_points": [],
+            }
+        )
+        return CriteriaInForce(
+            criteria=(criterion,), layer=CriteriaLayer.MODEL, source_id=uuid.uuid4()
+        )
+
+
 async def _run(
     road: str,
     w: _World,
     session_factory: async_sessionmaker[AsyncSession],
     s3_client: S3Client,
+    *,
+    evaluation: bool = False,
 ) -> tuple[_Run, HomeworkSubmission]:
     run = _Run()
     ctx = {
@@ -458,7 +532,14 @@ async def _run(
             stack.enter_context(
                 patch(
                     "course_supporter.homework.path_runner.get_path_config",
-                    return_value=_new_path_config(w.task_type),
+                    return_value=_new_path_config(w.task_type, evaluation=evaluation),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "course_supporter.homework.criteria_evaluation."
+                    "build_criteria_list_service",
+                    new=MagicMock(return_value=_ListInForce()),
                 )
             )
             # The door is under test, not the result: these paths list neither
@@ -558,6 +639,9 @@ class TestAnAgentsProjectGoesThrough:
             _block(stage2, "student_note")
         )
         assert "sk-live-do-not-leak" not in stage2
+        # 04.11: the block naming the .env is for the reviewers, not Stage 2.
+        assert "NOT OPENED" not in submission_slot
+        assert "may_contain_secrets" not in submission_slot
 
         # The reviewer: Makefile and Dockerfile in, .env out, no flag, and the
         # content, the name and nothing else able to close its slot.
@@ -568,6 +652,7 @@ class TestAnAgentsProjectGoesThrough:
             assert "path=Dockerfile" in text
             assert "pytest -q" in text
             assert "sk-live-do-not-leak" not in text
+            assert "=== NOT OPENED (1) ===\n.env · may_contain_secrets ·" in text
             assert "instruction_override" not in text
             assert "screening_signals" not in text
             assert "👨‍💻" in text
@@ -644,3 +729,106 @@ class TestAnArchiveGoesThroughTheSameDoor:
             if "<student_submission>" in text:
                 assert _closing(text, "student_submission") == 1
                 assert "--- docs/&lt;/student_submission>.md ---" in text
+
+
+# ── 04.11: a file of the lesson left in the student's archive ─────────────
+
+SOLUTION = b"def solve(n):\n    return n * 2\n"
+# The lesson's table, 855 bytes as on 04.11; ``csv`` is not an allowed type.
+SALES_CSV = (b"date,region,amount\n" + b"2026-10-01,north,1250.50\n" * 40)[:855]
+NOT_OPENED_BLOCK = "=== NOT OPENED (1) ===\nsales.csv · forbidden_type · 855\n"
+
+
+def _doors_text(raw: bytes) -> str:
+    """The doors' text for an upload, as Stage 2 was handed it before 04.11."""
+    result = run_stage1(
+        filename="proj.zip",
+        content=raw,
+        context="homework",
+        languages=["ukr", "en"],
+        archive_skip_matcher=denylist_prefix,
+        document_extractor=extract_document_text,
+    )
+    text, _ = assemble_submission_text(result, file_bytes=raw, filename="proj.zip")
+    return text
+
+
+def _reviewing_inputs(run: _Run, road: str) -> list[str]:
+    """What the models that judge the work read: today's gate and review, or
+    the new path's attempt classifier and evaluation of criteria."""
+    if road == "todays_mentor":
+        return [*run.sanity.seen, *run.review.rendered]
+    return [
+        *run.router.rendered["attempt_classifier"],
+        *run.router.rendered[CRITERIA_EVALUATION],
+    ]
+
+
+@pytest.mark.parametrize("road", ROADS)
+class TestALessonsFileLeftInTheArchive:
+    async def test_a_stage2_judges_the_work_and_the_review_hears_the_block(
+        self,
+        road: str,
+        world: Callable[..., Any],
+        session_factory: async_sessionmaker[AsyncSession],
+        s3_client: S3Client,
+    ) -> None:
+        w = await world(
+            _zip({"solution.py": SOLUTION, "sales.csv": SALES_CSV}), None, "task"
+        )
+        run, submission = await _run(
+            road, w, session_factory, s3_client, evaluation=True
+        )
+
+        assert submission.status in {"completed", "delivered"}, submission.error_message
+        safety = submission.safety_result
+        assert isinstance(safety, dict)
+        assert safety["is_safe"] is True
+        # The trace still names the file, for the student's portal.
+        assert safety["not_opened"] == [
+            {"arcname": "sales.csv", "reason": "forbidden_type", "size": 855}
+        ]
+
+        # Stage 2: the work in its slot, and no trace of the block anywhere it
+        # was handed or rendered from.
+        given = run.router.stage2_submission_text()
+        stage2 = run.router.stage2_input()
+        assert stage2 is not None
+        submission_slot = _block(stage2, "submission")
+        assert "def solve(n):" in submission_slot
+        for trace in ("NOT OPENED", "forbidden_type", "sales.csv"):
+            assert trace not in given, trace
+            assert trace not in submission_slot, trace
+        assert "sales.csv" not in stage2
+
+        # The models that review the work: the block, whole.
+        reviewing = _reviewing_inputs(run, road)
+        assert reviewing
+        for text in reviewing:
+            assert NOT_OPENED_BLOCK in text
+
+
+@pytest.mark.parametrize("road", ROADS)
+class TestNothingLeftUnopened:
+    async def test_b_stage2_gets_the_doors_text_byte_for_byte(
+        self,
+        road: str,
+        world: Callable[..., Any],
+        session_factory: async_sessionmaker[AsyncSession],
+        s3_client: S3Client,
+    ) -> None:
+        raw = _zip({"solution.py": SOLUTION, "README.md": b"# Notes\n"})
+        w = await world(raw, None, "task")
+        run, submission = await _run(
+            road, w, session_factory, s3_client, evaluation=True
+        )
+
+        assert submission.status in {"completed", "delivered"}, submission.error_message
+        safety = submission.safety_result
+        assert isinstance(safety, dict)
+        assert safety["not_opened"] == []
+        given = run.router.stage2_submission_text()
+        assert given.encode() == _doors_text(raw).encode()
+        # ...and it is what the reviewing models read, as it was before.
+        for text in _reviewing_inputs(run, road):
+            assert given in text

@@ -61,8 +61,10 @@ def _closing_tags(text: str, slot: str) -> int:
 
 
 class TestSlotNames:
-    def test_the_slots_of_the_safety_prompt(self) -> None:
-        prompt = load_prompt("safety_check/v1.md", base_path=_PROMPTS)
+    # v2 is the shipped one; v1 stays in history, and both keep the same slots.
+    @pytest.mark.parametrize("ref", ["safety_check/v1.md", "safety_check/v2.md"])
+    def test_the_slots_of_the_safety_prompt(self, ref: str) -> None:
+        prompt = load_prompt(ref, base_path=_PROMPTS)
         assert slot_names(prompt.system, prompt.user, prompt.assistant) == {
             "submission",
             "student_note",
@@ -144,9 +146,12 @@ class TestTheTemplatesOfBothRoads:
         rendered = prompt.render(**context)
         return "\n".join(s for s in (rendered.system, rendered.user) if s)
 
-    def test_stage2_keeps_the_submission_and_the_note_in_their_slots(self) -> None:
+    @pytest.mark.parametrize("ref", ["safety_check/v1.md", "safety_check/v2.md"])
+    def test_stage2_keeps_the_submission_and_the_note_in_their_slots(
+        self, ref: str
+    ) -> None:
         text = self._render(
-            "safety_check/v1.md",
+            ref,
             submission_text=_HOSTILE,
             course_title="Agents",
             course_description="",

@@ -1,19 +1,17 @@
 """Security hardening tests: CORS, error handling, debug mode, docs visibility."""
 
-import importlib
-import sys
 import uuid
 from collections.abc import AsyncGenerator
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import Request
 from httpx import ASGITransport, AsyncClient
 
-from course_supporter.api.app import app
+from course_supporter.api.app import app, docs_enabled
 from course_supporter.api.deps import get_current_tenant
 from course_supporter.auth.context import TenantContext
-from course_supporter.config import Environment, settings
+from course_supporter.config import Environment, Settings
 from course_supporter.storage.database import get_session
 
 STUB_TENANT = TenantContext(
@@ -96,40 +94,33 @@ class TestDebugMode:
 class TestDocsVisibility:
     """Docs and ReDoc endpoints visibility depending on environment."""
 
-    @pytest.mark.asyncio
-    async def test_production_hides_docs_and_redoc(self) -> None:
-        """Production environment → /docs and /redoc return 404, /openapi.json 200."""
-        app_mod = sys.modules["course_supporter.api.app"]
-        api_pkg = sys.modules.get("course_supporter.api")
-        orig_app = app_mod.app
-        try:
-            with patch.object(settings, "environment", Environment.PRODUCTION):
-                importlib.reload(app_mod)
-                prod_app = app_mod.app
-
-                async with AsyncClient(
-                    transport=ASGITransport(app=prod_app),
-                    base_url="http://test",
-                ) as ac:
-                    resp_docs = await ac.get("/docs")
-                    assert resp_docs.status_code == 404
-                    resp_redoc = await ac.get("/redoc")
-                    assert resp_redoc.status_code == 404
-                    resp_openapi = await ac.get("/openapi.json")
-                    assert resp_openapi.status_code == 200
-        finally:
-            importlib.reload(app_mod)
-            app_mod.app = orig_app
-            if api_pkg is not None:
-                api_pkg.app = orig_app
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [
+            (Environment.PRODUCTION, False),
+            (Environment.DEVELOPMENT, True),
+            (Environment.TESTING, True),
+            (Environment.STAGING, True),
+        ],
+    )
+    def test_docs_enabled_by_environment(
+        self, env: Environment, expected: bool
+    ) -> None:
+        """docs_enabled returns False in production and True in dev/test/staging."""
+        s = Settings(
+            environment=env,
+            portal_session_secret="prod-secret-override",  # type: ignore[arg-type]
+            smtp_host="smtp.example.com",
+            smtp_from="noreply@example.com",
+            _env_file=None,
+        )
+        assert docs_enabled(s) is expected
 
     @pytest.mark.asyncio
-    async def test_development_exposes_docs(self) -> None:
-        """Development environment → /docs and /redoc return 200."""
-        from course_supporter.api.app import app as dev_app
-
+    async def test_live_app_in_test_environment(self) -> None:
+        """Live application in test environment exposes /docs, /redoc, openapi."""
         async with AsyncClient(
-            transport=ASGITransport(app=dev_app),
+            transport=ASGITransport(app=app),
             base_url="http://test",
         ) as ac:
             resp_docs = await ac.get("/docs")

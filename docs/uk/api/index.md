@@ -13,7 +13,7 @@ last_updated: 2026-10-03
 
 # API
 
-Машинна специфікація всіх маршрутів — у Swagger: [api.pythoncourse.me/docs](https://api.pythoncourse.me/docs).
+Машинна специфікація всіх маршрутів — в описі API: [api.pythoncourse.me/openapi.json](https://api.pythoncourse.me/openapi.json).
 Нижче — провідник для платформи школи, що подає студентські роботи через API: як прийняти
 відповіді на тест і що перевіряється в коментарі студента.
 

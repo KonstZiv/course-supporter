@@ -75,11 +75,14 @@ CODE=$(curl -s -o /dev/null -w "%{http_code}" \
     "$BASE_URL/api/v1/courses")
 check "GET /courses with valid key → 200" 200 "$CODE"
 
-# --- 3. Swagger UI ---
+# --- 3. API Documentation ---
 echo ""
-echo "3. Swagger UI"
+echo "3. API Documentation"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/docs")
-check "GET /docs → 200" 200 "$CODE"
+check "GET /docs → 404" 404 "$CODE"
+
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/openapi.json")
+check "GET /openapi.json → 200" 200 "$CODE"
 
 # --- 4. Security Headers ---
 echo ""

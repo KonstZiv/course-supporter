@@ -51,7 +51,7 @@ from course_supporter.api.routes.students import router as students_router
 from course_supporter.api.routes.test_objects import router as test_objects_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.auth.scopes import rate_limiter
-from course_supporter.config import settings
+from course_supporter.config import Settings, settings
 from course_supporter.logging_config import configure_logging
 from course_supporter.storage.database import async_session, engine
 from course_supporter.storage.s3 import S3Client
@@ -127,6 +127,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     logger.info("app_stopped")
 
 
+def docs_enabled(settings: Settings) -> bool:
+    """Determine whether interactive documentation (/docs and /redoc) is enabled.
+
+    Disabled in production (decision 2026-11-04) to prevent public access
+    on https://api.pythoncourse.me. Enabled in development, testing, and staging.
+    """
+    return not settings.is_prod
+
+
 app = FastAPI(
     title="Course Supporter",
     description="AI-powered course structuring from learning materials",
@@ -134,7 +143,7 @@ app = FastAPI(
     lifespan=lifespan,
     debug=settings.is_dev,
     docs_url=None,
-    redoc_url=None if settings.is_prod else "/redoc",
+    redoc_url="/redoc" if docs_enabled(settings) else None,
 )
 
 app.mount(
@@ -146,7 +155,7 @@ app.mount(
 )
 
 
-if not settings.is_prod:
+if docs_enabled(settings):
 
     @app.get("/docs", include_in_schema=False)
     async def custom_swagger_ui() -> HTMLResponse:

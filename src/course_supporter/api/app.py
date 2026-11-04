@@ -134,6 +134,7 @@ app = FastAPI(
     lifespan=lifespan,
     debug=settings.is_dev,
     docs_url=None,
+    redoc_url=None if settings.is_prod else "/redoc",
 )
 
 app.mount(
@@ -145,24 +146,26 @@ app.mount(
 )
 
 
-@app.get("/docs", include_in_schema=False)
-async def custom_swagger_ui() -> HTMLResponse:
-    """Swagger UI with branded CSS overlay."""
-    html = get_swagger_ui_html(
-        openapi_url=app.openapi_url or "/openapi.json",
-        title=f"{app.title} — API Docs",
-        swagger_ui_parameters={
-            "docExpansion": "list",
-            "defaultModelsExpandDepth": 0,
-            "syntaxHighlight.theme": "monokai",
-        },
-    )
-    # Inject custom CSS after the default Swagger CSS
-    custom_link = '<link rel="stylesheet" href="/static/swagger.css">'
-    body = html.body
-    content = body.decode() if isinstance(body, bytes) else str(body)
-    patched = content.replace("</head>", f"{custom_link}</head>")
-    return HTMLResponse(patched)
+if not settings.is_prod:
+
+    @app.get("/docs", include_in_schema=False)
+    async def custom_swagger_ui() -> HTMLResponse:
+        """Swagger UI with branded CSS overlay."""
+        html = get_swagger_ui_html(
+            openapi_url=app.openapi_url or "/openapi.json",
+            title=f"{app.title} — API Docs",
+            swagger_ui_parameters={
+                "docExpansion": "list",
+                "defaultModelsExpandDepth": 0,
+                "syntaxHighlight.theme": "monokai",
+            },
+        )
+        # Inject custom CSS after the default Swagger CSS
+        custom_link = '<link rel="stylesheet" href="/static/swagger.css">'
+        body = html.body
+        content = body.decode() if isinstance(body, bytes) else str(body)
+        patched = content.replace("</head>", f"{custom_link}</head>")
+        return HTMLResponse(patched)
 
 
 app.add_middleware(RequestLoggingMiddleware)

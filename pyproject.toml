@@ -139,6 +139,7 @@ ignore = [
 "tests/unit/test_homework/test_test_text.py" = ["RUF002"]
 # The locks are named by the letters of the task (а–д), as the task names them.
 "tests/unit/test_homework/test_attempts.py" = ["RUF002"]
+"tests/integration/test_attempt_ledger_db.py" = ["RUF002", "RUF003"]
 "tests/unit/security/test_regex_patterns.py" = ["RUF002"]
 "tests/unit/test_linguistics.py" = ["RUF003"]
 "scripts/**/*.py" = ["S101", "S603", "T20", "RUF001", "ASYNC240"]

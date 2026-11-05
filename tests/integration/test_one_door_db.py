@@ -17,7 +17,8 @@ An archive of a text task closes the file (04.11): beside a clean solution it
 carries the lesson's ``sales.csv``, which is not opened. Stage 2 must judge the
 student's files without the block naming it, the models that review the work
 must still read that block, and with nothing left unopened Stage 2 must get the
-doors' text byte for byte.
+doors' text byte for byte. Since 2026-11-05 ``csv`` is read as text; the locks
+keep the shape of 04.11 with ``sales.xls``.
 
 Requires ``docker compose up -d``; run with ``--run-db --run-redis``.
 """
@@ -736,7 +737,7 @@ class TestAnArchiveGoesThroughTheSameDoor:
 SOLUTION = b"def solve(n):\n    return n * 2\n"
 # The lesson's table, 855 bytes as on 04.11; ``csv`` is not an allowed type.
 SALES_CSV = (b"date,region,amount\n" + b"2026-10-01,north,1250.50\n" * 40)[:855]
-NOT_OPENED_BLOCK = "=== NOT OPENED (1) ===\nsales.csv · forbidden_type · 855\n"
+NOT_OPENED_BLOCK = "=== NOT OPENED (1) ===\nsales.xls · forbidden_type · 855\n"
 
 
 def _doors_text(raw: bytes) -> str:
@@ -765,6 +766,8 @@ def _reviewing_inputs(run: _Run, road: str) -> list[str]:
 
 
 @pytest.mark.parametrize("road", ROADS)
+# Since 2026-11-05 a .csv is read as text; the shape of 04.11 — a lesson file
+# the policy does not admit — is kept with .xls.
 class TestALessonsFileLeftInTheArchive:
     async def test_a_stage2_judges_the_work_and_the_review_hears_the_block(
         self,
@@ -774,7 +777,7 @@ class TestALessonsFileLeftInTheArchive:
         s3_client: S3Client,
     ) -> None:
         w = await world(
-            _zip({"solution.py": SOLUTION, "sales.csv": SALES_CSV}), None, "task"
+            _zip({"solution.py": SOLUTION, "sales.xls": SALES_CSV}), None, "task"
         )
         run, submission = await _run(
             road, w, session_factory, s3_client, evaluation=True
@@ -786,7 +789,7 @@ class TestALessonsFileLeftInTheArchive:
         assert safety["is_safe"] is True
         # The trace still names the file, for the student's portal.
         assert safety["not_opened"] == [
-            {"arcname": "sales.csv", "reason": "forbidden_type", "size": 855}
+            {"arcname": "sales.xls", "reason": "forbidden_type", "size": 855}
         ]
 
         # Stage 2: the work in its slot, and no trace of the block anywhere it
@@ -796,10 +799,10 @@ class TestALessonsFileLeftInTheArchive:
         assert stage2 is not None
         submission_slot = _block(stage2, "submission")
         assert "def solve(n):" in submission_slot
-        for trace in ("NOT OPENED", "forbidden_type", "sales.csv"):
+        for trace in ("NOT OPENED", "forbidden_type", "sales.xls"):
             assert trace not in given, trace
             assert trace not in submission_slot, trace
-        assert "sales.csv" not in stage2
+        assert "sales.xls" not in stage2
 
         # The models that review the work: the block, whole.
         reviewing = _reviewing_inputs(run, road)

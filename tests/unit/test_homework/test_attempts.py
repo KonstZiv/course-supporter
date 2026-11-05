@@ -204,11 +204,13 @@ class TestLockCArchiveOrderIsNotTheWork:
 class TestLockDNotOpenedIsNotTheWork:
     """г. The block of what was not opened is the platform's line."""
 
+    # Since 2026-11-05 a .csv is read as text; the shape of 04.11 — a lesson file
+    # the policy does not admit — is kept with .xls.
     def test_an_unread_file_beside_the_same_work_changes_nothing(self) -> None:
         with_unread = _read(
             _zip(
                 ("solution.py", WORK.encode()),
-                ("sales.csv", SALES_CSV),
+                ("sales.xls", SALES_CSV),
                 (".env", b"TOKEN=1\n"),
             ),
             "hw.zip",

@@ -28,7 +28,7 @@ driver for tenant-specific overrides emerges.
   5 GB for video, 200 MB unzipped / depth 1 for archives. LLM
   safety check enabled (KD-2.1-P defense-in-depth).
   Charset-strict off (legacy encodings tolerated).
-* **homework**: prose (:data:`_PROSE`) + source code
+* **homework**: prose (:data:`_PROSE`) + data (:data:`_DATA`) + source code
   (:data:`CODE_EXTENSIONS`) + containers (:data:`_ARCHIVES`) +
   documents (:data:`_DOCUMENTS`), as a derived union rather than a
   list; :data:`HOMEWORK_CONVEYORS` names the checking pipeline for
@@ -328,6 +328,12 @@ _ARCHIVES: Final[frozenset[str]] = frozenset({"zip", "gz", "tgz"})
 # need a third extraction branch.
 _DOCUMENTS: Final[frozenset[str]] = frozenset({"docx", "pdf"})
 
+# Data a student's code reads. A course on code hands its students data
+# files with the lesson -- a .csv the script must parse -- and the solution
+# cannot be read without them. Plain text, so it takes the text conveyor and
+# the text caps, like ``txt``.
+_DATA: Final[frozenset[str]] = frozenset({"csv"})
+
 Conveyor = Literal["text", "archive", "document"]
 
 # Which pipeline verifies each accepted format. Product policy ("may a
@@ -337,7 +343,7 @@ Conveyor = Literal["text", "archive", "document"]
 # from the same groups, so a format cannot enter the policy without also
 # acquiring a conveyor here.
 HOMEWORK_CONVEYORS: Final[dict[str, Conveyor]] = {
-    **{ext: "text" for ext in _PROSE | CODE_EXTENSIONS},
+    **{ext: "text" for ext in _PROSE | _DATA | CODE_EXTENSIONS},
     **{ext: "archive" for ext in _ARCHIVES},
     **{ext: "document" for ext in _DOCUMENTS},
 }
@@ -348,7 +354,7 @@ HOMEWORK_POLICY: Final[ContextPolicy] = ContextPolicy(
     # Derived union, mirroring AUTHORED_POLICY's ``| CODE_EXTENSIONS`` form:
     # widening CODE_EXTENSIONS widens the student surface automatically, and
     # the two contours cannot drift apart by anyone forgetting a list.
-    allowed_extensions=_PROSE | CODE_EXTENSIONS | _ARCHIVES | _DOCUMENTS,
+    allowed_extensions=_PROSE | _DATA | CODE_EXTENSIONS | _ARCHIVES | _DOCUMENTS,
     max_file_size_bytes=1 * 1024 * 1024,
     max_video_upload_bytes=None,
     max_video_download_bytes=None,

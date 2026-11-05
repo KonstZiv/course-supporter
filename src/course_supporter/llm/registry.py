@@ -182,6 +182,7 @@ class TariffConfig(BaseModel):
     catalog_prices: Literal["off_peak"]
     peak_multiplier: Decimal = Field(gt=0)
     peak: PeakHours
+    off_peak_dates: list[date] = Field(default_factory=list)
 
     @field_validator("timezone")
     @classmethod
@@ -192,10 +193,24 @@ class TariffConfig(BaseModel):
             raise ValueError(f"unknown timezone: {value!r}") from exc
         return value
 
+    def is_off_peak_date(self, instant: datetime | date) -> bool:
+        """Whether the calendar date in tariff timezone is an off-peak date."""
+        if not self.off_peak_dates:
+            return False
+        if isinstance(instant, datetime):
+            if instant.tzinfo is None:
+                raise ValueError("a tariff window needs a timezone-aware instant")
+            d = instant.astimezone(ZoneInfo(self.timezone)).date()
+        else:
+            d = instant
+        return d in self.off_peak_dates
+
     def window_at(self, instant: datetime) -> TariffWindow:
         """Peak or off-peak at ``instant`` (timezone-aware)."""
         if instant.tzinfo is None:
             raise ValueError("a tariff window needs a timezone-aware instant")
+        if self.is_off_peak_date(instant):
+            return TariffWindow.OFF_PEAK
         local = instant.astimezone(ZoneInfo(self.timezone))
         if _WEEKDAYS[local.weekday()] not in self.peak.weekdays:
             return TariffWindow.OFF_PEAK
@@ -447,6 +462,9 @@ class ModelRegistryConfig(BaseModel):
                 "peak_multiplier": str(tariff.peak_multiplier),
                 "weekdays": [day.value for day in tariff.peak.weekdays],
                 "hours": tariff.peak.hours,
+                "off_peak_dates": [
+                    d.isoformat() for d in sorted(tariff.off_peak_dates)
+                ],
             }
             for name, tariff in self.tariffs.items()
         }

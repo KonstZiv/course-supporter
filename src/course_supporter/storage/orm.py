@@ -8,6 +8,7 @@ from typing import Any, ClassVar
 
 import uuid_utils as uuid7_lib
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     ColumnElement,
@@ -4420,11 +4421,12 @@ class BillingAuditEntry(Base):
     action: Mapped[str] = mapped_column(
         String(64),
         comment="What was done, e.g. author_settings.update, payment_rule.create, "
-        "payment_rule.end, account.anonymize.",
+        "payment_rule.end, account.anonymize, batch.admin_credit.",
     )
     entity: Mapped[str] = mapped_column(
         String(32),
-        comment="Kind of row changed: account | author_settings | payment_rule.",
+        comment="Kind of row changed: account | author_settings | payment_rule "
+        "| batch.",
     )
     entity_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, index=True, comment="Id of the row changed. No FK (several tables)."
@@ -4434,4 +4436,513 @@ class BillingAuditEntry(Base):
     )
     after: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, comment="The row after the change."
+    )
+
+
+# ── BIL-B: the journal of units — batches, movements, reservations, ──
+# ── differences, refunds ──
+#
+# The same rule as BIL-A: no foreign key to a table outside billing, and the
+# foreign keys inside billing have no ON DELETE action. The journal outlives
+# the account's owner by five years from the anonymization (its destruction is
+# the scheduler's, BIL-B part 2); no delete elsewhere ever reaches it.
+#
+# The balance is not stored: a batch's remaining units are its ``units`` minus
+# the movements that take units out of it (``billing.ledger`` reads them), and
+# the reserved and held parts are the active reservations and refund holds.
+# ``billing_batches`` and ``billing_movements`` are insert-only (the BIL-A
+# trigger refuses UPDATE); reservations, differences and refunds carry a state.
+
+_ACTION_KINDS = "('review', 'processing', 'task_preparation')"
+_MOVEMENT_KINDS = (
+    "('credit', 'reserve', 'reserve_release', 'debit', 'difference_arisen', "
+    "'difference_repaid', 'batch_expired', 'difference_annulled', "
+    "'benefit_covered', 'platform_covered', 'refund_hold', 'refund_completed', "
+    "'refund_rejected')"
+)
+_MOVEMENTS_WITH_BATCH = (
+    "('credit', 'reserve', 'reserve_release', 'debit', 'difference_repaid', "
+    "'batch_expired', 'refund_hold', 'refund_completed', 'refund_rejected')"
+)
+_MOVEMENTS_WITH_DIFFERENCE = (
+    "('difference_arisen', 'difference_repaid', 'difference_annulled')"
+)
+_MOVEMENTS_WITH_REFUND = "('refund_hold', 'refund_completed', 'refund_rejected')"
+_MOVEMENTS_OF_AN_ACTION = (
+    "('reserve', 'reserve_release', 'debit', 'difference_arisen', "
+    "'benefit_covered', 'platform_covered')"
+)
+_MOVEMENTS_WITH_PAYER = (
+    "('debit', 'difference_arisen', 'benefit_covered', 'platform_covered')"
+)
+
+
+class BillingBatch(Base):
+    """A package of units that arrived on an account (BIL-B).
+
+    A purchase (through Paddle, by the adapter of week 5) or a credit by the
+    administrator. Valid six calendar months from its creation
+    (``expires_at``); units are taken from the batch that expires first.
+    Insert-only: what is left of it is the journal's business
+    (``billing.ledger``), never a column.
+    """
+
+    __tablename__ = "billing_batches"
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('purchase', 'admin_credit')",
+            name="ck_billing_batches_source",
+        ),
+        CheckConstraint("units > 0", name="ck_billing_batches_units_positive"),
+        CheckConstraint(
+            "expires_at > created_at", name="ck_billing_batches_expires_after"
+        ),
+        CheckConstraint(
+            "source <> 'purchase' OR (amount_paid_minor IS NOT NULL "
+            "AND currency IS NOT NULL AND reason IS NULL AND actor IS NULL)",
+            name="ck_billing_batches_purchase",
+        ),
+        CheckConstraint(
+            "source <> 'admin_credit' OR (reason IS NOT NULL AND actor IS NOT NULL "
+            "AND amount_paid_minor IS NULL AND currency IS NULL "
+            "AND paddle_transaction_id IS NULL)",
+            name="ck_billing_batches_admin_credit",
+        ),
+        CheckConstraint(
+            "amount_paid_minor IS NULL OR amount_paid_minor >= 0",
+            name="ck_billing_batches_amount_not_negative",
+        ),
+        CheckConstraint(
+            "currency IS NULL OR currency ~ '^[A-Z]{3}$'",
+            name="ck_billing_batches_currency",
+        ),
+        CheckConstraint(
+            "(paddle_transaction_id IS NULL) = (paddle_line_id IS NULL)",
+            name="ck_billing_batches_paddle_ids",
+        ),
+        Index(
+            "uq_billing_batches_paddle_line",
+            "paddle_transaction_id",
+            "paddle_line_id",
+            unique=True,
+            postgresql_where=text("paddle_transaction_id IS NOT NULL"),
+        ),
+        {
+            "comment": "A package of units on an account (BIL-B): a purchase or "
+            "an administrator's credit, valid six months. Insert-only."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_accounts.id"),
+        index=True,
+        comment="The account the units arrived on.",
+    )
+    source: Mapped[str] = mapped_column(
+        String(16),
+        comment="purchase (paid through Paddle, refundable) | admin_credit "
+        "(granted by the administrator, never refunded).",
+    )
+    units: Mapped[int] = mapped_column(
+        Integer, comment="Units the batch brought; never changes."
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the units arrived; the start of the validity.",
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        index=True,
+        comment="created_at + 6 calendar months (clamped to the month's last "
+        "day). Units still free then burn.",
+    )
+    amount_paid_minor: Mapped[int | None] = mapped_column(
+        BigInteger,
+        comment="Purchase: the amount paid, tax included, in minor units of "
+        "currency (cents). NULL on an admin credit.",
+    )
+    currency: Mapped[str | None] = mapped_column(
+        String(3), comment="Purchase: ISO 4217 code of the amount paid."
+    )
+    paddle_transaction_id: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Purchase: Paddle transaction id; set by the Paddle adapter.",
+    )
+    paddle_line_id: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Purchase: Paddle line item id of the package within the "
+        "transaction; set by the Paddle adapter.",
+    )
+    reason: Mapped[str | None] = mapped_column(
+        Text, comment="Admin credit: why the units were granted."
+    )
+    actor: Mapped[str | None] = mapped_column(
+        String(200), comment="Admin credit: who granted them (--actor)."
+    )
+
+
+class BillingRefund(Base):
+    """A refund of unused units of one purchase batch, through Paddle (BIL-B).
+
+    While Paddle reviews it the units are held (not spendable); approved, they
+    leave the batch; rejected, they return to it. One row per Paddle
+    adjustment, so a repeated notice changes nothing.
+    """
+
+    __tablename__ = "billing_refunds"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('held', 'approved', 'rejected')",
+            name="ck_billing_refunds_state",
+        ),
+        CheckConstraint("units > 0", name="ck_billing_refunds_units_positive"),
+        CheckConstraint(
+            "amount_minor >= 0", name="ck_billing_refunds_amount_not_negative"
+        ),
+        CheckConstraint(
+            "(state = 'held') = (decided_at IS NULL)",
+            name="ck_billing_refunds_decided_at",
+        ),
+        UniqueConstraint(
+            "paddle_adjustment_id", name="uq_billing_refunds_paddle_adjustment"
+        ),
+        {
+            "comment": "Refund of unused units of a purchase batch (BIL-B): held "
+            "while Paddle reviews it, then approved or rejected."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_accounts.id"),
+        index=True,
+        comment="The account of the batch.",
+    )
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_batches.id"),
+        index=True,
+        comment="The purchase batch the units are refunded from.",
+    )
+    units: Mapped[int] = mapped_column(
+        Integer, comment="Units refunded: free units of the batch when held."
+    )
+    amount_minor: Mapped[int] = mapped_column(
+        BigInteger,
+        comment="Money back: floor(amount_paid_minor * units / batch units), "
+        "in minor units of the batch's currency.",
+    )
+    currency: Mapped[str] = mapped_column(
+        String(3), comment="The batch's currency (ISO 4217)."
+    )
+    paddle_adjustment_id: Mapped[str] = mapped_column(
+        String(64), comment="Paddle adjustment (refund) id."
+    )
+    state: Mapped[str] = mapped_column(
+        String(16),
+        default="held",
+        server_default="held",
+        comment="held (units blocked while Paddle reviews) | approved (units "
+        "gone) | rejected (units back in the batch).",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the units were held.",
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="When Paddle's decision was recorded; NULL while held.",
+    )
+
+
+class BillingReservation(Base):
+    """The units held for one action from its start to its end (BIL-B).
+
+    One row per action — ``(action_kind, action_key)`` is unique, the same key
+    as ``action_cost_estimates`` — so a repeated reserve returns the row there
+    is, and a settle or release happens once. ``allocation`` says which batches
+    the units are held in. An action charged without a reserve gets a row of
+    0 units, settled at once: the key stays unique either way.
+    """
+
+    __tablename__ = "billing_reservations"
+    __table_args__ = (
+        CheckConstraint(
+            f"action_kind IN {_ACTION_KINDS}",
+            name="ck_billing_reservations_action_kind",
+        ),
+        CheckConstraint(
+            "state IN ('active', 'settled', 'released')",
+            name="ck_billing_reservations_state",
+        ),
+        CheckConstraint("units >= 0", name="ck_billing_reservations_units"),
+        CheckConstraint(
+            "(state = 'active') = (finished_at IS NULL)",
+            name="ck_billing_reservations_finished_at",
+        ),
+        CheckConstraint(
+            "(state = 'settled') = (fact_units IS NOT NULL)",
+            name="ck_billing_reservations_fact_when_settled",
+        ),
+        CheckConstraint(
+            "fact_units IS NULL OR fact_units >= 0",
+            name="ck_billing_reservations_fact_not_negative",
+        ),
+        UniqueConstraint(
+            "action_kind", "action_key", name="uq_billing_reservations_action"
+        ),
+        {
+            "comment": "Units held for one action until it ends (BIL-B); one row "
+            "per action, the action's key unique."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    action_kind: Mapped[str] = mapped_column(
+        String(32), comment="review | processing | task_preparation."
+    )
+    action_key: Mapped[str] = mapped_column(
+        String(200),
+        comment="The action's identity as action_cost_estimates keeps it: the "
+        "submission id, the job id, or '<authored_document_id>:<version>:<kind>'.",
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_accounts.id"),
+        index=True,
+        comment="The account that pays (the payer).",
+    )
+    units: Mapped[int] = mapped_column(
+        Integer,
+        comment="Units held: the least of what was asked and what was available.",
+    )
+    allocation: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        comment="The units per batch, earliest expiry first: "
+        '[{"batch_id": "<uuid>", "units": n}, ...].',
+    )
+    state: Mapped[str] = mapped_column(
+        String(16),
+        default="active",
+        server_default="active",
+        comment="active (held) | settled (the action ended; charged) | released "
+        "(the action failed; nothing charged).",
+    )
+    fact_units: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="The action's actual cost in units, as settled; NULL until then.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the units were held (the action started).",
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="When the reservation was settled or released; NULL while active.",
+    )
+
+
+class BillingDifference(Base):
+    """What an action cost beyond the payer's available units (BIL-B).
+
+    Repaid first from any units that become free on the account — a purchase,
+    an admin credit, a reserve released — oldest first, so a difference and
+    free units never coexist. Annulled six months after it arose
+    (``annul_after``); never for an author account allowed credit.
+    """
+
+    __tablename__ = "billing_differences"
+    __table_args__ = (
+        CheckConstraint(
+            f"action_kind IN {_ACTION_KINDS}",
+            name="ck_billing_differences_action_kind",
+        ),
+        CheckConstraint(
+            "state IN ('open', 'repaid', 'annulled')",
+            name="ck_billing_differences_state",
+        ),
+        CheckConstraint("units > 0", name="ck_billing_differences_units_positive"),
+        CheckConstraint(
+            "outstanding_units >= 0 AND outstanding_units <= units",
+            name="ck_billing_differences_outstanding",
+        ),
+        CheckConstraint(
+            "(state = 'open') = (outstanding_units > 0)",
+            name="ck_billing_differences_open_is_outstanding",
+        ),
+        CheckConstraint(
+            "(state = 'open') = (closed_at IS NULL)",
+            name="ck_billing_differences_closed_at",
+        ),
+        {
+            "comment": "Units an action cost beyond what the payer had (BIL-B): "
+            "repaid first from units that become free, annulled after 6 months."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_accounts.id"),
+        index=True,
+        comment="The payer the difference is recorded against.",
+    )
+    action_kind: Mapped[str] = mapped_column(
+        String(32), comment="review | processing | task_preparation."
+    )
+    action_key: Mapped[str] = mapped_column(
+        String(200), comment="The action whose cost went beyond the available units."
+    )
+    units: Mapped[int] = mapped_column(
+        Integer, comment="The shortfall when the difference arose."
+    )
+    outstanding_units: Mapped[int] = mapped_column(
+        Integer, comment="Units still to repay; 0 once repaid or annulled."
+    )
+    state: Mapped[str] = mapped_column(
+        String(16),
+        default="open",
+        server_default="open",
+        comment="open | repaid | annulled.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the difference arose.",
+    )
+    annul_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="created_at + 6 calendar months; NULL (never) for an author "
+        "account allowed credit when the difference arose.",
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="When it was repaid in full or annulled; NULL while open.",
+    )
+
+
+class BillingMovement(Base):
+    """One movement of units on an account — the journal (BIL-B).
+
+    Insert-only (a trigger refuses UPDATE). ``units`` is always positive; the
+    kind says what it does. Kinds that take units OUT of a batch: debit,
+    difference_repaid, batch_expired, refund_completed. A credit brings the
+    batch's units; reserve, reserve_release, refund_hold and refund_rejected
+    only move units between free and held; difference_arisen,
+    difference_annulled, benefit_covered and platform_covered touch no batch.
+    """
+
+    __tablename__ = "billing_movements"
+    __table_args__ = (
+        CheckConstraint(f"kind IN {_MOVEMENT_KINDS}", name="ck_billing_movements_kind"),
+        CheckConstraint("units > 0", name="ck_billing_movements_units_positive"),
+        CheckConstraint(
+            f"(kind IN {_MOVEMENTS_WITH_BATCH}) = (batch_id IS NOT NULL)",
+            name="ck_billing_movements_batch",
+        ),
+        CheckConstraint(
+            f"(kind IN {_MOVEMENTS_WITH_DIFFERENCE}) = (difference_id IS NOT NULL)",
+            name="ck_billing_movements_difference",
+        ),
+        CheckConstraint(
+            f"(kind IN {_MOVEMENTS_WITH_REFUND}) = (refund_id IS NOT NULL)",
+            name="ck_billing_movements_refund",
+        ),
+        CheckConstraint(
+            "(action_kind IS NULL) = (action_key IS NULL)",
+            name="ck_billing_movements_action_pair",
+        ),
+        CheckConstraint(
+            f"action_kind IS NULL OR action_kind IN {_ACTION_KINDS}",
+            name="ck_billing_movements_action_kind",
+        ),
+        CheckConstraint(
+            f"kind NOT IN {_MOVEMENTS_OF_AN_ACTION} OR action_key IS NOT NULL",
+            name="ck_billing_movements_action_needed",
+        ),
+        CheckConstraint(
+            "payer_source IS NULL OR payer_source IN "
+            "('default', 'course_rule', 'student_rule', 'benefit', 'platform')",
+            name="ck_billing_movements_payer_source",
+        ),
+        CheckConstraint(
+            f"kind NOT IN {_MOVEMENTS_WITH_PAYER} OR (payer_source IS NOT NULL "
+            "AND beneficiary_account_id IS NOT NULL)",
+            name="ck_billing_movements_payer_needed",
+        ),
+        Index(
+            "ix_billing_movements_account_created",
+            "account_id",
+            "created_at",
+        ),
+        Index("ix_billing_movements_action", "action_kind", "action_key"),
+        {
+            "comment": "Journal of unit movements on billing accounts (BIL-B): "
+            "who, what, how many, for which action, for whom. Insert-only."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_accounts.id"),
+        comment="The account whose units moved (the payer of a charge).",
+    )
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("billing_batches.id"),
+        index=True,
+        comment="The batch the units moved in; NULL for kinds that touch none.",
+    )
+    difference_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("billing_differences.id"),
+        index=True,
+        comment="The difference that arose, was repaid or was annulled.",
+    )
+    refund_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("billing_refunds.id"),
+        index=True,
+        comment="The refund the units were held, refunded or returned for.",
+    )
+    kind: Mapped[str] = mapped_column(
+        String(32),
+        comment="credit | reserve | reserve_release | debit | difference_arisen "
+        "| difference_repaid | batch_expired | difference_annulled | "
+        "benefit_covered | platform_covered | refund_hold | refund_completed | "
+        "refund_rejected.",
+    )
+    units: Mapped[int] = mapped_column(
+        Integer, comment="How many units; always positive, the kind says which way."
+    )
+    action_kind: Mapped[str | None] = mapped_column(
+        String(32),
+        comment="review | processing | task_preparation; NULL when no action.",
+    )
+    action_key: Mapped[str | None] = mapped_column(
+        String(200),
+        comment="The action's key, as in action_cost_estimates and "
+        "billing_reservations.",
+    )
+    beneficiary_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("billing_accounts.id"),
+        index=True,
+        comment='The account the action was for ("за кого").',
+    )
+    payer_source: Mapped[str | None] = mapped_column(
+        String(16),
+        comment="Why this account paid: default | course_rule | student_rule | "
+        "benefit (the author's benefit covered it) | platform (re-processing "
+        "at the platform's initiative).",
+    )
+    rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("billing_payment_rules.id"),
+        index=True,
+        comment="The payment rule applied (course_rule / student_rule).",
+    )
+    actor: Mapped[str | None] = mapped_column(
+        String(200), comment="Who made an administrative movement (--actor)."
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the units moved.",
     )

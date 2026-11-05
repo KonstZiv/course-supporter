@@ -1,4 +1,5 @@
-"""Billing (BIL-A): who pays, under which rules, with whose consent.
+"""Billing (BIL-A, BIL-B): who pays, under which rules, with whose consent —
+and the journal of the units they pay with.
 
 Purpose:
     The platform sells prepaid packages of units. A student pays for the
@@ -21,10 +22,22 @@ Modules:
     (:mod:`.audit`). Today the only entry point is ``scripts/billing_admin.py``;
     administrator routes, when they come, call the same functions.
 
+The journal of units (BIL-B):
+    :mod:`.ledger` — the balance, credits (purchase, administrator), the
+    reserve of an action, its settle or release, the statement; the model's
+    map is its docstring.
+    :mod:`.journal` — the arithmetic every change shares: the account's lock,
+    what each batch holds, the repayment of differences.
+    :mod:`.benefit` — what the author's benefit covers; the monthly limit.
+    :mod:`.expiry` — expiry of batches, annulment of differences (for the
+    scheduler of BIL-B part 2).
+    :mod:`.refunds` — refunds of unused units through Paddle.
+
 Storage:
     ``billing_*`` tables (``storage.orm.Billing*``). None has a foreign key to a
     table outside billing, so deleting a tenant or a student never reaches a
-    billing row and never fails on one.
+    billing row and never fails on one; the journal stays five years after
+    the owner's anonymization (its destruction is BIL-B part 2).
 
 Transactions:
     The functions flush and never commit: the caller (a route, the script)

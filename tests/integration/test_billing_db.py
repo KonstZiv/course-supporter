@@ -931,7 +931,11 @@ class TestSchemaLocks:
         """Every foreign key of a billing table points inside billing and has
         no ON DELETE action; no table outside billing points at billing. So
         deleting a tenant, a student or a course never reaches a billing row
-        — not by one path, not by several (the BIL-D lesson)."""
+        — not by one path, not by several (the BIL-D lesson).
+
+        Since BIL-B a billing table may point at billing tables other than
+        ``billing_accounts`` (the journal at batches, differences, refunds,
+        rules); the rule is the same for every ``billing_*`` table."""
         rows = (
             await db_session.execute(
                 text(
@@ -944,8 +948,8 @@ class TestSchemaLocks:
         ).all()
         assert rows  # the internal keys exist, so the query looks where it should
         for child, parent, on_delete in rows:
-            assert child in BILLING_TABLES, (child, parent)
-            assert parent == "billing_accounts", (child, parent)
+            assert child.startswith("billing_"), (child, parent)
+            assert parent.startswith("billing_"), (child, parent)
             assert on_delete == "a", (child, parent, on_delete)  # NO ACTION
 
     @pytest.mark.parametrize("table", BILLING_TABLES)

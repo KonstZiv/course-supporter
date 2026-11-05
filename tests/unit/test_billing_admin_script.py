@@ -1,4 +1,4 @@
-"""``scripts/billing_admin.py``: each command calls its service function (BIL-A).
+"""``scripts/billing_admin.py``: each command calls its service function (BIL-A, BIL-B).
 
 The services are replaced by mocks; what is checked is the mapping from the
 command line to the call, the required ``--actor`` on every change, and the
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import uuid
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,6 +20,7 @@ from course_supporter.billing.accounts import Anonymization
 from course_supporter.billing.admin import AuthorSettingsView
 from course_supporter.billing.errors import BillingConflictError
 from course_supporter.billing.kinds import ActionKind, Benefit, RuleScope
+from course_supporter.billing.ledger import Balance
 
 TENANT = uuid.uuid4()
 VIEW = AuthorSettingsView(
@@ -49,6 +51,7 @@ async def _run(*argv: str) -> str:
         ["end-rule", "--rule", str(TENANT)],
         ["anonymize-student", "--student", str(TENANT)],
         ["anonymize-tenant", "--tenant", str(TENANT)],
+        ["credit", "--tenant", "t", "--units", "5", "--reason", "pilot"],
     ],
 )
 def test_every_change_needs_an_actor(argv: list[str]) -> None:
@@ -159,3 +162,107 @@ def test_a_refusal_exits_with_1(capsys: pytest.CaptureFixture[str]) -> None:
         code = billing_admin.main(["end-rule", "--rule", str(TENANT), "--actor", "k"])
     assert code == 1
     assert capsys.readouterr().err == "refused: no\n"
+
+
+BALANCE = Balance(
+    balance=500,
+    reserved=0,
+    held=0,
+    available=500,
+    difference=0,
+    next_expiry=datetime(2027, 5, 5, tzinfo=UTC),
+)
+
+
+def test_a_credit_needs_a_reason() -> None:
+    with pytest.raises(SystemExit) as exc:
+        _args("credit", "--tenant", "t", "--units", "5", "--actor", "k")
+    assert exc.value.code == 2
+
+
+async def test_credit_calls_the_services() -> None:
+    student, account = uuid.uuid4(), MagicMock(id=uuid.uuid4())
+    batch = MagicMock(
+        id=uuid.uuid4(), units=100, expires_at=datetime(2027, 5, 5, tzinfo=UTC)
+    )
+    with (
+        patch.object(
+            billing_admin.admin, "owner_account", AsyncMock(return_value=account)
+        ) as owner,
+        patch.object(
+            billing_admin.ledger,
+            "credit_admin",
+            AsyncMock(return_value=MagicMock(batch=batch, repaid_units=30)),
+        ) as service,
+        patch.object(billing_admin.ledger, "balance", AsyncMock(return_value=BALANCE)),
+    ):
+        out = await _run(
+            "credit",
+            "--tenant",
+            str(TENANT),
+            "--student",
+            str(student),
+            "--units",
+            "100",
+            "--reason",
+            "a review lost to an outage",
+            "--actor",
+            "k",
+        )
+    assert owner.await_args.kwargs == {
+        "tenant_id": TENANT,
+        "student_id": student,
+        "create": True,
+    }
+    assert service.await_args.kwargs == {
+        "account_id": account.id,
+        "units": 100,
+        "reason": "a review lost to an outage",
+        "actor": "k",
+    }
+    assert "100 units" in out and "repaid_difference=30" in out
+    assert "available=500" in out
+
+
+async def test_balance_of_an_owner_without_an_account() -> None:
+    with patch.object(
+        billing_admin.admin, "owner_account", AsyncMock(return_value=None)
+    ) as owner:
+        out = await _run("balance", "--tenant", str(TENANT))
+    assert owner.await_args.kwargs == {
+        "tenant_id": TENANT,
+        "student_id": None,
+        "create": False,
+    }
+    assert out.startswith("no account yet")
+
+
+async def test_statement_reads_a_period_in_utc() -> None:
+    account = uuid.uuid4()
+    args = _args(
+        "statement",
+        "--account",
+        str(account),
+        "--from",
+        "2026-11-01",
+        "--to",
+        "2026-12-01T00:00:00+02:00",
+    )
+    session = MagicMock(get=AsyncMock(return_value=object()))
+    with patch.object(
+        billing_admin.ledger, "statement", AsyncMock(return_value=[])
+    ) as service:
+        out = await billing_admin.COMMANDS["statement"](session, args)
+    assert service.await_args.args[1] == account
+    since, until = (
+        service.await_args.kwargs["since"],
+        service.await_args.kwargs["until"],
+    )
+    assert since == datetime(2026, 11, 1, tzinfo=UTC)
+    assert until == datetime(2026, 11, 30, 22, 0, tzinfo=UTC)
+    assert out == "no movements"
+
+
+def test_statement_refuses_a_bad_date() -> None:
+    with pytest.raises(SystemExit):
+        _args("statement", "--account", str(TENANT), "--from", "yesterday")

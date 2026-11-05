@@ -7,13 +7,23 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import HomeworkSubmission
+from course_supporter.storage.orm import HomeworkStatus, HomeworkSubmission
 
 logger = structlog.get_logger()
+
+ATTEMPT_STATUSES: frozenset[str] = frozenset(
+    {HomeworkStatus.COMPLETED.value, HomeworkStatus.DELIVERED.value}
+)
+"""The statuses of a revision that got a review: an attempt (task 13, K2).
+
+The same two :meth:`HomeworkRepository.has_reviewed_revision` reads. A refusal
+(``rejected``), an off-task submission (``mismatch``), a failure, a hold and a
+revision still in flight are not attempts.
+"""
 
 # Homework lifecycle, reconciled to the KD15 §1298 vocabulary in sprint-mentor
 # T7. The status is the MILESTONE the submission has REACHED (so ``safety_ok`` /
@@ -237,6 +247,80 @@ class HomeworkRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none() is not None
+
+    async def attempts_before(
+        self,
+        *,
+        student_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+        excluding: uuid.UUID,
+    ) -> tuple[int, uuid.UUID | None, str | None]:
+        """The student's attempts at the task so far (task 13, K2).
+
+        An attempt is a live revision that got a review — the two statuses
+        :meth:`has_reviewed_revision` reads, with its soft-delete filter — and
+        ``excluding`` is the revision asking. Returns how many there are, and
+        the latest one's id and recorded ``task_version`` (``None, None`` when
+        there is none). "Latest" is by submission time, the id breaking a tie.
+        """
+        live_attempts = (
+            HomeworkSubmission.student_id == student_id,
+            HomeworkSubmission.authored_document_id == authored_document_id,
+            HomeworkSubmission.status.in_(ATTEMPT_STATUSES),
+            HomeworkSubmission.deleted_at.is_(None),
+            HomeworkSubmission.id != excluding,
+        )
+        count = await self._session.scalar(
+            select(func.count()).select_from(HomeworkSubmission).where(*live_attempts)
+        )
+        latest = (
+            await self._session.execute(
+                select(HomeworkSubmission.id, HomeworkSubmission.task_version)
+                .where(*live_attempts)
+                .order_by(
+                    HomeworkSubmission.created_at.desc(),
+                    HomeworkSubmission.id.desc(),
+                )
+                .limit(1)
+            )
+        ).one_or_none()
+        if latest is None:
+            return int(count or 0), None, None
+        return int(count or 0), latest.id, latest.task_version
+
+    async def store_attempt(
+        self,
+        submission_id: uuid.UUID,
+        *,
+        attempt_no: int,
+        previous_submission_id: uuid.UUID | None,
+        task_version: str | None,
+        fingerprint: str,
+        attempt_receipt: dict[str, Any],
+    ) -> bool:
+        """Write the attempt ledger of a revision once (task 13, K2).
+
+        A single UPDATE guarded by ``attempt_no IS NULL``: a revision the
+        doors open again — a continuation, a retry — keeps the record of the
+        first opening. No status transition. Returns whether it wrote.
+        """
+        stmt = (
+            update(HomeworkSubmission)
+            .where(
+                HomeworkSubmission.id == submission_id,
+                HomeworkSubmission.attempt_no.is_(None),
+            )
+            .values(
+                attempt_no=attempt_no,
+                previous_submission_id=previous_submission_id,
+                task_version=task_version,
+                fingerprint=fingerprint,
+                attempt_receipt=attempt_receipt,
+            )
+        )
+        result: CursorResult[Any] = await self._session.execute(stmt)  # type: ignore[assignment]
+        await self._session.flush()
+        return bool(result.rowcount)
 
     async def get_by_id(self, submission_id: uuid.UUID) -> HomeworkSubmission | None:
         """Get a submission by primary key."""

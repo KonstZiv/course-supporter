@@ -43,6 +43,7 @@ nav:
       - Матеріали: uk/authors/materials.md
       - Завдання: uk/authors/tasks.md
       - Тести: uk/authors/tests.md
+      - Якщо щось пішло не так: uk/authors/troubleshooting.md
       - Тести й критерії через API: uk/authors/api.md
   - Для студентів: uk/students/index.md
   - Коди помилок: uk/errors/index.md

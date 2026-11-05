@@ -47,6 +47,7 @@ from course_supporter.funds_port import (
     SubmissionContext,
     SubmissionOutcome,
 )
+from course_supporter.homework.attempt_ledger import record_attempt
 from course_supporter.homework.doors import DoorReading
 from course_supporter.homework.path_checkpoint import (
     FREEZE_REASON_FOR_LADDER_STOP,
@@ -321,6 +322,9 @@ async def _run_path(
     if reading is None:
         # The doors refused and persisted their own refusal, as they do today.
         return
+    # ── Attempt ledger (task 13, K2): once, from what the doors read ──
+    await record_attempt(session, submission_id, reading)
+    await session.commit()
     submission_text = reading.text
     # ── Shadow price estimate (BIL-D): written beside the run, never in its way ──
     # A code stage calls no model and costs nothing: the estimate prices the

@@ -1601,6 +1601,15 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # The attempts of a student at a task by their work (task 13): the
+        # lookup K3's dedup and "a repeat of attempt N" stand on.
+        Index(
+            "ix_homework_submissions_attempt_fingerprint",
+            "student_id",
+            "authored_document_id",
+            "fingerprint",
+            postgresql_where=text("fingerprint IS NOT NULL"),
+        ),
         CheckConstraint(
             "score IS NULL OR (score BETWEEN 0 AND 100)",
             name="ck_homework_score_range",
@@ -1770,6 +1779,43 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
         comment="Algorithmic manifest of the submission snapshot (KD18): "
         "schema / aggregate_hash / included / excluded / totals. NULL for "
         "non-project submissions. Populated by P3.",
+    )
+
+    # ── Attempt ledger (mentor-rebuild task 13, K2) ──
+    # Written once, where the doors first read the work
+    # (homework/attempt_ledger.py); NULL on every row from before K2 and on a
+    # submission the doors refused. No review stage reads them yet.
+    attempt_no: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="Attempt number (task 13): the student's earlier attempts at "
+        "this task + 1, counted when the doors first read the work. An "
+        "attempt is a live submission that got a review (completed / "
+        "delivered); a refused, off-task or failed one takes no number from "
+        "the next. NULL before K2 and when the doors refused.",
+    )
+    previous_submission_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("homework_submissions.id", ondelete="SET NULL"),
+        index=True,
+        comment="FK → the student's latest earlier attempt at this task (task "
+        "13), NULL for the first. SET NULL — a hard delete of that attempt "
+        "only clears the pointer.",
+    )
+    task_version: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Version of the task this submission was read against (task "
+        "13): AuthoredDocument.content_hash for a text or project task, the "
+        "TestVersion id the stored answers name for a test. NULL before K2.",
+    )
+    fingerprint: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Fingerprint of the work (task 13, K1 AttemptSnapshotter): "
+        "SHA-256 hex, equal exactly when the work is the same. NULL before K2.",
+    )
+    attempt_receipt: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        comment="Receipt of the attempt (task 13): {attempt_no, "
+        "previous_submission_id, task_version, task_version_changed, "
+        "fingerprint}. NULL before K2.",
     )
 
     # Timestamps
@@ -2473,6 +2519,14 @@ class SubmissionCriterionVerdict(Base):
         nullable=True,
         comment="The earlier submission whose verdict the safeguard kept. NO "
         "foreign key: a trace that outlives a hard delete of that submission.",
+    )
+    quote_from_base: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        comment="The quote stands on the project's base, not on the student's "
+        "own work (task 13, reserved for the project path). Nothing writes or "
+        "reads it yet.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

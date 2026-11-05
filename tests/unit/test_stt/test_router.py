@@ -1,19 +1,24 @@
 """Tests for STTRouter fallback and retry logic."""
 
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
 from course_supporter.cost_kinds import CostKind
-from course_supporter.llm.registry import ModelConfig, ModelPrices
+from course_supporter.llm.registry import ModelConfig, ModelPrices, load_registry
 from course_supporter.stt.router import (
     AllSTTProvidersFailedError,
     STTAttempt,
     STTRouter,
 )
 from course_supporter.stt.schemas import STTResult
+
+_REGISTRY_PATH = (
+    Path(__file__).resolve().parents[3] / "config" / "external_services.yaml"
+)
 
 
 def _make_result(provider: str = "test", model_id: str = "m1") -> STTResult:
@@ -227,6 +232,33 @@ class TestSTTRouterAllFail:
 
         assert "boom" in str(exc_info.value)
         assert exc_info.value.action == "transcribe"
+
+    async def test_production_chain_exhausted_after_its_two_rungs(self) -> None:
+        """The real ``transcribe`` chain gives up after ElevenLabs and OpenAI STT.
+
+        Both rungs fail: each provider is tried once, in chain order, and the
+        router raises ``AllSTTProvidersFailedError`` naming both models — the
+        same end as when the chain had a third rung.
+        """
+        registry = load_registry(_REGISTRY_PATH)
+        elevenlabs = _make_provider(error=RuntimeError("elevenlabs down"))
+        openai_stt = _make_provider(error=RuntimeError("openai down"))
+
+        router = STTRouter(
+            {"elevenlabs": elevenlabs, "openai_stt": openai_stt},
+            registry,
+            max_attempts=1,
+        )
+        with pytest.raises(AllSTTProvidersFailedError) as exc_info:
+            await router.transcribe("transcribe", "/tmp/a.mp3")
+
+        assert exc_info.value.strategies_tried == ["default"]
+        assert exc_info.value.errors == [
+            ("scribe_v1", "elevenlabs down"),
+            ("gpt-4o-mini-transcribe", "openai down"),
+        ]
+        assert elevenlabs.transcribe.await_count == 1
+        assert openai_stt.transcribe.await_count == 1
 
 
 class TestSTTRouterLogCallback:

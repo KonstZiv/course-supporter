@@ -73,7 +73,7 @@ class TestTranscribeAction:
         chain = [
             m.model_id for m in registry.get_chain("transcribe", strategy="default")
         ]
-        assert chain == ["scribe_v1", "gpt-4o-mini-transcribe", "nova-3"]
+        assert chain == ["scribe_v1", "gpt-4o-mini-transcribe"]
 
     def test_transcribe_chain_models_are_minute_billed_stt(
         self,
@@ -200,7 +200,6 @@ _NOT_ESTABLISHED: dict[tuple[str, str], str] = {
     ("qwen3.5-flash", "price_effective_from"): _NO_DATE,
     ("qwen3.7-max", "price_effective_from"): _NO_DATE,
     ("gpt-4o-mini-transcribe", "price_effective_from"): _NO_DATE,
-    ("nova-3", "price_effective_from"): _NO_DATE,
     ("scribe_v1", "price_effective_from"): _NO_DATE,
     ("gemini-3.8-flash", "price_effective_from"): (
         "the pricing page and the model page give only the end of the "
@@ -277,7 +276,7 @@ class TestCalledModelPricesAreFilledOrMarked:
         called = _called_models(registry)
         # Guards the discovery: an empty set would pass the lock vacuously.
         assert len(_ROUTING_FILES) >= 9
-        assert {"deepseek-flash", "scribe_v1", "nova-3"} <= called
+        assert {"deepseek-flash", "scribe_v1", "gpt-4o-mini-transcribe"} <= called
         assert called <= set(registry.models)
 
     def test_every_empty_price_field_is_marked(

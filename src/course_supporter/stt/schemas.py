@@ -81,7 +81,7 @@ class STTResult(BaseModel):
             "Per-word transcription with provider time anchors "
             "(KD-2.2-C). Top-level optional field surfaced when "
             "the provider exposes word-level alignment (ElevenLabs "
-            "Scribe, Deepgram). Empty list when not surfaced."
+            "Scribe). Empty list when not surfaced."
         ),
     )
     language: str | None = None

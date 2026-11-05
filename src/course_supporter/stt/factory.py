@@ -31,9 +31,6 @@ STT_PROVIDER_CONFIGS: dict[str, STTProviderFactoryConfig] = {
         get_default_model=lambda s: s.openai_stt_default_model,
         key_pool_name="openai",
     ),
-    "deepgram": STTProviderFactoryConfig(
-        get_default_model=lambda s: s.deepgram_default_model,
-    ),
 }
 
 

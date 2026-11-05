@@ -83,12 +83,15 @@ def window_with_guard(
     the next ``guard_minutes`` (the action may run into it). Every minute of
     the guard interval is looked at, so a peak span shorter than the guard is
     not stepped over. Uses the tariff's own window logic
-    (:meth:`~course_supporter.llm.registry.TariffConfig.window_at`); it has no
-    holiday calendar, and neither has this (open debt of BIL-PRICES).
+    (:meth:`~course_supporter.llm.registry.TariffConfig.window_at`). On a
+    tariff off-peak date (holiday), no peak and no guard interval applies
+    (DD-BIL-HOL).
     """
     tariff = model.tariff
     if tariff is None:
         return TariffWindow.FLAT
+    if tariff.is_off_peak_date(at):
+        return TariffWindow.OFF_PEAK
     for minute in range(guard_minutes + 1):
         if tariff.window_at(at + timedelta(minutes=minute)) is TariffWindow.PEAK:
             return TariffWindow.PEAK

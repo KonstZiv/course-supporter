@@ -10,6 +10,7 @@ from decimal import Decimal
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import Table, create_engine, delete, inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -22,7 +23,6 @@ from course_supporter.storage.orm import ActionCostEstimate, Tenant
 pytestmark = pytest.mark.requires_db
 
 _TABLE: Table = ActionCostEstimate.__table__  # type: ignore[assignment]
-_MIGRATION = "bild_action_cost_estimates"
 
 
 def _estimate(_: EstimateSettings, at: datetime) -> ActionEstimate:
@@ -186,7 +186,8 @@ def test_the_migration_goes_down_and_up() -> None:
         command.upgrade(cfg, "head")
     with engine.connect() as conn:
         assert "action_cost_estimates" in inspect(conn).get_table_names()
+        # The head moves on with later migrations; it is still one head.
         assert conn.scalar(text("SELECT version_num FROM alembic_version")) == (
-            _MIGRATION
+            ScriptDirectory.from_config(cfg).get_current_head()
         )
     engine.dispose()

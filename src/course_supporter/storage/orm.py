@@ -4018,3 +4018,366 @@ class ActionCostEstimate(Base):
         server_default=func.now(),
         comment="When the estimate was written.",
     )
+
+
+# ── BIL-A: payer accounts, payment rules, author settings, consent, audit ──
+#
+# None of these tables has a foreign key to a table outside billing (tenants,
+# students, course_nodes): a billing record outlives the account it belongs to
+# and must never stand in the way of deleting it (the lesson of
+# ``action_cost_estimates``, BIL-D). The owner ids are plain indexed columns.
+# Foreign keys INSIDE billing point at ``billing_accounts`` with no ON DELETE
+# action: nothing outside billing deletes an account, so no delete can reach a
+# billing row by any path.
+
+
+class BillingAccount(Base):
+    """Who pays: one prepaid account of a student or of an author (BIL-A).
+
+    A student's account is scoped to the tenant the student belongs to; an
+    author's account is the tenant's. At most one ACTIVE account per owner
+    (two partial unique indexes); it is created lazily, the first time it is
+    needed (``billing.accounts.get_or_create_*``).
+
+    When its owner is deleted the account is not: it is closed and anonymized
+    (``tenant_id`` / ``student_id`` erased, ``anonymized_at`` set) and keeps
+    its opaque id, which the account's consents, rules and audit entries go on
+    pointing at. Nothing in the system closes an active account on its own.
+    """
+
+    __tablename__ = "billing_accounts"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('student', 'author')", name="ck_billing_accounts_kind"
+        ),
+        CheckConstraint(
+            "status IN ('active', 'closed')", name="ck_billing_accounts_status"
+        ),
+        CheckConstraint(
+            "kind = 'student' OR student_id IS NULL",
+            name="ck_billing_accounts_author_has_no_student",
+        ),
+        CheckConstraint(
+            "anonymized_at IS NOT NULL OR (tenant_id IS NOT NULL "
+            "AND (kind = 'author' OR student_id IS NOT NULL))",
+            name="ck_billing_accounts_owner_until_anonymized",
+        ),
+        CheckConstraint(
+            "anonymized_at IS NULL OR (status = 'closed' "
+            "AND tenant_id IS NULL AND student_id IS NULL)",
+            name="ck_billing_accounts_anonymized_is_closed",
+        ),
+        CheckConstraint(
+            "(status = 'closed') = (closed_at IS NOT NULL)",
+            name="ck_billing_accounts_closed_at",
+        ),
+        Index(
+            "uq_billing_accounts_active_author",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("kind = 'author' AND status = 'active'"),
+        ),
+        Index(
+            "uq_billing_accounts_active_student",
+            "tenant_id",
+            "student_id",
+            unique=True,
+            postgresql_where=text("kind = 'student' AND status = 'active'"),
+        ),
+        {
+            "comment": "Prepaid account of a student (reviews) or an author "
+            "(processing, task preparation) (BIL-A). Never deleted with its "
+            "owner: closed and anonymized instead."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    kind: Mapped[str] = mapped_column(
+        String(16),
+        comment="student (pays for the reviews of its own work) | author (pays "
+        "for processing materials and preparing tasks).",
+    )
+    # No foreign keys on purpose (block comment above): kept after any delete,
+    # never in its way.
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        index=True,
+        comment="Tenant the account belongs to (the author is the tenant). No FK. "
+        "NULL once anonymized.",
+    )
+    student_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        index=True,
+        comment="Student of a student account; NULL on an author account. No FK. "
+        "NULL once anonymized.",
+    )
+    status: Mapped[str] = mapped_column(
+        String(16),
+        default="active",
+        server_default="active",
+        comment="active | closed. Closed only when the owner is deleted.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the account was created (lazily, on first need).",
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="When the account was closed; NULL while active.",
+    )
+    anonymized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="When the owner references were erased after the owner's "
+        "deletion; the start of the retention period.",
+    )
+
+
+class BillingPaymentRule(Base):
+    """Someone else pays for an action (BIL-A): "reviews on course X: the author".
+
+    A rule is scoped to a course (a root ``CourseNode``) or to a student, and
+    to one kind of action. Its payer is the author account of the same tenant
+    (a student never pays for another student). Set and ended only by the
+    platform administrator, through ``billing.admin``. At most one active rule
+    per (target, action kind).
+    """
+
+    __tablename__ = "billing_payment_rules"
+    __table_args__ = (
+        CheckConstraint(
+            "scope IN ('course', 'student')", name="ck_billing_payment_rules_scope"
+        ),
+        CheckConstraint(
+            "action_kind IN ('review', 'processing', 'task_preparation')",
+            name="ck_billing_payment_rules_action_kind",
+        ),
+        CheckConstraint(
+            "(scope = 'course') = (course_node_id IS NOT NULL) "
+            "AND (scope = 'student') = (student_id IS NOT NULL)",
+            name="ck_billing_payment_rules_target",
+        ),
+        CheckConstraint(
+            "active = (ended_at IS NULL)", name="ck_billing_payment_rules_active"
+        ),
+        Index(
+            "uq_billing_payment_rules_active_course",
+            "course_node_id",
+            "action_kind",
+            unique=True,
+            postgresql_where=text("active AND scope = 'course'"),
+        ),
+        Index(
+            "uq_billing_payment_rules_active_student",
+            "student_id",
+            "action_kind",
+            unique=True,
+            postgresql_where=text("active AND scope = 'student'"),
+        ),
+        {
+            "comment": "Who pays for a kind of action on a course or for a "
+            "student, instead of the default (BIL-A). Set by the administrator."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    scope: Mapped[str] = mapped_column(
+        String(16), comment="course | student: what the rule is about."
+    )
+    action_kind: Mapped[str] = mapped_column(
+        String(32), comment="review | processing | task_preparation."
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, index=True, comment="Tenant of the course or the student. No FK."
+    )
+    course_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        index=True,
+        comment="Root CourseNode (the course) of a course rule. No FK.",
+    )
+    student_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, index=True, comment="Student of a student rule. No FK."
+    )
+    payer_account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_accounts.id"),
+        index=True,
+        comment="The account that pays: the author account of the same tenant.",
+    )
+    active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default=text("true"),
+        comment="True until the rule is ended.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the rule was set.",
+    )
+    created_by: Mapped[str] = mapped_column(
+        String(200), comment="Who set the rule (the administrator's --actor)."
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="When the rule was ended; NULL while active."
+    )
+
+
+class BillingAuthorSettings(Base):
+    """What the administrator granted an author account (BIL-A).
+
+    One row per author account, created on its first change; an account
+    without a row has the defaults (no benefit, no credit). A separate table
+    rather than columns of ``billing_accounts``: the settings belong to author
+    accounts only, so on the accounts table they would be empty on every
+    student account. The arithmetic of the limit is not here (BIL-B / BIL-E).
+    """
+
+    __tablename__ = "billing_author_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "benefit IN ('none', 'monthly_limit', 'unlimited')",
+            name="ck_billing_author_settings_benefit",
+        ),
+        CheckConstraint(
+            "(benefit = 'monthly_limit') = (monthly_limit_units IS NOT NULL)",
+            name="ck_billing_author_settings_limit_needs_benefit",
+        ),
+        CheckConstraint(
+            "monthly_limit_units IS NULL OR monthly_limit_units > 0",
+            name="ck_billing_author_settings_limit_positive",
+        ),
+        CheckConstraint(
+            "(benefit = 'none') = (benefit_started_at IS NULL)",
+            name="ck_billing_author_settings_benefit_started",
+        ),
+        {
+            "comment": "Benefit and credit of an author account, set by the "
+            "administrator (BIL-A). No row = no benefit, no credit."
+        },
+    )
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_accounts.id"),
+        primary_key=True,
+        comment="The author account these settings are of.",
+    )
+    benefit: Mapped[str] = mapped_column(
+        String(16),
+        default="none",
+        server_default="none",
+        comment="none | monthly_limit (free up to monthly_limit_units a month) "
+        "| unlimited.",
+    )
+    monthly_limit_units: Mapped[int | None] = mapped_column(
+        Integer, comment="Units a month free of charge; only with monthly_limit."
+    )
+    benefit_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="When the current kind of benefit was granted; NULL with none.",
+    )
+    credit_allowed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        comment="May the account go below zero.",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        comment="When the settings last changed.",
+    )
+
+
+class BillingConsent(Base):
+    """An account holder agreed to the billing terms of one revision (BIL-A).
+
+    Insert-only: a trigger refuses any UPDATE. One row per (account, terms
+    version); agreeing again to the same revision writes nothing.
+    """
+
+    __tablename__ = "billing_consents"
+    __table_args__ = (
+        CheckConstraint(
+            "text_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_billing_consents_text_sha256",
+        ),
+        CheckConstraint("channel IN ('portal')", name="ck_billing_consents_channel"),
+        UniqueConstraint(
+            "account_id", "terms_version", name="uq_billing_consents_version"
+        ),
+        {
+            "comment": "Consent to the billing terms, one row per account and "
+            "terms revision (BIL-A). Insert-only."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_accounts.id"),
+        index=True,
+        comment="The account whose holder agreed.",
+    )
+    terms_version: Mapped[str] = mapped_column(
+        String(32),
+        comment="Revision of the terms agreed to (settings.billing_terms_version).",
+    )
+    consented_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the holder agreed.",
+    )
+    text_sha256: Mapped[str] = mapped_column(
+        String(64),
+        comment="SHA-256 (hex) of the terms text the holder was shown, as the "
+        "client reports it.",
+    )
+    channel: Mapped[str] = mapped_column(
+        String(16), comment="Where the holder agreed: portal."
+    )
+
+
+class BillingAuditEntry(Base):
+    """One change made by the platform administrator to billing data (BIL-A).
+
+    Written by ``billing.admin`` / ``billing.accounts`` in the same transaction
+    as the change, whatever the entry point (today the script
+    ``scripts/billing_admin.py``). Insert-only: a trigger refuses any UPDATE.
+    ``entity_id`` names rows of several tables, so it has no foreign key.
+    """
+
+    __tablename__ = "billing_audit_log"
+    __table_args__ = (
+        {
+            "comment": "Audit log of administrative changes to billing data "
+            "(BIL-A): who, when, what, before and after. Insert-only."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    actor: Mapped[str] = mapped_column(
+        String(200), comment="Who made the change (the administrator's --actor)."
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the change was made.",
+    )
+    action: Mapped[str] = mapped_column(
+        String(64),
+        comment="What was done, e.g. author_settings.update, payment_rule.create, "
+        "payment_rule.end, account.anonymize.",
+    )
+    entity: Mapped[str] = mapped_column(
+        String(32),
+        comment="Kind of row changed: account | author_settings | payment_rule.",
+    )
+    entity_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, index=True, comment="Id of the row changed. No FK (several tables)."
+    )
+    before: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="The row before the change; NULL when it was created."
+    )
+    after: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, comment="The row after the change."
+    )

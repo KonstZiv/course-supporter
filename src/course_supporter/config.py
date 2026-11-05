@@ -95,6 +95,15 @@ class Settings(BaseSettings):
     # supplied via PORTAL_BASE_URL in ``.env.prod`` (Phase 6 password-recovery).
     portal_base_url: str = "http://localhost:5173"
 
+    # --- Billing (BIL-A) ---
+    # The revision of the billing terms in force: the date it took effect,
+    # YYYY-MM-DD (the site's terms page states it). A student whose account
+    # has no consent to this revision is asked to agree in the portal; raising
+    # it asks everyone again. Set BILLING_TERMS_VERSION when the terms change.
+    billing_terms_version: str = Field(
+        default="2026-11-07", pattern=r"^\d{4}-\d{2}-\d{2}$"
+    )
+
     # --- PostgreSQL ---
     postgres_user: str = "course_supporter"
     postgres_password: SecretStr = SecretStr("secret")
@@ -433,7 +442,7 @@ class Settings(BaseSettings):
     # Configurable per environment via env vars.
     # Defaults can be overridden via external_services.yaml registry.
     gemini_default_model: str = "gemini-3.5-flash-lite"
-    anthropic_default_model: str = "claude-sonnet-4-5-20250929"
+    anthropic_default_model: str = "claude-sonnet-5-5"
     openai_default_model: str = "gpt-4o-mini"
     deepseek_default_model: str = "deepseek-flash"
     # Thinking-on sibling defaults to V4 Pro (reasoning-tier flagship; the only

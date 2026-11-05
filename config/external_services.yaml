@@ -55,6 +55,10 @@
 #   0.000075), which ends 2026-12-31. The Gemini price revision is due by
 #   2026-12-20; a dated test turns red from that day while either model still
 #   carries the introductory price (TestGeminiIntroductoryPriceGuard).
+# 2026-11-05 BIL-A (catalog 2026-11-05.1): claude-sonnet-5-5 added (prices
+#   read 2026-11-05 on platform.claude.com/docs/en/about-claude/pricing) as
+#   the new anthropic_default_model; Sonnet 4.5 retires 2026-11-30. No other
+#   price changed.
 #
 # ── Capabilities (task 09a, 2026-10-01) ──
 # The former ``structured_output`` label is split in two wire facts:
@@ -79,8 +83,8 @@
 # a pricing rule or a tariff therefore means: give the catalog a new version,
 # and paste the fingerprint the loader's error message prints.
 catalog:
-  version: "2026-10-30.2"
-  pricing_sha256: "086a5a5ecd87b36c89ba35c7078e5cc05595b08c6e7a1e0560cdb90f3179d649"
+  version: "2026-11-05.1"
+  pricing_sha256: "9459137a201338b4310ab359a08cfd313064d01053e249840277d0040ee3eaea"
 
 # ── Time-of-day tariffs (BIL-C, decision 3) ──
 # A model names its tariff with ``tariff:``; its cost_per_1k_* are then the
@@ -282,6 +286,28 @@ providers:
     # refreshes". No ladder calls Anthropic. Status per
     # platform.claude.com/docs/en/about-claude/model-deprecations.
     models:
+      - id: claude-sonnet-5-5
+        # Sonnet 5.5 — registered 2026-11-05 (BIL-A) as the replacement of
+        # Sonnet 4.5 (retires November 30, 2026) and the new
+        # anthropic_default_model. Prices read 2026-11-05 on
+        # https://platform.claude.com/docs/en/about-claude/pricing: base input
+        # $2 / MTok, output $10 / MTok, "Cache hits and refreshes" $0.10 / MTok
+        # (0.05x base input); no prompt-size tier ("the full 1M token context
+        # window at standard pricing"); no effective date on the page. Limits
+        # from https://platform.claude.com/docs/en/about-claude/models/overview
+        # (read 2026-11-05): context 1M tokens, max output 128K tokens. A
+        # dateless ID: "Every Claude model ID is a pinned snapshot, including
+        # the dateless IDs used from the 4.6 generation on", so it keeps the
+        # snapshot convention. Retirement "Not sooner than September 28, 2027".
+        capabilities: [long_context]
+        max_context: 1000000
+        max_output_tokens: 128000
+        unit_type: tokens
+        cost_per_1k_in: 0.002
+        cost_per_1k_out: 0.010
+        cost_per_1k_in_cached: 0.0001
+        price_effective_from: null
+        price_holds_to_input_tokens: null
       - id: claude-sonnet-4-5-20250929
         # Sonnet 4.5 — current Sonnet snapshot (registered 2026-05-23;
         # replaces the retired 2025-05-14 Sonnet snapshot). $3 / $15 per 1M.

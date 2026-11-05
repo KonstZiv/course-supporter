@@ -1,11 +1,14 @@
 """The safety check reads the student's files, not the platform's lines (04.11).
 
-A student's archive carried, beside the work, ``sales.xls`` from the lesson.
-``csv`` is not an allowed extension, so the file was not opened, and the doors
-named it in the block they append for the models that review the work::
+A student's archive carried, beside the work, ``sales.csv`` from the lesson.
+``csv`` was not an allowed extension then, so the file was not opened, and the
+doors named it in the block they append for the models that review the work::
 
     === NOT OPENED (1) ===
-    sales.xls · forbidden_type · 855
+    sales.csv · forbidden_type · 855
+
+Since 2026-11-05 ``csv`` is read as text; the locks below keep the shape of
+04.11 with ``sales.xls``, a lesson file the policy still does not admit.
 
 The safety check was shown the same text, read ``forbidden_type`` as a verdict
 and refused a clean submission as a policy violation. The locks, through the

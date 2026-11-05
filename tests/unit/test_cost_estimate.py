@@ -121,6 +121,10 @@ class TestPeakWindow:
             (datetime(2026, 11, 2, 4, 0, tzinfo=UTC), 15, TariffWindow.OFF_PEAK),
             (datetime(2026, 11, 2, 5, 50, tzinfo=UTC), 15, TariffWindow.PEAK),
             (datetime(2026, 11, 7, 7, 0, tzinfo=UTC), 15, TariffWindow.OFF_PEAK),
+            # DD-BIL-HOL: Chinese public holidays
+            (datetime(2027, 1, 1, 2, 0, tzinfo=UTC), 15, TariffWindow.OFF_PEAK),
+            (datetime(2027, 1, 1, 0, 50, tzinfo=UTC), 15, TariffWindow.OFF_PEAK),
+            (datetime(2027, 1, 8, 0, 50, tzinfo=UTC), 15, TariffWindow.PEAK),
         ],
     )
     def test_window(
@@ -132,6 +136,27 @@ class TestPeakWindow:
     ) -> None:
         model = registry.models["deepseek-v4-pro"]
         assert window_with_guard(model, at, guard) is window
+
+    def test_holiday_on_weekday_is_off_peak(
+        self, registry: ModelRegistryConfig
+    ) -> None:
+        model = registry.models["deepseek-v4-pro"]
+        at = datetime(2027, 1, 1, 2, 0, tzinfo=UTC)
+        assert window_with_guard(model, at, guard_minutes=15) is TariffWindow.OFF_PEAK
+
+    def test_holiday_morning_before_peak_is_off_peak(
+        self, registry: ModelRegistryConfig
+    ) -> None:
+        model = registry.models["deepseek-v4-pro"]
+        at = datetime(2027, 1, 1, 0, 50, tzinfo=UTC)
+        assert window_with_guard(model, at, guard_minutes=15) is TariffWindow.OFF_PEAK
+
+    def test_ordinary_weekday_before_peak_is_peak(
+        self, registry: ModelRegistryConfig
+    ) -> None:
+        model = registry.models["deepseek-v4-pro"]
+        at = datetime(2027, 1, 8, 0, 50, tzinfo=UTC)
+        assert window_with_guard(model, at, guard_minutes=15) is TariffWindow.PEAK
 
     def test_a_model_without_tariff_is_flat(
         self, registry: ModelRegistryConfig

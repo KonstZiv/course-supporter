@@ -330,3 +330,38 @@ class TestGeminiIntroductoryPriceGuard:
             "Вступна ціна Gemini 3.6/3.8 Flash закінчується 2026-12-31 — "
             "потрібна ревізія цін (борг BIL-PRICES)"
         )
+
+
+# ── Guard: Chinese public holidays for next year are populated in time ──
+#
+# State Council of China publishes the public holiday schedule for the upcoming
+# year in November / early December. From December 15 of each year, this test
+# fails if tariffs.deepseek_peak does not contain at least one holiday date
+# for the upcoming year (DD-BIL-HOL).
+
+
+class TestChineseHolidaysNextYearGuard:
+    def test_next_year_holidays_present_after_december_15(
+        self, registry: ModelRegistryConfig
+    ) -> None:
+        today = datetime.now(UTC).date()
+        if today < date(today.year, 12, 15):
+            return
+        next_year = today.year + 1
+        tariff = registry.tariffs.get("deepseek_peak")
+        assert tariff is not None, "Тариф deepseek_peak не знайдено"
+        has_next_year = any(d.year == next_year for d in tariff.off_peak_dates)
+        assert has_next_year, (
+            "Немає святкових днів КНР на наступний рік у tariffs.deepseek_peak — "
+            "потрібна ревізія (DD-BIL-HOL)"
+        )
+
+    def test_guard_logic_satisfied_for_2027(
+        self, registry: ModelRegistryConfig
+    ) -> None:
+        tariff = registry.tariffs["deepseek_peak"]
+        has_2027 = any(d.year == 2027 for d in tariff.off_peak_dates)
+        assert has_2027, (
+            "Немає святкових днів КНР на 2027 рік у tariffs.deepseek_peak — "
+            "потрібна ревізія (DD-BIL-HOL)"
+        )

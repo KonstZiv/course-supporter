@@ -1,5 +1,6 @@
 """Tests for unified external service registry."""
 
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -399,6 +400,24 @@ class TestTariffConfig:
         valid_config["tariffs"] = {"t": self._tariff(catalog_prices="peak")}
         with pytest.raises(ValueError):
             ModelRegistryConfig.model_validate(valid_config)
+
+    def test_off_peak_dates_default_empty(self, valid_config: dict) -> None:
+        valid_config["tariffs"] = {"t": self._tariff()}
+        cfg = ModelRegistryConfig.model_validate(valid_config)
+        tariff = cfg.tariffs["t"]
+        assert tariff.off_peak_dates == []
+        assert not tariff.is_off_peak_date(date(2027, 1, 1))
+
+    def test_off_peak_dates_parsed_and_queried(self, valid_config: dict) -> None:
+        valid_config["tariffs"] = {
+            "t": self._tariff(off_peak_dates=["2027-01-01", "2027-01-02"])
+        }
+        cfg = ModelRegistryConfig.model_validate(valid_config)
+        tariff = cfg.tariffs["t"]
+        assert tariff.off_peak_dates == [date(2027, 1, 1), date(2027, 1, 2)]
+        assert tariff.is_off_peak_date(date(2027, 1, 1))
+        assert tariff.is_off_peak_date(datetime(2027, 1, 1, 12, 0, tzinfo=UTC))
+        assert not tariff.is_off_peak_date(date(2027, 1, 3))
 
 
 class TestExactPrices:

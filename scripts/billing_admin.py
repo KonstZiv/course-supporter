@@ -1,11 +1,11 @@
-"""Billing administration CLI (BIL-A): the platform administrator's only door.
+"""Billing administration CLI (BIL-A, BIL-B): the administrator's only door.
 
 By operator decision of 2026-11-05 there are no administrator routes until
 there is a decision on how an administrator signs in; this script calls the
-same service layer (``course_supporter.billing.admin`` / ``.accounts``) that
-those routes will call. Every change writes an audit entry naming ``--actor``
-(required on every command that changes something), in the same transaction
-as the change.
+same service layer (``course_supporter.billing.admin`` / ``.accounts`` /
+``.ledger``) that those routes will call. Every change writes an audit entry
+naming ``--actor`` (required on every command that changes something), in the
+same transaction as the change.
 
 Usage (inside the application container, like ``scripts/manage_tenant.py``)::
 
@@ -37,6 +37,18 @@ it; a student account is refused):
         --action review --actor kostiantyn       # this student's reviews: author
     end-rule --rule <rule-id> --actor kostiantyn
 
+Units (BIL-B). A credit is a batch of its own: valid 6 months, never
+refunded, repaying the account's difference first; --reason is required and
+the credit is audited (batch.admin_credit). Without --student — the author's
+(the tenant's) account; the account is created on first need:
+    credit  --tenant "Python Academy" --units 500 --reason "pilot" \
+        --actor kostiantyn
+    credit  --tenant "Python Academy" --student <student-id> --units 100 \
+        --reason "a review lost to an outage" --actor kostiantyn
+    balance --tenant "Python Academy" [--student <student-id>]
+    statement --account <account-id> [--from 2026-11-01] [--to 2026-12-01]
+        # movements in [from, to); dates or ISO instants, UTC
+
 Anonymization, AFTER the tenant or the student was deleted by hand (there is
 no account-deletion flow yet; when one appears it calls the same functions).
 It closes and anonymizes the owner's accounts and ends the active payment
@@ -56,15 +68,21 @@ import asyncio
 import sys
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from course_supporter.billing import accounts, admin
+from course_supporter.billing import accounts, admin, ledger
 from course_supporter.billing.errors import BillingError, BillingNotFoundError
 from course_supporter.billing.kinds import ActionKind, Benefit, RuleScope
 from course_supporter.config import get_settings
-from course_supporter.storage.orm import BillingAccount, BillingPaymentRule, Tenant
+from course_supporter.storage.orm import (
+    BillingAccount,
+    BillingMovement,
+    BillingPaymentRule,
+    Tenant,
+)
 
 Handler = Callable[[AsyncSession, argparse.Namespace], Awaitable[str]]
 
@@ -84,6 +102,15 @@ async def resolve_tenant_id(session: AsyncSession, value: str) -> uuid.UUID:
     if tenant_id is None:
         raise BillingNotFoundError(f"tenant {value!r} not found")
     return tenant_id
+
+
+def _instant(value: str) -> datetime:
+    """A date or an ISO instant; without a zone it is UTC."""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a date: {value!r}") from exc
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _yes_no(value: str) -> bool:
@@ -119,6 +146,25 @@ def _settings_line(view: admin.AuthorSettingsView) -> str:
     return (
         f"author account {view.account_id}  benefit={view.benefit.value}{limit}  "
         f"since={view.benefit_started_at}  credit_allowed={view.credit_allowed}"
+    )
+
+
+def _balance_line(account_id: uuid.UUID, view: ledger.Balance) -> str:
+    expiry = f"{view.next_expiry:%Y-%m-%d}" if view.next_expiry else "-"
+    return (
+        f"account {account_id}  balance={view.balance}  reserved={view.reserved}  "
+        f"held={view.held}  available={view.available}  "
+        f"difference={view.difference}  next_expiry={expiry}"
+    )
+
+
+def _movement_line(m: BillingMovement) -> str:
+    action = f"{m.action_kind}:{m.action_key}" if m.action_kind else "-"
+    return (
+        f"{m.created_at:%Y-%m-%d %H:%M:%S}  {m.kind:<19} {m.units:>7}  "
+        f"batch={m.batch_id or '-'}  action={action}  "
+        f"for={m.beneficiary_account_id or '-'}  source={m.payer_source or '-'}  "
+        f"rule={m.rule_id or '-'}  actor={m.actor or '-'}"
     )
 
 
@@ -211,6 +257,49 @@ async def end_rule(session: AsyncSession, args: argparse.Namespace) -> str:
     return "ended " + _rule_line(rule)
 
 
+async def credit(session: AsyncSession, args: argparse.Namespace) -> str:
+    """Credit units to an owner's account: a batch of its own, audited."""
+    tenant_id = await resolve_tenant_id(session, args.tenant)
+    account = await admin.owner_account(
+        session, tenant_id=tenant_id, student_id=args.student, create=True
+    )
+    assert account is not None  # created on first need
+    done = await ledger.credit_admin(
+        session,
+        account_id=account.id,
+        units=args.units,
+        reason=args.reason,
+        actor=args.actor,
+    )
+    batch = done.batch
+    return (
+        f"credited batch {batch.id}  {batch.units} units to account {account.id}  "
+        f"expires={batch.expires_at:%Y-%m-%d}  repaid_difference={done.repaid_units}"
+        "\n" + _balance_line(account.id, await ledger.balance(session, account.id))
+    )
+
+
+async def balance(session: AsyncSession, args: argparse.Namespace) -> str:
+    """The balance of an owner's account."""
+    tenant_id = await resolve_tenant_id(session, args.tenant)
+    account = await admin.owner_account(
+        session, tenant_id=tenant_id, student_id=args.student, create=False
+    )
+    if account is None:
+        return "no account yet (it is created on first need)"
+    return _balance_line(account.id, await ledger.balance(session, account.id))
+
+
+async def statement(session: AsyncSession, args: argparse.Namespace) -> str:
+    """The movements of an account in [from, to)."""
+    if await session.get(BillingAccount, args.account) is None:
+        raise BillingNotFoundError(f"account {args.account} not found")
+    rows = await ledger.statement(
+        session, args.account, since=args.since, until=args.until
+    )
+    return "\n".join(_movement_line(m) for m in rows) or "no movements"
+
+
 def _anonymization_lines(done: accounts.Anonymization) -> str:
     def ids(values: list[uuid.UUID]) -> str:
         return ", ".join(map(str, values)) or "-"
@@ -247,6 +336,9 @@ COMMANDS: dict[str, Handler] = {
     "end-rule": end_rule,
     "anonymize-student": anonymize_student,
     "anonymize-tenant": anonymize_tenant,
+    "credit": credit,
+    "balance": balance,
+    "statement": statement,
 }
 
 
@@ -298,6 +390,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = command("anonymize-tenant", "after a tenant's deletion", changes=True)
     p.add_argument("--tenant", required=True, type=uuid.UUID, help="tenant id")
+
+    p = command("credit", "credit units (a batch of its own)", changes=True)
+    p.add_argument("--tenant", required=True, help="tenant id or name")
+    p.add_argument("--student", type=uuid.UUID, help="student id (else the author)")
+    p.add_argument("--units", required=True, type=int)
+    p.add_argument("--reason", required=True, help="why the units are granted")
+
+    p = command("balance", "show the balance of an account", changes=False)
+    p.add_argument("--tenant", required=True, help="tenant id or name")
+    p.add_argument("--student", type=uuid.UUID, help="student id (else the author)")
+
+    p = command("statement", "list the movements of an account", changes=False)
+    p.add_argument("--account", required=True, type=uuid.UUID)
+    p.add_argument("--from", dest="since", type=_instant, help="from (inclusive)")
+    p.add_argument("--to", dest="until", type=_instant, help="to (exclusive)")
     return parser
 
 

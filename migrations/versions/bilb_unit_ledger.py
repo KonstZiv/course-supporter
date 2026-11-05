@@ -1,7 +1,7 @@
 """BIL-B: the journal of units — batches, movements, reservations, differences, refunds.
 
 Revision ID: bilb_unit_ledger
-Revises: bila_billing_accounts
+Revises: task13_attempt_ledger
 Create Date: 2026-11-05
 
 Creates five tables:
@@ -38,7 +38,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "bilb_unit_ledger"
-down_revision: str | Sequence[str] | None = "bila_billing_accounts"
+down_revision: str | Sequence[str] | None = "task13_attempt_ledger"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

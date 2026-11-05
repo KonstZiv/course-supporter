@@ -1330,8 +1330,9 @@ class TestLocks:
 
 
 def test_the_migration_goes_down_and_up() -> None:
-    """Downgrade drops the five tables and keeps BIL-A's guard function and
-    tables; upgrade brings them back."""
+    """Downgrade to the revision below (K2 of the Mentor, task 13) drops the
+    five tables and keeps BIL-A's guard function and tables; upgrade brings
+    them back."""
     cfg = Config("alembic.ini")
     engine = create_engine(get_settings().database_url)
     guard = text("SELECT count(*) FROM pg_proc WHERE proname = 'billing_refuse_update'")
@@ -1340,7 +1341,7 @@ def test_the_migration_goes_down_and_up() -> None:
         "('billing_batches_insert_only', 'billing_movements_insert_only')"
     )
     try:
-        command.downgrade(cfg, "bila_billing_accounts")
+        command.downgrade(cfg, "task13_attempt_ledger")
         with engine.connect() as conn:
             names = set(inspect(conn).get_table_names())
             assert not set(LEDGER_TABLES) & names

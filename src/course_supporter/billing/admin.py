@@ -3,10 +3,12 @@
 Purpose:
     One service layer for every administrative read and change of billing
     data: read an account, the settings of an author account, the payment
-    rules. Today the only entry point is ``scripts/billing_admin.py``, run
-    inside the application container (operator decision 2026-11-05: no
-    administrator routes until there is a decision on how an administrator
-    signs in). The routes, when they come, call these same functions.
+    rules; find the owner's account to credit units to (BIL-B — the credit
+    itself is :func:`.ledger.credit_admin`). Today the only entry point is
+    ``scripts/billing_admin.py``, run inside the application container
+    (operator decision 2026-11-05: no administrator routes until there is a
+    decision on how an administrator signs in). The routes, when they come,
+    call these same functions.
 
 Audit:
     Every change writes one audit entry (:mod:`.audit`) in the caller's
@@ -36,7 +38,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.billing import audit
-from course_supporter.billing.accounts import get_or_create_author_account
+from course_supporter.billing.accounts import (
+    find_active_account,
+    get_or_create_author_account,
+    get_or_create_student_account,
+)
 from course_supporter.billing.errors import (
     BillingConflictError,
     BillingInvalidError,
@@ -182,6 +188,48 @@ async def find_accounts(
         )
     rows = await session.execute(stmt.order_by(BillingAccount.created_at))
     return list(rows.scalars())
+
+
+async def owner_account(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    student_id: uuid.UUID | None = None,
+    create: bool,
+) -> BillingAccount | None:
+    """The live owner's active account: the author's, or the student's in the
+    tenant. With ``create`` it is created on first need; without, None when
+    there is none yet.
+
+    Raises:
+        BillingNotFoundError: no such live tenant, or no such live student in it.
+    """
+    await _live_tenant(session, tenant_id)
+    if student_id is not None:
+        student = await session.get(Student, student_id)
+        if (
+            student is None
+            or student.deleted_at is not None
+            or student.tenant_id != tenant_id
+        ):
+            raise BillingNotFoundError(
+                f"student {student_id} not found in tenant {tenant_id}"
+            )
+        if create:
+            return await get_or_create_student_account(
+                session, tenant_id=tenant_id, student_id=student_id
+            )
+        return await find_active_account(
+            session,
+            kind=AccountKind.STUDENT,
+            tenant_id=tenant_id,
+            student_id=student_id,
+        )
+    if create:
+        return await get_or_create_author_account(session, tenant_id=tenant_id)
+    return await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant_id
+    )
 
 
 # ── Author settings ────────────────────────────────────────────────────

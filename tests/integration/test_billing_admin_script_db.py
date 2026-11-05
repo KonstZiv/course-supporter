@@ -1,4 +1,4 @@
-"""``scripts/billing_admin.py`` end to end on a live database (BIL-A).
+"""``scripts/billing_admin.py`` end to end on a live database (BIL-A, BIL-B).
 
 The script's ``main`` runs as an operator would run it — its own engine, its
 own committed transaction — and the test reads back what the service wrote:
@@ -22,6 +22,9 @@ from course_supporter.storage.orm import (
     BillingAccount,
     BillingAuditEntry,
     BillingAuthorSettings,
+    BillingBatch,
+    BillingMovement,
+    Student,
     Tenant,
 )
 
@@ -44,11 +47,20 @@ def tenant() -> Iterator[Tenant]:
                 select(BillingAccount.id).where(BillingAccount.tenant_id == row.id)
             )
         )
-        session.execute(
-            delete(BillingAuditEntry).where(
-                BillingAuditEntry.entity_id.in_(account_ids)
+        batch_ids = list(
+            session.scalars(
+                select(BillingBatch.id).where(BillingBatch.account_id.in_(account_ids))
             )
         )
+        session.execute(
+            delete(BillingAuditEntry).where(
+                BillingAuditEntry.entity_id.in_(account_ids + batch_ids)
+            )
+        )
+        session.execute(
+            delete(BillingMovement).where(BillingMovement.account_id.in_(account_ids))
+        )
+        session.execute(delete(BillingBatch).where(BillingBatch.id.in_(batch_ids)))
         session.execute(
             delete(BillingAuthorSettings).where(
                 BillingAuthorSettings.account_id.in_(account_ids)
@@ -57,6 +69,7 @@ def tenant() -> Iterator[Tenant]:
         session.execute(
             delete(BillingAccount).where(BillingAccount.id.in_(account_ids))
         )
+        session.execute(delete(Student).where(Student.tenant_id == row.id))
         session.execute(delete(Tenant).where(Tenant.id == row.id))
         session.commit()
     engine.dispose()
@@ -124,5 +137,70 @@ def test_a_refusal_writes_nothing(
                 select(BillingAccount).where(BillingAccount.tenant_id == tenant.id)
             ).first()
             is None
+        )
+    engine.dispose()
+
+
+def test_credit_balance_statement(
+    tenant: Tenant, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A credit to a student's account: a batch, its audit entry, the balance
+    and the statement — through the script, in committed transactions."""
+    engine = create_engine(get_settings().database_url)
+    with Session(engine) as session:
+        student = Student(tenant_id=tenant.id, external_id=f"s-{uuid.uuid4().hex[:8]}")
+        session.add(student)
+        session.commit()
+        student_id = student.id
+
+    owner = ["--tenant", tenant.name, "--student", str(student_id)]
+    assert billing_admin.main(["balance", *owner]) == 0
+    assert capsys.readouterr().out.startswith("no account yet")
+
+    code = billing_admin.main(
+        ["credit", *owner, "--units", "250", "--reason", "pilot", "--actor", "k"]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "250 units" in out and "available=250" in out
+
+    with Session(engine) as session:
+        account = session.scalars(
+            select(BillingAccount).where(BillingAccount.student_id == student_id)
+        ).one()
+        batch = session.scalars(
+            select(BillingBatch).where(BillingBatch.account_id == account.id)
+        ).one()
+        assert (batch.source, batch.units, batch.reason, batch.actor) == (
+            "admin_credit",
+            250,
+            "pilot",
+            "k",
+        )
+        [entry] = session.scalars(
+            select(BillingAuditEntry).where(BillingAuditEntry.entity_id == batch.id)
+        ).all()
+        assert (entry.actor, entry.action) == ("k", "batch.admin_credit")
+
+    assert billing_admin.main(["balance", *owner]) == 0
+    assert "balance=250" in capsys.readouterr().out
+    assert billing_admin.main(["statement", "--account", str(account.id)]) == 0
+    [line] = capsys.readouterr().out.splitlines()
+    assert "credit" in line and "250" in line and "actor=k" in line
+
+    # A refusal (no reason) writes nothing.
+    code = billing_admin.main(
+        ["credit", *owner, "--units", "5", "--reason", " ", "--actor", "k"]
+    )
+    assert code == 1
+    assert "needs a reason" in capsys.readouterr().err
+    with Session(engine) as session:
+        assert (
+            len(
+                session.scalars(
+                    select(BillingBatch).where(BillingBatch.account_id == account.id)
+                ).all()
+            )
+            == 1
         )
     engine.dispose()

@@ -1,6 +1,7 @@
 """The audit log of administrative changes to billing data (BIL-A).
 
-Every change made through :mod:`.admin` or :mod:`.accounts` writes one entry
+Every change made through :mod:`.admin`, :mod:`.accounts` or an
+administrator's credit of units (:func:`.ledger.credit_admin`) writes one entry
 in the same transaction as the change: who (the administrator's ``--actor``),
 when, what, which row, the row before and after. The table refuses UPDATE (a
 trigger), so an entry, once written, stays as written.
@@ -25,6 +26,7 @@ from course_supporter.storage.orm import (
     BillingAccount,
     BillingAuditEntry,
     BillingAuthorSettings,
+    BillingBatch,
     BillingPaymentRule,
 )
 
@@ -70,6 +72,18 @@ def rule_snapshot(rule: BillingPaymentRule) -> dict[str, Any]:
         "active": rule.active,
         "created_by": rule.created_by,
         "ended_at": _instant(rule.ended_at),
+    }
+
+
+def batch_snapshot(batch: BillingBatch) -> dict[str, Any]:
+    """A batch as it arrived (BIL-B); a batch never changes afterwards."""
+    return {
+        "account_id": _id(batch.account_id),
+        "source": batch.source,
+        "units": batch.units,
+        "created_at": _instant(batch.created_at),
+        "expires_at": _instant(batch.expires_at),
+        "reason": batch.reason,
     }
 
 

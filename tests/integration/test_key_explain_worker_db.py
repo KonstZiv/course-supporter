@@ -628,8 +628,8 @@ def _provider_answering(content: str) -> AsyncMock:
     provider.complete = AsyncMock(
         return_value=LLMResponse(
             content=content,
-            provider="deepseek_thinking",
-            model_id="deepseek-v4-pro",
+            provider="gemini",
+            model_id="gemini-3.8-flash",
             tokens_in=900,
             tokens_out=300,
             finish_reason=FinishReason.STOP,
@@ -644,7 +644,7 @@ def _real_router(
     """The shipped ladder, registry and prompt; only the model is a double."""
     return StageRouter(
         load_ladder_config(Path("config")),
-        {"deepseek_thinking": provider},
+        {"gemini": provider},
         registry=load_registry(Path("config/external_services.yaml")),
         session_factory=session_factory,
     )

@@ -391,10 +391,10 @@ class TestTheExplanationIsKept:
         (request,) = router.requests
         assert request["stage_name"] == REVIEW_EXPLANATION
         assert request["ladder"] == [
-            ("dashscope", "qwen3.7-max"),
-            ("deepseek", "deepseek-flash"),
+            ("gemini", "gemini-3.8-flash"),
+            ("mistral", "mistral-small-latest"),
         ]
-        assert request["money_ceiling_usd"] == 0.24
+        assert request["money_ceiling_usd"] == 0.20
         assert request["stop_on_output_ceiling"] is True
         render = request["render"]
         assert render["result"] == {"passed": True, "score": 60}
@@ -559,10 +559,10 @@ def _response(content: str) -> LLMResponse:
     return LLMResponse(content=content, provider="p", model_id="m")
 
 
-def _real_router(qwen: Any, deepseek: Any) -> StageRouter:
+def _real_router(gemini: Any, mistral: Any) -> StageRouter:
     return StageRouter(
         LadderConfig(),
-        {"dashscope": qwen, "deepseek": deepseek},
+        {"gemini": gemini, "mistral": mistral},
         registry=load_registry(_REPO_ROOT / "config" / "external_services.yaml"),
         prompt_base_path=_REPO_ROOT,
     )
@@ -582,13 +582,13 @@ class TestAnExplanationAgainstTheFacts:
             db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
         )
         # The unmet "should" left without its remark, then mended.
-        qwen = _provider(_response(_answer(remarks=())), _response(_answer()))
-        deepseek = _provider()
+        gemini = _provider(_response(_answer(remarks=())), _response(_answer()))
+        mistral = _provider()
 
-        await _explain(db_session, _real_router(qwen, deepseek), submission)
+        await _explain(db_session, _real_router(gemini, mistral), submission)
 
-        assert qwen.complete.await_count == 2
-        deepseek.complete.assert_not_awaited()
+        assert gemini.complete.await_count == 2
+        mistral.complete.assert_not_awaited()
         kept = await _kept(db_session, submission)
         assert kept is not None
         assert [r["id"] for r in kept[1]["remarks"]] == ["c2"]
@@ -604,11 +604,11 @@ class TestAnExplanationAgainstTheFacts:
             db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
         )
         wrong = _response(_answer(passed=False))
-        qwen = _provider(wrong, wrong)
-        deepseek = _provider(wrong, wrong)
+        gemini = _provider(wrong, wrong)
+        mistral = _provider(wrong, wrong)
 
         with pytest.raises(LadderExhaustedError):
-            await _explain(db_session, _real_router(qwen, deepseek), submission)
+            await _explain(db_session, _real_router(gemini, mistral), submission)
 
         assert await _kept(db_session, submission) is None
 

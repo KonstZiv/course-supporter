@@ -211,13 +211,11 @@ class TestStage2HappyPath:
         committed_job: dict[str, uuid.UUID],
     ) -> None:
         mistral = _provider_with(side_effects=[_ok_response(_safe_json())])
-        deepseek = _provider_with(side_effects=[])
         gemini = _provider_with(side_effects=[])
 
         router = _build_router(
             providers={
                 "mistral": mistral,
-                "deepseek": deepseek,
                 "gemini": gemini,
             },
             session_factory=session_factory,
@@ -238,7 +236,6 @@ class TestStage2HappyPath:
         assert result.confidence == pytest.approx(0.95)
         # First ladder entry succeeded -- no fallback consumed.
         assert mistral.complete.await_count == 1
-        assert deepseek.complete.await_count == 0
         assert gemini.complete.await_count == 0
 
 
@@ -253,7 +250,6 @@ class TestStage2UnsafeDetection:
         router = _build_router(
             providers={
                 "mistral": mistral,
-                "deepseek": _provider_with(side_effects=[]),
                 "gemini": _provider_with(side_effects=[]),
             },
             session_factory=session_factory,
@@ -289,13 +285,11 @@ class TestStage2BrokenJSONNoRetry:
         committed_job: dict[str, uuid.UUID],
     ) -> None:
         mistral = _provider_with(side_effects=[_ok_response("totally not json {[}")])
-        deepseek = _provider_with(side_effects=[])
         gemini = _provider_with(side_effects=[])
 
         router = _build_router(
             providers={
                 "mistral": mistral,
-                "deepseek": deepseek,
                 "gemini": gemini,
             },
             session_factory=session_factory,
@@ -315,7 +309,6 @@ class TestStage2BrokenJSONNoRetry:
         # NO ladder reuse, NO retry against the same provider --
         # this is the BLOCKER #1 contract.
         assert mistral.complete.await_count == 1
-        assert deepseek.complete.await_count == 0
         assert gemini.complete.await_count == 0
 
         # Error preserves the raw broken content for log forensics.
@@ -335,13 +328,11 @@ class TestStage2SchemaViolation:
         bad_payload = '{"is_safe": true, "violations": [], "reasoning": "looks ok"}'
 
         mistral = _provider_with(side_effects=[_ok_response(bad_payload)])
-        deepseek = _provider_with(side_effects=[])
         gemini = _provider_with(side_effects=[])
 
         router = _build_router(
             providers={
                 "mistral": mistral,
-                "deepseek": deepseek,
                 "gemini": gemini,
             },
             session_factory=session_factory,
@@ -358,7 +349,6 @@ class TestStage2SchemaViolation:
             )
 
         assert mistral.complete.await_count == 1
-        assert deepseek.complete.await_count == 0
         assert gemini.complete.await_count == 0
 
 
@@ -384,7 +374,6 @@ class TestStage2MarkdownWrappedJSON:
         router = _build_router(
             providers={
                 "mistral": mistral,
-                "deepseek": _provider_with(side_effects=[]),
                 "gemini": _provider_with(side_effects=[]),
             },
             session_factory=session_factory,
@@ -415,13 +404,11 @@ class TestStage2EmptyContentFallthrough:
         committed_job: dict[str, uuid.UUID],
     ) -> None:
         mistral = _provider_with(side_effects=[_ok_response("")])
-        deepseek = _provider_with(side_effects=[_ok_response(_safe_json())])
-        gemini = _provider_with(side_effects=[])
+        gemini = _provider_with(side_effects=[_ok_response(_safe_json())])
 
         router = _build_router(
             providers={
                 "mistral": mistral,
-                "deepseek": deepseek,
                 "gemini": gemini,
             },
             session_factory=session_factory,
@@ -434,11 +421,10 @@ class TestStage2EmptyContentFallthrough:
             result = await run_stage2_safety_check(submission_text="x", router=router)
 
         assert result.is_safe is True
-        # Both first and second providers were exercised; gemini
-        # remained untouched.
+        # Both rungs were exercised: the empty first, the answering second
+        # (gemini since 2026-11-05, when the deepseek rung left the ladder).
         assert mistral.complete.await_count == 1
-        assert deepseek.complete.await_count == 1
-        assert gemini.complete.await_count == 0
+        assert gemini.complete.await_count == 1
 
         # The empty attempt keeps success=True (transport succeeded — billing
         # layer) while its outcome says "empty" (routing layer falls through);
@@ -448,7 +434,7 @@ class TestStage2EmptyContentFallthrough:
         assert [(esc.provider, esc.outcome) for esc in escs] == [
             ("mistral", CallOutcome.EMPTY),
             ("mistral", CallOutcome.ABANDONED),
-            ("deepseek", CallOutcome.SUCCESS),
+            ("gemini", CallOutcome.SUCCESS),
         ]
         assert [esc.success for esc in escs] == [True, None, True]
 
@@ -465,13 +451,11 @@ class TestStage2LadderExhaustion:
         # Each provider raises a SEMANTIC exception (single attempt
         # per entry, no infrastructure retries).
         mistral = _provider_with(side_effects=[RuntimeError("mistral down")])
-        deepseek = _provider_with(side_effects=[RuntimeError("deepseek down")])
         gemini = _provider_with(side_effects=[RuntimeError("gemini down")])
 
         router = _build_router(
             providers={
                 "mistral": mistral,
-                "deepseek": deepseek,
                 "gemini": gemini,
             },
             session_factory=session_factory,
@@ -485,14 +469,15 @@ class TestStage2LadderExhaustion:
             await run_stage2_safety_check(submission_text="x", router=router)
 
         assert exc_info.value.stage_name == "safety_check"
-        assert len(exc_info.value.attempts) == 3
+        assert len(exc_info.value.attempts) == 2
 
-        # Six rows survive the raise: per provider, the failed attempt and the
-        # no-call trace of its abandonment (mentor-rebuild 01).
+        # Four rows survive the raise: per provider, the failed attempt and the
+        # no-call trace of its abandonment (mentor-rebuild 01). Two rungs since
+        # 2026-11-05, when the deepseek rung left the ladder.
         escs = await _fetch_escs(session_factory, committed_job["job_id"])
-        assert len(escs) == 6
+        assert len(escs) == 4
         attempts = [esc for esc in escs if esc.outcome != CallOutcome.ABANDONED]
-        assert [esc.provider for esc in attempts] == ["mistral", "deepseek", "gemini"]
+        assert [esc.provider for esc in attempts] == ["mistral", "gemini"]
         for esc in attempts:
             assert esc.success is False
             assert esc.action == "safety_check"
@@ -515,7 +500,6 @@ class TestStage2ESCActionAndStrategy:
         router = _build_router(
             providers={
                 "mistral": mistral,
-                "deepseek": _provider_with(side_effects=[]),
                 "gemini": _provider_with(side_effects=[]),
             },
             session_factory=session_factory,
@@ -560,7 +544,6 @@ class TestStage2JinjaPlumbing:
         router = _build_router(
             providers={
                 "mistral": mistral,
-                "deepseek": _provider_with(side_effects=[]),
                 "gemini": _provider_with(side_effects=[]),
             },
             session_factory=session_factory,

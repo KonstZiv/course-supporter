@@ -262,15 +262,15 @@ class TestSafetyCheckLadderLoads:
         stage = cfg.get_stage("safety_check")
         assert stage.prompt_ref == _PROMPT_REF
 
-    def test_ladder_three_entries_in_order(self) -> None:
+    def test_ladder_two_entries_in_order(self) -> None:
+        """Since 2026-11-05 without the deepseek-flash rung between the two."""
         cfg = load_ladder_config(_CONFIG_DIR)
         stage = cfg.get_stage("safety_check")
-        assert len(stage.ladder) == 3
+        assert len(stage.ladder) == 2
         providers = [entry.provider for entry in stage.ladder]
         models = [entry.model for entry in stage.ladder]
-        assert providers == ["mistral", "deepseek", "gemini"]
+        assert providers == ["mistral", "gemini"]
         assert models == [
             "mistral-small-latest",
-            "deepseek-flash",
             "gemini-3.5-flash-lite",
         ]

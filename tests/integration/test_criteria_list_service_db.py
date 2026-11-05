@@ -418,7 +418,7 @@ class TestFailure:
         )
         router = StageRouter(
             ladders,
-            {"deepseek_thinking": empty, "dashscope": answering, "deepseek": answering},
+            {"gemini": empty, "mistral": answering},
             registry=load_registry(Path("config/external_services.yaml")),
         )
         service = _service(

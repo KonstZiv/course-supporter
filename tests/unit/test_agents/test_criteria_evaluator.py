@@ -113,18 +113,18 @@ def _execution() -> StageExecution:
             requires=["json_mode"],
             ladder=[
                 LadderEntry(
-                    provider="dashscope", model="qwen3.7-max", max_output_tokens=16384
+                    provider="gemini", model="gemini-3.8-flash", max_output_tokens=32768
                 ),
                 LadderEntry(
-                    provider="deepseek_thinking",
-                    model="deepseek-v4-pro",
-                    max_output_tokens=32768,
+                    provider="mistral",
+                    model="mistral-large-2512",
+                    max_output_tokens=8192,
                 ),
             ],
         ),
         stage_name="criteria_evaluation",
         stop_on_output_ceiling=True,
-        money_ceiling_usd=0.55,
+        money_ceiling_usd=0.38,
     )
 
 
@@ -242,7 +242,7 @@ class TestTheRequest:
         assert request["render"]["items"] == _ITEMS
         assert request["render"]["repeat"] == []
         assert [v.id for v in evaluated.answer.verdicts] == _ITEMS
-        assert (evaluated.provider, evaluated.model) == ("dashscope", "qwen3.7-max")
+        assert (evaluated.provider, evaluated.model) == ("gemini", "gemini-3.8-flash")
 
     async def test_the_repeat_names_its_items_alone_each_with_its_reason(
         self,
@@ -358,11 +358,11 @@ def _response(content: str, finish: FinishReason = FinishReason.STOP) -> LLMResp
     )
 
 
-def _real_router(qwen: Any, deepseek: Any) -> StageRouter:
+def _real_router(gemini: Any, mistral: Any) -> StageRouter:
     """The real router over the real registry; only the two providers are fakes."""
     return StageRouter(
         LadderConfig(),
-        {"dashscope": qwen, "deepseek_thinking": deepseek},
+        {"gemini": gemini, "mistral": mistral},
         registry=load_registry(_REPO_ROOT / "config" / "external_services.yaml"),
         prompt_base_path=_REPO_ROOT,
     )
@@ -370,50 +370,52 @@ def _real_router(qwen: Any, deepseek: Any) -> StageRouter:
 
 class TestThroughTheRealRouter:
     async def test_a_foreign_identifier_is_retried_on_the_same_rung(self) -> None:
-        qwen = _provider(_response(_answer(*_ITEMS, "c9")), _response(_answer(*_ITEMS)))
-        deepseek = _provider()
-
-        evaluated = await CriteriaEvaluatorAgent(_real_router(qwen, deepseek)).evaluate(
-            _SHOWN, execution=_execution()
+        gemini = _provider(
+            _response(_answer(*_ITEMS, "c9")), _response(_answer(*_ITEMS))
         )
+        mistral = _provider()
 
-        assert qwen.complete.await_count == 2
-        deepseek.complete.assert_not_awaited()
+        evaluated = await CriteriaEvaluatorAgent(
+            _real_router(gemini, mistral)
+        ).evaluate(_SHOWN, execution=_execution())
+
+        assert gemini.complete.await_count == 2
+        mistral.complete.assert_not_awaited()
         assert [v.id for v in evaluated.answer.verdicts] == _ITEMS
 
     async def test_the_schema_reaches_each_rung_in_its_own_form(self) -> None:
-        """qwen3.7-max holds a strict schema; DeepSeek gets JSON mode (09a)."""
-        qwen = _provider(_response(_answer("c1")), _response(_answer("c1")))
-        deepseek = _provider(_response(_answer(*_ITEMS)))
+        """gemini-3.8-flash holds a strict schema; Mistral gets JSON mode (09a)."""
+        gemini = _provider(_response(_answer("c1")), _response(_answer("c1")))
+        mistral = _provider(_response(_answer(*_ITEMS)))
 
-        await CriteriaEvaluatorAgent(_real_router(qwen, deepseek)).evaluate(
+        await CriteriaEvaluatorAgent(_real_router(gemini, mistral)).evaluate(
             _SHOWN, execution=_execution()
         )
 
-        sent_to_qwen: LLMRequest = qwen.complete.await_args_list[0].args[0]
-        sent_to_deepseek: LLMRequest = deepseek.complete.await_args.args[0]
-        assert sent_to_qwen.schema_mode is SchemaMode.STRICT
-        assert sent_to_qwen.response_schema == RESPONSE_SCHEMA
-        assert sent_to_qwen.response_schema is not None
-        assert "description" not in _keywords(sent_to_qwen.response_schema)
-        assert sent_to_deepseek.schema_mode is SchemaMode.JSON
-        assert mentions_json(sent_to_deepseek)
+        sent_to_gemini: LLMRequest = gemini.complete.await_args_list[0].args[0]
+        sent_to_mistral: LLMRequest = mistral.complete.await_args.args[0]
+        assert sent_to_gemini.schema_mode is SchemaMode.STRICT
+        assert sent_to_gemini.response_schema == RESPONSE_SCHEMA
+        assert sent_to_gemini.response_schema is not None
+        assert "description" not in _keywords(sent_to_gemini.response_schema)
+        assert sent_to_mistral.schema_mode is SchemaMode.JSON
+        assert mentions_json(sent_to_mistral)
 
     async def test_an_answer_cut_at_the_output_ceiling_stops_after_one_call(
         self,
     ) -> None:
         cut = _answer(*_ITEMS)[:40]
-        qwen = _provider(_response(cut, FinishReason.OUTPUT_CEILING))
-        deepseek = _provider()
+        gemini = _provider(_response(cut, FinishReason.OUTPUT_CEILING))
+        mistral = _provider()
 
         with pytest.raises(LadderExhaustedError) as caught:
-            await CriteriaEvaluatorAgent(_real_router(qwen, deepseek)).evaluate(
+            await CriteriaEvaluatorAgent(_real_router(gemini, mistral)).evaluate(
                 _SHOWN, execution=_execution()
             )
 
         assert caught.value.stop is LadderStop.OUTPUT_CEILING
-        assert qwen.complete.await_count == 1
-        deepseek.complete.assert_not_awaited()
+        assert gemini.complete.await_count == 1
+        mistral.complete.assert_not_awaited()
 
 
 class TestThePromptSaysJson:

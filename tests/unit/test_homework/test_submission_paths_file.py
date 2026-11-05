@@ -31,11 +31,36 @@ _REGISTRY_FILE = Path("config/external_services.yaml")
 
 # Starting content of both stage definitions: (provider, model, pin). A change
 # here is a conscious recalibration of the new path, not of today's Mentor.
+# 2026-11-05: the deepseek-flash rung between the two left both copies at once
+# (DeepSeek and Alibaba off the students' texts, the product owner's decision).
 _COPIED_RUNGS = [
     ("mistral", "mistral-small-latest", None),
-    ("deepseek", "deepseek-flash", 8192),
     ("gemini", "gemini-3.5-flash-lite", None),
 ]
+
+# The providers the product owner took off the students' texts (2026-11-05):
+# DeepSeek, both modes, and Alibaba's DashScope. No rung of the Mentor's two
+# files may name one again.
+_OFF_THE_STUDENTS_TEXTS = {"deepseek", "deepseek_thinking", "dashscope"}
+
+# The text stages' ladders since 2026-11-05: (provider, model, pin), and the
+# ceilings (tool_steps, money_usd, output_tokens) counted for them in the file.
+_TEXT_STAGES = {
+    "criteria_evaluation": (
+        [
+            ("gemini", "gemini-3.8-flash", 32768),
+            ("mistral", "mistral-large-2512", 8192),
+        ],
+        (0, 0.38, 32768),
+    ),
+    "review_explanation": (
+        [
+            ("gemini", "gemini-3.8-flash", 32768),
+            ("mistral", "mistral-small-latest", 8192),
+        ],
+        (0, 0.20, 32768),
+    ),
+}
 
 
 @pytest.fixture(scope="module")
@@ -163,19 +188,20 @@ class TestCheckedInPaths:
         stage = config.stages["review_explanation"]
         assert isinstance(stage, ModelStage)
         assert stage.prompt_ref == "prompts/review_explanation/v2.md"
-        assert stage.ceilings.money_usd == 0.24
+        assert stage.ceilings.money_usd == 0.20
         assert Path("prompts/review_explanation/v1.md").is_file()
 
     @pytest.mark.parametrize(
         ("task_type", "state", "estimate"),
         [
             (AssignmentType.TEST, SubmissionState.FIRST, 0.0),
-            # 0.05 + 0.05 + 0.55 + 0 + 0.24: safety, the classifier, the
-            # evaluation, the course links (code, free) and the explanation.
-            (AssignmentType.TASK, SubmissionState.FIRST, 0.89),
-            (AssignmentType.TASK, SubmissionState.REPEAT_WITH_REPLIES, 0.84),
-            (AssignmentType.SHORT_TASK, SubmissionState.FIRST, 0.89),
-            (AssignmentType.SHORT_TASK, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.84),
+            # 0.05 + 0.05 + 0.38 + 0 + 0.20: safety, the classifier, the
+            # evaluation, the course links (code, free) and the explanation
+            # (0.89 and 0.84 until the Gemini and Mistral ladders, 2026-11-05).
+            (AssignmentType.TASK, SubmissionState.FIRST, 0.68),
+            (AssignmentType.TASK, SubmissionState.REPEAT_WITH_REPLIES, 0.63),
+            (AssignmentType.SHORT_TASK, SubmissionState.FIRST, 0.68),
+            (AssignmentType.SHORT_TASK, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.63),
             (AssignmentType.PROJECT, SubmissionState.FIRST, 0.10),
             (AssignmentType.PROJECT, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.05),
         ],
@@ -206,6 +232,91 @@ class TestCheckedInPaths:
             stage.ceilings.money_usd,
             stage.ceilings.output_tokens,
         ) == (0, 0.05, 8192)
+
+    @pytest.mark.parametrize("stage_name", sorted(_TEXT_STAGES))
+    def test_a_text_stage_runs_gemini_then_mistral(
+        self, config: PathConfig, stage_name: str
+    ) -> None:
+        """Gemini first (a strict schema on the wire), Mistral second (JSON mode).
+
+        The Mistral rung is pinned at its registry cap: unpinned it would be
+        sent the stage's 32768, which Gemini's reasoning needs and Mistral's
+        registry entry does not allow.
+        """
+        stage = config.stages[stage_name]
+        assert isinstance(stage, ModelStage)
+        rungs, ceilings = _TEXT_STAGES[stage_name]
+
+        assert [
+            (r.provider, r.model, r.max_output_tokens) for r in stage.ladder
+        ] == rungs
+        assert all(r.reasoning is None for r in stage.ladder)
+        assert (
+            stage.ceilings.tool_steps,
+            stage.ceilings.money_usd,
+            stage.ceilings.output_tokens,
+        ) == ceilings
+
+    def test_no_rung_of_the_mentor_is_off_the_students_texts(
+        self, config: PathConfig
+    ) -> None:
+        """Neither Mentor file names DeepSeek or Alibaba on any rung (2026-11-05)."""
+        ladders = load_ladder_config(get_settings().ladders_dir)
+        mentor = yaml.safe_load(
+            (get_settings().ladders_dir / "ladders_mentor.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        named = {
+            (f"submission_paths.yaml:{name}", rung.provider)
+            for name, stage in model_stages(config).items()
+            for rung in stage.ladder
+        } | {
+            (f"ladders_mentor.yaml:{name}", rung.provider)
+            for name in mentor["stages"]
+            for rung in ladders.get_stage(name).ladder
+        }
+
+        assert {where for where, p in named if p in _OFF_THE_STUDENTS_TEXTS} == set()
+
+    @pytest.mark.parametrize(
+        ("stage_name", "tokens_in"),
+        [
+            # The largest realistic inputs of the files' money comments, at the
+            # router's 3.5 characters a token.
+            ("safety", 39_840),
+            ("attempt_classifier", 38_147),
+            ("criteria_evaluation", 56_021),
+            ("review_explanation", 77_017),
+        ],
+    )
+    def test_every_rung_stays_affordable_after_the_first_failed(
+        self,
+        config: PathConfig,
+        registry: ModelRegistryConfig,
+        stage_name: str,
+        tokens_in: int,
+    ) -> None:
+        """The money comments' claim, at the registry's prices: rung 1 fits the
+        ceiling, and what is left after it fits rung 2 — the router admits a
+        rung by its estimate (input x price + pin x price). Money alone: the
+        input budget is the router's other rule, and on review_explanation it
+        skips the second rung at this input (77 017 > 0.5 x 131 072). The
+        Gemini price revision turns this red for a stage whose number it must
+        recount.
+        """
+        stage = config.stages[stage_name]
+        assert isinstance(stage, ModelStage)
+        attempts = []
+        for rung in stage.ladder:
+            pin = rung.max_output_tokens or stage.ceilings.output_tokens
+            cost = registry.models[rung.model].estimate_cost(tokens_in, pin)
+            assert cost is not None
+            attempts.append(cost)
+        first, second = attempts
+
+        assert first <= stage.ceilings.money_usd
+        assert second <= stage.ceilings.money_usd - first
 
 
 class TestShortTaskPathsByConfigurationAlone:

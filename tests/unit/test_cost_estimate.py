@@ -43,7 +43,11 @@ from course_supporter.homework.path_config import (
     load_path_config,
     model_stages,
 )
-from course_supporter.llm.ladder_config import StageConfig, load_ladder_config
+from course_supporter.llm.ladder_config import (
+    LadderEntry,
+    StageConfig,
+    load_ladder_config,
+)
 from course_supporter.llm.registry import ModelRegistryConfig, load_registry
 from course_supporter.models.source import AssignmentType
 
@@ -145,19 +149,40 @@ class TestPeakWindow:
         catalog: Catalog,
         ladders: dict[str, StageConfig],
     ) -> None:
-        def at(moment: datetime) -> Decimal:
+        """On a DeepSeek rung the peak doubles; on the shipped rung it does not.
+
+        The shipped ``criteria_decomposition`` left DeepSeek on 2026-11-05
+        (gemini-3.8-flash, no tariff), so the doubling is shown on the same
+        stage with its former rung 1 put back, and the shipped stage is shown
+        flat.
+        """
+        stage = ladders["criteria_decomposition"]
+        on_deepseek = stage.model_copy(
+            update={
+                "ladder": [
+                    LadderEntry(
+                        provider="deepseek_thinking",
+                        model="deepseek-v4-pro",
+                        max_output_tokens=32768,
+                    )
+                ]
+            }
+        )
+
+        def at(moment: datetime, stages: dict[str, StageConfig]) -> Decimal:
             return estimate_task_preparation(
                 kind="criteria_decomposition",
-                ladders=ladders,
+                ladders=stages,
                 settings=settings,
                 catalog=catalog,
                 task_chars=7000,
                 at=moment,
             ).e_usd
 
-        off = at(MONDAY_NOON)
-        peak = at(datetime(2026, 11, 2, 7, 0, tzinfo=UTC))
-        assert peak == off * 2
+        peak_moment = datetime(2026, 11, 2, 7, 0, tzinfo=UTC)
+        deepseek = {**ladders, "criteria_decomposition": on_deepseek}
+        assert at(peak_moment, deepseek) == at(MONDAY_NOON, deepseek) * 2
+        assert at(peak_moment, ladders) == at(MONDAY_NOON, ladders)
 
 
 # ── Units ──
@@ -231,10 +256,14 @@ class TestReview:
     ) -> None:
         """10 000 characters -> 2 857 tokens of work beside each prompt.
 
-        safety              mistral-small  5158 in, 8192 out  0.0056889
-        attempt_classifier  mistral-small  3555 in, 8192 out  0.00544845
-        criteria_evaluation qwen3.7-max   21429 in, 16384 out 0.116475034
-        review_explanation  qwen3.7-max   25586 in, 8192 out  0.082775492
+        safety              mistral-small     5158 in, 8192 out  0.0056889
+        attempt_classifier  mistral-small     3555 in, 8192 out  0.00544845
+        criteria_evaluation gemini-3.8-flash 21429 in, 16384 out 0.07751175
+        review_explanation  gemini-3.8-flash 25586 in, 8192 out  0.0499095
+
+        gemini-3.8-flash: 21 429 x 0.00075/1k + 16 384 x 0.00375/1k and
+        25 586 x 0.00075/1k + 8 192 x 0.00375/1k (since 2026-11-05; the output
+        is the step's own setting in cost_estimate.yaml, not the rung's pin).
         """
         estimate = _review(
             paths, settings, catalog, AssignmentType.TASK, SubmissionState.FIRST, 10_000
@@ -244,10 +273,10 @@ class TestReview:
         ] == [
             ("safety", "mistral-small-latest", 5158, 8192),
             ("attempt_classifier", "mistral-small-latest", 3555, 8192),
-            ("criteria_evaluation", "qwen3.7-max", 21429, 16384),
-            ("review_explanation", "qwen3.7-max", 25586, 8192),
+            ("criteria_evaluation", "gemini-3.8-flash", 21429, 16384),
+            ("review_explanation", "gemini-3.8-flash", 25586, 8192),
         ]
-        assert estimate.e_usd == Decimal("0.210387876")
+        assert estimate.e_usd == Decimal("0.1385586")
         assert estimate.uncalibrated
         assert estimate.catalog_version == catalog.version
         assert estimate.inputs["path_key"] == "task/first"
@@ -299,14 +328,14 @@ class TestFirstFittingRung:
     def test_a_rung_too_small_for_the_input_is_skipped(
         self, paths: PathConfig, registry: ModelRegistryConfig
     ) -> None:
-        """safety: 0.5 x 131 072 (mistral-small) = 65 536 tokens; the third rung
-        (gemini-3.5-flash-lite) has a million."""
+        """safety: 0.5 x 131 072 (mistral-small) = 65 536 tokens; the second
+        rung (gemini-3.5-flash-lite) has a million."""
         stage = model_stages(paths)["safety"]
         assert first_fitting_rung("safety", stage, registry.models, 65_536).model == (
             "mistral-small-latest"
         )
         assert first_fitting_rung("safety", stage, registry.models, 100_000).model == (
-            "deepseek-flash"
+            "gemini-3.5-flash-lite"
         )
 
     def test_no_rung_fits(
@@ -507,7 +536,7 @@ class TestTaskPreparation:
         )
         assert estimate.kind is ActionKind.TASK_PREPARATION
         [step] = estimate.steps
-        assert (step.step, step.model) == (kind, "deepseek-v4-pro")
+        assert (step.step, step.model) == (kind, "gemini-3.8-flash")
         assert step.tokens_in == settings.task_preparation[kind].prompt_tokens + 2000
 
 

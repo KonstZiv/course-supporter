@@ -344,8 +344,8 @@ class TestOneRequestWhenEveryVerdictStands:
         (request,) = router.requests
         assert request["stage_name"] == CRITERIA_EVALUATION
         assert request["ladder"] == [
-            ("dashscope", "qwen3.7-max"),
-            ("deepseek_thinking", "deepseek-v4-pro"),
+            ("gemini", "gemini-3.8-flash"),
+            ("mistral", "mistral-large-2512"),
         ]
         assert request["render"]["items"] == ["c1", "c2.p1", "c2.p2"]
         rows = await _rows(db_session, submission)
@@ -386,9 +386,9 @@ class TestTheRepeat:
         first, again = router.requests
         assert again["render"]["items"] == ["c1"]
         assert [note["id"] for note in again["render"]["repeat"]] == ["c1"]
-        assert again["ladder"] == [("dashscope", "qwen3.7-max")]
+        assert again["ladder"] == [("gemini", "gemini-3.8-flash")]
         # The repeat keeps the stage's own limits.
-        assert again["money_ceiling_usd"] == first["money_ceiling_usd"] == 0.55
+        assert again["money_ceiling_usd"] == first["money_ceiling_usd"] == 0.38
         assert again["stop_on_output_ceiling"] is True
         rows = await _rows(db_session, submission)
         assert rows["c1"].verdict == VerdictValue.MET
@@ -474,13 +474,13 @@ class TestTheRepeat:
                 _not_met("c2.p2"),
             ),
             _answer(_met("c1", _C1_QUOTE)),
-            by=("deepseek_thinking", "deepseek-v4-pro"),
+            by=("mistral", "mistral-large-2512"),
         )
 
         await _evaluate(db_session, router, submission)
 
         _, again = router.requests
-        assert again["ladder"] == [("deepseek_thinking", "deepseek-v4-pro")]
+        assert again["ladder"] == [("mistral", "mistral-large-2512")]
 
 
 class TestTheSafeguard:
@@ -715,18 +715,18 @@ class TestACutAnswer:
     async def test_it_stops_the_stage_after_one_call_and_writes_nothing(
         self, db_session: AsyncSession, submission: HomeworkSubmission
     ) -> None:
-        qwen = _provider(
+        gemini = _provider(
             LLMResponse(
                 content=_ALL_STAND[:60],
-                provider="dashscope",
-                model_id="qwen3.7-max",
+                provider="gemini",
+                model_id="gemini-3.8-flash",
                 finish_reason=FinishReason.OUTPUT_CEILING,
             )
         )
-        deepseek = _provider()
+        mistral = _provider()
         router = StageRouter(
             LadderConfig(),
-            {"dashscope": qwen, "deepseek_thinking": deepseek},
+            {"gemini": gemini, "mistral": mistral},
             registry=load_registry(_REPO_ROOT / "config" / "external_services.yaml"),
             prompt_base_path=_REPO_ROOT,
         )
@@ -735,8 +735,8 @@ class TestACutAnswer:
             await _evaluate(db_session, router, submission)
 
         assert caught.value.stop is LadderStop.OUTPUT_CEILING
-        assert qwen.complete.await_count == 1
-        deepseek.complete.assert_not_awaited()
+        assert gemini.complete.await_count == 1
+        mistral.complete.assert_not_awaited()
         assert await _rows(db_session, submission) == {}
 
 

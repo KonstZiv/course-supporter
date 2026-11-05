@@ -256,7 +256,8 @@ class TestWhatTheCallerSees:
 
     def test_the_ceiling_is_a_number_the_funds_port_can_use(self) -> None:
         """One attempt's worst case, from the registry — not the ladder's budget."""
-        assert pytest.approx(0.08) == KEY_EXPLANATION_CEILING_USD
-        assert 0.0757 < KEY_EXPLANATION_CEILING_USD < 0.5, (
+        # gemini-3.8-flash at 16 384 in, 32 768 out: $0.135168 (2026-11-05).
+        assert pytest.approx(0.14) == KEY_EXPLANATION_CEILING_USD
+        assert 0.1352 < KEY_EXPLANATION_CEILING_USD < 0.5, (
             "above the dearest rung's single attempt, far below the live-run cap"
         )

@@ -48,23 +48,26 @@ logger = structlog.get_logger(__name__)
 STAGE_NAME: Final = "key_explanation"
 """The stage in ``config/ladders_mentor.yaml`` this agent runs."""
 
-KEY_EXPLANATION_CEILING_USD: Final = 0.08
+KEY_EXPLANATION_CEILING_USD: Final = 0.14
 """What one attempt at this stage can cost, for the funds port's estimate.
 
 The dearest single attempt across the ladder, from the model registry
-(``config/external_services.yaml``, rates read 2026-09-19), against an input of
-16 384 tokens — roughly eight times the 2.1k the comparable
+(``config/external_services.yaml``, catalog 2026-10-30.2, read 2026-11-05),
+against an input of 16 384 tokens — roughly eight times the 2.1k the comparable
 ``criteria_decomposition`` stage actually used in production on 2026-09-07:
 
-* ``deepseek_thinking/deepseek-v4-pro`` — $0.00066/1k in, $0.00198/1k out,
-  32 768-token output ceiling → **$0.0757**;
-* ``dashscope/qwen3.7-max`` — $0.00165 / $0.004951, 8 192 → $0.0676;
-* ``deepseek/deepseek-flash`` — $0.00015 / $0.0006, 8 192 → $0.0074 (rung
-  renamed from ``deepseek-v4-flash`` and repriced 2026-09-30).
+* ``gemini/gemini-3.8-flash`` — $0.00075/1k in, $0.00375/1k out, 32 768-token
+  output ceiling (its reasoning counted inside) → **$0.1352**;
+* ``mistral/mistral-large-2512`` — $0.0005 / $0.0015, 8 192 → $0.0205.
 
-Rounded up to $0.08. It is a ceiling for ONE attempt, the same meaning the path
-stages' ``money_usd`` carries (``config/submission_paths.yaml``), not a budget
-for the whole ladder: the port is asked once, before the first paid call.
+Rounded up to $0.14. Recounted 2026-11-05, when Gemini and Mistral replaced
+DeepSeek and Alibaba in the ladder (it was $0.08, on ``deepseek-v4-pro``'s
+$0.0757). Gemini is at its introductory price, which ends 2026-12-31; from
+2027-01-01 the Gemini attempt is $0.2703, and the Gemini price revision
+recounts this number. It is a ceiling for ONE attempt, the same meaning the
+path stages' ``money_usd`` carries (``config/submission_paths.yaml``), not a
+budget for the whole ladder: the port is asked once, before the first paid
+call.
 
 Not calibrated (no spike). The first live run is the data that will correct it;
 the rates are the registry's and move with it.

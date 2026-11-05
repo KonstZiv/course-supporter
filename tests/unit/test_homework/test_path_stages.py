@@ -533,7 +533,7 @@ class TestStageOutputCeiling:
 
         assert first.complete.await_args.args[0].max_tokens == 8192
 
-    async def test_the_shipped_third_safety_rung_is_affordable_alone(
+    async def test_the_shipped_gemini_safety_rung_is_affordable_alone(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Lock 2: gemini-3.5-flash-lite as the first and only attempt is called.
@@ -541,19 +541,22 @@ class TestStageOutputCeiling:
         Priced at the registry's 65536 it is about $0.164 against a $0.05
         ceiling and was skipped without a call; priced at the stage's 8192 it
         is about $0.021. Only the money is judged here: this says nothing about
-        the rung after two failed ones, which share the same ceiling.
+        the rung after a failed one, which shares the same ceiling. The rung
+        was the third until 2026-11-05 and is the second since the
+        deepseek-flash rung left the ladder.
         """
         _typical_prompt(monkeypatch)
         registry = load_registry(_REGISTRY_FILE)
         shipped = load_path_config(_PATHS_FILE).stages[SAFETY]
         assert isinstance(shipped, ModelStage)
-        third = shipped.ladder[2]
-        assert third.model == "gemini-3.5-flash-lite"
-        assert third.max_output_tokens is None
-        cap = registry.models[third.model].max_output_tokens
+        assert len(shipped.ladder) == 2
+        gemini_rung = shipped.ladder[1]
+        assert gemini_rung.model == "gemini-3.5-flash-lite"
+        assert gemini_rung.max_output_tokens is None
+        cap = registry.models[gemini_rung.model].max_output_tokens
         assert cap is not None and cap > shipped.ceilings.output_tokens
         context = replace(
-            _context(), stage=shipped.model_copy(update={"ladder": [third]})
+            _context(), stage=shipped.model_copy(update={"ladder": [gemini_rung]})
         )
         execution = await _execution_of(monkeypatch, context)
         gemini = _answering_provider()

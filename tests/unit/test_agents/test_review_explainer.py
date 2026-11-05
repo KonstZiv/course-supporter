@@ -188,16 +188,18 @@ def _execution() -> StageExecution:
             requires=["json_mode"],
             ladder=[
                 LadderEntry(
-                    provider="dashscope", model="qwen3.7-max", max_output_tokens=8192
+                    provider="gemini", model="gemini-3.8-flash", max_output_tokens=32768
                 ),
                 LadderEntry(
-                    provider="deepseek", model="deepseek-flash", max_output_tokens=8192
+                    provider="mistral",
+                    model="mistral-small-latest",
+                    max_output_tokens=8192,
                 ),
             ],
         ),
         stage_name="review_explanation",
         stop_on_output_ceiling=True,
-        money_ceiling_usd=0.18,
+        money_ceiling_usd=0.20,
     )
 
 
@@ -298,7 +300,7 @@ class TestTheRequest:
         assert request["expects_json"] is True
         assert [r.id for r in explained.answer.remarks] == ["c1", "c2"]
         assert [r.links for r in explained.answer.remarks] == [("c1.l1",), ()]
-        assert (explained.provider, explained.model) == ("dashscope", "qwen3.7-max")
+        assert (explained.provider, explained.model) == ("gemini", "gemini-3.8-flash")
 
     def test_the_model_is_shown_the_result_and_every_verdict(self) -> None:
         context = render_context(_SHOWN)
@@ -416,11 +418,11 @@ def _response(content: str) -> LLMResponse:
     return LLMResponse(content=content, provider="p", model_id="m")
 
 
-def _real_router(qwen: Any, deepseek: Any) -> StageRouter:
+def _real_router(gemini: Any, mistral: Any) -> StageRouter:
     """The real router over the real registry; only the two providers are fakes."""
     return StageRouter(
         LadderConfig(),
-        {"dashscope": qwen, "deepseek": deepseek},
+        {"gemini": gemini, "mistral": mistral},
         registry=load_registry(_REPO_ROOT / "config" / "external_services.yaml"),
         prompt_base_path=_REPO_ROOT,
     )
@@ -430,60 +432,63 @@ class TestThroughTheRealRouter:
     async def test_a_wrong_pass_is_retried_on_the_same_rung_with_the_reason(
         self,
     ) -> None:
-        qwen = _provider(_response(_answer(passed=True)), _response(_answer()))
-        deepseek = _provider()
+        gemini = _provider(_response(_answer(passed=True)), _response(_answer()))
+        mistral = _provider()
 
-        explained = await ReviewExplainerAgent(_real_router(qwen, deepseek)).explain(
+        explained = await ReviewExplainerAgent(_real_router(gemini, mistral)).explain(
             _SHOWN, execution=_execution()
         )
 
-        assert qwen.complete.await_count == 2
-        deepseek.complete.assert_not_awaited()
-        retry: LLMRequest = qwen.complete.await_args_list[1].args[0]
+        assert gemini.complete.await_count == 2
+        mistral.complete.assert_not_awaited()
+        retry: LLMRequest = gemini.complete.await_args_list[1].args[0]
         assert "passed must be false" in retry.prompt
         assert explained.answer.passed is False
 
     async def test_a_rung_that_keeps_disagreeing_gives_way_to_the_next(self) -> None:
-        qwen = _provider(
+        gemini = _provider(
             _response(_answer(remarks=("c2",))), _response(_answer(remarks=("c2",)))
         )
-        deepseek = _provider(_response(_answer()))
+        mistral = _provider(_response(_answer()))
 
-        explained = await ReviewExplainerAgent(_real_router(qwen, deepseek)).explain(
+        explained = await ReviewExplainerAgent(_real_router(gemini, mistral)).explain(
             _SHOWN, execution=_execution()
         )
 
-        assert qwen.complete.await_count == 2
-        assert deepseek.complete.await_count == 1
-        assert (explained.provider, explained.model) == ("deepseek", "deepseek-flash")
+        assert gemini.complete.await_count == 2
+        assert mistral.complete.await_count == 1
+        assert (explained.provider, explained.model) == (
+            "mistral",
+            "mistral-small-latest",
+        )
 
     async def test_no_agreeing_answer_on_any_rung_is_no_explanation(self) -> None:
         wrong = _response(_answer(passed=True))
-        qwen = _provider(wrong, wrong)
-        deepseek = _provider(wrong, wrong)
+        gemini = _provider(wrong, wrong)
+        mistral = _provider(wrong, wrong)
 
         with pytest.raises(LadderExhaustedError):
-            await ReviewExplainerAgent(_real_router(qwen, deepseek)).explain(
+            await ReviewExplainerAgent(_real_router(gemini, mistral)).explain(
                 _SHOWN, execution=_execution()
             )
 
     async def test_the_schema_reaches_each_rung_in_its_own_form(self) -> None:
-        """qwen3.7-max holds a strict schema; deepseek-flash gets JSON mode."""
-        qwen = _provider(
+        """gemini-3.8-flash holds a strict schema; Mistral gets JSON mode."""
+        gemini = _provider(
             _response(_answer(passed=True)), _response(_answer(passed=True))
         )
-        deepseek = _provider(_response(_answer()))
+        mistral = _provider(_response(_answer()))
 
-        await ReviewExplainerAgent(_real_router(qwen, deepseek)).explain(
+        await ReviewExplainerAgent(_real_router(gemini, mistral)).explain(
             _SHOWN, execution=_execution()
         )
 
-        sent_to_qwen: LLMRequest = qwen.complete.await_args_list[0].args[0]
-        sent_to_deepseek: LLMRequest = deepseek.complete.await_args.args[0]
-        assert sent_to_qwen.schema_mode is SchemaMode.STRICT
-        assert sent_to_qwen.response_schema == RESPONSE_SCHEMA
-        assert sent_to_deepseek.schema_mode is SchemaMode.JSON
-        assert mentions_json(sent_to_deepseek)
+        sent_to_gemini: LLMRequest = gemini.complete.await_args_list[0].args[0]
+        sent_to_mistral: LLMRequest = mistral.complete.await_args.args[0]
+        assert sent_to_gemini.schema_mode is SchemaMode.STRICT
+        assert sent_to_gemini.response_schema == RESPONSE_SCHEMA
+        assert sent_to_mistral.schema_mode is SchemaMode.JSON
+        assert mentions_json(sent_to_mistral)
 
 
 def _system(shown: ExplanationInput = _SHOWN) -> str:

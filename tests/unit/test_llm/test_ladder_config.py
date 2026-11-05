@@ -373,18 +373,18 @@ class TestRealConfigs:
         # Hotfix 1 (2026-09-14): at 8192 the thinking-on rung spent its whole
         # output ceiling on reasoning, returned an empty body and the stage was
         # paid twice. 32768 is the ratified value — fourfold margin over the
-        # largest measured success, and bounded by the 900 s HTTP read timeout
-        # (see ladders_mentor.yaml). The provider stays thinking-on. The
-        # fallback rungs carry 16384 since task 08 (section 9, decision 6):
-        # room for the mandatory points of the v2 form. A swap or a silent
-        # revert breaks this test.
+        # largest measured success (see ladders_mentor.yaml). Since 2026-11-05
+        # rung 1 is gemini-3.8-flash, which counts its reasoning inside the
+        # same ceiling, so the value stays. The fallback is mistral-large-2512
+        # at its registry cap, 8192: it does not reason, so the whole pin is
+        # answer. A swap or a silent revert breaks this test.
         config = load_ladder_config(Path("config"))
         ladder = config.get_stage("criteria_decomposition").ladder
 
-        assert ladder[0].provider == "deepseek_thinking"
-        assert ladder[0].model == "deepseek-v4-pro"
+        assert ladder[0].provider == "gemini"
+        assert ladder[0].model == "gemini-3.8-flash"
         assert ladder[0].max_output_tokens == 32768
-        assert [rung.max_output_tokens for rung in ladder[1:]] == [16384, 16384]
+        assert [rung.max_output_tokens for rung in ladder[1:]] == [8192]
 
     def test_methodist_bottomup_rungs_carry_the_full_text_ceiling(self) -> None:
         # 2026-09-30: with methodological documents and tasks read in full
@@ -405,17 +405,18 @@ class TestRealConfigs:
         # Hotfix 2 (2026-09-17, DD-SP-AY): the fault hotfix 1 fixed for the
         # decomposition reached this stage next — on live run 1 the thinking-on
         # rung returned exactly 8192 output tokens with an empty body, the
-        # ladder descended to qwen3.7-max and the layer was paid twice. 32768
-        # is the ratified value, bounded by the 900 s HTTP read timeout (see
-        # ladders_mentor.yaml). Provider and model stay, the fallback rungs keep
-        # 8192: a swap or a silent revert breaks this test.
+        # ladder descended and the layer was paid twice. 32768 is the ratified
+        # value (see ladders_mentor.yaml); since 2026-11-05 it is carried by
+        # gemini-3.8-flash, which counts its reasoning inside the same ceiling.
+        # The fallback, mistral-large-2512, keeps 8192: a swap or a silent
+        # revert breaks this test.
         config = load_ladder_config(Path("config"))
         ladder = config.get_stage("mentor_layered_evaluation_node_course").ladder
 
-        assert ladder[0].provider == "deepseek_thinking"
-        assert ladder[0].model == "deepseek-v4-pro"
+        assert ladder[0].provider == "gemini"
+        assert ladder[0].model == "gemini-3.8-flash"
         assert ladder[0].max_output_tokens == 32768
-        assert [rung.max_output_tokens for rung in ladder[1:]] == [8192, 8192]
+        assert [rung.max_output_tokens for rung in ladder[1:]] == [8192]
 
     def test_dictionary_translation_is_one_rung_at_the_ratified_ceiling(
         self,
@@ -501,10 +502,10 @@ class TestRealConfigs:
         config = load_ladder_config(Path("config"))
         ladder = config.get_stage("mentor_layered_evaluation_industry").ladder
 
-        assert ladder[0].provider == "deepseek_thinking"
-        assert ladder[0].model == "deepseek-v4-pro"
+        assert ladder[0].provider == "gemini"
+        assert ladder[0].model == "gemini-3.8-flash"
         assert ladder[0].max_output_tokens == 32768
-        assert [rung.max_output_tokens for rung in ladder[1:]] == [8192, 8192]
+        assert [rung.max_output_tokens for rung in ladder[1:]] == [8192]
 
     def test_pass_2a_fallback_rung_carries_max_output_tokens_8192_override(
         self,
@@ -1100,54 +1101,46 @@ LADDER_MODEL_TABLE: dict[str, list[tuple[str, str]]] = {
     "dictionary_translation": [
         ("gemini", "gemini-3.8-flash"),
     ],
-    # ladders_mentor.yaml
+    # ladders_mentor.yaml — since 2026-11-05 Gemini and Mistral only: the
+    # product owner took DeepSeek and Alibaba off the students' texts.
     "safety_check": [
         ("mistral", "mistral-small-latest"),
-        ("deepseek", "deepseek-flash"),
         ("gemini", "gemini-3.5-flash-lite"),
     ],
     "safety_check_authored": [
         ("mistral", "mistral-small-latest"),
-        ("deepseek", "deepseek-flash"),
         ("gemini", "gemini-3.5-flash-lite"),
     ],
     "sanity_check": [
         ("mistral", "mistral-small-latest"),
-        ("deepseek", "deepseek-flash"),
         ("gemini", "gemini-3.5-flash-lite"),
     ],
     "criteria_decomposition": [
-        ("deepseek_thinking", "deepseek-v4-pro"),
-        ("dashscope", "qwen3.7-max"),
-        ("deepseek", "deepseek-flash"),
+        ("gemini", "gemini-3.8-flash"),
+        ("mistral", "mistral-large-2512"),
     ],
     # mentor-rebuild task 06: a copy of criteria_decomposition's ladder, for
     # the same reason — structured reasoning over one task document, paid once
     # per task version rather than per submission.
     "key_explanation": [
-        ("deepseek_thinking", "deepseek-v4-pro"),
-        ("dashscope", "qwen3.7-max"),
-        ("deepseek", "deepseek-flash"),
+        ("gemini", "gemini-3.8-flash"),
+        ("mistral", "mistral-large-2512"),
     ],
     "mentor_layered_evaluation_node_course": [
-        ("deepseek_thinking", "deepseek-v4-pro"),
-        ("dashscope", "qwen3.7-max"),
-        ("deepseek", "deepseek-flash"),
+        ("gemini", "gemini-3.8-flash"),
+        ("mistral", "mistral-large-2512"),
     ],
     "mentor_layered_evaluation_industry": [
-        ("deepseek_thinking", "deepseek-v4-pro"),
-        ("dashscope", "qwen3.7-max"),
-        ("deepseek", "deepseek-flash"),
+        ("gemini", "gemini-3.8-flash"),
+        ("mistral", "mistral-large-2512"),
     ],
     "mentor_denoising": [
-        ("dashscope", "qwen3.7-max"),
         ("gemini", "gemini-3.8-flash"),
-        ("deepseek", "deepseek-flash"),
+        ("mistral", "mistral-large-2512"),
     ],
     "mentor_synthesis": [
-        ("dashscope", "qwen3.7-max"),
         ("gemini", "gemini-3.8-flash"),
-        ("deepseek", "deepseek-flash"),
+        ("mistral", "mistral-large-2512"),
     ],
     # ladders_methodist.yaml
     "methodist_bottomup": [

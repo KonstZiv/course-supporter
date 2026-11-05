@@ -15,15 +15,19 @@ stages:
   # against a fixed schema -- frontier reasoning capability would be
   # overkill. Override of the factory default mistral-large-2512 is
   # intentional; do NOT "fix" by reverting to large unless safety-
-  # accuracy telemetry shows small underperforming. deepseek-flash
-  # and gemini-3.5-flash-lite are equivalent-tier fallbacks for
+  # accuracy telemetry shows small underperforming.
+  # gemini-3.5-flash-lite is the equivalent-tier fallback for
   # infrastructure outages on the primary; ladder order is by
-  # historical reliability, not capability. (2026-09-30: rung 3 was
-  # gemini-2.5-flash, which answers our key 404 "no longer available to
-  # new users"; rung 2 renamed deepseek-v4-flash -> deepseek-flash.)
+  # historical reliability, not capability. (2026-09-30: the Gemini rung
+  # was gemini-2.5-flash, which answers our key 404 "no longer available to
+  # new users". 2026-11-05: the deepseek-flash rung between the two was
+  # removed — the product owner took DeepSeek and Alibaba off the students'
+  # texts; the same on safety_check_authored and sanity_check below. The
+  # 8192 pin N20 put on that rung (2026-07-19) went with it: the two rungs
+  # left were never pinned.)
   #
-  # Snapshot convention: this ladder uses provider aliases for all
-  # three rungs (mistral / deepseek / gemini) -- "latest stable",
+  # Snapshot convention: this ladder uses provider aliases for both
+  # rungs (mistral / gemini) -- "latest stable",
   # relying on provider-side stability guarantees per existing repo
   # convention (mirrors ladders_pipeline.yaml pass_2a_mapping). Where
   # an Anthropic model appears in a ladder it is pinned to a
@@ -45,17 +49,6 @@ stages:
     ladder:
       - provider: mistral
         model: mistral-small-latest
-      # These three classifier stages (safety_check, safety_check_authored,
-      # sanity_check) pin the v4-flash rung output at 8192. Their output is a
-      # short structured verdict — a SafetyResult (security/schemas.py) for the
-      # two safety stages, a SanityClassification {verdict, confidence, reason}
-      # (models/sanity.py) for sanity_check — so 8192 is generous headroom
-      # while still bounding degenerate output. The pin wins over the registry
-      # max_output_tokens (stage_router._build_request), so v4-flash's 384K
-      # provider ceiling does not flow into these wire calls. N20, 2026-07-19.
-      - provider: deepseek
-        model: deepseek-flash
-        max_output_tokens: 8192
       - provider: gemini
         model: gemini-3.5-flash-lite
 
@@ -70,10 +63,12 @@ stages:
     requires: [json_mode]
     # F6 (task-code-materials, ratified 2026-07-12): oversize authored
     # input (large code/text/web surfaces) skips the mistral-small rung
-    # and lands on rung 2, deepseek-flash (1 048 576 context), instead of
-    # being silently provider-truncated. The budget is computed per rung
-    # from that rung's own max_context (llm/stage_router.py), so rung 3 is
-    # reached only when rung 2 fails, not by size (corrected 2026-09-30).
+    # and lands on rung 2, instead of being silently provider-truncated.
+    # Rung 2 is gemini-3.5-flash-lite (1 048 576 context) since 2026-11-05;
+    # it was deepseek-flash, with the same window, removed with the
+    # safety_check rung. The budget is computed per rung from that rung's
+    # own max_context (llm/stage_router.py), so an oversize input has one
+    # rung left, not two.
     # Applies to ALL authored source types — accepted deliberately as an
     # improvement. Last-resort byte backstop (1.5 MiB + loud warning)
     # lives at the call site (api/tasks.py:_bound_safety_text).
@@ -81,11 +76,6 @@ stages:
     ladder:
       - provider: mistral
         model: mistral-small-latest
-      # v4-flash output here is a short SafetyResult verdict, so 8192 is ample
-      # headroom; full rationale over the safety_check rung.
-      - provider: deepseek
-        model: deepseek-flash
-        max_output_tokens: 8192
       - provider: gemini
         model: gemini-3.5-flash-lite
 
@@ -94,9 +84,9 @@ stages:
   # look like an attempt at the declared task?" → {verdict, confidence, reason}.
   # Its purpose is economy — skip the expensive three-phase review graph on
   # obvious garbage — so the model tier is the CHEAP binary classifier, the same
-  # tier as ``safety_check`` (mistral-small primary; deepseek-flash /
-  # gemini-3.5-flash-lite equivalent-tier fallbacks for outages, ordered by
-  # historical reliability, not capability). Frontier reasoning would be
+  # tier as ``safety_check`` (mistral-small primary; gemini-3.5-flash-lite
+  # the equivalent-tier fallback for outages — deepseek-flash between them
+  # until 2026-11-05, see safety_check). Frontier reasoning would be
   # overkill for a coarse triage decision; a high confidence_threshold
   # (config/sanity.yaml) keeps the gate conservative regardless of model. Alias
   # rungs ("latest stable") per the safety_check convention.
@@ -107,11 +97,6 @@ stages:
     ladder:
       - provider: mistral
         model: mistral-small-latest
-      # v4-flash output here is a short sanity verdict {verdict, confidence,
-      # reason}, so 8192 is ample headroom; full rationale over safety_check.
-      - provider: deepseek
-        model: deepseek-flash
-        max_output_tokens: 8192
       - provider: gemini
         model: gemini-3.5-flash-lite
 
@@ -131,8 +116,11 @@ stages:
   # classifier like safety_check. The reasoning tier mirrors the
   # methodist stages (the closest comparable synthesis workload). Cost is
   # amortised across every attempt at the task (cache hit ⇒ zero further
-  # LLM calls), so a capable primary is justified; deepseek-v4-flash is a
-  # competent cheap floor. ``requires: [json_mode]`` only —
+  # LLM calls), so a capable primary is justified. Since 2026-11-05 the
+  # ladder is Gemini, then Mistral — the strongest of each in the registry
+  # that our key can call (DeepSeek and Alibaba taken off the students'
+  # chain by the product owner; this stage is on it, text_budget.py
+  # STUDENT_LADDER_STAGES). ``requires: [json_mode]`` only —
   # ``long_context`` is deliberately NOT required: the input is a single
   # task document, not a subtree (the methodist_topdown rationale), so
   # requiring it would falsely exclude legitimate rungs. ``input_budget_ratio``
@@ -145,42 +133,36 @@ stages:
     requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
-      # Rung 1 ceiling: 32768, not the 8192 the other rungs carry (hotfix 1,
-      # ratified 2026-09-14). deepseek_thinking keeps thinking ON, and on this
-      # provider the reasoning is counted inside max_output_tokens. At 8192 the
-      # reasoning ate the whole ceiling: on 2026-09-07 the rung returned
-      # 8192 output tokens and an EMPTY body, the ladder descended to qwen3.7-max
-      # and the decomposition was paid twice. Prod register before the fix, all
-      # on inputs under 2.5k tokens: 7696 (success), 6345 (success), 8192
-      # (ceiling hit, empty). The largest successful output is 7696, so 32768
-      # leaves a fourfold margin; 16384 was rejected because the step-E case was
-      # cut at 8192 by an unknown amount, so doubling might not be enough.
-      # The upper bound is time, not the model (registry: 65536): observed
-      # generation is ~60-69 tokens/s, so a full 32768 is ~9 min against the
-      # 900 s HTTP read timeout (providers/openai_compat.py) — ~40% headroom.
-      # 65536 would be ~18 min: a certain timeout, which the router retries as
-      # an infrastructure error, each attempt paid — a worse failure than the
-      # one fixed here. Worst-case cost ~$0.065 off-peak (~$0.13 peak), once per
-      # task version, not per submission. The provider is deliberately NOT
-      # switched to thinking-off ``deepseek``: that would change model behaviour
-      # without calibration.
-      - provider: deepseek_thinking
-        model: deepseek-v4-pro
+      # Rung 1 ceiling: 32768 (hotfix 1, ratified 2026-09-14, kept on the new
+      # model 2026-11-05). gemini-3.8-flash counts its reasoning inside
+      # max_output_tokens and the connector cannot limit it
+      # (config/external_services.yaml) — the fault hotfix 1 fixed on the
+      # previous rung 1, deepseek_thinking/deepseek-v4-pro: at 8192 its
+      # reasoning ate the whole ceiling, on 2026-09-07 it returned 8192 output
+      # tokens and an EMPTY body, and the decomposition was paid twice. Prod
+      # register of that rung, all on inputs under 2.5k tokens: 7696
+      # (success), 6345 (success), 8192 (ceiling hit, empty). The largest
+      # successful output with reasoning was 7696, so 32768 leaves a fourfold
+      # margin; the same need carries over to a model that reasons inside the
+      # same ceiling. Registry cap 65536. NOT CALIBRATED on gemini-3.8-flash:
+      # its reasoning length and speed on this stage are not measured; the
+      # first live runs are the data. Worst-case cost at a 2.5k-token input:
+      # 2 500 x 0.00075/1k + 32 768 x 0.00375/1k = $0.1248 at the introductory
+      # price (twice that from 2027-01-01), once per task version, not per
+      # submission.
+      - provider: gemini
+        model: gemini-3.8-flash
         max_output_tokens: 32768
-      # Rungs 2 and 3 ceiling: 16384 (mentor-rebuild task 08, section 9
-      # decision 6, decided 2026-09-29), up from 8192 — room for the mandatory
-      # points the v2 form adds. Observed 2026-09-07: 18 criteria on
-      # qwen3.7-max took 5707 output tokens, 4036 of them reasoning. Registry
-      # limits are far above (config/external_services.yaml, read 2026-09-30):
-      # qwen3.7-max 65536, deepseek-flash 384000. What bounds rung 2 is time:
-      # the DashScope client's default request timeout is 300 s
-      # (dashscope/common/constants.py).
-      - provider: dashscope
-        model: qwen3.7-max
-        max_output_tokens: 16384
-      - provider: deepseek
-        model: deepseek-flash
-        max_output_tokens: 16384
+      # Rung 2 ceiling: 8192 — mistral-large-2512's registry cap (the
+      # first-party ceiling is not published), under the 16384 task 08 gave
+      # the rungs after the first (section 9 decision 6, 2026-09-29) for the
+      # mandatory points of the v2 form. Observed 2026-09-07: 18 criteria on
+      # qwen3.7-max took 5707 output tokens, 4036 of them reasoning — an
+      # answer of ~1.7k; mistral-large-2512 does not reason, so the whole
+      # 8192 is answer room.
+      - provider: mistral
+        model: mistral-large-2512
+        max_output_tokens: 8192
 
   # ── key_explanation (mentor-rebuild task 06) ──
   # Writes one explanation per question of a test's answer key: why the answer
@@ -196,11 +178,14 @@ stages:
   #
   # NOT CALIBRATED: no spike was run for this stage. The ladder, the rung-1
   # output ceiling and the budget ratio are copied from criteria_decomposition,
-  # whose rationale (hotfix 1, ratified 2026-09-14) is that deepseek_thinking
-  # counts reasoning inside max_output_tokens and 8192 left nothing for the
-  # answer. The first live run of this stage is the calibration data. Rungs 2
-  # and 3 keep 8192: task 08 raised criteria_decomposition's for the mandatory
-  # points of its v2 form, which explanations do not carry.
+  # whose rationale (hotfix 1, ratified 2026-09-14) is that a rung-1 model
+  # that counts reasoning inside max_output_tokens — deepseek_thinking then,
+  # gemini-3.8-flash since 2026-11-05 — needs room beyond 8192 for the
+  # answer. The first live run of this stage is the calibration data. Rung 2
+  # keeps 8192: task 08 raised criteria_decomposition's for the mandatory
+  # points of its v2 form, which explanations do not carry. The funds port's
+  # estimate of one attempt, KEY_EXPLANATION_CEILING_USD
+  # (agents/key_explainer.py), is counted from this ladder.
   #
   # Prompt v2 (mentor-rebuild task 07): a doubt flag per question beside each
   # explanation, and the reason told through the option's content, not its
@@ -212,14 +197,11 @@ stages:
     requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
-      - provider: deepseek_thinking
-        model: deepseek-v4-pro
+      - provider: gemini
+        model: gemini-3.8-flash
         max_output_tokens: 32768
-      - provider: dashscope
-        model: qwen3.7-max
-        max_output_tokens: 8192
-      - provider: deepseek
-        model: deepseek-flash
+      - provider: mistral
+        model: mistral-large-2512
         max_output_tokens: 8192
 
   # ── Mentor review graph (sprint-mentor T6, vision §1369-1400 / D8-D12) ──
@@ -238,30 +220,29 @@ stages:
     requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
-      # Rung 1 ceiling: 32768, not the 8192 the other rungs carry (hotfix 2,
-      # ratified 2026-09-17 — DD-SP-AY). The same fault hotfix 1 fixed one
-      # stage earlier, on the same provider: deepseek_thinking counts the
-      # reasoning inside max_output_tokens, so at 8192 the rung can spend the
+      # Rung 1 ceiling: 32768, not the 8192 the other rung carries (hotfix 2,
+      # ratified 2026-09-17 — DD-SP-AY; kept on the new model 2026-11-05). The
+      # fault hotfix 1 fixed one stage earlier: a model that counts its
+      # reasoning inside max_output_tokens — deepseek_thinking then,
+      # gemini-3.8-flash now, whose connector cannot limit it — can spend the
       # whole ceiling on reasoning and return an EMPTY body. Live run 1
-      # (2026-09-17) is the measurement: this rung returned exactly 8192 output
-      # tokens with an empty body (outcome ``empty_at_output_ceiling``,
-      # finish_reason ``output_ceiling``), the ladder descended to qwen3.7-max
-      # and the layer was paid twice — $0.0446, the most expensive row of the
-      # run. What pushed this stage over is hotfix 1 itself: the unblocked
-      # decomposition now yields 37 criteria instead of 18, and this rung
-      # applies them. The bounds are hotfix 1's, unchanged: observed generation
-      # is ~60-69 tokens/s, so a full 32768 is ~9 min against the 900 s HTTP
-      # read timeout (providers/openai_compat.py); 65536 would time out and be
-      # retried as an infrastructure error, each attempt paid. Provider, model
-      # and rungs 2 and 3 are unchanged; a test pins the value.
-      - provider: deepseek_thinking
-        model: deepseek-v4-pro
+      # (2026-09-17) is the measurement, on deepseek_thinking: the rung returned
+      # exactly 8192 output tokens with an empty body (outcome
+      # ``empty_at_output_ceiling``, finish_reason ``output_ceiling``), the
+      # ladder descended and the layer was paid twice — $0.0446, the most
+      # expensive row of the run. What pushed this stage over is hotfix 1
+      # itself: the unblocked decomposition yields 37 criteria instead of 18,
+      # and this rung applies them. NOT CALIBRATED on gemini-3.8-flash; a test
+      # pins the value.
+      - provider: gemini
+        model: gemini-3.8-flash
         max_output_tokens: 32768
-      - provider: dashscope
-        model: qwen3.7-max
-        max_output_tokens: 8192
-      - provider: deepseek
-        model: deepseek-flash
+      # The fallback: the strongest Mistral in the registry, with JSON mode,
+      # at its registry cap; its 262 144-token window keeps the submission
+      # budget where safety_check and sanity_check put it
+      # (homework/text_budget.py).
+      - provider: mistral
+        model: mistral-large-2512
         max_output_tokens: 8192
 
   # Phase 1B — industry layer (D8, autonomous). Same DEEP tier as 1A: an
@@ -278,51 +259,56 @@ stages:
       # history: same provider, same tier, same submission judged with the same
       # model, so whatever grows one grows the other. This stage has not hit the
       # ceiling — 5285 and 6928 output tokens on the two measured prod runs — so
-      # here the change is precaution, while for 1A it was repair. Bounds,
-      # provider, model and rungs 2 and 3 as above.
-      - provider: deepseek_thinking
-        model: deepseek-v4-pro
+      # here the change is precaution, while for 1A it was repair (both
+      # counted on deepseek_thinking). Model and rung 2 as above, since
+      # 2026-11-05.
+      - provider: gemini
+        model: gemini-3.8-flash
         max_output_tokens: 32768
-      - provider: dashscope
-        model: qwen3.7-max
-        max_output_tokens: 8192
-      - provider: deepseek
-        model: deepseek-flash
+      - provider: mistral
+        model: mistral-large-2512
         max_output_tokens: 8192
 
   # Phase 3 — denoising (D10): semantic recidivism/correction matching against
   # history + a bounded delta. MEDIUM tier — comparison, lighter than the
   # layered judgement. json_mode (strict JSON outcome).
+  #
+  # Since 2026-11-05 here and in synthesis below: gemini-3.8-flash, the
+  # second rung until then, is the first (qwen3.7-max's place), and
+  # mistral-large-2512 the second (deepseek-flash, the third, is gone).
+  # Rung 1 pin 32768, up from the 8192 gemini-3.8-flash carried as rung 2:
+  # its reasoning is counted inside max_output_tokens and the connector
+  # cannot limit it, so the pin keeps qwen's answer room, 8192, plus the
+  # 10 000 tokens of reasoning the path stages reserve for a first rung
+  # (config/submission_paths.yaml, review_explanation), rounded up. On a
+  # ladder stage an empty answer at the ceiling descends to rung 2 — paid
+  # twice — rather than stopping. Mistral Large, not Small, for the 262 144
+  # window: these stages carry the whole submission and its history. NOT
+  # CALIBRATED.
   mentor_denoising:
     prompt_ref: "prompts/mentor_denoising/v1.md"
     requires: [json_mode]
     input_budget_ratio: 0.5
     ladder:
-      - provider: dashscope
-        model: qwen3.7-max
-        max_output_tokens: 8192
       - provider: gemini
         model: gemini-3.8-flash
-        max_output_tokens: 8192
-      - provider: deepseek
-        model: deepseek-flash
+        max_output_tokens: 32768
+      - provider: mistral
+        model: mistral-large-2512
         max_output_tokens: 8192
 
   # Synthesis — the single human review (review_markdown). MEDIUM strong-
   # generation tier; this is writing quality, not reasoning depth. Plain
   # Markdown output, so `requires: []` (no json_mode) — mirrors the
-  # pass_2c denoise text stages.
+  # pass_2c denoise text stages. Rungs and pins as on denoising above.
   mentor_synthesis:
     prompt_ref: "prompts/mentor_synthesis/v1.md"
     requires: []
     input_budget_ratio: 0.5
     ladder:
-      - provider: dashscope
-        model: qwen3.7-max
-        max_output_tokens: 8192
       - provider: gemini
         model: gemini-3.8-flash
-        max_output_tokens: 8192
-      - provider: deepseek
-        model: deepseek-flash
+        max_output_tokens: 32768
+      - provider: mistral
+        model: mistral-large-2512
         max_output_tokens: 8192

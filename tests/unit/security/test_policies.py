@@ -28,6 +28,7 @@ from course_supporter.homework.submission_core import ALLOWED_HOMEWORK_EXTENSION
 from course_supporter.security.file_type import _EXTENSION_TO_MIME_FAMILIES
 from course_supporter.security.policies import (
     _ARCHIVES,
+    _DATA,
     _DOCUMENTS,
     _PROSE,
     AUTHORED_POLICY,
@@ -118,14 +119,14 @@ class TestHomeworkPolicy:
         # re-listing the members here would recreate, inside the test, the
         # hand-maintained twin the derived form exists to remove (DD-19-B).
         assert HOMEWORK_POLICY.allowed_extensions == (
-            _PROSE | CODE_EXTENSIONS | _ARCHIVES | _DOCUMENTS
+            _PROSE | _DATA | CODE_EXTENSIONS | _ARCHIVES | _DOCUMENTS
         )
 
     def test_groups_are_disjoint(self) -> None:
         # Overlap would make a format's conveyor ambiguous: HOMEWORK_CONVEYORS
         # is built by merging the group dicts, so a member of two groups would
         # silently take whichever comes last.
-        groups = (_PROSE, CODE_EXTENSIONS, _ARCHIVES, _DOCUMENTS)
+        groups = (_PROSE, _DATA, CODE_EXTENSIONS, _ARCHIVES, _DOCUMENTS)
         for i, first in enumerate(groups):
             for second in groups[i + 1 :]:
                 assert first & second == set(), f"{first & second!r} in two groups"
@@ -417,3 +418,22 @@ class TestTextExtensionsDerived:
     def test_text_conveyor_and_screened_set_agree(self) -> None:
         routed_as_text = {e for e, c in HOMEWORK_CONVEYORS.items() if c == "text"}
         assert routed_as_text == _TEXT_EXTENSIONS
+
+
+class TestCsvIsData:
+    """A .csv is the input data of a student's code (operator, 2026-11-05)."""
+
+    def test_csv_is_admitted_for_homework(self) -> None:
+        assert "csv" in _DATA
+        assert "csv" in HOMEWORK_POLICY.allowed_extensions
+
+    def test_csv_takes_the_text_conveyor_like_txt(self) -> None:
+        assert HOMEWORK_CONVEYORS["csv"] == HOMEWORK_CONVEYORS["txt"] == "text"
+
+    def test_csv_is_capped_like_txt(self) -> None:
+        assert get_max_size_for_extension(
+            "csv", HOMEWORK_POLICY
+        ) == get_max_size_for_extension("txt", HOMEWORK_POLICY)
+
+    def test_csv_stays_out_of_authored(self) -> None:
+        assert "csv" not in AUTHORED_POLICY.allowed_extensions

@@ -111,6 +111,7 @@ from course_supporter.security.normalization import (
     normalize_filename,
 )
 from course_supporter.security.policies import (
+    _DATA,
     _PROSE,
     CODE_EXTENSIONS,
     ContextPolicy,
@@ -139,7 +140,7 @@ from course_supporter.security.text_screen import ScreenedText, screen_text
 # screening; nothing here narrows it. Locked by
 # ``TestTextExtensionsDerived`` (empty set difference), which guards the
 # CONSTRUCTION rather than the values.
-_TEXT_EXTENSIONS: frozenset[str] = _PROSE | CODE_EXTENSIONS
+_TEXT_EXTENSIONS: frozenset[str] = _PROSE | _DATA | CODE_EXTENSIONS
 
 
 logger = structlog.get_logger(__name__)

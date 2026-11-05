@@ -756,6 +756,8 @@ class TestArchiveKindForFilename:
 
 
 class TestIsTextExtension:
+    # csv is read as text since 2026-11-05: the input data of a student's code
+    # (gates/FORMATS.md, group 5).
     @pytest.mark.parametrize(
         "ext",
         # The original five, plus formats that joined when _TEXT_EXTENSIONS
@@ -763,15 +765,26 @@ class TestIsTextExtension:
         # False here before, which is precisely the defect — they were
         # admitted uploads that skipped the unicode reject and the injection
         # pre-screen. Case variants keep the lower-casing contract pinned.
-        ["txt", "md", "html", "py", "ipynb", "json", "xml", "yaml", "ts", "TXT", "Md"],
+        [
+            "txt",
+            "md",
+            "html",
+            "py",
+            "ipynb",
+            "json",
+            "xml",
+            "yaml",
+            "ts",
+            "TXT",
+            "Md",
+            "csv",
+        ],
     )
     def test_text_extensions(self, ext: str) -> None:
         assert _is_text_extension(ext) is True
 
-    @pytest.mark.parametrize("ext", ["pdf", "zip", "gz", "csv", "mp4", ""])
+    @pytest.mark.parametrize("ext", ["pdf", "zip", "gz", "mp4", ""])
     def test_non_text_extensions(self, ext: str) -> None:
-        # csv stays out deliberately: it is data, not a submission the Mentor
-        # reads, and no policy admits it (gates/FORMATS.md, "Виключено").
         assert _is_text_extension(ext) is False
 
 

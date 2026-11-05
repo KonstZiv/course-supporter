@@ -50,6 +50,7 @@ from course_supporter.billing.kinds import (
     Benefit,
     RuleScope,
 )
+from course_supporter.billing.rules import end_rule
 from course_supporter.storage.orm import (
     BillingAccount,
     BillingAuthorSettings,
@@ -440,17 +441,5 @@ async def end_payment_rule(
         raise BillingNotFoundError(f"rule {rule_id} not found")
     if not rule.active:
         raise BillingConflictError(f"rule {rule_id} is already ended")
-    before = audit.rule_snapshot(rule)
-    rule.active = False
-    rule.ended_at = now or datetime.now(UTC)
-    await session.flush()
-    await audit.record(
-        session,
-        actor=actor,
-        action=AuditAction.PAYMENT_RULE_END,
-        entity="payment_rule",
-        entity_id=rule.id,
-        before=before,
-        after=audit.rule_snapshot(rule),
-    )
+    await end_rule(session, rule, actor=actor, now=now or datetime.now(UTC))
     return rule

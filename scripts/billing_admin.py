@@ -38,7 +38,10 @@ it; a student account is refused):
     end-rule --rule <rule-id> --actor kostiantyn
 
 Anonymization, AFTER the tenant or the student was deleted by hand (there is
-no account-deletion flow yet; when one appears it calls the same functions):
+no account-deletion flow yet; when one appears it calls the same functions).
+It closes and anonymizes the owner's accounts and ends the active payment
+rules about the owner — a student's student rules, every rule of a tenant —
+each ending audited as payment_rule.end; a second run changes nothing:
     anonymize-student --student <student-id> --actor kostiantyn
     anonymize-tenant  --tenant <tenant-id> --actor kostiantyn
 
@@ -208,20 +211,30 @@ async def end_rule(session: AsyncSession, args: argparse.Namespace) -> str:
     return "ended " + _rule_line(rule)
 
 
+def _anonymization_lines(done: accounts.Anonymization) -> str:
+    def ids(values: list[uuid.UUID]) -> str:
+        return ", ".join(map(str, values)) or "-"
+
+    return (
+        f"anonymized {len(done.account_ids)} account(s): {ids(done.account_ids)}\n"
+        f"ended {len(done.ended_rule_ids)} rule(s): {ids(done.ended_rule_ids)}"
+    )
+
+
 async def anonymize_student(session: AsyncSession, args: argparse.Namespace) -> str:
-    """Close and anonymize the accounts of a deleted student."""
-    ids = await accounts.anonymize_student_accounts(
+    """Close and anonymize a deleted student's accounts; end their rules."""
+    done = await accounts.anonymize_student_accounts(
         session, args.student, actor=args.actor
     )
-    return f"anonymized {len(ids)} account(s): " + ", ".join(map(str, ids))
+    return _anonymization_lines(done)
 
 
 async def anonymize_tenant(session: AsyncSession, args: argparse.Namespace) -> str:
-    """Close and anonymize every account of a deleted tenant."""
-    ids = await accounts.anonymize_tenant_accounts(
+    """Close and anonymize a deleted tenant's accounts; end its rules."""
+    done = await accounts.anonymize_tenant_accounts(
         session, args.tenant, actor=args.actor
     )
-    return f"anonymized {len(ids)} account(s): " + ", ".join(map(str, ids))
+    return _anonymization_lines(done)
 
 
 COMMANDS: dict[str, Handler] = {

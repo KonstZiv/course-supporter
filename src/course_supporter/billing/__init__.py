@@ -11,7 +11,9 @@ Purpose:
 
 Modules:
     :mod:`.accounts` — the account of a student or of an author, created
-    lazily; its anonymization once the owner is deleted.
+    lazily; its anonymization once the owner is deleted, which also ends the
+    payment rules about that owner.
+    :mod:`.rules` — the one path that ends a payment rule.
     :mod:`.payer` — THE one place that decides who pays for an action.
     :mod:`.consent` — consent to the billing terms in force.
     :mod:`.admin` — the administrator's operations: read an account, author

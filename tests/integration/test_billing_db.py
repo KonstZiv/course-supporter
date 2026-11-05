@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.billing import admin
 from course_supporter.billing.accounts import (
+    Anonymization,
     anonymize_student_accounts,
     anonymize_tenant_accounts,
     find_active_account,
@@ -267,11 +268,11 @@ class TestDeletion:
         )
         at = datetime(2026, 11, 5, 12, tzinfo=UTC)
 
-        ids = await anonymize_student_accounts(
+        done = await anonymize_student_accounts(
             db_session, world.student_id, actor=ACTOR, now=at
         )
 
-        assert ids == [account.id]
+        assert done.account_ids == [account.id]
         await db_session.refresh(account)
         assert (account.status, account.tenant_id, account.student_id) == (
             "closed",
@@ -293,10 +294,9 @@ class TestDeletion:
         assert "student_id" not in entry.before  # the log keeps no owner
         assert entry.after["status"] == "closed"
         # Idempotent.
-        assert (
-            await anonymize_student_accounts(db_session, world.student_id, actor=ACTOR)
-            == []
-        )
+        assert await anonymize_student_accounts(
+            db_session, world.student_id, actor=ACTOR
+        ) == Anonymization([], [])
 
     async def test_anonymizing_a_deleted_tenant(
         self, db_session: AsyncSession, world: World
@@ -309,18 +309,18 @@ class TestDeletion:
             text("DELETE FROM tenants WHERE id = :id"), {"id": world.tenant_id}
         )
 
-        ids = await anonymize_tenant_accounts(db_session, world.tenant_id, actor=ACTOR)
+        done = await anonymize_tenant_accounts(db_session, world.tenant_id, actor=ACTOR)
 
-        assert set(ids) == {student.id, author.id}
+        assert set(done.account_ids) == {student.id, author.id}
         rows = await db_session.execute(
-            select(BillingAccount).where(BillingAccount.id.in_(ids))
+            select(BillingAccount).where(BillingAccount.id.in_(done.account_ids))
         )
         for account in rows.scalars():
             await db_session.refresh(account)
             assert account.status == "closed"
             assert account.tenant_id is None and account.student_id is None
             assert account.anonymized_at is not None
-        # Settings and rules stay, on the opaque account id.
+        # Settings and (ended) rules stay, on the opaque account id.
         assert await db_session.get(BillingAuthorSettings, author.id) is not None
         rules = await db_session.scalar(
             select(func.count()).where(BillingPaymentRule.payer_account_id == author.id)
@@ -346,9 +346,122 @@ class TestDeletion:
         assert student is not None
         student.deleted_at = datetime.now(UTC)
         await db_session.flush()
-        assert await anonymize_student_accounts(
+        done = await anonymize_student_accounts(
             db_session, world.student_id, actor=ACTOR
-        ) == [account.id]
+        )
+        assert done.account_ids == [account.id]
+
+
+# ── Anonymization ends the rules about the deleted owner ───────────────
+
+
+class TestAnonymizationEndsRules:
+    async def _rule(
+        self,
+        session: AsyncSession,
+        world: World,
+        scope: RuleScope,
+        student_id: uuid.UUID | None = None,
+    ) -> BillingPaymentRule:
+        return await admin.create_payment_rule(
+            session,
+            actor="setter",
+            tenant_id=world.tenant_id,
+            scope=scope,
+            action_kind=ActionKind.REVIEW,
+            course_node_id=world.course_id if scope is RuleScope.COURSE else None,
+            student_id=student_id,
+        )
+
+    async def _audit_count(self, session: AsyncSession) -> int:
+        return await _count(session, "billing_audit_log")
+
+    async def test_a_students_rules_end_with_their_anonymization(
+        self, db_session: AsyncSession, world: World
+    ) -> None:
+        mine = await self._rule(db_session, world, RuleScope.STUDENT, world.student_id)
+        theirs = await self._rule(
+            db_session, world, RuleScope.STUDENT, world.other_student_id
+        )
+        course = await self._rule(db_session, world, RuleScope.COURSE)
+        await db_session.execute(
+            text("DELETE FROM students WHERE id = :id"), {"id": world.student_id}
+        )
+        at = datetime(2026, 11, 6, 9, tzinfo=UTC)
+
+        done = await anonymize_student_accounts(
+            db_session, world.student_id, actor="eraser", now=at
+        )
+
+        assert done.ended_rule_ids == [mine.id]
+        for rule in (mine, theirs, course):
+            await db_session.refresh(rule)
+        assert (mine.active, mine.ended_at) == (False, at)
+        assert mine.student_id == world.student_id  # the opaque target stays
+        assert theirs.active and course.active  # another student's, the course's
+        _, ended = await _audit(db_session, mine.id)
+        assert (ended.actor, ended.action) == ("eraser", "payment_rule.end")
+        assert ended.before is not None and ended.before["active"] is True
+        assert ended.after is not None and ended.after["active"] is False
+
+    async def test_every_rule_of_a_tenant_ends_with_its_anonymization(
+        self, db_session: AsyncSession, world: World
+    ) -> None:
+        rules = [
+            await self._rule(db_session, world, RuleScope.STUDENT, world.student_id),
+            await self._rule(
+                db_session, world, RuleScope.STUDENT, world.other_student_id
+            ),
+            await self._rule(db_session, world, RuleScope.COURSE),
+        ]
+        elsewhere = await _tenant_with_course(db_session)
+        kept = await admin.create_payment_rule(
+            db_session,
+            actor="setter",
+            tenant_id=elsewhere.tenant_id,
+            scope=RuleScope.COURSE,
+            action_kind=ActionKind.REVIEW,
+            course_node_id=elsewhere.course_id,
+        )
+        await db_session.execute(
+            text("DELETE FROM tenants WHERE id = :id"), {"id": world.tenant_id}
+        )
+
+        done = await anonymize_tenant_accounts(
+            db_session, world.tenant_id, actor="eraser"
+        )
+
+        assert set(done.ended_rule_ids) == {r.id for r in rules}
+        for rule in rules:
+            await db_session.refresh(rule)
+            assert not rule.active and rule.ended_at is not None
+            assert [e.action for e in await _audit(db_session, rule.id)] == [
+                "payment_rule.create",
+                "payment_rule.end",
+            ]
+        await db_session.refresh(kept)
+        assert kept.active  # another tenant's rule
+
+    async def test_a_second_anonymization_writes_nothing(
+        self, db_session: AsyncSession, world: World
+    ) -> None:
+        await _everything_billing(db_session, world)
+        await db_session.execute(
+            text("DELETE FROM tenants WHERE id = :id"), {"id": world.tenant_id}
+        )
+        await anonymize_student_accounts(db_session, world.student_id, actor=ACTOR)
+        await anonymize_tenant_accounts(db_session, world.tenant_id, actor=ACTOR)
+        written = await self._audit_count(db_session)
+
+        again_student = await anonymize_student_accounts(
+            db_session, world.student_id, actor=ACTOR
+        )
+        again_tenant = await anonymize_tenant_accounts(
+            db_session, world.tenant_id, actor=ACTOR
+        )
+
+        assert again_student == again_tenant == Anonymization([], [])
+        assert await self._audit_count(db_session) == written
 
 
 # ── Payer ──────────────────────────────────────────────────────────────

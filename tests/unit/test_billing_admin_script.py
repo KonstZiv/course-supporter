@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from scripts import billing_admin
 
+from course_supporter.billing.accounts import Anonymization
 from course_supporter.billing.admin import AuthorSettingsView
 from course_supporter.billing.errors import BillingConflictError
 from course_supporter.billing.kinds import ActionKind, Benefit, RuleScope
@@ -130,24 +131,25 @@ async def test_create_rule_calls_the_service() -> None:
 
 
 async def test_anonymize_commands_call_the_service() -> None:
-    owner = uuid.uuid4()
+    owner, rule = uuid.uuid4(), uuid.uuid4()
     with (
         patch.object(
             billing_admin.accounts,
             "anonymize_student_accounts",
-            AsyncMock(return_value=[owner]),
+            AsyncMock(return_value=Anonymization([owner], [rule])),
         ) as student,
         patch.object(
             billing_admin.accounts,
             "anonymize_tenant_accounts",
-            AsyncMock(return_value=[]),
+            AsyncMock(return_value=Anonymization([], [])),
         ) as tenant,
     ):
         out = await _run("anonymize-student", "--student", str(owner), "--actor", "k")
-        await _run("anonymize-tenant", "--tenant", str(owner), "--actor", "k")
+        again = await _run("anonymize-tenant", "--tenant", str(owner), "--actor", "k")
     assert student.await_args.args[1] == owner
     assert tenant.await_args.kwargs == {"actor": "k"}
-    assert out == f"anonymized 1 account(s): {owner}"
+    assert out == f"anonymized 1 account(s): {owner}\nended 1 rule(s): {rule}"
+    assert again == "anonymized 0 account(s): -\nended 0 rule(s): -"
 
 
 def test_a_refusal_exits_with_1(capsys: pytest.CaptureFixture[str]) -> None:

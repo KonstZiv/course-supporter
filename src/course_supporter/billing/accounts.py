@@ -14,9 +14,14 @@ Deletion:
     What remains is to cut the account from the deleted owner:
     :func:`anonymize_student_accounts` / :func:`anonymize_tenant_accounts`
     close the account, erase ``tenant_id`` / ``student_id`` and stamp
-    ``anonymized_at``. The account itself, its consents, its rules and the
-    audit log stay, pointing at its opaque id. ``anonymized_at`` starts the
-    retention period; destroying the account after it is BIL-B.
+    ``anonymized_at``; in the same transaction they END the active payment
+    rules about the deleted owner (a student's student rules; every rule of
+    a tenant), each with a ``payment_rule.end`` audit entry, the way the
+    administrator ends one (:func:`.rules.end_rule`). The account itself, its
+    consents, its rules and the audit log stay, pointing at its opaque id; the
+    target ids inside an ended rule stay too (the rule's check constraint
+    needs them, and they name rows that no longer exist). ``anonymized_at``
+    starts the retention period; destroying the account after it is BIL-B.
 
     TO DO: wire both functions into the account-deletion flow when it
     appears. Today the system has none — a tenant or a student is deleted by
@@ -28,6 +33,7 @@ Deletion:
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select, text, update
@@ -36,11 +42,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.billing import audit
 from course_supporter.billing.errors import BillingConflictError
-from course_supporter.billing.kinds import AccountKind, AccountStatus, AuditAction
-from course_supporter.storage.orm import BillingAccount, Student, Tenant
+from course_supporter.billing.kinds import (
+    AccountKind,
+    AccountStatus,
+    AuditAction,
+    RuleScope,
+)
+from course_supporter.billing.rules import end_rule
+from course_supporter.storage.orm import (
+    BillingAccount,
+    BillingPaymentRule,
+    Student,
+    Tenant,
+)
 
 _ACTIVE_AUTHOR = text("kind = 'author' AND status = 'active'")
 _ACTIVE_STUDENT = text("kind = 'student' AND status = 'active'")
+
+
+@dataclass(frozen=True)
+class Anonymization:
+    """What one anonymization changed; both empty when it was done before."""
+
+    account_ids: list[uuid.UUID]
+    """Accounts closed and anonymized."""
+    ended_rule_ids: list[uuid.UUID]
+    """Active payment rules about the deleted owner, now ended."""
 
 
 async def find_active_account(
@@ -117,7 +144,7 @@ async def _anonymize(
     *,
     actor: str,
     now: datetime,
-) -> list[uuid.UUID]:
+) -> None:
     # A Core UPDATE, not an attribute assignment: the repository allows no
     # ``<row>.status = ...`` anywhere in src (tests/unit/test_l1a_invariants).
     for account in accounts:
@@ -143,7 +170,23 @@ async def _anonymize(
             before=before,
             after=audit.account_snapshot(account),
         )
-    return [account.id for account in accounts]
+
+
+async def _anonymize_and_end(
+    session: AsyncSession,
+    accounts: list[BillingAccount],
+    rules: list[BillingPaymentRule],
+    *,
+    actor: str,
+    now: datetime,
+) -> Anonymization:
+    await _anonymize(session, accounts, actor=actor, now=now)
+    for rule in rules:
+        await end_rule(session, rule, actor=actor, now=now)
+    return Anonymization(
+        account_ids=[account.id for account in accounts],
+        ended_rule_ids=[rule.id for rule in rules],
+    )
 
 
 async def anonymize_student_accounts(
@@ -152,13 +195,15 @@ async def anonymize_student_accounts(
     *,
     actor: str,
     now: datetime | None = None,
-) -> list[uuid.UUID]:
-    """Close and anonymize the accounts of a DELETED student; return their ids.
+) -> Anonymization:
+    """Close and anonymize the accounts of a DELETED student and end the
+    active student rules for them (``scope = student``), in one transaction.
 
     TO DO: call from the account-deletion flow when it appears (module
     docstring). Refuses (:class:`BillingConflictError`) while the student
     still exists and is not soft-deleted, so a live student's account is never
-    closed. Idempotent: an already anonymized account is not touched again.
+    closed. Rules about other students and course rules stay active.
+    Idempotent: a second call finds nothing to change and writes nothing.
     """
     actor = audit.require_actor(actor)
     student = await session.get(Student, student_id)
@@ -166,7 +211,7 @@ async def anonymize_student_accounts(
         raise BillingConflictError(
             f"student {student_id} is not deleted; delete the student first"
         )
-    rows = await session.execute(
+    accounts = await session.execute(
         select(BillingAccount)
         .where(
             BillingAccount.kind == AccountKind.STUDENT.value,
@@ -175,8 +220,21 @@ async def anonymize_student_accounts(
         )
         .with_for_update()
     )
-    return await _anonymize(
-        session, list(rows.scalars()), actor=actor, now=now or datetime.now(UTC)
+    rules = await session.execute(
+        select(BillingPaymentRule)
+        .where(
+            BillingPaymentRule.active.is_(True),
+            BillingPaymentRule.scope == RuleScope.STUDENT.value,
+            BillingPaymentRule.student_id == student_id,
+        )
+        .with_for_update()
+    )
+    return await _anonymize_and_end(
+        session,
+        list(accounts.scalars()),
+        list(rules.scalars()),
+        actor=actor,
+        now=now or datetime.now(UTC),
     )
 
 
@@ -186,9 +244,10 @@ async def anonymize_tenant_accounts(
     *,
     actor: str,
     now: datetime | None = None,
-) -> list[uuid.UUID]:
+) -> Anonymization:
     """Close and anonymize every account of a DELETED tenant — the author's
-    and its students' — and return their ids.
+    and its students' — and end every active rule of the tenant (course and
+    student rules), in one transaction.
 
     TO DO: call from the account-deletion flow when it appears (module
     docstring). Refuses (:class:`BillingConflictError`) while the tenant still
@@ -201,7 +260,7 @@ async def anonymize_tenant_accounts(
         raise BillingConflictError(
             f"tenant {tenant_id} is not deleted; delete the tenant first"
         )
-    rows = await session.execute(
+    accounts = await session.execute(
         select(BillingAccount)
         .where(
             BillingAccount.tenant_id == tenant_id,
@@ -209,6 +268,18 @@ async def anonymize_tenant_accounts(
         )
         .with_for_update()
     )
-    return await _anonymize(
-        session, list(rows.scalars()), actor=actor, now=now or datetime.now(UTC)
+    rules = await session.execute(
+        select(BillingPaymentRule)
+        .where(
+            BillingPaymentRule.active.is_(True),
+            BillingPaymentRule.tenant_id == tenant_id,
+        )
+        .with_for_update()
+    )
+    return await _anonymize_and_end(
+        session,
+        list(accounts.scalars()),
+        list(rules.scalars()),
+        actor=actor,
+        now=now or datetime.now(UTC),
     )

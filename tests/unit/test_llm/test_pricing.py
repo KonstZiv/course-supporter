@@ -20,6 +20,7 @@ import socket
 import ssl
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import aiohttp
 import anthropic
@@ -48,7 +49,11 @@ def _at(day: date, hh: int, mm: int = 0, ss: int = 0) -> datetime:
     return datetime(day.year, day.month, day.day, hh, mm, ss, tzinfo=UTC)
 
 
-def _registry(**model_fields: object) -> ModelRegistryConfig:
+def _registry(
+    *,
+    off_peak_dates: list[date | str] | None = None,
+    **model_fields: object,
+) -> ModelRegistryConfig:
     model: dict[str, object] = {
         "id": "m",
         "unit_type": "tokens",
@@ -56,20 +61,21 @@ def _registry(**model_fields: object) -> ModelRegistryConfig:
         "cost_per_1k_out": 0.0008,
     }
     model.update(model_fields)
+    peak_tariff: dict[str, object] = {
+        "timezone": "UTC",
+        "catalog_prices": "off_peak",
+        "peak_multiplier": 2,
+        "peak": {
+            "weekdays": ["mon", "tue", "wed", "thu", "fri"],
+            "hours": ["01:00-04:00", "06:00-10:00"],
+        },
+    }
+    if off_peak_dates is not None:
+        peak_tariff["off_peak_dates"] = off_peak_dates
     return ModelRegistryConfig.model_validate(
         {
             "catalog": {"version": _VERSION, "pricing_sha256": "0" * 64},
-            "tariffs": {
-                "peak": {
-                    "timezone": "UTC",
-                    "catalog_prices": "off_peak",
-                    "peak_multiplier": 2,
-                    "peak": {
-                        "weekdays": ["mon", "tue", "wed", "thu", "fri"],
-                        "hours": ["01:00-04:00", "06:00-10:00"],
-                    },
-                }
-            },
+            "tariffs": {"peak": peak_tariff},
             "providers": {
                 "p": {"type": "llm", "models": [model]},
                 "s": {
@@ -153,6 +159,56 @@ class TestTariffWindow:
             _model(), usage=TokenUsage(tokens_in=1, tokens_in_cached=None, tokens_out=1)
         )
         assert row.tariff_window is TariffWindow.FLAT
+
+
+class TestChinesePublicHolidays:
+    """DD-BIL-HOL: Chinese public holidays are off-peak in full."""
+
+    @pytest.mark.parametrize("hour", [2, 7])
+    def test_holiday_on_weekday_is_off_peak(self, hour: int) -> None:
+        # 2027-01-01 is Friday (New Year), marked as off-peak date
+        reg = _registry(
+            tariff="peak",
+            off_peak_dates=[date(2027, 1, 1)],
+        )
+        tariff = reg.models["m"].tariff
+        assert tariff is not None
+        assert tariff.window_at(_at(date(2027, 1, 1), hour)) is TariffWindow.OFF_PEAK
+
+    @pytest.mark.parametrize("hour", [2, 7])
+    def test_same_weekday_without_holiday_is_peak(self, hour: int) -> None:
+        # 2027-01-08 is regular Friday (not in off_peak_dates)
+        reg = _registry(
+            tariff="peak",
+            off_peak_dates=[date(2027, 1, 1)],
+        )
+        tariff = reg.models["m"].tariff
+        assert tariff is not None
+        assert tariff.window_at(_at(date(2027, 1, 8), hour)) is TariffWindow.PEAK
+
+    def test_weekend_is_off_peak(self) -> None:
+        # 2027-01-09 is Saturday
+        reg = _registry(
+            tariff="peak",
+            off_peak_dates=[date(2027, 1, 1)],
+        )
+        tariff = reg.models["m"].tariff
+        assert tariff is not None
+        assert tariff.window_at(_at(date(2027, 1, 9), 2)) is TariffWindow.OFF_PEAK
+
+    def test_real_deepseek_tariff_from_catalog(self) -> None:
+        from course_supporter.llm.registry import load_registry
+
+        reg = load_registry(Path("config/external_services.yaml"))
+        tariff = reg.tariffs["deepseek_peak"]
+        # 2027-01-01 (Friday) is official holiday
+        assert tariff.window_at(_at(date(2027, 1, 1), 2)) is TariffWindow.OFF_PEAK
+        assert tariff.window_at(_at(date(2027, 1, 1), 7)) is TariffWindow.OFF_PEAK
+        # 2027-01-08 (Friday) is non-holiday
+        assert tariff.window_at(_at(date(2027, 1, 8), 2)) is TariffWindow.PEAK
+        assert tariff.window_at(_at(date(2027, 1, 8), 7)) is TariffWindow.PEAK
+        # 2027-01-09 (Saturday) is weekend
+        assert tariff.window_at(_at(date(2027, 1, 9), 2)) is TariffWindow.OFF_PEAK
 
 
 class TestExactTokenPrice:

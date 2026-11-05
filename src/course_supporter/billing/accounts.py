@@ -30,7 +30,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -118,14 +118,22 @@ async def _anonymize(
     actor: str,
     now: datetime,
 ) -> list[uuid.UUID]:
+    # A Core UPDATE, not an attribute assignment: the repository allows no
+    # ``<row>.status = ...`` anywhere in src (tests/unit/test_l1a_invariants).
     for account in accounts:
         before = audit.account_snapshot(account)
-        account.status = AccountStatus.CLOSED.value
-        account.closed_at = account.closed_at or now
-        account.tenant_id = None
-        account.student_id = None
-        account.anonymized_at = now
-        await session.flush()
+        await session.execute(
+            update(BillingAccount)
+            .where(BillingAccount.id == account.id)
+            .values(
+                status=AccountStatus.CLOSED.value,
+                closed_at=func.coalesce(BillingAccount.closed_at, now),
+                tenant_id=None,
+                student_id=None,
+                anonymized_at=now,
+            )
+        )
+        await session.refresh(account)
         await audit.record(
             session,
             actor=actor,

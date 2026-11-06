@@ -65,9 +65,14 @@ Not repeated:
       review the assembler can write out again can be given again.
 
 Failure:
-    The lookup reads and writes nothing; if it raises, the error is logged and
-    the work is reviewed as usual — a missed repeat costs a review, a broken
-    one would cost the student theirs.
+    The reads before the decision — the receipt and the lookup — write
+    nothing and run in a savepoint (as the attempt ledger writes in one). If
+    one raises, the savepoint is rolled back, so the session the body goes on
+    with is not left in an aborted transaction; the error is logged as a
+    warning with the submission's id and the work is reviewed as usual — a
+    missed repeat costs a review, a broken one would cost the student theirs.
+    The copy and the receipt are written after the decision, as any write of
+    the body is: if they fail, the submission fails the body's way.
 
 Interface:
     :func:`find_unchanged_attempt` — the earlier attempt whose review to give
@@ -80,6 +85,7 @@ Interface:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -148,17 +154,15 @@ async def repeat_unchanged_review(
     repeated — also when an earlier run of this submission already repeated it
     — or ``None`` for an ordinary review.
     """
-    receipt = await session.scalar(
-        select(HomeworkSubmission.attempt_receipt).where(
-            HomeworkSubmission.id == submission_id
-        )
-    )
+    looked_up = await _in_a_savepoint(session, submission_id, _look_up)
+    if looked_up is None:
+        return None
+    receipt, source = looked_up
     if receipt is None:
         # The ledger wrote nothing (it failed, logged): no fingerprint to match.
         return None
     if DEDUP_RECEIPT_KEY in receipt:
         return int(receipt[DEDUP_RECEIPT_KEY])
-    source = await find_unchanged_attempt(session, submission_id)
     if source is None:
         return None
 
@@ -189,19 +193,59 @@ async def find_unchanged_attempt(
 ) -> UnchangedAttempt | None:
     """The earlier attempt of the same work, judged alike, or ``None``.
 
-    The rule is the module's. Never raises: an error is logged and read as no
-    match, so the work is reviewed as usual.
+    The rule is the module's. Never raises: the lookup runs in a savepoint,
+    and an error is logged and read as no match (:func:`_in_a_savepoint`).
     """
-    log = logger.bind(submission_id=str(submission_id))
+    return await _in_a_savepoint(session, submission_id, _find)
+
+
+async def _in_a_savepoint[T](
+    session: AsyncSession,
+    submission_id: uuid.UUID,
+    read: Callable[[AsyncSession, uuid.UUID], Awaitable[T]],
+) -> T | None:
+    """Run a read of the dedup in a savepoint; ``None`` when it failed.
+
+    Everything the dedup asks the database before it decides — the receipt,
+    the lookup — goes through here. A query that fails aborts the database's
+    transaction; rolled back to the savepoint, the caller's session stays
+    usable, and the work is reviewed as usual: the funds port, the stages and
+    the review are written through that same session. The error is logged as
+    a warning with the submission's id, as the attempt ledger logs its own.
+    """
     try:
-        return await _find(session, submission_id, log)
+        async with session.begin_nested():
+            return await read(session, submission_id)
     except Exception:
-        log.exception("attempt_dedup_lookup_failed")
+        logger.warning(
+            "attempt_dedup_lookup_failed",
+            submission_id=str(submission_id),
+            exc_info=True,
+        )
         return None
 
 
+async def _look_up(
+    session: AsyncSession, submission_id: uuid.UUID
+) -> tuple[dict[str, Any] | None, UnchangedAttempt | None]:
+    """The submission's receipt, and the attempt to repeat when one is to be found.
+
+    No lookup when there is no receipt (no fingerprint to match), nor when the
+    receipt already names the attempt repeated (a run re-entered after its
+    copy was committed).
+    """
+    receipt = await session.scalar(
+        select(HomeworkSubmission.attempt_receipt).where(
+            HomeworkSubmission.id == submission_id
+        )
+    )
+    if receipt is None or DEDUP_RECEIPT_KEY in receipt:
+        return receipt, None
+    return receipt, await _find(session, submission_id)
+
+
 async def _find(
-    session: AsyncSession, submission_id: uuid.UUID, log: Any
+    session: AsyncSession, submission_id: uuid.UUID
 ) -> UnchangedAttempt | None:
     row = (
         await session.execute(
@@ -249,8 +293,9 @@ async def _find(
         return None
     review = _version_1_review(source.review_result)
     if review is None:
-        log.warning(
+        logger.warning(
             "attempt_dedup_review_unreadable",
+            submission_id=str(submission_id),
             source_submission_id=str(source.id),
         )
         return None

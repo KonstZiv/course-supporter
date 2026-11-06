@@ -17,6 +17,9 @@ The locks of the commit, one class each, on a real database and the real body:
 * ґ. a test is scored anew every time; today's Mentor repeats nothing, even
   when the new path reviewed the same work before.
 
+And the road of a failure: a lookup whose query breaks in the database leaves
+the body's session usable (a savepoint), and the work is reviewed as usual.
+
 Lock д (a review stored without the new field) is a unit lock:
 ``tests/unit/test_review_unchanged_note.py``.
 
@@ -38,6 +41,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from course_supporter.api.tasks import arq_process_homework
 from course_supporter.criteria_kinds import CriteriaLayer
@@ -1111,3 +1115,56 @@ class TestChangedWorkIsReviewed:
 
         assert router.calls == [SAFETY, CRITERIA_EVALUATION, REVIEW_EXPLANATION]
         _assert_reviewed_anew(await _row(session_factory, second_id))
+
+
+# ── A lookup that breaks: the session stays usable, the review is ordinary ──
+
+
+async def _broken_lookup(self: HomeworkRepository, **_: Any) -> None:
+    """The lookup's query fails in the database, in the body's own session.
+
+    A real error of Postgres, not a mock that raises: the statement aborts the
+    session's transaction, as a broken lookup in production would.
+    """
+    await self._session.execute(text("SELECT * FROM k3_no_such_table"))
+
+
+class TestALookupThatFailsIsAnOrdinaryReview:
+    """The dedup's reads run in a savepoint: a failed one costs only the repeat."""
+
+    async def test_the_submission_walks_its_stages_to_the_end(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """A match exists, the lookup breaks: everything after it still runs
+        through the same session — the funds port, every stage, the review."""
+        await _first_review(session_factory, task_world, tmp_path)
+        router, port = _RouterDouble(session_factory), _PortDouble()
+
+        with (
+            patch.object(
+                HomeworkRepository, "latest_unchanged_attempt", new=_broken_lookup
+            ),
+            capture_logs() as logs,
+        ):
+            second_id = await _walk(
+                session_factory,
+                task_world,
+                _UTF8_LF,
+                tmp_path,
+                router=router,
+                source=_ListSource(task_world["in_force"]),
+                port=port,
+            )
+
+        assert router.calls == [SAFETY, CRITERIA_EVALUATION, REVIEW_EXPLANATION]
+        assert len(port.reserved) == 1
+        assert port.released == [SubmissionOutcome.COMPLETED]
+        second = await _row(session_factory, second_id)
+        _assert_reviewed_anew(second)
+        assert second.attempt_no == 2
+        [failed] = [e for e in logs if e["event"] == "attempt_dedup_lookup_failed"]
+        assert failed["log_level"] == "warning"
+        assert failed["submission_id"] == str(second_id)

@@ -39,3 +39,4 @@ test.no_explanation: Walang paliwanag para sa tanong na ito.
 test.explanations_in_course_language: Ang paliwanag ay nasa wika ng kurso.
 position.audio: Audio, {time}
 link.later_in_course: Higit pa rito — sa susunod na bahagi ng kurso
+review.unchanged: Hindi nagbago ang gawa mula sa nakaraang pagsubok (pagsubok {attempt}), kaya inulit ang pagsusuri nang walang bagong pagsisiyasat.

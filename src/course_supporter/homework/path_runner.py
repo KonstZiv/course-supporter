@@ -3,10 +3,13 @@
 Purpose:
     One linear body. It opens the same free doors today's Mentor opens, asks the
     funds port once before anything is paid for, walks the stage list its path
-    resolved to, and finishes the revision. It knows the NAMES of its stages and
-    not their meanings: a stage is a description plus an executor, and what a
-    stage decided comes back as a value the body acts on
-    (:class:`~course_supporter.homework.path_stages.StageOutcome`).
+    resolved to, and finishes the revision. Work the student already sent is
+    answered before any of that is paid for: its earlier review is given again
+    and the revision finishes without a stage or a funds question
+    (:mod:`~course_supporter.homework.attempt_dedup`, task 13). It knows the
+    NAMES of its stages and not their meanings: a stage is a description plus
+    an executor, and what a stage decided comes back as a value the body acts
+    on (:class:`~course_supporter.homework.path_stages.StageOutcome`).
 
 Interface:
     :func:`run_new_path_if_switched` is what the ARQ task calls as its first
@@ -47,6 +50,7 @@ from course_supporter.funds_port import (
     SubmissionContext,
     SubmissionOutcome,
 )
+from course_supporter.homework.attempt_dedup import repeat_unchanged_review
 from course_supporter.homework.attempt_ledger import record_attempt
 from course_supporter.homework.doors import DoorReading
 from course_supporter.homework.path_checkpoint import (
@@ -322,25 +326,39 @@ async def _run_path(
     if reading is None:
         # The doors refused and persisted their own refusal, as they do today.
         return
-    # ── Attempt ledger (task 13, K2): once, from what the doors read ──
-    await record_attempt(session, submission_id, reading)
-    await session.commit()
-    submission_text = reading.text
-    # ── Shadow price estimate (BIL-D): written beside the run, never in its way ──
-    # A code stage calls no model and costs nothing: the estimate prices the
-    # model stages of the path alone.
-    priced = model_stages(config)
-    await shadow_review(
-        session_factory=ctx["session_factory"],
-        submission_id=submission.id,
-        tenant_id=submission.tenant_id,
-        job_id=job_id,
-        path_key=str(choice.key),
-        stage_names=[name for name in choice.stages if name in priced],
-        path_stages=priced,
-        submission_chars=len(submission_text),
-    )
     try:
+        # ── Attempt ledger (task 13, K2): once, from what the doors read ──
+        await record_attempt(session, submission_id, reading)
+        await session.commit()
+        # ── The same work again (task 13, K3): its review, nothing paid ──
+        # Before the estimate, the funds port and every stage: a repeated
+        # review calls no model and costs nothing. Asked only on a run with no
+        # checkpoint — a continuation is past this point, and its reserve.
+        if resumed is None and await _repeat_unchanged(
+            session,
+            hw_repo,
+            submission=submission,
+            student=student,
+            tenant=tenant,
+            entered_as=entered_as,
+            log=log,
+        ):
+            return
+        submission_text = reading.text
+        # ── Shadow price estimate (BIL-D): beside the run, never in its way ──
+        # A code stage calls no model and costs nothing: the estimate prices
+        # the model stages of the path alone.
+        priced = model_stages(config)
+        await shadow_review(
+            session_factory=ctx["session_factory"],
+            submission_id=submission.id,
+            tenant_id=submission.tenant_id,
+            job_id=job_id,
+            path_key=str(choice.key),
+            stage_names=[name for name in choice.stages if name in priced],
+            path_stages=priced,
+            submission_chars=len(submission_text),
+        )
         # ── The first funds question, before anything is paid for ──
         context = SubmissionContext(
             tenant_id=submission.tenant_id,
@@ -467,6 +485,45 @@ async def _run_path(
     finally:
         if file_path is not None and file_path.exists():
             file_path.unlink()
+
+
+async def _repeat_unchanged(
+    session: AsyncSession,
+    hw_repo: HomeworkRepository,
+    *,
+    submission: HomeworkSubmission,
+    student: Student | None,
+    tenant: Tenant | None,
+    entered_as: str,
+    log: Any,
+) -> bool:
+    """Give unchanged work its earlier review, and finish; ``False`` otherwise.
+
+    :func:`~course_supporter.homework.attempt_dedup.repeat_unchanged_review`
+    flushes the copy and the receipt; ``reviewing`` is committed with them,
+    then the revision finishes exactly as a reviewed one does (:func:`_finish`).
+    A run re-entered after that commit starts the finish where the first run
+    stopped, as the body's own finish does (:data:`_RESULT_UNDER_WAY`). No
+    stage runs, the funds port is not asked, and the builder's follow-up does
+    not run: it follows up a review it built, and this one it did not.
+    """
+    repeated = await repeat_unchanged_review(session, submission.id)
+    if repeated is None:
+        return False
+    if entered_as not in _RESULT_UNDER_WAY:
+        await hw_repo.update_status(submission.id, "reviewing")
+    await session.commit()
+    await _finish(
+        session,
+        hw_repo,
+        submission=submission,
+        student=student,
+        tenant=tenant,
+        completed=entered_as == HomeworkStatus.COMPLETED.value,
+        log=log,
+    )
+    log.info("path_repeated_unchanged_review", dedup_of=repeated)
+    return True
 
 
 async def _student_and_tenant(

@@ -303,7 +303,9 @@ def assemble_review(structure: ReviewStructureV1) -> str:
     Sections come in the order :data:`SECTION_ORDER` ratified (§2.13), and a
     section with nothing in it is left out entirely rather than printed as an
     empty heading. The structure itself refuses to be empty, so the result is
-    never just a title.
+    never just a title. A review repeated for unchanged work
+    (``unchanged_from_attempt``, task 13) opens with the phrase that says so,
+    the attempt's number put in; a review without it prints as before.
 
     Args:
         structure: The review. Its ``language`` decides the words; there is no
@@ -320,6 +322,12 @@ def assemble_review(structure: ReviewStructureV1) -> str:
     phrases = phrases_for(structure.language)
     language = structure.language
     lines: list[str] = [f"# {_phrase(phrases, 'review.title', language)}"]
+
+    # A repeated review says so first, before the verdict it repeats: the
+    # student reads that nothing was checked anew before reading the result.
+    if structure.unchanged_from_attempt is not None:
+        unchanged = _phrase(phrases, "review.unchanged", language)
+        lines.extend(("", _fill(unchanged, str(structure.unchanged_from_attempt))))
 
     for section in SECTION_ORDER:
         rendered = _section(structure, section, phrases, language)

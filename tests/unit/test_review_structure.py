@@ -130,8 +130,10 @@ class TestSections:
 
     def test_every_section_field_is_in_the_order(self) -> None:
         """And the other way: a section the model can hold but the order does
-        not name would be written by a stage and read by nobody."""
-        not_a_section = {"schema_version", "language"}
+        not name would be written by a stage and read by nobody. The note
+        that a review repeats an earlier attempt's (task 13) is no section:
+        it is printed before them all."""
+        not_a_section = {"schema_version", "language", "unchanged_from_attempt"}
         fields = set(ReviewStructureV1.model_fields) - not_a_section
 
         assert fields == set(SECTION_ORDER)

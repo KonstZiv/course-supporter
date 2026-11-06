@@ -39,3 +39,4 @@ test.no_explanation: ამ კითხვას განმარტება
 test.explanations_in_course_language: განმარტება მოცემულია კურსის ენაზე.
 position.audio: აუდიო, {time}
 link.later_in_course: დაწვრილებით — კურსის შემდგომ ნაწილში
+review.unchanged: ნამუშევარი წინა მცდელობის შემდეგ არ შეცვლილა (მცდელობა {attempt}), ამიტომ რეცენზია ახალი შემოწმების გარეშე განმეორდა.

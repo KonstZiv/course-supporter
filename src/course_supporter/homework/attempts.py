@@ -11,9 +11,14 @@ Purpose:
     may spare the paid review is the adapter's own answer
     (:attr:`AttemptSnapshotter.dedup_enabled`).
 
-    Nothing calls the port yet: the attempt ledger (K2), the dedup at the
-    doors (K3), the difference handed to the evaluation (K4) and the attempt
-    number in the API (K5) come later. The dedup by the raw file hash
+    Two callers ask the port. The attempt ledger
+    (:mod:`~course_supporter.homework.attempt_ledger`, K2) stores every
+    attempt's fingerprint, on both roads, right after the doors read the work.
+    The dedup (:mod:`~course_supporter.homework.attempt_dedup`, K3) reads
+    :attr:`AttemptSnapshotter.dedup_enabled` on the new path and, where it is
+    ``True``, repeats the review of an earlier attempt with the fingerprint
+    the ledger stored. The difference handed to the evaluation (K4) and the
+    attempt number in the API (K5) come later. The dedup by the raw file hash
     (``file_hash``) that exists today is a different thing and is not touched.
 
 Input and output:
@@ -91,7 +96,7 @@ from course_supporter.homework.test_text import canonical_answers
 # The frame the doors render around each archive member: read from the one
 # place that renders it, so the order of frames is restored on the very shape
 # the doors produced and cannot drift from it.
-from course_supporter.homework.text_budget import _ENTRY_FRAME
+from course_supporter.homework.text_budget import ENTRY_FRAME
 from course_supporter.models.source import AssignmentType
 from course_supporter.normalizer import Delta, Manifest, compute_delta
 
@@ -281,7 +286,7 @@ def normalized_work_text(reading: DoorReading) -> str:
 
 def _framed(files: Iterable[tuple[str, str]]) -> str:
     """Files in frames, joined as ``text_budget.fit_archive_entries`` joins them."""
-    return "\n".join(_ENTRY_FRAME.format(name=name) + body for name, body in files)
+    return "\n".join(ENTRY_FRAME.format(name=name) + body for name, body in files)
 
 
 def _by_path(file: WorkFile) -> tuple[str, str]:

@@ -5,9 +5,10 @@ Purpose:
     which one came before. This module records that once per submission, on
     the row itself, the moment the doors have read the work — on both roads
     (the new path's ``path_runner`` and today's Mentor in ``api.tasks``), which
-    call :func:`record_attempt` with what their doors read. Nothing reads the
-    record yet: the dedup (K3), the difference handed to the evaluation (K4)
-    and the number in the API (K5) come later.
+    call :func:`record_attempt` with what their doors read. The dedup of the
+    new path (:mod:`~course_supporter.homework.attempt_dedup`, K3) reads the
+    record right after it is written; the difference handed to the evaluation
+    (K4) and the number in the API (K5) come later.
 
 What is recorded:
     * ``attempt_no`` — the student's earlier attempts at the same task + 1. An
@@ -20,7 +21,8 @@ What is recorded:
       (:func:`task_version_of`);
     * ``fingerprint`` — the K1 fingerprint of the work
       (:func:`~course_supporter.homework.attempts.attempt_snapshotter_for`);
-    * ``attempt_receipt`` — the four above and ``task_version_changed``.
+    * ``attempt_receipt`` — the four above and ``task_version_changed``; the
+      dedup adds ``dedup_of`` when it repeats an earlier attempt's review.
 
 Once:
     A continuation, a retry or a run re-entered after a crash opens the doors
@@ -38,9 +40,10 @@ Known limitation — submissions in flight together:
     a change of the doors this commit does not make.
 
 Failure:
-    The record is bookkeeping no review reads yet, so it never fails one: an
-    error is logged and the review goes on without a record (written inside a
-    savepoint, so the caller's transaction is left as it was).
+    The record never fails a review: an error is logged and the review goes on
+    without a record (written inside a savepoint, so the caller's transaction
+    is left as it was) — and without the dedup, which has no fingerprint to
+    match then, so the work is reviewed as usual.
 """
 
 from __future__ import annotations

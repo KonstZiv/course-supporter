@@ -39,3 +39,4 @@ test.no_explanation: Sellele küsimusele selgitus puudub.
 test.explanations_in_course_language: Selgitused on esitatud kursuse keeles.
 position.audio: audio, {time}
 link.later_in_course: Täpsemalt — kursuse edasises osas
+review.unchanged: Töö pole pärast eelmist katset muutunud (katse {attempt}), seega korrati retsensiooni ilma uue kontrollita.

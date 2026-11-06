@@ -39,3 +39,4 @@ test.no_explanation: M'hemmx spjegazzjoni għal din il-mistoqsija.
 test.explanations_in_course_language: L-ispjegazzjoni tingħata fil-lingwa tal-kors.
 position.audio: awdjo, {time}
 link.later_in_course: Aktar dettalji — aktar 'il quddiem fil-kors
+review.unchanged: Ix-xogħol ma nbidilx mit-tentattiv ta' qabel (tentattiv {attempt}), għalhekk ir-reviżjoni ġiet ripetuta mingħajr kontroll ġdid.

@@ -39,3 +39,4 @@ test.no_explanation: Այս հարցի համար բացատրություն չ�
 test.explanations_in_course_language: Բացատրությունը տրված է դասընթացի լեզվով։
 position.audio: աուդիո, {time}
 link.later_in_course: Մանրամասն՝ դասընթացի հաջորդ մասերում
+review.unchanged: Աշխատանքը նախորդ փորձից հետո չի փոխվել (փորձ {attempt}), ուստի գրախոսությունը կրկնվել է առանց նոր ստուգման։

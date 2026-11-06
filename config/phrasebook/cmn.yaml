@@ -39,3 +39,4 @@ test.no_explanation: 本题没有解释。
 test.explanations_in_course_language: 解释以课程语言提供。
 position.audio: 音频, {time}
 link.later_in_course: 详见课程后续内容
+review.unchanged: 作业自上一次尝试以来没有变化（第 {attempt} 次尝试），因此重复了之前的评审，未进行新的检查。

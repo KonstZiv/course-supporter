@@ -39,3 +39,4 @@ test.no_explanation: No hay explicación para esta pregunta.
 test.explanations_in_course_language: La explicación está en el idioma del curso.
 position.audio: audio, {time}
 link.later_in_course: Más detalles — más adelante en el curso
+review.unchanged: El trabajo no ha cambiado desde el intento anterior (intento {attempt}), por eso la revisión se repite sin una nueva comprobación.

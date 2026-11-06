@@ -39,3 +39,4 @@ test.no_explanation: Bu sual üçün izah yoxdur.
 test.explanations_in_course_language: İzah kursun dilində verilib.
 position.audio: audio, {time}
 link.later_in_course: Ətraflı — kursun davamında
+review.unchanged: İş əvvəlki cəhddən bəri dəyişməyib (cəhd {attempt}), buna görə rəy yeni yoxlama olmadan təkrarlanıb.

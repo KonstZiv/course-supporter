@@ -73,7 +73,7 @@ BILLING_TABLES = (
 )
 ACTOR = "test-admin"
 SHA = "a" * 64
-V1 = "2026-11-07"
+V1 = "2026-11-09"
 V2 = "2026-12-01"
 
 

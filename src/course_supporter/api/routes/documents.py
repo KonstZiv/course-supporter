@@ -232,6 +232,23 @@ async def _cleanup_s3_best_effort(s3: S3Client, key: str) -> None:
         )
 
 
+def _should_cleanup_confirm_reject(exc: Exception) -> bool:
+    """Decide whether confirm_upload rejection should delete client's S3 object
+    (DD-3.3c-L).
+
+    Permanent rejections before commit (400 Stage 1 / slide cap, 422 duration
+    probe failure) clean up the orphaned S3 object.
+    Temporary rejections (503 INTAKE_OVERLOADED / INTAKE_PROBE_UNAVAILABLE)
+    preserve the object so client can retry confirm_upload later with the same key.
+    """
+    if isinstance(exc, HTTPException):
+        if exc.status_code == 503:
+            return False
+        if exc.status_code in (400, 422):
+            return True
+    return False
+
+
 async def _intake_video_duration_sec(
     source_type: SourceType,
     *,
@@ -876,6 +893,16 @@ async def create_document(
     elif source_url is not None:
         actual_url = source_url
 
+    committed = False
+    original_commit = session.commit
+
+    async def _tracking_commit(*args: Any, **kwargs: Any) -> None:
+        nonlocal committed
+        await original_commit(*args, **kwargs)
+        committed = True
+
+    session.commit = _tracking_commit  # type: ignore[method-assign]
+
     try:
         if file is not None:
             # DD-3.3c-I-B: probe video duration at intake (ffprobe on the
@@ -909,9 +936,14 @@ async def create_document(
             duration_sec=duration_sec,
         )
     except Exception:
-        if uploaded_s3_key is not None:
+        # DD-3.3c-L: clean up newly uploaded S3 object ONLY if commit has NOT
+        # occurred. If commit succeeded (QQ5 boundary inside _enqueue_document_flow),
+        # the AuthoredDocument is durably persisted and must not lose its file.
+        if not committed and uploaded_s3_key is not None:
             await _cleanup_s3_best_effort(s3, uploaded_s3_key)
         raise
+    finally:
+        session.commit = original_commit  # type: ignore[method-assign]
     # The flow helper owns the commit (QQ5 helper-owns-commit) — it has already
     # durably committed the document INSERT + Job before dispatch. A code doc
     # enters DOCUMENT_PREPARATION here (BE8); every other type is unchanged (I6).
@@ -1046,6 +1078,16 @@ async def confirm_upload(
             detail=("File not found in S3. Upload may have failed or expired."),
         )
 
+    committed = False
+    original_commit = session.commit
+
+    async def _tracking_commit(*args: Any, **kwargs: Any) -> None:
+        nonlocal committed
+        await original_commit(*args, **kwargs)
+        committed = True
+
+    session.commit = _tracking_commit  # type: ignore[method-assign]
+
     try:
         actual_filename = body.filename or body.key.rsplit("/", 1)[-1]
 
@@ -1133,9 +1175,16 @@ async def confirm_upload(
             document=document,
             duration_sec=duration_sec,
         )
-    except Exception:
-        await _cleanup_s3_best_effort(s3, body.key)
+    except Exception as exc:
+        # DD-3.3c-L: On confirm_upload (direct client upload), clean up S3 object
+        # only if commit has NOT occurred AND the rejection is permanent (400, 422).
+        # Temporary 503 rejections (INTAKE_OVERLOADED, INTAKE_PROBE_UNAVAILABLE)
+        # preserve the file so client can retry confirm_upload with the same key.
+        if not committed and _should_cleanup_confirm_reject(exc):
+            await _cleanup_s3_best_effort(s3, body.key)
         raise
+    finally:
+        session.commit = original_commit  # type: ignore[method-assign]
     # The flow helper owns the commit (QQ5 helper-owns-commit); a code doc enters
     # DOCUMENT_PREPARATION here (BE8), every other type is unchanged (I6).
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -381,14 +382,14 @@ class TestCreateDocument:
         assert resp.status_code == 422
         mock_s3.delete_object.assert_awaited_once()
 
-    async def test_confirm_reject_503_cleans_up_s3(
+    async def test_confirm_reject_503_preserves_s3_file(
         self,
         client: AsyncClient,
         node_id: uuid.UUID,
         mock_s3: AsyncMock,
     ) -> None:
         """DD-3.3c-L: On 503 admission reject during confirm_upload, S3 object
-        is cleaned up.
+        is NOT cleaned up so client can retry with the same key later.
         """
         mock_s3.head_object = AsyncMock(return_value={"ContentLength": 64})
         mock_s3.get_object = AsyncMock(return_value=b"%PDF-1.4\n")
@@ -415,6 +416,39 @@ class TestCreateDocument:
                 json={"key": key, "source_type": "presentation"},
             )
         assert resp.status_code == 503
+        mock_s3.delete_object.assert_not_called()
+
+    async def test_confirm_reject_400_cleans_up_s3(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """DD-3.3c-L: On 400 Stage 1 failure during confirm_upload, S3 object
+        is cleaned up (permanent invalid file rejection).
+        """
+        mock_s3.head_object = AsyncMock(return_value={"ContentLength": 64})
+        mock_s3.get_object = AsyncMock(return_value=b"%PDF-1.4\ncorrupt")
+        key = f"tenants/{STUB_TENANT.tenant_id}/nodes/{node_id}/abc/deck.pdf"
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(
+                RUN_STAGE1,
+                side_effect=SecurityRejectedError(
+                    category=ErrorCategory.FORBIDDEN_TYPE,
+                    detail="Forbidden content",
+                ),
+            ),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents/confirm-upload",
+                json={"key": key, "source_type": "presentation"},
+            )
+        assert resp.status_code == 400
         mock_s3.delete_object.assert_awaited_once_with(key)
 
     async def test_confirm_reject_422_cleans_up_s3(
@@ -450,6 +484,86 @@ class TestCreateDocument:
             )
         assert resp.status_code == 422
         mock_s3.delete_object.assert_awaited_once_with(key)
+
+    async def test_multipart_post_commit_enqueue_failure_preserves_s3_file(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+        mock_session: AsyncMock,
+    ) -> None:
+        """DD-3.3c-L: When DB commit succeeds but post-commit redis enqueue
+        fails on multipart create_document, S3 object is NOT cleaned up.
+        """
+        mock_s3.upload_smart.return_value = (
+            "http://localhost:9000/bucket/key/slides.pdf",
+            1024,
+        )
+        entry = _mock_entry(node_id=node_id)
+
+        async def _commit_and_fail_enqueue(*args: Any, **kwargs: Any) -> Any:
+            await mock_session.commit()
+            raise Exception("Redis connection lost")
+
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, side_effect=_commit_and_fail_enqueue),
+            patch(RUN_STAGE1, return_value=None),
+            pytest.raises(Exception, match="Redis connection lost"),
+        ):
+            await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "presentation"},
+                files={
+                    "file": (
+                        "slides.pdf",
+                        io.BytesIO(b"PDF content"),
+                        "application/pdf",
+                    )
+                },
+            )
+        mock_s3.delete_object.assert_not_called()
+
+    async def test_confirm_post_commit_enqueue_failure_preserves_s3_file(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+        mock_session: AsyncMock,
+    ) -> None:
+        """DD-3.3c-L: When DB commit succeeds but post-commit redis enqueue
+        fails on confirm_upload, S3 object is NOT cleaned up.
+        """
+        mock_s3.head_object = AsyncMock(return_value={"ContentLength": 64})
+        mock_s3.get_object = AsyncMock(return_value=b"%PDF-1.4\n")
+        key = f"tenants/{STUB_TENANT.tenant_id}/nodes/{node_id}/abc/deck.pdf"
+        entry = _mock_entry(node_id=node_id, source_type="presentation")
+
+        async def _commit_and_fail_enqueue(*args: Any, **kwargs: Any) -> Any:
+            await mock_session.commit()
+            raise Exception("Redis connection lost")
+
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(ENQUEUE_FUNC, side_effect=_commit_and_fail_enqueue),
+            patch(RUN_STAGE1, return_value=None),
+            pytest.raises(Exception, match="Redis connection lost"),
+        ):
+            await client.post(
+                f"/api/v1/nodes/{node_id}/documents/confirm-upload",
+                json={"key": key, "source_type": "presentation"},
+            )
+        mock_s3.delete_object.assert_not_called()
 
     async def test_multipart_upload_reject_s3_cleanup_error_ignored(
         self,

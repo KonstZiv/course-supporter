@@ -39,3 +39,4 @@ test.no_explanation: این سوال توضیحی ندارد.
 test.explanations_in_course_language: توضیحات به زبان دوره ارائه شده است.
 position.audio: صوت، {time}
 link.later_in_course: توضیح بیشتر — در ادامهٔ دوره
+review.unchanged: کار از تلاش قبلی تغییری نکرده است (تلاش {attempt})، بنابراین بازبینی بدون بررسی دوباره تکرار شد.

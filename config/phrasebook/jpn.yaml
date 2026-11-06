@@ -39,3 +39,4 @@ test.no_explanation: この質問の解説はありません。
 test.explanations_in_course_language: 解説はコースの言語で記載されています。
 position.audio: 音声、{time}
 link.later_in_course: 詳しくはコースの後半で
+review.unchanged: 前回の試行（{attempt} 回目）から作業内容が変わっていないため、新たな確認を行わずにレビューを再掲しました。

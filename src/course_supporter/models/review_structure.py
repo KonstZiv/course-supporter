@@ -23,6 +23,9 @@ Interface:
     :class:`Position`, :class:`Reference` — the parts.
     :class:`TestSection`, :class:`TestQuestionResult`, :class:`TestOption` —
     a test's result, question by question (task 07).
+    ``ReviewStructureV1.unchanged_from_attempt`` — the earlier attempt a
+    review repeats when the work did not change (task 13, K3). Optional, so
+    the version stays ``"1"`` and a review stored before it reads unchanged.
 
 Two rules the model enforces rather than documents:
 
@@ -434,6 +437,23 @@ class ReviewStructureV1(VersionedReview):
     )
     progress: str | None = Field(
         default=None, description="A word about how the student is doing overall."
+    )
+
+    # Not a section: a note on the whole review, printed before the sections
+    # and not counted by ``_says_something`` — a review that says nothing is
+    # not made one by saying that it was said before. Left out of the dump
+    # when absent, so every review without it — stored before it or written
+    # since — is stored and sent key for key as before.
+    unchanged_from_attempt: int | None = Field(
+        default=None,
+        ge=1,
+        exclude_if=lambda value: value is None,
+        description=(
+            "The number of the student's earlier attempt this review repeats: "
+            "the work did not change since it, so its review was given again "
+            "without a new check (task 13, K3). None for a review written for "
+            "this submission, and for every review stored before the field."
+        ),
     )
 
     @model_validator(mode="after")

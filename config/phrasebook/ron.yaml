@@ -39,3 +39,4 @@ test.no_explanation: Nu există nicio explicație pentru această întrebare.
 test.explanations_in_course_language: Explicațiile sunt oferite în limba cursului.
 position.audio: audio, {time}
 link.later_in_course: Mai multe detalii — mai departe în curs
+review.unchanged: Lucrarea nu s-a schimbat de la încercarea anterioară (încercarea {attempt}), de aceea recenzia a fost repetată fără o nouă verificare.

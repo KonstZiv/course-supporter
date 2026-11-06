@@ -39,3 +39,4 @@ test.no_explanation: આ પ્રશ્ન માટે કોઈ સમજૂ�
 test.explanations_in_course_language: સમજૂતી કોર્સની ભાષામાં છે.
 position.audio: ઑડિયો, {time}
 link.later_in_course: વધુ વિગતો — કોર્સમાં આગળ
+review.unchanged: અગાઉના પ્રયાસ પછી કાર્યમાં કોઈ ફેરફાર થયો નથી (પ્રયાસ {attempt}), તેથી નવી તપાસ વિના સમીક્ષા ફરીથી આપવામાં આવી છે.

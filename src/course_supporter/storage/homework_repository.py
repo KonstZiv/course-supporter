@@ -7,11 +7,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from sqlalchemy import func, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import HomeworkStatus, HomeworkSubmission
+from course_supporter.storage.orm import (
+    HomeworkStatus,
+    HomeworkSubmission,
+    SubmissionCriterionVerdict,
+)
 
 logger = structlog.get_logger()
 
@@ -287,6 +291,78 @@ class HomeworkRepository:
         if latest is None:
             return int(count or 0), None, None
         return int(count or 0), latest.id, latest.task_version
+
+    async def latest_unchanged_attempt(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        student_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+        excluding: uuid.UUID,
+        fingerprint: str,
+        task_version: str,
+        criteria_list: tuple[str, uuid.UUID] | None,
+    ) -> HomeworkSubmission | None:
+        """The latest earlier attempt of the same work, judged alike (task 13, K3).
+
+        Among the attempts :meth:`attempts_before` counts — live revisions that
+        got a review, ``excluding`` the one asking — the latest, by the same
+        order, whose recorded ``fingerprint`` and ``task_version`` are these,
+        which carries a number and a review, and — when ``criteria_list`` is a
+        list's address (``criteria_layer``, ``criteria_source_id``) — whose
+        verdicts were judged against that list. ``None`` for ``criteria_list``
+        means the type is judged against no list; the key is then the
+        fingerprint and the version alone. Read through the partial index
+        ``ix_homework_submissions_attempt_fingerprint``.
+        """
+        conditions = [
+            HomeworkSubmission.tenant_id == tenant_id,
+            HomeworkSubmission.student_id == student_id,
+            HomeworkSubmission.authored_document_id == authored_document_id,
+            HomeworkSubmission.fingerprint == fingerprint,
+            HomeworkSubmission.status.in_(ATTEMPT_STATUSES),
+            HomeworkSubmission.deleted_at.is_(None),
+            HomeworkSubmission.id != excluding,
+            HomeworkSubmission.task_version == task_version,
+            HomeworkSubmission.attempt_no.is_not(None),
+            HomeworkSubmission.review_result.is_not(None),
+        ]
+        if criteria_list is not None:
+            layer, source_id = criteria_list
+            conditions.append(
+                exists().where(
+                    SubmissionCriterionVerdict.submission_id == HomeworkSubmission.id,
+                    SubmissionCriterionVerdict.tenant_id == tenant_id,
+                    SubmissionCriterionVerdict.criteria_layer == layer,
+                    SubmissionCriterionVerdict.criteria_source_id == source_id,
+                )
+            )
+        stmt = (
+            select(HomeworkSubmission)
+            .where(*conditions)
+            .order_by(
+                HomeworkSubmission.created_at.desc(), HomeworkSubmission.id.desc()
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def store_dedup_of(
+        self, submission_id: uuid.UUID, *, dedup_of: int, receipt: dict[str, Any]
+    ) -> None:
+        """Add ``dedup_of`` to the revision's attempt receipt (task 13, K3).
+
+        ``receipt`` is the receipt as the ledger wrote it; the number of the
+        attempt whose review was repeated joins it. No status transition.
+        """
+        stmt = (
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == submission_id)
+            .values(attempt_receipt={**receipt, "dedup_of": dedup_of})
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
 
     async def store_attempt(
         self,

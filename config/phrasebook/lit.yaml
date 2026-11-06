@@ -39,3 +39,4 @@ test.no_explanation: Šiam klausimui paaiškinimo nėra.
 test.explanations_in_course_language: Paaiškinimai pateikti kurso kalba.
 position.audio: Garso įrašas, {time}
 link.later_in_course: Plačiau — vėliau kurse
+review.unchanged: Darbas nuo ankstesnio bandymo nepasikeitė (bandymas {attempt}), todėl recenzija pakartota be naujo patikrinimo.

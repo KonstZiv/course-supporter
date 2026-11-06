@@ -203,9 +203,10 @@ class TestAcceptance:
         """Every key of the source reaches a reader through this assembler.
 
         A phrase nobody renders is a phrase nobody notices going wrong — and it
-        was paid for in sixty languages. The two reviews below are all it takes
-        to reach every key: the maximal one, and a passing verdict, which is
-        the only thing the first cannot be at the same time.
+        was paid for in sixty languages. The reviews below are all it takes
+        to reach every key: the maximal one, a passing verdict, which is the
+        only thing the first cannot be at the same time, a course link, and a
+        review repeated for unchanged work (task 13).
         """
         passed = ReviewStructureV1(
             schema_version=REVIEW_SCHEMA_VERSION,
@@ -216,6 +217,7 @@ class TestAcceptance:
             assemble_review(full_review("ukr"))
             + assemble_review(passed)
             + assemble_review(review_with_a_course_link("ukr"))
+            + assemble_review(passed.model_copy(update={"unchanged_from_attempt": 1}))
         )
 
         unused = [

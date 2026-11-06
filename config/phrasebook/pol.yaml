@@ -39,3 +39,4 @@ test.no_explanation: Brak wyjaśnienia do tego pytania.
 test.explanations_in_course_language: Wyjaśnienia podano w języku kursu.
 position.audio: audio, {time}
 link.later_in_course: Więcej — dalej w kursie
+review.unchanged: Praca nie zmieniła się od poprzedniej próby (próba {attempt}), dlatego recenzja została powtórzona bez ponownego sprawdzenia.

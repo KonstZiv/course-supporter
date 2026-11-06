@@ -39,3 +39,4 @@ test.no_explanation: Engin útskýring.
 test.explanations_in_course_language: Útskýringar eru á tungumáli námskeiðsins.
 position.audio: hljóð, {time}
 link.later_in_course: Nánar síðar í námskeiðinu
+review.unchanged: Verkefnið hefur ekki breyst frá fyrri tilraun (tilraun {attempt}), svo yfirferðin er endurtekin án nýrrar athugunar.

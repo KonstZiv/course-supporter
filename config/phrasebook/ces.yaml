@@ -39,3 +39,4 @@ test.no_explanation: K této otázce není žádné vysvětlení.
 test.explanations_in_course_language: Vysvětlení je uvedeno v jazyce kurzu.
 position.audio: audio, {time}
 link.later_in_course: Podrobněji — dále v kurzu
+review.unchanged: Práce se od předchozího pokusu nezměnila (pokus {attempt}), proto je recenze zopakována bez nové kontroly.

@@ -39,3 +39,4 @@ test.no_explanation: ఈ ప్రశ్నకు వివరణ లేదు.
 test.explanations_in_course_language: వివరణ కోర్సు భాషలో ఇవ్వబడింది.
 position.audio: ఆడియో, {time}
 link.later_in_course: మరిన్ని వివరాలు — కోర్సులో తర్వాత
+review.unchanged: మునుపటి ప్రయత్నం నుండి పనిలో మార్పు లేదు (ప్రయత్నం {attempt}), కాబట్టి కొత్త తనిఖీ లేకుండా సమీక్ష మళ్లీ ఇవ్వబడింది.

@@ -39,3 +39,4 @@ test.no_explanation: या प्रश्नासाठी कोणतेह
 test.explanations_in_course_language: स्पष्टीकरण कोर्सच्या भाषेत दिले आहे.
 position.audio: ऑडिओ, {time}
 link.later_in_course: अधिक माहिती — अभ्यासक्रमात पुढे
+review.unchanged: मागील प्रयत्नापासून कामात कोणताही बदल झालेला नाही (प्रयत्न {attempt}), म्हणून नवीन तपासणीशिवाय पुनरावलोकन पुन्हा दिले आहे.

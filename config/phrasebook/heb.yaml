@@ -39,3 +39,4 @@ test.no_explanation: אין הסבר לשאלה זו.
 test.explanations_in_course_language: ההסבר מוצג בשפת הקורס.
 position.audio: אודיו, {time}
 link.later_in_course: פרטים נוספים — בהמשך הקורס
+review.unchanged: העבודה לא השתנתה מאז הניסיון הקודם (ניסיון {attempt}), ולכן הסקירה חוזרת ללא בדיקה חדשה.

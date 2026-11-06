@@ -39,3 +39,4 @@ test.no_explanation: Geen uitleg beschikbaar.
 test.explanations_in_course_language: De uitleg is in de taal van de cursus.
 position.audio: audio, {time}
 link.later_in_course: Meer hierover later in de cursus
+review.unchanged: Het werk is sinds de vorige poging niet veranderd (poging {attempt}), dus de beoordeling is herhaald zonder nieuwe controle.

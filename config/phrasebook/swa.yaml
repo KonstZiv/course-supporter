@@ -39,3 +39,4 @@ test.no_explanation: Hakuna maelezo kwa swali hili.
 test.explanations_in_course_language: Maelezo yametolewa kwa lugha ya kozi.
 position.audio: sauti, {time}
 link.later_in_course: Maelezo zaidi — baadaye katika kozi
+review.unchanged: Kazi haijabadilika tangu jaribio lililopita (jaribio {attempt}), kwa hivyo mapitio yamerudiwa bila ukaguzi mpya.

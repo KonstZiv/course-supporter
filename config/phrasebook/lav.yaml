@@ -39,3 +39,4 @@ test.no_explanation: Šim jautājumam nav paskaidrojuma.
 test.explanations_in_course_language: Paskaidrojumi ir sniegti kursa valodā.
 position.audio: audio, {time}
 link.later_in_course: Sīkāk — kursā vēlāk
+review.unchanged: Darbs kopš iepriekšējā mēģinājuma nav mainījies (mēģinājums {attempt}), tāpēc recenzija atkārtota bez jaunas pārbaudes.

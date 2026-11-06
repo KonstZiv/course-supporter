@@ -39,3 +39,4 @@ test.no_explanation: Ingen forklaring for dette spørsmålet.
 test.explanations_in_course_language: Forklaringen er gitt på kursspråket.
 position.audio: Lyd, {time}
 link.later_in_course: Mer om dette senere i kurset
+review.unchanged: Arbeidet er ikke endret siden forrige forsøk (forsøk {attempt}), så tilbakemeldingen er gjentatt uten ny kontroll.

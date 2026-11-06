@@ -1785,7 +1785,10 @@ class HomeworkSubmission(SoftDeleteMixin, Base):
     # ── Attempt ledger (mentor-rebuild task 13, K2) ──
     # Written once, where the doors first read the work
     # (homework/attempt_ledger.py); NULL on every row from before K2 and on a
-    # submission the doors refused. No review stage reads them yet.
+    # submission the doors refused. No review stage reads them; the new path's
+    # dedup (homework/attempt_dedup.py, K3) matches on fingerprint and
+    # task_version before the first stage, and adds ``dedup_of`` to the
+    # receipt of a submission whose review it repeated.
     attempt_no: Mapped[int | None] = mapped_column(
         Integer,
         comment="Attempt number (task 13): the student's earlier attempts at "

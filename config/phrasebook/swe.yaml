@@ -39,3 +39,4 @@ test.no_explanation: Förklaring saknas.
 test.explanations_in_course_language: Förklaringar på kursspråket.
 position.audio: ljud, {time}
 link.later_in_course: Mer om detta senare i kursen
+review.unchanged: Arbetet har inte ändrats sedan föregående försök (försök {attempt}), så granskningen upprepas utan en ny kontroll.

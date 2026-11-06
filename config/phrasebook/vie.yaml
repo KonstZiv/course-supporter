@@ -39,3 +39,4 @@ test.no_explanation: Không có giải thích cho câu hỏi này.
 test.explanations_in_course_language: Giải thích bằng ngôn ngữ của khóa học.
 position.audio: âm thanh, {time}
 link.later_in_course: Chi tiết hơn — ở phần sau của khóa học
+review.unchanged: Bài làm không thay đổi so với lần thử trước (lần thử {attempt}), vì vậy bài đánh giá được lặp lại mà không kiểm tra lại.

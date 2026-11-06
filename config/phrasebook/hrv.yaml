@@ -39,3 +39,4 @@ test.no_explanation: Nema objašnjenja za ovo pitanje.
 test.explanations_in_course_language: Objašnjenja su na jeziku tečaja.
 position.audio: audio, {time}
 link.later_in_course: Detaljnije — kasnije u tečaju
+review.unchanged: Rad se nije promijenio od prethodnog pokušaja (pokušaj {attempt}), pa je recenzija ponovljena bez nove provjere.

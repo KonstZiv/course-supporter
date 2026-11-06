@@ -532,6 +532,8 @@ async def delete_node(
             key = s3.extract_key(doc.source_url)
             if key is not None:
                 file_keys.append(key)
+            if doc.slide_keys:
+                file_keys.extend(doc.slide_keys)
 
     # (3) Cascade soft-delete. Class-level ``__scrub_callable__``
     # dispatch (models-fix-3) clears KD3 fields on root + every

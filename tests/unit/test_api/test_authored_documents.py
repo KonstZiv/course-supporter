@@ -293,6 +293,210 @@ class TestCreateDocument:
         assert resp.status_code == 201
         mock_s3.upload_smart.assert_awaited_once()
 
+    async def test_multipart_reject_503_cleans_up_s3(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """DD-3.3c-L: On 503 admission reject, newly uploaded S3 object is
+        cleaned up.
+        """
+        entry = _mock_entry(node_id=node_id)
+        mock_s3.upload_smart.return_value = (
+            "http://localhost:9000/bucket/key/slides.pdf",
+            1024,
+        )
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(
+                ENQUEUE_FUNC,
+                side_effect=HTTPException(
+                    status_code=503,
+                    detail={"code": "INTAKE_OVERLOADED", "details": "Queue full"},
+                ),
+            ),
+            patch(RUN_STAGE1, return_value=None),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "presentation"},
+                files={
+                    "file": (
+                        "slides.pdf",
+                        io.BytesIO(b"PDF content"),
+                        "application/pdf",
+                    )
+                },
+            )
+        assert resp.status_code == 503
+        mock_s3.delete_object.assert_awaited_once()
+        uploaded_key = mock_s3.upload_smart.call_args.kwargs["key"]
+        mock_s3.delete_object.assert_awaited_with(uploaded_key)
+
+    async def test_multipart_reject_422_cleans_up_s3(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """DD-3.3c-L: On 422 duration probe failure, newly uploaded S3 object
+        is cleaned up.
+        """
+        mock_s3.upload_smart.return_value = (
+            "http://localhost:9000/bucket/key/video.mp4",
+            1024,
+        )
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(
+                "course_supporter.api.routes.documents._intake_video_duration_sec",
+                side_effect=HTTPException(
+                    status_code=422,
+                    detail={"code": "INTAKE_DURATION_UNAVAILABLE"},
+                ),
+            ),
+            patch(RUN_STAGE1, return_value=None),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "video"},
+                files={
+                    "file": (
+                        "video.mp4",
+                        io.BytesIO(b"video bytes"),
+                        "video/mp4",
+                    )
+                },
+            )
+        assert resp.status_code == 422
+        mock_s3.delete_object.assert_awaited_once()
+
+    async def test_confirm_reject_503_cleans_up_s3(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """DD-3.3c-L: On 503 admission reject during confirm_upload, S3 object
+        is cleaned up.
+        """
+        mock_s3.head_object = AsyncMock(return_value={"ContentLength": 64})
+        mock_s3.get_object = AsyncMock(return_value=b"%PDF-1.4\n")
+        key = f"tenants/{STUB_TENANT.tenant_id}/nodes/{node_id}/abc/deck.pdf"
+        entry = _mock_entry(node_id=node_id, source_type="presentation")
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(
+                ENQUEUE_FUNC,
+                side_effect=HTTPException(
+                    status_code=503,
+                    detail={"code": "INTAKE_OVERLOADED", "details": "Queue full"},
+                ),
+            ),
+            patch(RUN_STAGE1, return_value=None),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents/confirm-upload",
+                json={"key": key, "source_type": "presentation"},
+            )
+        assert resp.status_code == 503
+        mock_s3.delete_object.assert_awaited_once_with(key)
+
+    async def test_confirm_reject_422_cleans_up_s3(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """DD-3.3c-L: On 422 duration probe failure during confirm_upload, S3
+        object is cleaned up.
+        """
+        mock_s3.head_object = AsyncMock(return_value={"ContentLength": 64})
+        mock_s3.get_object = AsyncMock(return_value=b"video bytes")
+        key = f"tenants/{STUB_TENANT.tenant_id}/nodes/{node_id}/abc/video.mp4"
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch(
+                "course_supporter.api.routes.documents._intake_video_duration_sec",
+                side_effect=HTTPException(
+                    status_code=422,
+                    detail={"code": "INTAKE_DURATION_UNAVAILABLE"},
+                ),
+            ),
+            patch(RUN_STAGE1, return_value=None),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents/confirm-upload",
+                json={"key": key, "source_type": "video"},
+            )
+        assert resp.status_code == 422
+        mock_s3.delete_object.assert_awaited_once_with(key)
+
+    async def test_multipart_upload_reject_s3_cleanup_error_ignored(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """DD-3.3c-L: Cleanup failure on rejection logs warning and does not
+        alter response.
+        """
+        mock_s3.delete_object.side_effect = Exception("S3 timeout")
+        mock_s3.upload_smart.return_value = (
+            "http://localhost:9000/bucket/key/slides.pdf",
+            1024,
+        )
+        entry = _mock_entry(node_id=node_id)
+        with (
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(AuthoredDocumentRepository, "create", return_value=entry),
+            patch(
+                ENQUEUE_FUNC,
+                side_effect=HTTPException(
+                    status_code=503,
+                    detail={"code": "INTAKE_OVERLOADED", "details": "Queue full"},
+                ),
+            ),
+            patch(RUN_STAGE1, return_value=None),
+        ):
+            resp = await client.post(
+                f"/api/v1/nodes/{node_id}/documents",
+                data={"source_type": "presentation"},
+                files={
+                    "file": (
+                        "slides.pdf",
+                        io.BytesIO(b"PDF content"),
+                        "application/pdf",
+                    )
+                },
+            )
+        assert resp.status_code == 503
+        assert resp.json()["detail"]["code"] == "INTAKE_OVERLOADED"
+        mock_s3.delete_object.assert_awaited_once()
+
     async def test_invalid_source_type_returns_422(
         self, client: AsyncClient, node_id: uuid.UUID
     ) -> None:

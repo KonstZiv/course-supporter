@@ -39,3 +39,4 @@ test.no_explanation: ಈ ಪ್ರಶ್ನೆಗೆ ಯಾವುದೇ ವಿ�
 test.explanations_in_course_language: ವಿವರಣೆಗಳನ್ನು ಕೋರ್ಸ್‌ನ ಭಾಷೆಯಲ್ಲಿ ನೀಡಲಾಗಿದೆ.
 position.audio: ಆಡಿಯೊ, {time}
 link.later_in_course: ಹೆಚ್ಚಿನ ವಿವರ — ಕೋರ್ಸ್‌ನ ಮುಂದಿನ ಭಾಗದಲ್ಲಿ
+review.unchanged: ಹಿಂದಿನ ಪ್ರಯತ್ನದಿಂದ ಕೆಲಸ ಬದಲಾಗಿಲ್ಲ (ಪ್ರಯತ್ನ {attempt}), ಆದ್ದರಿಂದ ಹೊಸ ಪರಿಶೀಲನೆ ಇಲ್ಲದೆ ವಿಮರ್ಶೆಯನ್ನು ಪುನರಾವರ್ತಿಸಲಾಗಿದೆ.

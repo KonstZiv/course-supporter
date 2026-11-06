@@ -72,7 +72,9 @@ _CHARS_PER_TOKEN = 2.0
 
 # Rendered frame around one archive member inside ``submission_text``. Counted
 # against the budget because the model pays for it like any other character.
-_ENTRY_FRAME = "--- {name} ---\n"
+# Public: the attempt snapshot (``homework/attempts.py``) restores the order of
+# an archive's files on the very frames rendered here.
+ENTRY_FRAME = "--- {name} ---\n"
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,7 +259,7 @@ def fit_archive_entries(
         for entry in entries
     }
     rendered = {
-        name: _ENTRY_FRAME.format(name=name) + body for name, body in bodies.items()
+        name: ENTRY_FRAME.format(name=name) + body for name, body in bodies.items()
     }
 
     kept: set[str] = set()

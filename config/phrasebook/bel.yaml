@@ -39,3 +39,4 @@ test.no_explanation: Тлумачэння да гэтага пытання ня�
 test.explanations_in_course_language: Тлумачэнне пададзена на мове курса.
 position.audio: аўдыя, {time}
 link.later_in_course: Падрабязней — далей у курсе
+review.unchanged: Праца не змянілася з папярэдняй спробы (спроба {attempt}), таму рэцэнзію паўторана без новай праверкі.

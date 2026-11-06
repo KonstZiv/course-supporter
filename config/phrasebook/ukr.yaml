@@ -18,8 +18,8 @@
 # 2026-09-17). Should the structure ever need a number inside a sentence, that
 # is a change of this format, not another key.
 #
-# ``{time}``, ``{number}`` and ``{name}`` are filled by the assembler; a
-# translation carries them through unchanged.
+# ``{time}``, ``{number}``, ``{name}`` and ``{attempt}`` are filled by the
+# assembler; a translation carries them through unchanged.
 
 # --- The verdict (structure section 1: passed or not, and why) ---
 verdict.passed: Зараховано
@@ -74,3 +74,8 @@ link.later_in_course: Докладніше — далі в курсі
 
 # --- The document itself: the markdown the webhook and the bridge page carry ---
 review.title: Рецензія
+
+# --- The same work again: an earlier attempt's review repeated (task 13) ---
+# Opens the review, before the verdict. ``{attempt}`` is the number of the
+# attempt repeated — a name for it, like ``test.question``'s, not a count.
+review.unchanged: Робота не змінилась із попередньої спроби (спроба {attempt}), тому рецензію повторено без нової перевірки.

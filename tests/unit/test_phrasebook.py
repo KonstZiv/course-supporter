@@ -201,7 +201,7 @@ class TestShippedSource:
     """The file every translation derives from (mentor-rebuild task 04)."""
 
     SOURCE_FILE = Path("config/phrasebook") / f"{SOURCE_LANGUAGE}.yaml"
-    PLACEHOLDERS: ClassVar[set[str]] = {"time", "number", "name"}
+    PLACEHOLDERS: ClassVar[set[str]] = {"time", "number", "name", "attempt"}
 
     def test_it_reads_as_plain_phrases(self) -> None:
         phrases = load_language_file(self.SOURCE_FILE)

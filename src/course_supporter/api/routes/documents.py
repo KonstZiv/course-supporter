@@ -1215,10 +1215,17 @@ async def attach_project_base(
             archive_key=archive_key,
         )
     except IntegrityError as exc:
-        # A concurrent re-upload won the UNIQUE(doc, version) race. The stored
-        # S3 object is orphaned (uuid-scoped — no overwrite of the winner);
-        # cleanup folds into the deferred base-S3-cleanup debt (sibling DD-6-R).
+        # A concurrent re-upload won the UNIQUE(doc, version) race. Clean up the
+        # newly-uploaded archive_key best-effort (DD-6-U).
         await session.rollback()
+        try:
+            await s3.delete_object(archive_key)
+        except Exception:
+            logger.warning(
+                "base_attach_s3_cleanup_failed",
+                archive_key=archive_key,
+                exc_info=True,
+            )
         raise HTTPException(
             status_code=409,
             detail={
@@ -1569,6 +1576,16 @@ async def delete_document(
     # the ingest seam) — no extract_key round-trip needed.
     if document.slide_keys:
         file_keys.extend(document.slide_keys)
+    # Project base versions (Phase 6 KD18) store raw archives and normalized
+    # snapshots in S3; collect archive_key and snapshot_key before cascade-delete
+    # removes the project_bases rows (DD-6-U).
+    base_repo = ProjectBaseRepository(session)
+    bases = await base_repo.list_for_documents([document_id])
+    for base in bases:
+        if base.archive_key:
+            file_keys.append(base.archive_key)
+        if base.snapshot_key:
+            file_keys.append(base.snapshot_key)
 
     # (3) Cascade soft-delete. Class-level ``__scrub_callable__``
     # dispatch (models-fix-3) clears KD3 fields on the AuthoredDocument

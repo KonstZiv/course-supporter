@@ -29,6 +29,7 @@ from course_supporter.storage.authored_document_repository import (
 )
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -1200,6 +1201,63 @@ class TestDeleteDocument:
             "tenants/t/deck.pptx",
             "tenants/t/nodes/n/slides/d/0001.webp",
             "tenants/t/nodes/n/slides/d/0002.webp",
+        ]
+
+    async def test_project_base_keys_included_in_s3_cleanup(
+        self,
+        client: AsyncClient,
+        node_id: uuid.UUID,
+        mock_s3: AsyncMock,
+    ) -> None:
+        """DD-6-U: Document deletion collects archive_key and snapshot_key of
+        project bases.
+        """
+        entry = _mock_entry(
+            node_id=node_id,
+            source_type="code",
+            task_type="project",
+            source_url="http://localhost:9000/bucket/tenants/t/project.zip",
+        )
+        base_v1 = MagicMock()
+        base_v1.archive_key = "tenants/t/bases/d/v1/original.zip"
+        base_v1.snapshot_key = "tenants/t/bases/d/v1/snapshot.zip"
+        base_v2 = MagicMock()
+        base_v2.archive_key = "tenants/t/bases/d/v2/original.zip"
+        base_v2.snapshot_key = None
+        mock_s3.extract_key = MagicMock(return_value="tenants/t/project.zip")
+        cascade_mock = AsyncMock()
+        enqueue_mock = AsyncMock()
+        with (
+            patch.object(AuthoredDocumentRepository, "get_by_id", return_value=entry),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_node(node_id=node_id),
+            ),
+            patch.object(
+                ProjectBaseRepository,
+                "list_for_documents",
+                new=AsyncMock(return_value=[base_v1, base_v2]),
+            ),
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+            patch(
+                "course_supporter.api.routes.documents.enqueue_s3_cleanup",
+                enqueue_mock,
+            ),
+        ):
+            resp = await client.delete(f"/api/v1/documents/{entry.id}")
+        assert resp.status_code == 204
+        cascade_mock.assert_awaited_once()
+        enqueue_mock.assert_awaited_once()
+        assert enqueue_mock.call_args.kwargs["file_keys"] == [
+            "tenants/t/project.zip",
+            "tenants/t/bases/d/v1/original.zip",
+            "tenants/t/bases/d/v1/snapshot.zip",
+            "tenants/t/bases/d/v2/original.zip",
         ]
 
     async def test_no_enqueue_when_extract_key_returns_none(

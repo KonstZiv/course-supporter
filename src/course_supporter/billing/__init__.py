@@ -29,17 +29,25 @@ The journal of units (BIL-B):
     :mod:`.journal` — the arithmetic every change shares: the account's lock,
     what each batch holds, the repayment of differences.
     :mod:`.benefit` — what the author's benefit covers; the monthly limit.
-    :mod:`.expiry` — expiry of batches, annulment of differences (for the
-    scheduler of BIL-B part 2).
+    :mod:`.expiry` — expiry of batches, annulment of differences.
     :mod:`.refunds` — refunds of unused units through Paddle.
+
+Upkeep on the clock (BIL-B part 2):
+    :mod:`.periodic` — the four periodic tasks the scheduler
+    (``course_supporter.periodic``) runs: expiry, annulment, hanging reserves,
+    destruction.
+    :mod:`.stale_reserves` — reserves left active too long, released.
+    :mod:`.retention` — the records of an account destroyed five years after
+    its owner's anonymization.
 
 Storage:
     ``billing_*`` tables (``storage.orm.Billing*``). None has a foreign key to a
     table outside billing, so deleting a tenant or a student never reaches a
     billing row and never fails on one; the journal stays five years after
-    the owner's anonymization (its destruction is BIL-B part 2).
+    the owner's anonymization, then :mod:`.retention` destroys it.
 
 Transactions:
-    The functions flush and never commit: the caller (a route, the script)
-    owns the transaction, so a change and its audit entry land together.
+    The functions flush and never commit: the caller (a route, the script,
+    a periodic task) owns the transaction, so a change and its audit entry
+    land together.
 """

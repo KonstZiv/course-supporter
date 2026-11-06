@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from scripts import billing_admin
@@ -203,4 +204,56 @@ def test_credit_balance_statement(
             )
             == 1
         )
+    engine.dispose()
+
+
+def test_run_periodic_dry_run_then_run(
+    tenant: Tenant, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``run-periodic`` (BIL-B part 2): a dry run counts and changes nothing;
+    the run burns the expired batch, as the scheduler would."""
+    engine = create_engine(get_settings().database_url)
+    now = datetime.now(UTC)
+    with Session(engine) as session:
+        account = BillingAccount(kind="author", tenant_id=tenant.id)
+        session.add(account)
+        session.flush()
+        session.add(
+            BillingBatch(
+                account_id=account.id,
+                source="admin_credit",
+                units=100,
+                created_at=now - timedelta(days=200),
+                expires_at=now - timedelta(days=17),
+                reason="pilot",
+                actor="k",
+            )
+        )
+        session.commit()
+        account_id = account.id
+
+    def burned() -> list[int]:
+        with Session(engine) as session:
+            return list(
+                session.scalars(
+                    select(BillingMovement.units).where(
+                        BillingMovement.account_id == account_id,
+                        BillingMovement.kind == "batch_expired",
+                    )
+                )
+            )
+
+    run = ["run-periodic", "--task", "billing_expire"]
+    # stdout: the run's log line (periodic_task_run), then the script's answer.
+    assert billing_admin.main([*run, "--dry-run"]) == 0
+    *_, answer = capsys.readouterr().out.splitlines()
+    assert answer.startswith("billing_expire: processed ")
+    assert "units=" in answer and answer.endswith("(dry run: nothing changed)")
+    assert burned() == []
+
+    assert billing_admin.main(run) == 0
+    *_, answer = capsys.readouterr().out.splitlines()
+    assert answer.startswith("billing_expire: processed ")
+    assert "dry run" not in answer
+    assert burned() == [100]
     engine.dispose()

@@ -18,6 +18,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from course_supporter.key_pool import KeyPool
+from course_supporter.periodic.schedule import parse_cron
 
 
 class Environment(StrEnum):
@@ -103,6 +104,28 @@ class Settings(BaseSettings):
     billing_terms_version: str = Field(
         default="2026-11-07", pattern=r"^\d{4}-\d{2}-\d{2}$"
     )
+    # Billing upkeep (BIL-B part 2), read by the periodic tasks below.
+    # An active reserve older than this is released as hanging: it must exceed
+    # the longest an action may run (worker_job_timeout x worker_max_tries).
+    billing_stale_reserve_hours: int = Field(default=24, ge=1)
+    # The records of an account are destroyed this many years after its
+    # owner's anonymization (operator's rule: five).
+    billing_retention_years: int = Field(default=5, ge=1)
+    # Accounts destroyed per transaction.
+    billing_purge_batch_size: int = Field(default=50, ge=1)
+
+    # --- Periodic tasks (course_supporter.periodic) ---
+    # ARQ cron jobs of WorkerSettings. Each task: a switch and a schedule of
+    # five cron fields, UTC ("minute hour day month weekday"). A task switched
+    # off is not scheduled; scripts/billing_admin.py run-periodic still runs it.
+    periodic_billing_expire_enabled: bool = True
+    periodic_billing_expire_cron: str = "5 * * * *"
+    periodic_billing_annul_enabled: bool = True
+    periodic_billing_annul_cron: str = "10 * * * *"
+    periodic_billing_stale_reserves_enabled: bool = True
+    periodic_billing_stale_reserves_cron: str = "*/15 * * * *"
+    periodic_billing_purge_enabled: bool = True
+    periodic_billing_purge_cron: str = "30 3 * * *"
 
     # --- PostgreSQL ---
     postgres_user: str = "course_supporter"
@@ -213,6 +236,17 @@ class Settings(BaseSettings):
         underlying ``intake_job_expires_hours`` must satisfy.
         """
         return int(self.intake_job_expires_hours * 3_600_000)
+
+    @field_validator(
+        "periodic_billing_expire_cron",
+        "periodic_billing_annul_cron",
+        "periodic_billing_stale_reserves_cron",
+        "periodic_billing_purge_cron",
+    )
+    @classmethod
+    def _validate_cron(cls, v: str) -> str:
+        parse_cron(v)  # raises ValueError: a bad schedule stops the boot
+        return v
 
     @field_validator("worker_heavy_window_tz")
     @classmethod

@@ -1,8 +1,8 @@
 """Expiry of batches and annulment of differences (BIL-B): for the scheduler.
 
 Purpose:
-    Two functions the scheduler of BIL-B part 2 will run; nothing runs them
-    yet. Each is idempotent — a second run at the same moment finds nothing —
+    Two functions the scheduler runs hourly (:mod:`.periodic`, BIL-B part 2).
+    Each is idempotent — a second run at the same moment finds nothing —
     and safe to run at any time: it locks each account it changes
     (:func:`.journal.lock_account`), like every other change of units.
 

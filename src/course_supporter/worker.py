@@ -11,7 +11,7 @@ Or in Docker::
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
@@ -26,12 +26,14 @@ from course_supporter.api.tasks import (
 )
 from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
+from course_supporter.periodic import registry as periodic
 from course_supporter.workers.base_normalize import base_normalize_task
 from course_supporter.workers.email_send import arq_send_email
 from course_supporter.workers.key_explain import arq_explain_key
 from course_supporter.workers.s3_cleanup import s3_cleanup_task
 
 if TYPE_CHECKING:
+    from arq.cron import CronJob
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 WorkerCtx = dict[str, Any]
@@ -263,6 +265,11 @@ class WorkerSettings:
         base_normalize_task,
         arq_explain_key,
     ]
+    # The system's one scheduler (``course_supporter.periodic``): the periodic
+    # tasks live here, on the default queue, and nowhere else — the homework
+    # worker serves students' submissions only. Evaluated in UTC.
+    cron_jobs: ClassVar[list[CronJob]] = periodic.cron_jobs(_settings)
+    timezone: ClassVar[tzinfo] = UTC
     on_startup = startup
     on_shutdown = shutdown
 

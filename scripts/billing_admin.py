@@ -57,8 +57,22 @@ each ending audited as payment_rule.end; a second run changes nothing:
     anonymize-student --student <student-id> --actor kostiantyn
     anonymize-tenant  --tenant <tenant-id> --actor kostiantyn
 
+Periodic tasks (BIL-B part 2), run by hand — the same run the scheduler makes
+(``course_supporter.periodic``): the task's advisory lock, its transaction, its
+log line. For a deployment check and for diagnosis; a task switched off in the
+settings runs all the same. --dry-run does the work in a transaction that is
+rolled back: it counts what a run would do now and changes nothing. Nothing is
+audited (the scheduler's runs are not either), so there is no --actor:
+    run-periodic --task billing_expire [--dry-run]     # burn expired units
+    run-periodic --task billing_annul [--dry-run]      # annul differences
+    run-periodic --task billing_stale_reserves [--dry-run]
+        # release reserves hanging longer than BILLING_STALE_RESERVE_HOURS
+    run-periodic --task billing_purge --dry-run
+        # count what the five-year destruction would delete now
+
 Exit status: 0 on success; 1 when the operation is refused (the message says
-why; nothing is written); 2 on a usage error.
+why; nothing is written) or a periodic task failed or found its lock held;
+2 on a usage error.
 """
 
 from __future__ import annotations
@@ -71,12 +85,14 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from course_supporter.billing import accounts, admin, ledger
 from course_supporter.billing.errors import BillingError, BillingNotFoundError
 from course_supporter.billing.kinds import ActionKind, Benefit, RuleScope
+from course_supporter.billing.periodic import BILLING_TASKS
 from course_supporter.config import get_settings
+from course_supporter.periodic.runner import TaskRun, run_task
 from course_supporter.storage.orm import (
     BillingAccount,
     BillingMovement,
@@ -326,6 +342,40 @@ async def anonymize_tenant(session: AsyncSession, args: argparse.Namespace) -> s
     return _anonymization_lines(done)
 
 
+class PeriodicRunError(Exception):
+    """A periodic task run by hand failed or found its lock held."""
+
+
+def _periodic_line(run: TaskRun) -> str:
+    details = "".join(f", {k}={v}" for k, v in run.details.items())
+    dry = " (dry run: nothing changed)" if run.dry_run else ""
+    return (
+        f"{run.task}: processed {run.processed}{details} in {run.duration_ms} ms{dry}"
+    )
+
+
+async def run_periodic(args: argparse.Namespace) -> str:
+    """Run one periodic task as the scheduler would (module docstring)."""
+    task = next(t for t in BILLING_TASKS if t.name == args.task)
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    try:
+        factory = async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
+        done = await run_task(task, factory, settings=settings, dry_run=args.dry_run)
+    finally:
+        await engine.dispose()
+    if done.skipped == "busy":
+        raise PeriodicRunError(f"{task.name}: another run holds its lock; try later")
+    if done.error is not None:
+        raise PeriodicRunError(f"{task.name} failed: {done.error}")
+    line = _periodic_line(done)
+    if not task.enabled(settings):
+        line += f"\nnote: {task.name} is switched off in the schedule"
+    return line
+
+
 COMMANDS: dict[str, Handler] = {
     "show-account": show_account,
     "get-settings": get_settings_cmd,
@@ -339,6 +389,11 @@ COMMANDS: dict[str, Handler] = {
     "credit": credit,
     "balance": balance,
     "statement": statement,
+}
+
+# Commands that open their own transactions rather than run in the one of run().
+SELF_TRANSACTED: dict[str, Callable[[argparse.Namespace], Awaitable[str]]] = {
+    "run-periodic": run_periodic,
 }
 
 
@@ -405,11 +460,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--account", required=True, type=uuid.UUID)
     p.add_argument("--from", dest="since", type=_instant, help="from (inclusive)")
     p.add_argument("--to", dest="until", type=_instant, help="to (exclusive)")
+
+    p = command("run-periodic", "run a periodic task by hand", changes=False)
+    p.add_argument(
+        "--task",
+        required=True,
+        choices=[t.name for t in BILLING_TASKS],
+        help="; ".join(f"{t.name}: {t.summary}" for t in BILLING_TASKS),
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="count only; roll everything back"
+    )
     return parser
 
 
 async def run(args: argparse.Namespace) -> str:
-    """Run one command in one transaction: committed on success only."""
+    """Run one command in one transaction: committed on success only.
+
+    The exceptions (``SELF_TRANSACTED``) own their transactions: a periodic
+    task opens its own.
+    """
+    if args.command in SELF_TRANSACTED:
+        return await SELF_TRANSACTED[args.command](args)
     engine = create_async_engine(get_settings().database_url)
     try:
         async with AsyncSession(engine) as session, session.begin():
@@ -425,6 +497,9 @@ def main(argv: list[str] | None = None) -> int:
         out = asyncio.run(run(args))
     except BillingError as exc:
         sys.stderr.write(f"refused: {exc}\n")
+        return 1
+    except PeriodicRunError as exc:
+        sys.stderr.write(f"{exc}\n")
         return 1
     sys.stdout.write(out + "\n")
     return 0

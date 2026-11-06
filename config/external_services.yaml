@@ -835,6 +835,12 @@ providers:
         cost_per_minute: 0.003
         billing_granularity_sec: null
 
+  # Deepgram is no longer called (DEEPGRAM-REMOVE-1, 2026-11-05): no transcribe
+  # chain names nova-3 and the code has no Deepgram provider. The price entry
+  # stays so register rows written before the removal keep a model to be priced
+  # by (cost_estimate/report.py re-prices rows of unknown cost by model id), and
+  # so the catalog fingerprint and version stay as they are. Same practice as
+  # the retired LLM ids above (entries kept for old register rows).
   deepgram:
     type: stt
     models:
@@ -856,13 +862,13 @@ strategies:
     providers: [gemini, whisper]
     fallback: true
   stt_default:
-    providers: [elevenlabs, openai_stt, deepgram]
+    providers: [elevenlabs, openai_stt]
     fallback: true
   stt_quality:
     providers: [elevenlabs, openai_stt]
     fallback: true
   stt_budget:
-    providers: [deepgram, openai_stt]
+    providers: [openai_stt]
     fallback: true
 
 # STT action chain consumed by STTRouter (KD7 fallback ladder). The LLM
@@ -871,6 +877,6 @@ actions:
   transcribe:
     strategy: stt_default
     chain:
-      default: [scribe_v1, gpt-4o-mini-transcribe, nova-3]
+      default: [scribe_v1, gpt-4o-mini-transcribe]
       quality: [scribe_v1, gpt-4o-mini-transcribe]
-      budget: [nova-3, gpt-4o-mini-transcribe]
+      budget: [gpt-4o-mini-transcribe]

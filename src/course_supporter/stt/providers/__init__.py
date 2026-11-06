@@ -9,19 +9,16 @@ classes. To add a new provider:
 """
 
 from course_supporter.stt.providers.base import STTProvider
-from course_supporter.stt.providers.deepgram import DeepgramSTTProvider
 from course_supporter.stt.providers.elevenlabs import ElevenLabsSTTProvider
 from course_supporter.stt.providers.openai_stt import OpenAISTTProvider
 
 STT_PROVIDER_REGISTRY: dict[str, type[STTProvider]] = {
     "elevenlabs": ElevenLabsSTTProvider,
     "openai_stt": OpenAISTTProvider,
-    "deepgram": DeepgramSTTProvider,
 }
 
 __all__ = [
     "STT_PROVIDER_REGISTRY",
-    "DeepgramSTTProvider",
     "ElevenLabsSTTProvider",
     "OpenAISTTProvider",
     "STTProvider",

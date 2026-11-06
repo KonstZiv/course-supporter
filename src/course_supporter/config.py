@@ -37,7 +37,7 @@ _LLM_PROVIDER_KEYS = (
     "mistral",
     "dashscope",
 )
-_STT_PROVIDER_KEYS = ("elevenlabs", "deepgram")
+_STT_PROVIDER_KEYS = ("elevenlabs",)
 _ALL_PROVIDER_KEYS = _LLM_PROVIDER_KEYS + _STT_PROVIDER_KEYS
 
 # Dev-only default for the portal session signing secret. A production
@@ -408,9 +408,6 @@ class Settings(BaseSettings):
     elevenlabs_api_key_raw: SecretStr | None = Field(
         None, validation_alias="elevenlabs_api_key"
     )
-    deepgram_api_key_raw: SecretStr | None = Field(
-        None, validation_alias="deepgram_api_key"
-    )
 
     _key_pools: dict[str, KeyPool] = PrivateAttr(default_factory=dict)
 
@@ -463,11 +460,6 @@ class Settings(BaseSettings):
         pool = self._key_pools.get("elevenlabs")
         return pool.next_key() if pool else None
 
-    @property
-    def deepgram_api_key(self) -> SecretStr | None:
-        pool = self._key_pools.get("deepgram")
-        return pool.next_key() if pool else None
-
     def key_pool_for(self, provider: str) -> KeyPool | None:
         """Return the full key pool for a provider, or None."""
         return self._key_pools.get(provider)
@@ -492,7 +484,6 @@ class Settings(BaseSettings):
     # --- STT Default Models ---
     elevenlabs_default_model: str = "scribe_v1"
     openai_stt_default_model: str = "gpt-4o-mini-transcribe"
-    deepgram_default_model: str = "nova-3"
 
     # --- DeepSeek ---
     # DeepSeek uses OpenAI-compatible API via OpenAI SDK with custom base_url.

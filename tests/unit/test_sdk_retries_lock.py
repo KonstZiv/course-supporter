@@ -27,7 +27,6 @@ from course_supporter.llm.providers.anthropic import AnthropicProvider
 from course_supporter.llm.providers.dashscope import DashScopeProvider
 from course_supporter.llm.providers.gemini import GeminiProvider
 from course_supporter.llm.providers.openai_compat import OpenAICompatProvider
-from course_supporter.stt.providers.deepgram import DeepgramSTTProvider
 from course_supporter.stt.providers.elevenlabs import ElevenLabsSTTProvider
 from course_supporter.stt.providers.openai_stt import OpenAISTTProvider
 
@@ -142,11 +141,9 @@ class TestSpeechToText:
 
         assert await _requests_sent(call, openai.APIStatusError) == 1
 
-    @pytest.mark.parametrize(
-        "provider_cls", [ElevenLabsSTTProvider, DeepgramSTTProvider]
-    )
+    @pytest.mark.parametrize("provider_cls", [ElevenLabsSTTProvider])
     def test_raw_httpx_clients_have_no_transport_retries(
-        self, provider_cls: type[ElevenLabsSTTProvider | DeepgramSTTProvider]
+        self, provider_cls: type[ElevenLabsSTTProvider]
     ) -> None:
         """Raw ``httpx``: no SDK; the transport's connect retries stay at 0."""
         provider = provider_cls(["k1", "k2"])

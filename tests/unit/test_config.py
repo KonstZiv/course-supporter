@@ -1,6 +1,7 @@
 """Tests for application configuration."""
 
 from datetime import time
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -166,6 +167,50 @@ class TestSettings:
         s = Settings(environment="testing", _env_file=None)  # type: ignore[arg-type]
         assert s.is_testing is True
         assert s.is_dev is False
+
+
+class TestRemovedProviderKeyInEnvironment:
+    """A key of a removed provider does not stop the boot (DEEPGRAM-REMOVE-1).
+
+    The Deepgram provider is gone, but production's ``.env.prod`` keeps
+    ``DEEPGRAM_API_KEY`` until the owner removes it. Compose hands that file to
+    the containers as environment variables (``env_file:``); a local checkout
+    reads its ``.env`` file. Settings must load in both cases, and the leftover
+    key must not bring a speech-to-text provider back.
+    """
+
+    _LEFTOVER = "DEEPGRAM_API_KEY"
+
+    def test_leftover_key_in_process_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.stt.factory import create_stt_providers
+
+        monkeypatch.setenv(self._LEFTOVER, "leftover-key")
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "el-key")
+
+        s = Settings(_env_file=None)
+
+        assert s.key_pool_for("deepgram") is None
+        assert set(create_stt_providers(s)) == {"elevenlabs"}
+
+    def test_leftover_key_in_env_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.stt.factory import create_stt_providers
+
+        monkeypatch.delenv(self._LEFTOVER, raising=False)
+        monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            f"{self._LEFTOVER}=leftover-key\nELEVENLABS_API_KEY=el-key\n",
+            encoding="utf-8",
+        )
+
+        s = Settings(_env_file=env_file)
+
+        assert s.key_pool_for("deepgram") is None
+        assert set(create_stt_providers(s)) == {"elevenlabs"}
 
 
 class TestWorkerSettings:

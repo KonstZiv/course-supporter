@@ -787,42 +787,81 @@ class TestPurge:
             source=PayerSource.STUDENT_RULE,
             rule_id=rule_id,
         )
+        # The student's own rows: a batch, its credit movement, a consent.
+        await scene.buy(student, 50, at=at - timedelta(days=20))
+        await scene.do(
+            lambda s: record_student_consent(
+                s,
+                tenant_id=tenant,
+                student_id=student_id,
+                terms_version="2026-11-09",
+                current_version="2026-11-09",
+                text_sha256=SHA,
+                channel=ConsentChannel.PORTAL,
+            )
+        )
         await scene.delete_student_and_anonymize(student_id, at)
         return tenant, author, student, rule_id
 
-    async def test_an_account_another_account_still_names_is_kept_whole(
+    async def test_a_row_another_account_names_stays_alone_until_that_one_goes(
         self, scene: Scene
     ) -> None:
-        """The author (active) paid for the student's review: the author's
-        journal names the student's account, so nothing of it is destroyed."""
-        _, author, student, _ = await self._paid_by_the_author(
-            scene, student_first=False
+        """Operator 2026-11-06, option b. The author (active) paid for the
+        student's review: the author's movement names the student's account.
+        Everything of the student goes but the account row, which stays —
+        anonymized — while the author's journal points at it, counted in the
+        INFO line, never as a WARNING. Once the author is destroyed, the next
+        run deletes the row."""
+        tenant, author, student, _ = await self._paid_by_the_author(
+            scene, student_first=True
         )
-        before = {a: await scene.rows(a) for a in (author, student)}
+        own = await scene.rows(student)
+        assert own["billing_batches"] and own["billing_consents"]
+        author_rows = await scene.rows(author)
+        author_journal = await scene.journal(author)
 
         with capture_logs() as logs:
             done = await run(scene, BILLING_PURGE)
 
-        assert {a: await scene.rows(a) for a in (author, student)} == before
-        assert done.details["blocked"] >= 1
-        blocked = [
-            e
-            for e in logs
-            if e["event"] == "billing_purge_blocked" and e["account_id"] == str(student)
-        ]
-        assert len(blocked) == 1
-        assert blocked[0]["log_level"] == "warning"
-        assert "beneficiary" in blocked[0]["constraint"]
+        assert await scene.rows(student) == {**ALL_GONE, "billing_accounts": 1}
+        stub = await scene.do(lambda s: s.get(BillingAccount, student))
+        assert stub is not None
+        assert (stub.tenant_id, stub.student_id, stub.status) == (None, None, "closed")
+        assert await scene.rows(author) == author_rows  # the author is untouched
+        assert await scene.journal(author) == author_journal
+        assert done.details["kept_as_reference"] >= 1
+        [line] = [e for e in logs if e["event"] == "periodic_task_run"]
+        assert line["log_level"] == "info"
+        assert line["kept_as_reference"] == done.details["kept_as_reference"]
+        assert not [e for e in logs if e["log_level"] == "warning"]
+
+        # The next night: still a reference, counted again, nothing else.
+        again = await run(scene, BILLING_PURGE)
+        assert again.details["kept_as_reference"] >= 1
+        assert await scene.rows(student) == {**ALL_GONE, "billing_accounts": 1}
+
+        # The author goes. One account per batch: the student's batch comes
+        # first (its id is lower), while the author's movement still exists.
+        await scene.delete_tenant_and_anonymize(tenant, add_months(scene.now, -12 * 6))
+        assert student < author
+        await run(scene, BILLING_PURGE, billing_purge_batch_size=1)
+        assert await scene.rows(author) == ALL_GONE
+        assert await scene.rows(student) == {**ALL_GONE, "billing_accounts": 1}
+
+        # The next run deletes the row nothing points at any more.
+        await run(scene, BILLING_PURGE)
+        assert await scene.rows(student) == ALL_GONE
 
     async def test_both_due_both_destroyed_whatever_the_order(
         self, scene: Scene
     ) -> None:
-        """Once the author is due too, both go — the student first in id order,
-        freed by the second pass over the batch."""
+        """Once the author is due too, both go in one run: the student's account
+        row, kept at first (it comes first in id order), goes in the second pass
+        over the batch."""
         tenant, author, student, rule_id = await self._paid_by_the_author(
             scene, student_first=True
         )
-        assert student < author  # the student comes first and is blocked at first
+        assert student < author  # the student comes first: its row is kept at first
         await scene.delete_tenant_and_anonymize(tenant, add_months(scene.now, -12 * 6))
 
         done = await run(scene, BILLING_PURGE)

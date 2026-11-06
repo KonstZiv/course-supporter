@@ -11,7 +11,9 @@ Purpose:
 
 The threshold (``settings.billing_stale_reserve_hours``, 24 h by default) must
 exceed the longest an action may legitimately run: a job runs at most
-``worker_job_timeout`` (6 h) times ``worker_max_tries`` (3) = 18 h.
+``worker_job_timeout`` (6 h) times ``worker_max_tries`` (3) = 18 h. It assumes
+— a requirement on BIL-E (operator 2026-11-06) — that a reserve is placed when
+the action starts, not when its job is queued.
 
 Nothing places reserves yet (that is BIL-E), so today this finds nothing.
 Idempotent: a released reserve is no longer active. Safe beside a settle: the

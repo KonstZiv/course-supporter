@@ -8,20 +8,27 @@ Purpose:
     never destroyed: only ``status = 'closed' AND anonymized_at <= cutoff``
     qualifies, and the condition is checked again under the row's lock.
 
-What goes, for one account, all or nothing (one SAVEPOINT):
+What goes, for one account:
     its movements, refunds, reservations, differences, batches, consents,
-    author settings, the payment rules it is the payer of, the audit entries
-    about it, its batches or those rules, and the account itself.
+    author settings, the payment rules it is the payer of, and the audit
+    entries about it, its batches or those rules — all or nothing (one
+    SAVEPOINT); then, in a SAVEPOINT of its own, the account row itself.
 
-What stops it:
-    The foreign keys inside billing have no ON DELETE action. If a row that is
-    NOT being destroyed still points at the account — today the one way is a
-    movement on ANOTHER account naming it as the beneficiary ("за кого": an
-    author paid for this student's review) — Postgres refuses the delete, the
-    savepoint is rolled back, and the account is reported as blocked: nothing
-    of it is destroyed. Such an account waits until the account pointing at it
-    is destroyed in turn (if that one is due in the same batch, a second pass
-    over the batch finds it free).
+What stays, and how long (operator 2026-11-06, option b):
+    The foreign keys inside billing have no ON DELETE action. A row of
+    ANOTHER account may still point at this one — today the one way is a
+    movement naming it as the beneficiary ("за кого": an author paid for
+    this student's review), and that movement belongs to the author's
+    journal. Then Postgres refuses to delete the account row, and only that
+    row stays: anonymized, it holds an opaque id, the kind, the state and the
+    dates, nothing of the owner. It is "kept as a reference" and stays due, so
+    each night's run tries again; once the rows pointing at it are destroyed
+    with their own account, the next run deletes it (or the same run, by a
+    second pass over the batch). Kept rows are counted in the run's INFO line.
+
+    Should any of the account's OWN rows be pointed at from outside (not done
+    by any code path today), nothing of the account is deleted: it is
+    reported as blocked, with a WARNING.
 
 The insert-only triggers on batches, movements, consents and the audit log
 refuse UPDATE only (``BEFORE UPDATE``); DELETE is allowed on purpose, for this.
@@ -60,10 +67,13 @@ _FOREIGN_KEY_VIOLATION = "23503"
 
 @dataclass(frozen=True, slots=True)
 class Purged:
-    """One account destroyed: the rows deleted, per table."""
+    """One account's rows deleted, per table (``billing_accounts`` included)."""
 
     account_id: uuid.UUID
     rows: dict[str, int]
+    kept_by: str | None = None
+    """The foreign key that kept the account row as a reference; None when
+    the row went too."""
 
     @property
     def total(self) -> int:
@@ -72,8 +82,16 @@ class Purged:
 
 
 @dataclass(frozen=True, slots=True)
+class Kept:
+    """An account row left as a reference: everything else of it is gone."""
+
+    account_id: uuid.UUID
+    constraint: str
+
+
+@dataclass(frozen=True, slots=True)
 class Blocked:
-    """An account a row outside it still points at; nothing of it deleted."""
+    """An account whose own rows are pointed at; nothing of it deleted."""
 
     account_id: uuid.UUID
     constraint: str
@@ -83,7 +101,11 @@ class Blocked:
 class PurgeOutcome:
     """What one batch of due accounts came to."""
 
-    purged: list[Purged] = field(default_factory=list)
+    rows: int = 0
+    """Rows deleted, account rows included."""
+    destroyed: list[uuid.UUID] = field(default_factory=list)
+    """Accounts gone entirely, the account row included."""
+    kept: list[Kept] = field(default_factory=list)
     blocked: list[Blocked] = field(default_factory=list)
 
 
@@ -115,7 +137,10 @@ async def accounts_due(
     return list(rows.scalars())
 
 
-async def _delete_rows(session: AsyncSession, account_id: uuid.UUID) -> dict[str, int]:
+async def _delete_own_rows(
+    session: AsyncSession, account_id: uuid.UUID
+) -> dict[str, int]:
+    """Every billing row of the account except the account row."""
     batch_ids = list(
         (
             await session.execute(
@@ -160,7 +185,6 @@ async def _delete_rows(session: AsyncSession, account_id: uuid.UUID) -> dict[str
                 ),
             ),
         ),
-        (BillingAccount, BillingAccount.id == account_id),
     )
     rows: dict[str, int] = {}
     for model, condition in steps:
@@ -171,12 +195,22 @@ async def _delete_rows(session: AsyncSession, account_id: uuid.UUID) -> dict[str
     return rows
 
 
+def _foreign_key(exc: IntegrityError) -> str:
+    """The violated foreign key's name; re-raise any other integrity error."""
+    if getattr(exc.orig, "sqlstate", None) != _FOREIGN_KEY_VIOLATION:
+        raise exc
+    diag = getattr(exc.orig, "diag", None)
+    return str(getattr(diag, "constraint_name", "") or "")
+
+
 async def purge_account(
     session: AsyncSession, account_id: uuid.UUID, *, cutoff: datetime
 ) -> Purged | Blocked | None:
-    """Destroy one due account, all or nothing (module docstring).
+    """Destroy one due account (module docstring).
 
-    Returns None when the account is not (or no longer) due.
+    Returns None when the account is not (or no longer) due; a
+    :class:`Purged` whose ``kept_by`` names the foreign key when the account
+    row stays as a reference.
     """
     try:
         async with session.begin_nested():
@@ -187,37 +221,51 @@ async def purge_account(
             )
             if due is None:
                 return None
-            rows = await _delete_rows(session, account_id)
+            rows = await _delete_own_rows(session, account_id)
     except IntegrityError as exc:
-        if getattr(exc.orig, "sqlstate", None) != _FOREIGN_KEY_VIOLATION:
-            raise
-        diag = getattr(exc.orig, "diag", None)
-        return Blocked(account_id, str(getattr(diag, "constraint_name", "") or ""))
+        return Blocked(account_id, _foreign_key(exc))
+    try:
+        async with session.begin_nested():
+            deleted = await session.execute(
+                delete(BillingAccount)
+                .where(BillingAccount.id == account_id)
+                .execution_options(synchronize_session=False)
+            )
+    except IntegrityError as exc:
+        return Purged(account_id, rows, kept_by=_foreign_key(exc))
+    rows[BillingAccount.__tablename__] = deleted.rowcount  # type: ignore[attr-defined]
     return Purged(account_id, rows)
 
 
 async def purge_accounts(
     session: AsyncSession, account_ids: Sequence[uuid.UUID], *, cutoff: datetime
 ) -> PurgeOutcome:
-    """Destroy each due account of a batch; retry the blocked ones once.
+    """Destroy each due account of a batch; retry the rest once.
 
-    The second pass frees an account that only another account of the same
-    batch pointed at, when that one came later in the first pass.
+    The second pass deletes an account row that only another account of the
+    same batch pointed at, when that one came later in the first pass.
     """
     outcome = PurgeOutcome()
 
-    async def one_pass(ids: Sequence[uuid.UUID]) -> list[Blocked]:
+    async def one_pass(ids: Sequence[uuid.UUID]) -> tuple[list[Kept], list[Blocked]]:
+        kept: list[Kept] = []
         blocked: list[Blocked] = []
         for account_id in ids:
             done = await purge_account(session, account_id, cutoff=cutoff)
-            if isinstance(done, Purged):
-                outcome.purged.append(done)
-            elif isinstance(done, Blocked):
+            if isinstance(done, Blocked):
                 blocked.append(done)
-        return blocked
+            elif isinstance(done, Purged):
+                outcome.rows += done.total
+                if done.kept_by is None:
+                    outcome.destroyed.append(account_id)
+                else:
+                    kept.append(Kept(account_id, done.kept_by))
+        return kept, blocked
 
-    blocked = await one_pass(account_ids)
-    if blocked and outcome.purged:  # what went may have freed what was blocked
-        blocked = await one_pass([b.account_id for b in blocked])
-    outcome.blocked = blocked
+    kept, blocked = await one_pass(account_ids)
+    if (kept or blocked) and outcome.destroyed:  # what went may free the rest
+        kept, blocked = await one_pass(
+            [k.account_id for k in kept] + [b.account_id for b in blocked]
+        )
+    outcome.kept, outcome.blocked = kept, blocked
     return outcome

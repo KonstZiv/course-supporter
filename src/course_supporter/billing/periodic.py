@@ -15,7 +15,10 @@ its logic; the lock, the transaction and the log line are the runner's
     billing_purge           — :mod:`.retention`: accounts anonymized more than
                               ``billing_retention_years`` ago are destroyed, in
                               batches of ``billing_purge_batch_size`` accounts,
-                              one transaction each. Nightly (UTC).
+                              one transaction each; an account row another
+                              account still points at stays as a reference
+                              (``kept_as_reference`` in the INFO line). Nightly
+                              (UTC).
 """
 
 from __future__ import annotations
@@ -78,7 +81,7 @@ async def _stale_reserves(run: TaskContext) -> TaskResult:
 async def _purge(run: TaskContext) -> TaskResult:
     cutoff = retention.retention_cutoff(run.now, run.settings.billing_retention_years)
     after: uuid.UUID | None = None
-    rows = accounts = blocked = 0
+    rows = accounts = kept = blocked = 0
     while True:
         try:
             async with run.transaction() as session:
@@ -96,8 +99,9 @@ async def _purge(run: TaskContext) -> TaskResult:
         if not due:
             break
         after = due[-1]
-        rows += sum(p.total for p in outcome.purged)
-        accounts += len(outcome.purged)
+        rows += outcome.rows
+        accounts += len(outcome.destroyed)
+        kept += len(outcome.kept)
         blocked += len(outcome.blocked)
         for stuck in outcome.blocked:
             log.warning(
@@ -106,7 +110,10 @@ async def _purge(run: TaskContext) -> TaskResult:
                 constraint=stuck.constraint,
                 dry_run=run.dry_run,
             )
-    return TaskResult(rows, {"accounts": accounts, "blocked": blocked})
+    return TaskResult(
+        rows,
+        {"accounts": accounts, "kept_as_reference": kept, "blocked": blocked},
+    )
 
 
 def _expire_enabled(s: Settings) -> bool:

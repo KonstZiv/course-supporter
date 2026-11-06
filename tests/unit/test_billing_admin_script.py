@@ -21,6 +21,7 @@ from course_supporter.billing.admin import AuthorSettingsView
 from course_supporter.billing.errors import BillingConflictError
 from course_supporter.billing.kinds import ActionKind, Benefit, RuleScope
 from course_supporter.billing.ledger import Balance
+from course_supporter.periodic.runner import TaskRun
 
 TENANT = uuid.uuid4()
 VIEW = AuthorSettingsView(
@@ -63,7 +64,10 @@ def test_every_change_needs_an_actor(argv: list[str]) -> None:
 def test_every_command_has_a_handler() -> None:
     parser = billing_admin.build_parser()
     sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
-    assert set(sub.choices) == set(billing_admin.COMMANDS)
+    assert not set(billing_admin.COMMANDS) & set(billing_admin.SELF_TRANSACTED)
+    assert set(sub.choices) == set(billing_admin.COMMANDS) | set(
+        billing_admin.SELF_TRANSACTED
+    )
 
 
 async def test_set_benefit_calls_the_service() -> None:
@@ -266,3 +270,80 @@ async def test_statement_reads_a_period_in_utc() -> None:
 def test_statement_refuses_a_bad_date() -> None:
     with pytest.raises(SystemExit):
         _args("statement", "--account", str(TENANT), "--from", "yesterday")
+
+
+# ── run-periodic (BIL-B part 2) ────────────────────────────────────────
+
+
+def _periodic_run(**overrides: object) -> TaskRun:
+    fields: dict[str, object] = {
+        "task": "billing_purge",
+        "processed": 12,
+        "details": {"accounts": 1, "blocked": 0},
+        "duration_ms": 7,
+        "dry_run": True,
+    }
+    fields.update(overrides)
+    return TaskRun(**fields)  # type: ignore[arg-type]
+
+
+def test_run_periodic_names_one_of_the_four_tasks() -> None:
+    for name in (
+        "billing_expire",
+        "billing_annul",
+        "billing_stale_reserves",
+        "billing_purge",
+    ):
+        args = _args("run-periodic", "--task", name)
+        assert (args.task, args.dry_run) == (name, False)
+    assert _args("run-periodic", "--task", "billing_purge", "--dry-run").dry_run
+    with pytest.raises(SystemExit) as exc:
+        _args("run-periodic", "--task", "s3_cleanup")
+    assert exc.value.code == 2
+
+
+async def test_run_periodic_runs_the_task_as_the_scheduler_would() -> None:
+    with (
+        patch.object(billing_admin, "create_async_engine") as engine,
+        patch.object(
+            billing_admin, "run_task", AsyncMock(return_value=_periodic_run())
+        ) as run_task,
+    ):
+        engine.return_value.dispose = AsyncMock()
+        out = await billing_admin.run(
+            _args("run-periodic", "--task", "billing_purge", "--dry-run")
+        )
+    task = run_task.await_args.args[0]
+    assert task.name == "billing_purge"
+    assert run_task.await_args.kwargs["dry_run"] is True
+    assert out == (
+        "billing_purge: processed 12, accounts=1, blocked=0 in 7 ms "
+        "(dry run: nothing changed)"
+    )
+    engine.return_value.dispose.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("run", "message"),
+    [
+        (
+            _periodic_run(skipped="busy"),
+            "billing_purge: another run holds its lock; try later\n",
+        ),
+        (
+            _periodic_run(error="RuntimeError: boom"),
+            "billing_purge failed: RuntimeError: boom\n",
+        ),
+    ],
+)
+def test_a_busy_or_failed_periodic_run_exits_with_1(
+    run: TaskRun, message: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with (
+        patch.object(billing_admin, "create_async_engine") as engine,
+        patch.object(billing_admin, "run_task", AsyncMock(return_value=run)),
+    ):
+        engine.return_value.dispose = AsyncMock()
+        code = billing_admin.main(["run-periodic", "--task", "billing_purge"])
+    assert code == 1
+    assert capsys.readouterr().err == message

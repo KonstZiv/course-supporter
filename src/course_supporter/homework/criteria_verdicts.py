@@ -47,11 +47,13 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
   The field a verdict does not use — the sentence of a "met", the quote of a
   "not met" — is ignored, never a defect.
 * A "met" that still does not stand after the repeat — the repeat gave
-  another quote that does not stand, or took the "met" back as "not met" —
-  is UNCONFIRMED: it reads "not met", flagged for the author
-  (``quote_not_found``), unless the safeguard keeps an earlier "met". The
-  model said "done", and the check found no line to bear it out: that is not
-  the same as "not done". A "not met" given in the first answer is "not met";
+  another quote that does not stand, or took back as "not met" a "met" whose
+  quote was too short — is UNCONFIRMED: it reads "not met", flagged for the
+  author (``quote_not_found``), unless the safeguard keeps an earlier "met".
+  The model said "done", and the check found no line to bear it out: that is
+  not the same as "not done". A "met" taken back after any other defect of
+  its quote — not found in the work, say — is "not met": the model most
+  likely erred first. A "not met" given in the first answer is "not met";
   one still without a sentence reads "not met" without one.
 * A criterion checked by mandatory points is met when every point is, and
   unconfirmed when every point is met or unconfirmed — one at least
@@ -391,23 +393,6 @@ class RepeatReason(StrEnum):
     NO_SENTENCE = "no_sentence"
 
 
-_QUOTE_REASONS: Final = frozenset(
-    {
-        RepeatReason.NO_QUOTE,
-        RepeatReason.QUOTE_NOT_ONE_LINE,
-        RepeatReason.QUOTE_TOO_LONG,
-        RepeatReason.QUOTE_TOO_SHORT,
-        RepeatReason.QUOTE_NOT_FOUND,
-    }
-)
-"""The reasons that are about a "met"'s quote — every reason a "met" can have.
-
-A "met" asked about again for one of these and taken back on the repeat is
-unconfirmed, not "not met" (:func:`_word_to_settle`). Named one by one, so a
-reason of another kind added later does not join them unseen.
-"""
-
-
 # What the repeated request tells the model about each item: one defect, said
 # so that the model can mend it. English, as every instruction to a model is.
 _REPEAT_FEEDBACK: Final[Mapping[RepeatReason, str]] = MappingProxyType(
@@ -531,8 +516,8 @@ def settle_verdicts(
 
     For every item, the model's last word: the repeat's for the items it was
     asked about again, the first answer's for the rest — except a "met" whose
-    quote did not stand and which the repeat took back, settled on that "met"
-    (:func:`_word_to_settle`). Then, item by item:
+    quote was too short and which the repeat took back, settled on that
+    "met" (:func:`_word_to_settle`). Then, item by item:
 
     1. "met" on a quote that stands (:func:`items_to_ask_again`) — met,
        placed;
@@ -608,28 +593,35 @@ def _word_to_settle(
 ) -> ItemVerdict:
     """The verdict an item is settled on: the model's last word, but one case.
 
-    A "met" whose quote did not stand (:data:`_QUOTE_REASONS`), taken back as
-    "not met" on the repeat, is settled on that first "met" — so it reads
-    unconfirmed, as a "met" whose second quote did not stand either, and not
-    "not met" (ratified 2026-11-07). The repeat answered the check's refusal
-    of a quote, not a question about the work: in the student's problem 2 a
-    whole line, too short to quote at more length, was taken back with a
-    sentence on the quote's length. That sentence is about the check, not
-    the work, so it is not stored — and the explanation, which reads the
-    stored rows, is told the state alone, never the check's mechanics.
+    A "met" whose quote was too short (:attr:`RepeatReason.QUOTE_TOO_SHORT`),
+    taken back as "not met" on the repeat, is settled on that first "met" —
+    so it reads unconfirmed, as a "met" whose second quote did not stand
+    either, and not "not met" (ratified 2026-11-07). The evidence is most
+    likely in the work and the rule on a quote's length refused it: the
+    repeat answered that refusal, not a question about the work — in the
+    student's problem 2 a line too short to quote at more length was taken
+    back with a sentence on the quote's length. That sentence is about the
+    check, not the work, so it is not stored, and the explanation, which
+    reads the stored rows, is told the state alone, never the check's
+    mechanics. A short quote the work does not have at all is named too
+    short as well (``_standing_quote`` names every short miss so), so its
+    take-back reads unconfirmed too.
 
-    Every other item is settled on its last word, as before: a "not met" of
-    the first answer stays one, and the repeat's word on a "not met" without
-    a sentence stands.
+    A "met" taken back after any other defect of its quote — a quote not in
+    the work, none, of several lines, too long — is "not met", as before the
+    decision: the model most likely erred the first time (narrowed by the
+    Mentor session, 2026-11-07). Every other item is settled on its last
+    word too: a "not met" of the first answer stays one, and the repeat's
+    word on a "not met" without a sentence stands.
     """
     if repeat is None:
         return first
     took_back = repeat.verdict is VerdictValue.NOT_MET
-    first_fell = (
+    too_short = (
         first.verdict is VerdictValue.MET
-        and _repeat_reason(first, work) in _QUOTE_REASONS
+        and _repeat_reason(first, work) is RepeatReason.QUOTE_TOO_SHORT
     )
-    return first if took_back and first_fell else repeat
+    return first if took_back and too_short else repeat
 
 
 def _unconfirmed(item: ScoredItem) -> bool:

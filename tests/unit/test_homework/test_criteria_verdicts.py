@@ -563,22 +563,31 @@ class TestRepeat:
             assert settled[item].quote_not_found is True
         assert settled["c2"].verdict is NOT_MET
 
-    def test_a_repeat_that_takes_a_fallen_met_back_reads_unconfirmed(self) -> None:
-        # Until 2026-11-07 this read a plain "not met" (the student's
-        # problem 2); now it is the first "met", unconfirmed (TestUnconfirmed).
+    def test_a_repeat_that_takes_a_met_back_reads_by_its_reason(self) -> None:
+        # A quote too short: the first "met", unconfirmed (the student's
+        # problem 2, TestUnconfirmed). A quote the work lacks: the repeat's
+        # "not met", as before 2026-11-07 (TestARealNotMet).
         repeat = _answer(_not_met("c2.p1"), _not_met("c2.p2"))
         settled = _settle(self._FIRST, repeat)
-        for item, quote in (("c2.p1", _ABSENT), ("c2.p2", _SHORT)):
-            assert settled[item] == VerdictRecord(
-                item_id=item,
-                item_kind=VerdictItemKind.POINT,
-                weight=None,
-                verdict=NOT_MET,
-                model_verdict=MET,
-                quote=quote,
-                retried=True,
-                quote_not_found=True,
-            )
+        assert settled["c2.p2"] == VerdictRecord(
+            item_id="c2.p2",
+            item_kind=VerdictItemKind.POINT,
+            weight=None,
+            verdict=NOT_MET,
+            model_verdict=MET,
+            quote=_SHORT,
+            retried=True,
+            quote_not_found=True,
+        )
+        assert settled["c2.p1"] == VerdictRecord(
+            item_id="c2.p1",
+            item_kind=VerdictItemKind.POINT,
+            weight=None,
+            verdict=NOT_MET,
+            model_verdict=NOT_MET,
+            missing="The work does not do this.",
+            retried=True,
+        )
 
     def test_answers_that_miss_an_item_are_refused(self) -> None:
         with pytest.raises(ValueError, match="do not cover exactly"):
@@ -1135,10 +1144,10 @@ class TestAWholeLineIsEvidence:
 class TestUnconfirmed:
     """Decisions 2 and 3 (2026-11-07): a "met" the check could not confirm.
 
-    The model said "met", its quote did not stand, and the repeat took it
-    back — or gave another quote that did not stand either. The row reads
-    "not met" with the author's flag; it does not fail the work, and the
-    score counts it as met.
+    The model said "met", its quote did not stand, and the repeat gave
+    another quote that did not stand either — or took back a "met" whose
+    quote was too short. The row reads "not met" with the author's flag; it
+    does not fail the work, and the score counts it as met.
     """
 
     def test_the_students_problem_reads_unconfirmed_and_passes(self) -> None:
@@ -1170,33 +1179,20 @@ class TestUnconfirmed:
         # 3 (c1, unconfirmed, counted as met) + 2 (c2) of 5 -> 100.
         assert score_percent(records) == 100
 
-    @pytest.mark.parametrize(
-        ("quote", "reason"),
-        [
-            (None, RepeatReason.NO_QUOTE),
-            ("def fibonacci(n):\n    if n < 2:", RepeatReason.QUOTE_NOT_ONE_LINE),
-            ("x" * (MAX_QUOTE_CHARS + 1), RepeatReason.QUOTE_TOO_LONG),
-            (_SHORT, RepeatReason.QUOTE_TOO_SHORT),
-            (_ABSENT, RepeatReason.QUOTE_NOT_FOUND),
-        ],
-        ids=["no-quote", "two-lines", "too-long", "too-short", "not-found"],
-    )
-    def test_a_met_taken_back_after_any_quote_reason_is_unconfirmed(
-        self, quote: str | None, reason: RepeatReason
-    ) -> None:
-        said = {"id": "c1", "verdict": "met", "quote": quote, "missing": None}
-        first = _one(said)
-        assert items_to_ask_again(first, _WORK) == (RepeatItem("c1", reason),)
-        repeat = _answer(_not_met("c1", "The check refused the quote."))
+    def test_a_too_short_met_taken_back_is_unconfirmed(self) -> None:
+        first = _one(_met("c1", _SHORT))
+        assert items_to_ask_again(first, _WORK) == (
+            RepeatItem("c1", RepeatReason.QUOTE_TOO_SHORT),
+        )
+        repeat = _answer(_not_met("c1", "The quote is too short."))
         records = settle_verdicts(_ONE, first, repeat, work=_WORK, earlier={})
-        c1 = records[0]
-        assert c1 == VerdictRecord(
+        assert records[0] == VerdictRecord(
             item_id="c1",
             item_kind=VerdictItemKind.CRITERION,
             weight=WeightCategory.MUST,
             verdict=NOT_MET,
             model_verdict=MET,
-            quote=quote,
+            quote=_SHORT,
             retried=True,
             quote_not_found=True,
         )
@@ -1282,7 +1278,11 @@ class TestUnconfirmed:
 
 
 class TestARealNotMet:
-    """Decision 2 (2026-11-07): a "not met" of the first answer is "not met"."""
+    """Decision 2 (2026-11-07): what reads "not met", and fails a "must".
+
+    A "not met" of the first answer, and a "met" taken back after a defect of
+    its quote other than its length (narrowed the same day).
+    """
 
     def test_a_not_met_in_the_first_answer_fails_a_must(self) -> None:
         first = _one(_not_met("c1", "No base case."))
@@ -1309,6 +1309,53 @@ class TestARealNotMet:
             False,
             "No base case.",
         )
+        assert is_passed(records) is False
+
+    def test_a_met_on_a_quote_the_work_lacks_taken_back_is_not_met(self) -> None:
+        # Narrowed 2026-11-07: the model most likely erred the first time.
+        first = _one(_met("c1", _ABSENT))
+        assert items_to_ask_again(first, _WORK) == (
+            RepeatItem("c1", RepeatReason.QUOTE_NOT_FOUND),
+        )
+        repeat = _answer(_not_met("c1", "No memoisation in the work."))
+        records = settle_verdicts(_ONE, first, repeat, work=_WORK, earlier={})
+        assert records[0] == VerdictRecord(
+            item_id="c1",
+            item_kind=VerdictItemKind.CRITERION,
+            weight=WeightCategory.MUST,
+            verdict=NOT_MET,
+            model_verdict=NOT_MET,
+            missing="No memoisation in the work.",
+            retried=True,
+        )
+        assert is_passed(records) is False
+        # 2 (c3) of 5 -> 40.
+        assert score_percent(records) == 40
+
+    @pytest.mark.parametrize(
+        ("quote", "reason"),
+        [
+            (None, RepeatReason.NO_QUOTE),
+            ("def fibonacci(n):\n    if n < 2:", RepeatReason.QUOTE_NOT_ONE_LINE),
+            ("x" * (MAX_QUOTE_CHARS + 1), RepeatReason.QUOTE_TOO_LONG),
+        ],
+        ids=["no-quote", "two-lines", "too-long"],
+    )
+    def test_a_met_taken_back_after_another_quote_defect_is_not_met(
+        self, quote: str | None, reason: RepeatReason
+    ) -> None:
+        said = {"id": "c1", "verdict": "met", "quote": quote, "missing": None}
+        first = _one(said)
+        assert items_to_ask_again(first, _WORK) == (RepeatItem("c1", reason),)
+        repeat = _answer(_not_met("c1", "No base case."))
+        records = settle_verdicts(_ONE, first, repeat, work=_WORK, earlier={})
+        c1 = records[0]
+        assert (c1.verdict, c1.model_verdict, c1.quote_not_found) == (
+            NOT_MET,
+            NOT_MET,
+            False,
+        )
+        assert (c1.quote, c1.missing) == (None, "No base case.")
         assert is_passed(records) is False
 
     def test_a_not_met_on_a_met_that_stood_is_not_a_take_back(self) -> None:

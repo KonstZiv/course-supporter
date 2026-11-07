@@ -48,12 +48,13 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
   "not met" — is ignored, never a defect.
 * A "met" that still does not stand after the repeat — the repeat gave
   another quote that does not stand, or took back as "not met" a "met" whose
-  quote was too short — is UNCONFIRMED: it reads "not met", flagged for the
-  author (``quote_not_found``), unless the safeguard keeps an earlier "met".
-  The model said "done", and the check found no line to bear it out: that is
-  not the same as "not done". A "met" taken back after any other defect of
-  its quote — not found in the work, say — is "not met": the model most
-  likely erred first. A "not met" given in the first answer is "not met";
+  quote was too short but in the work — is UNCONFIRMED: it reads "not met",
+  flagged for the author (``quote_not_found``), unless the safeguard keeps
+  an earlier "met". The model said "done", and the check found no line to
+  bear it out: that is not the same as "not done". A "met" taken back after
+  any other defect of its quote — a short quote the work does not have, a
+  quote not found in the work — is "not met": the model most likely erred
+  first. A "not met" given in the first answer is "not met";
   one still without a sentence reads "not met" without one.
 * A criterion checked by mandatory points is met when every point is, and
   unconfirmed when every point is met or unconfirmed — one at least
@@ -82,9 +83,10 @@ import bisect
 import unicodedata
 import uuid
 from collections import Counter
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import count
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol
 
@@ -306,21 +308,40 @@ class _SearchableFile:
         """The physical line, from 1, of the squeezed character at ``offset``."""
         return bisect.bisect_right(self.line_starts, offset)
 
+    def lines(self) -> Iterator[tuple[int, int, int]]:
+        """Each physical line: its number from 1, and its squeezed span.
+
+        Nothing for a file without lines, whose lines are an artefact of text
+        extraction (:attr:`WorkFile.has_lines`), not lines the student wrote.
+        """
+        if not self.file.has_lines:
+            return
+        ends = [*self.line_starts[1:], len(self.squeezed)]
+        yield from zip(count(1), self.line_starts, ends)
+
     def whole_line(self, needle: str) -> int | None:
         """The first physical line, from 1, that is ``needle`` and nothing else.
 
         Both squeezed. ``None`` for an empty needle — a blank line proves
-        nothing — and for a file without lines, whose lines are an artefact of
-        text extraction (:attr:`WorkFile.has_lines`), not lines the student
-        wrote.
+        nothing — and for a file without lines (:meth:`lines`).
         """
-        if not needle or not self.file.has_lines:
+        if not needle:
             return None
-        ends = [*self.line_starts[1:], len(self.squeezed)]
-        for number, (start, end) in enumerate(
-            zip(self.line_starts, ends, strict=True), start=1
-        ):
+        for number, start, end in self.lines():
             if end - start == len(needle) and self.squeezed.startswith(needle, start):
+                return number
+        return None
+
+    def line_holding(self, needle: str) -> int | None:
+        """The first physical line, from 1, holding ``needle`` whole or as a piece.
+
+        Both squeezed. ``None`` for an empty needle and for a file without
+        lines (:meth:`lines`).
+        """
+        if not needle:
+            return None
+        for number, start, end in self.lines():
+            if self.squeezed.find(needle, start, end) >= 0:
                 return number
         return None
 
@@ -362,6 +383,18 @@ class SubmittedWork:
 
     def __init__(self, files: Sequence[WorkFile]) -> None:
         self._files = tuple(_SearchableFile(file) for file in files)
+
+    def is_in_a_line(self, quote: str) -> bool:
+        """Whether ``quote`` is in a line of the work, whole or as a piece.
+
+        Compared as :meth:`find` compares, but at any length and only inside
+        one line of a file with lines: it tells a quote too short to stand
+        that IS in the work from one the work does not have.
+        """
+        needle = _squeezed(quote)
+        return any(
+            searchable.line_holding(needle) is not None for searchable in self._files
+        )
 
     def find(self, quote: str) -> QuotePlace | None:
         """Where ``quote`` first stands in the work, or ``None``.
@@ -516,8 +549,8 @@ def settle_verdicts(
 
     For every item, the model's last word: the repeat's for the items it was
     asked about again, the first answer's for the rest — except a "met" whose
-    quote was too short and which the repeat took back, settled on that
-    "met" (:func:`_word_to_settle`). Then, item by item:
+    quote was too short but in the work and which the repeat took back,
+    settled on that "met" (:func:`_word_to_settle`). Then, item by item:
 
     1. "met" on a quote that stands (:func:`items_to_ask_again`) — met,
        placed;
@@ -593,35 +626,36 @@ def _word_to_settle(
 ) -> ItemVerdict:
     """The verdict an item is settled on: the model's last word, but one case.
 
-    A "met" whose quote was too short (:attr:`RepeatReason.QUOTE_TOO_SHORT`),
-    taken back as "not met" on the repeat, is settled on that first "met" —
-    so it reads unconfirmed, as a "met" whose second quote did not stand
-    either, and not "not met" (ratified 2026-11-07). The evidence is most
-    likely in the work and the rule on a quote's length refused it: the
-    repeat answered that refusal, not a question about the work — in the
-    student's problem 2 a line too short to quote at more length was taken
-    back with a sentence on the quote's length. That sentence is about the
-    check, not the work, so it is not stored, and the explanation, which
-    reads the stored rows, is told the state alone, never the check's
-    mechanics. A short quote the work does not have at all is named too
-    short as well (``_standing_quote`` names every short miss so), so its
-    take-back reads unconfirmed too.
+    A "met" whose quote was too short (:attr:`RepeatReason.QUOTE_TOO_SHORT`)
+    and IS in the work — in a line of a file with lines, as a piece
+    (:meth:`SubmittedWork.is_in_a_line`) — taken back as "not met" on the
+    repeat, is settled on that first "met": so it reads unconfirmed, as a
+    "met" whose second quote did not stand either, and not "not met"
+    (ratified 2026-11-07). The evidence was in the work and the rule on a
+    quote's length refused it: the repeat answered that refusal, not a
+    question about the work — in the student's problem 2 a line too short to
+    quote at more length was taken back with a sentence on the quote's
+    length. That sentence is about the check, not the work, so it is not
+    stored, and the explanation, which reads the stored rows, is told the
+    state alone, never the check's mechanics.
 
-    A "met" taken back after any other defect of its quote — a quote not in
-    the work, none, of several lines, too long — is "not met", as before the
-    decision: the model most likely erred the first time (narrowed by the
-    Mentor session, 2026-11-07). Every other item is settled on its last
-    word too: a "not met" of the first answer stays one, and the repeat's
-    word on a "not met" without a sentence stands.
+    A "met" taken back after any other defect of its quote — a short quote
+    the work does not have, a quote not in the work, none, of several lines,
+    too long — is "not met", as before the decision: the model most likely
+    erred the first time (narrowed by the Mentor session, 2026-11-07). Every
+    other item is settled on its last word too: a "not met" of the first
+    answer stays one, and the repeat's word on a "not met" without a
+    sentence stands.
     """
     if repeat is None:
         return first
     took_back = repeat.verdict is VerdictValue.NOT_MET
-    too_short = (
+    too_short_of_the_work = (
         first.verdict is VerdictValue.MET
         and _repeat_reason(first, work) is RepeatReason.QUOTE_TOO_SHORT
+        and work.is_in_a_line(first.quote or "")
     )
-    return first if took_back and too_short else repeat
+    return first if took_back and too_short_of_the_work else repeat
 
 
 def _unconfirmed(item: ScoredItem) -> bool:

@@ -113,6 +113,8 @@ _SOLUTION = (
 _WORK = SubmittedWork([WorkFile("fibonacci.py", _SOLUTION, has_lines=True)])
 
 _ABSENT = "return memo[n]"  # a quote the work does not have
+# A comment line longer than a quote may be.
+_LONG_LINE = "# " + "x" * MAX_QUOTE_CHARS
 # A piece of line 2 ("if n < 2:"), five characters besides spaces: too short
 # to count, and not a whole line, so the whole-line rule does not take it.
 _SHORT = "if n < 2"
@@ -1116,6 +1118,26 @@ class TestAWholeLineIsEvidence:
         )
         assert work.find(_VENV) == QuotePlace("a/.gitignore", (2, 2))
 
+    @pytest.mark.parametrize(
+        ("quote", "held"),
+        [
+            (_SHORT, True),  # a piece of line 2
+            ("return n", True),  # the whole of line 3
+            ("x = 9", False),  # not in the work
+            ("2: return", False),  # across the break of lines 2 and 3
+            ("", False),
+        ],
+        ids=["piece", "whole-line", "absent", "across-lines", "blank"],
+    )
+    def test_a_quote_is_in_a_line_only_inside_one_line(
+        self, quote: str, *, held: bool
+    ) -> None:
+        assert _WORK.is_in_a_line(quote) is held
+
+    def test_a_document_has_no_line_to_hold_a_quote(self) -> None:
+        work = SubmittedWork([WorkFile("notes.docx", "Висновок: так\n", False)])
+        assert work.is_in_a_line("так") is False
+
     def test_the_minimum_is_unchanged(self) -> None:
         assert MIN_QUOTE_CHARS == 8
 
@@ -1280,8 +1302,9 @@ class TestUnconfirmed:
 class TestARealNotMet:
     """Decision 2 (2026-11-07): what reads "not met", and fails a "must".
 
-    A "not met" of the first answer, and a "met" taken back after a defect of
-    its quote other than its length (narrowed the same day).
+    A "not met" of the first answer, and a "met" taken back after any defect
+    of its quote but a short quote that is in the work (narrowed the same
+    day).
     """
 
     def test_a_not_met_in_the_first_answer_fails_a_must(self) -> None:
@@ -1332,23 +1355,59 @@ class TestARealNotMet:
         # 2 (c3) of 5 -> 40.
         assert score_percent(records) == 40
 
+    def test_a_too_short_met_the_work_lacks_taken_back_is_not_met(self) -> None:
+        # Closed by the third commit: too short AND not in the work — the
+        # model most likely erred, as on a quote not found.
+        absent = "x = 9"
+        assert not _WORK.is_in_a_line(absent)
+        first = _one(_met("c1", absent))
+        assert items_to_ask_again(first, _WORK) == (
+            RepeatItem("c1", RepeatReason.QUOTE_TOO_SHORT),
+        )
+        repeat = _answer(_not_met("c1", "No base case."))
+        records = settle_verdicts(_ONE, first, repeat, work=_WORK, earlier={})
+        assert records[0] == VerdictRecord(
+            item_id="c1",
+            item_kind=VerdictItemKind.CRITERION,
+            weight=WeightCategory.MUST,
+            verdict=NOT_MET,
+            model_verdict=NOT_MET,
+            missing="No base case.",
+            retried=True,
+        )
+        assert is_passed(records) is False
+        # 2 (c3) of 5 -> 40.
+        assert score_percent(records) == 40
+
     @pytest.mark.parametrize(
         ("quote", "reason"),
         [
             (None, RepeatReason.NO_QUOTE),
-            ("def fibonacci(n):\n    if n < 2:", RepeatReason.QUOTE_NOT_ONE_LINE),
-            ("x" * (MAX_QUOTE_CHARS + 1), RepeatReason.QUOTE_TOO_LONG),
+            # Line 4 cut in two: its text IS in a line of the work.
+            (
+                "return fibonacci(n - 1)\n+ fibonacci(n - 2)",
+                RepeatReason.QUOTE_NOT_ONE_LINE,
+            ),
+            # The long comment line, whole: in the work, but too long a quote.
+            (_LONG_LINE, RepeatReason.QUOTE_TOO_LONG),
         ],
         ids=["no-quote", "two-lines", "too-long"],
     )
     def test_a_met_taken_back_after_another_quote_defect_is_not_met(
         self, quote: str | None, reason: RepeatReason
     ) -> None:
+        # Only the length, with the quote in the work, makes a take-back
+        # unconfirmed: a quote in the work with another defect does not.
+        work = SubmittedWork(
+            [WorkFile("fibonacci.py", _SOLUTION + _LONG_LINE + "\n", True)]
+        )
+        if quote is not None:
+            assert work.is_in_a_line(quote)
         said = {"id": "c1", "verdict": "met", "quote": quote, "missing": None}
         first = _one(said)
-        assert items_to_ask_again(first, _WORK) == (RepeatItem("c1", reason),)
+        assert items_to_ask_again(first, work) == (RepeatItem("c1", reason),)
         repeat = _answer(_not_met("c1", "No base case."))
-        records = settle_verdicts(_ONE, first, repeat, work=_WORK, earlier={})
+        records = settle_verdicts(_ONE, first, repeat, work=work, earlier={})
         c1 = records[0]
         assert (c1.verdict, c1.model_verdict, c1.quote_not_found) == (
             NOT_MET,

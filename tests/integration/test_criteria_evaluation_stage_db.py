@@ -986,7 +986,8 @@ class TestAMetTakenBackAfterItsQuoteFell:
 
 class TestARealNotMetStays:
     """A "not met" of the first answer fails a "must", as before 2026-11-07;
-    so does a "met" on a quote the work lacks, taken back on the repeat."""
+    so does a "met" on a quote the work lacks — of any length — taken back on
+    the repeat."""
 
     async def test_a_not_met_in_the_first_answer_fails_the_work(
         self, db_session: AsyncSession, submission: HomeworkSubmission
@@ -1043,6 +1044,40 @@ class TestARealNotMetStays:
             missing,
             True,
         )
+        assert (rows["c1"].verdict, rows["c1"].quote_not_found) == (
+            VerdictValue.NOT_MET,
+            False,
+        )
+        stored = list(rows.values())
+        assert is_passed(stored) is False
+        # 2 (c2) of 5 -> 40.
+        assert score_percent(stored) == 40
+
+    async def test_a_too_short_met_the_work_lacks_taken_back_fails_the_work(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        missing = "У .gitignore немає рядка .venv/."
+        router = _Router(
+            _answer(_met("c1.p1", _VENV), _met("c2", _C2_QUOTE)),
+            _answer(_not_met("c1.p1", missing)),
+        )
+
+        rows = await _evaluate_project(
+            db_session, router, submission, "__pycache__/\n*.pyc\n"
+        )
+
+        _, again = router.requests
+        (note,) = again["render"]["repeat"]
+        assert (
+            note["problem"]
+            == RepeatItem("c1.p1", RepeatReason.QUOTE_TOO_SHORT).feedback
+        )
+        point = rows["c1.p1"]
+        assert (point.verdict, point.model_verdict) == (
+            VerdictValue.NOT_MET,
+            VerdictValue.NOT_MET,
+        )
+        assert (point.quote_not_found, point.missing) == (False, missing)
         assert (rows["c1"].verdict, rows["c1"].quote_not_found) == (
             VerdictValue.NOT_MET,
             False,

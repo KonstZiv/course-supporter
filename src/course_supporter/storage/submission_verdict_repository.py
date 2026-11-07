@@ -71,9 +71,9 @@ class VerdictRecord:
         retried: The item was asked about once more.
         quote_not_found: The model said "met" and no quote bore it out after
             the repeat — the repeat's quote did not stand either, or the
-            repeat took back a "met" whose quote was too short: unconfirmed,
-            the author's flag. On a criterion checked by mandatory points:
-            every point is met or so, one at least so
+            repeat took back a "met" whose quote was too short but in the
+            work: unconfirmed, the author's flag. On a criterion checked by
+            mandatory points: every point is met or so, one at least so
             (``homework/criteria_verdicts.py``).
         safeguard_submission_id: The earlier submission whose "met" the
             safeguard kept; ``None`` when it did not fire.

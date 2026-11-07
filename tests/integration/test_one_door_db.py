@@ -686,6 +686,46 @@ class TestAnAgentsProjectGoesThrough:
         assert run.reviewer_inputs(road) == []
 
 
+class TestTheEvaluationReadsTheProjectsFiles:
+    """Project chain K1: the new path's doors hand a project's files on."""
+
+    async def test_k1_the_students_files_reach_the_evaluation(
+        self,
+        world: Callable[..., Any],
+        session_factory: async_sessionmaker[AsyncSession],
+        s3_client: S3Client,
+    ) -> None:
+        from course_supporter.homework import criteria_evaluation
+        from course_supporter.homework.criteria_verdicts import (
+            SubmittedWork,
+            WorkFile,
+        )
+
+        # The double's verdict quotes ``def solve(n):`` -- here it stands.
+        files = {**PROJECT, "app/solve.py": SOLUTION}
+        w = await world(_zip(files), None)
+        handed: list[tuple[WorkFile, ...]] = []
+
+        def _record(given: tuple[WorkFile, ...]) -> SubmittedWork:
+            handed.append(tuple(given))
+            return SubmittedWork(given)
+
+        with patch.object(criteria_evaluation, "SubmittedWork", side_effect=_record):
+            _, submission = await _run(
+                "new_path", w, session_factory, s3_client, evaluation=True
+            )
+
+        assert submission.status in {"completed", "delivered"}, submission.error_message
+        # No base is attached: every file the screen read is the student's,
+        # in order of path; the .env never reached the snapshot.
+        assert [[f.name for f in work] for work in handed] == [
+            sorted(set(files) - {".env"})
+        ]
+        (work,) = handed
+        assert all(f.has_lines for f in work)
+        assert all("sk-live-do-not-leak" not in f.text for f in work)
+
+
 @pytest.mark.parametrize("road", ROADS)
 class TestAnArchiveGoesThroughTheSameDoor:
     """A ``task`` archive: Stage 1's archive pass, not the normalizer."""

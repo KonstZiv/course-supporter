@@ -113,6 +113,9 @@ _SOLUTION = (
 _WORK = SubmittedWork([WorkFile("fibonacci.py", _SOLUTION, has_lines=True)])
 
 _ABSENT = "return memo[n]"  # a quote the work does not have
+# A piece of line 2 ("if n < 2:"), five characters besides spaces: too short
+# to count, and not a whole line, so the whole-line rule does not take it.
+_SHORT = "if n < 2"
 
 
 def _met(item: str, quote: str) -> dict[str, Any]:
@@ -405,7 +408,7 @@ class TestQuoteNotInTheWork:
             _met("c1", "def fibonacci(n):"),
             _met("c2.p1", _ABSENT),
             _not_met("c2.p2"),
-            _met("c3", "return n"),  # 7 characters: too short to count
+            _met("c3", _SHORT),
             _met("c4", "fibonacci(n - 2)"),
         )
         assert items_to_ask_again(answer, _WORK) == (
@@ -458,9 +461,10 @@ class TestQuoteNotInTheWork:
         assert work.find("Café: the base") == QuotePlace("answer.md", (1, 1))
 
     def test_a_quote_shorter_than_the_minimum_is_not_found(self) -> None:
-        # "return n" is on line 3, but it is seven non-whitespace characters.
-        assert len("returnn") == MIN_QUOTE_CHARS - 1
-        assert _WORK.find("return n") is None
+        # "return f" opens line 4, but it is seven non-whitespace characters
+        # and not the whole line.
+        assert len("returnf") == MIN_QUOTE_CHARS - 1
+        assert _WORK.find("return f") is None
 
     def test_a_quote_of_the_minimum_length_is_found(self) -> None:
         work = SubmittedWork([WorkFile("a.txt", "x = 1\nab cd ef gh\n", True)])
@@ -526,7 +530,7 @@ class TestRepeat:
     _FIRST = _answer(
         _met("c1", "def fibonacci(n):"),
         _met("c2.p1", _ABSENT),
-        _met("c2.p2", "return n"),
+        _met("c2.p2", _SHORT),
         _not_met("c3"),
         _met("c4", "fibonacci(n - 2)"),
         *(_not_met(item) for item in ("c5.p1", "c5.p2", "c5.p3")),
@@ -550,7 +554,7 @@ class TestRepeat:
         assert settled["c4"].retried is False
 
     def test_still_unfound_after_the_repeat_is_not_met_flagged(self) -> None:
-        repeat = _answer(_met("c2.p1", _ABSENT), _met("c2.p2", "return n"))
+        repeat = _answer(_met("c2.p1", _ABSENT), _met("c2.p2", _SHORT))
         settled = _settle(self._FIRST, repeat)
         for item in ("c2.p1", "c2.p2"):
             assert settled[item].verdict is NOT_MET
@@ -559,13 +563,22 @@ class TestRepeat:
             assert settled[item].quote_not_found is True
         assert settled["c2"].verdict is NOT_MET
 
-    def test_a_repeat_that_says_not_met_is_not_flagged(self) -> None:
+    def test_a_repeat_that_takes_a_fallen_met_back_reads_unconfirmed(self) -> None:
+        # Until 2026-11-07 this read a plain "not met" (the student's
+        # problem 2); now it is the first "met", unconfirmed (TestUnconfirmed).
         repeat = _answer(_not_met("c2.p1"), _not_met("c2.p2"))
         settled = _settle(self._FIRST, repeat)
-        assert settled["c2.p1"].verdict is NOT_MET
-        assert settled["c2.p1"].model_verdict is NOT_MET
-        assert settled["c2.p1"].retried is True
-        assert settled["c2.p1"].quote_not_found is False
+        for item, quote in (("c2.p1", _ABSENT), ("c2.p2", _SHORT)):
+            assert settled[item] == VerdictRecord(
+                item_id=item,
+                item_kind=VerdictItemKind.POINT,
+                weight=None,
+                verdict=NOT_MET,
+                model_verdict=MET,
+                quote=quote,
+                retried=True,
+                quote_not_found=True,
+            )
 
     def test_answers_that_miss_an_item_are_refused(self) -> None:
         with pytest.raises(ValueError, match="do not cover exactly"):
@@ -605,7 +618,7 @@ class TestDefectOfOneVerdict:
                 RepeatReason.QUOTE_NOT_ONE_LINE,
             ),
             (_met("c1", "x" * (MAX_QUOTE_CHARS + 1)), RepeatReason.QUOTE_TOO_LONG),
-            (_met("c1", "return n"), RepeatReason.QUOTE_TOO_SHORT),
+            (_met("c1", _SHORT), RepeatReason.QUOTE_TOO_SHORT),
             (_met("c1", _ABSENT), RepeatReason.QUOTE_NOT_FOUND),
             (
                 {"id": "c1", "verdict": "not_met", "quote": None, "missing": None},
@@ -821,7 +834,7 @@ class TestReadAnswer:
             {"id": "c1", "verdict": "met", "quote": None, "missing": None},
             _met("c1", "def fibonacci(n):\n    if n < 2:"),
             _met("c1", "x" * (MAX_QUOTE_CHARS + 1)),
-            _met("c1", "return n"),
+            _met("c1", _SHORT),
             _met("c1", _ABSENT),
             {"id": "c1", "verdict": "not_met", "quote": None, "missing": None},
             {"id": "c1", "verdict": "not_met", "quote": None, "missing": " "},
@@ -1005,6 +1018,312 @@ class TestSameInputSameResult:
             score_percent(second),
             is_passed(second),
         )
+
+
+# The student's problem 2 (2026-11-07): a mandatory point asks for the line
+# ".venv/" in .gitignore — six characters, the whole line, all the evidence
+# there is.
+_VENV = ".venv/"
+_MAIN = "print('hello, world')\n"
+_GITIGNORE = "__pycache__/\n*.pyc\n.venv/\n"  # .venv/ is line 3
+# A ".gitignore" where ".venv/" is only a piece of a longer line.
+_GITIGNORE_PIECE = "__pycache__/\n*.pyc\ncache/.venv/old\n"
+_VENV_SENTENCE = "Рядок .venv/ є, але цитата має менше 8 символів, тож її не прийнято."
+
+# c1 "must", checked by one point; c2 "should". Weights 3 + 2 = 5.
+_VENV_LIST = _in_force(_criterion("c1", "must", points=1), _criterion("c2", "should"))
+_C2_MET = _met("c2", "print('hello, world')")
+
+
+def _project(gitignore: str) -> SubmittedWork:
+    return SubmittedWork(
+        [WorkFile("main.py", _MAIN, True), WorkFile(".gitignore", gitignore, True)]
+    )
+
+
+class TestAWholeLineIsEvidence:
+    """Decision 1 (2026-11-07): a short quote that is a whole line stands."""
+
+    @pytest.mark.parametrize(
+        "gitignore",
+        [
+            _GITIGNORE,
+            "__pycache__/\n*.pyc\n   .venv/ \t\n",
+            _GITIGNORE.replace("\n", "\r\n"),
+            _BOM + _GITIGNORE,
+        ],
+        ids=["plain", "spaces-around", "crlf", "bom"],
+    )
+    def test_a_short_whole_line_is_found_on_its_line(self, gitignore: str) -> None:
+        assert len(_VENV) < MIN_QUOTE_CHARS
+        assert _project(gitignore).find(_VENV) == QuotePlace(".gitignore", (3, 3))
+
+    @pytest.mark.parametrize("quote", ["  .venv/ ", "\t.venv/", f"{_NBSP}.venv/"])
+    def test_spaces_around_the_quote_do_not_hide_the_line(self, quote: str) -> None:
+        assert _project(_GITIGNORE).find(quote) == QuotePlace(".gitignore", (3, 3))
+
+    def test_a_decomposed_quote_finds_a_composed_whole_line(self) -> None:
+        work = SubmittedWork([WorkFile("words.txt", "first\ncafé/\n", True)])
+        quote = unicodedata.normalize("NFD", "café/")
+        assert quote != "café/"
+        assert work.find(quote) == QuotePlace("words.txt", (2, 2))
+
+    def test_a_short_piece_of_a_longer_line_is_not_found(self) -> None:
+        assert _project(_GITIGNORE_PIECE).find(_VENV) is None
+
+    def test_a_short_piece_of_a_longer_line_is_asked_again_as_too_short(
+        self,
+    ) -> None:
+        # As before 2026-11-07.
+        answer = _answer(_met("c1.p1", _VENV), _C2_MET)
+        assert items_to_ask_again(answer, _project(_GITIGNORE_PIECE)) == (
+            RepeatItem("c1.p1", RepeatReason.QUOTE_TOO_SHORT),
+        )
+
+    def test_a_short_quote_the_work_lacks_is_asked_again_as_too_short(
+        self,
+    ) -> None:
+        answer = _answer(_met("c1.p1", ".env/"), _C2_MET)
+        assert items_to_ask_again(answer, _project(_GITIGNORE)) == (
+            RepeatItem("c1.p1", RepeatReason.QUOTE_TOO_SHORT),
+        )
+
+    @pytest.mark.parametrize("quote", ["", "   ", "\t\n", _BOM])
+    def test_a_blank_line_is_never_evidence(self, quote: str) -> None:
+        work = SubmittedWork([WorkFile("a.txt", "first\n\n   \n\t\nlast\n", True)])
+        assert work.find(quote) is None
+
+    def test_a_whole_line_of_a_document_is_not_taken(self) -> None:
+        # The lines of a docx or a pdf are an artefact of text extraction.
+        work = SubmittedWork([WorkFile("notes.docx", "Висновок\nТак\n", False)])
+        assert work.find("Так") is None
+
+    def test_the_first_whole_line_of_the_work_wins(self) -> None:
+        work = SubmittedWork(
+            [
+                WorkFile("a/.gitignore", "*.pyc\n.venv/\n", True),
+                WorkFile(".gitignore", _GITIGNORE, True),
+            ]
+        )
+        assert work.find(_VENV) == QuotePlace("a/.gitignore", (2, 2))
+
+    def test_the_minimum_is_unchanged(self) -> None:
+        assert MIN_QUOTE_CHARS == 8
+
+    def test_a_met_on_a_whole_short_line_stands_without_a_repeat(self) -> None:
+        # The whole-line lock of the stage, its pure part.
+        work = _project(_GITIGNORE)
+        answer = _answer(_met("c1.p1", _VENV), _C2_MET)
+        assert items_to_ask_again(answer, work) == ()
+        records = settle_verdicts(_VENV_LIST, answer, None, work=work, earlier={})
+        settled = {record.item_id: record for record in records}
+        assert settled["c1.p1"] == VerdictRecord(
+            item_id="c1.p1",
+            item_kind=VerdictItemKind.POINT,
+            weight=None,
+            verdict=MET,
+            model_verdict=MET,
+            quote=_VENV,
+            quote_file=".gitignore",
+            quote_lines=(3, 3),
+        )
+        assert settled["c1"].verdict is MET
+        assert is_passed(records) is True
+        assert score_percent(records) == 100
+
+
+class TestUnconfirmed:
+    """Decisions 2 and 3 (2026-11-07): a "met" the check could not confirm.
+
+    The model said "met", its quote did not stand, and the repeat took it
+    back — or gave another quote that did not stand either. The row reads
+    "not met" with the author's flag; it does not fail the work, and the
+    score counts it as met.
+    """
+
+    def test_the_students_problem_reads_unconfirmed_and_passes(self) -> None:
+        work = _project(_GITIGNORE_PIECE)
+        first = _answer(_met("c1.p1", _VENV), _C2_MET)
+        repeat = _answer(_not_met("c1.p1", _VENV_SENTENCE))
+        records = settle_verdicts(_VENV_LIST, first, repeat, work=work, earlier={})
+        settled = {record.item_id: record for record in records}
+        assert settled["c1.p1"] == VerdictRecord(
+            item_id="c1.p1",
+            item_kind=VerdictItemKind.POINT,
+            weight=None,
+            verdict=NOT_MET,
+            model_verdict=MET,
+            quote=_VENV,
+            retried=True,
+            quote_not_found=True,
+        )
+        # Its criterion is unconfirmed too: its one point is.
+        assert settled["c1"] == VerdictRecord(
+            item_id="c1",
+            item_kind=VerdictItemKind.CRITERION,
+            weight=WeightCategory.MUST,
+            verdict=NOT_MET,
+            model_verdict=None,
+            quote_not_found=True,
+        )
+        assert is_passed(records) is True
+        # 3 (c1, unconfirmed, counted as met) + 2 (c2) of 5 -> 100.
+        assert score_percent(records) == 100
+
+    @pytest.mark.parametrize(
+        ("quote", "reason"),
+        [
+            (None, RepeatReason.NO_QUOTE),
+            ("def fibonacci(n):\n    if n < 2:", RepeatReason.QUOTE_NOT_ONE_LINE),
+            ("x" * (MAX_QUOTE_CHARS + 1), RepeatReason.QUOTE_TOO_LONG),
+            (_SHORT, RepeatReason.QUOTE_TOO_SHORT),
+            (_ABSENT, RepeatReason.QUOTE_NOT_FOUND),
+        ],
+        ids=["no-quote", "two-lines", "too-long", "too-short", "not-found"],
+    )
+    def test_a_met_taken_back_after_any_quote_reason_is_unconfirmed(
+        self, quote: str | None, reason: RepeatReason
+    ) -> None:
+        said = {"id": "c1", "verdict": "met", "quote": quote, "missing": None}
+        first = _one(said)
+        assert items_to_ask_again(first, _WORK) == (RepeatItem("c1", reason),)
+        repeat = _answer(_not_met("c1", "The check refused the quote."))
+        records = settle_verdicts(_ONE, first, repeat, work=_WORK, earlier={})
+        c1 = records[0]
+        assert c1 == VerdictRecord(
+            item_id="c1",
+            item_kind=VerdictItemKind.CRITERION,
+            weight=WeightCategory.MUST,
+            verdict=NOT_MET,
+            model_verdict=MET,
+            quote=quote,
+            retried=True,
+            quote_not_found=True,
+        )
+        assert is_passed(records) is True
+        # 3 (c1, unconfirmed) + 2 (c3, met) of 5 -> 100.
+        assert score_percent(records) == 100
+
+    def test_the_score_counts_an_unconfirmed_criterion_as_met(self) -> None:
+        first = _answer(_met("c1", _SHORT), _not_met("c3"))
+        repeat = _answer(_not_met("c1", "The quote is too short."))
+        records = settle_verdicts(_ONE, first, repeat, work=_WORK, earlier={})
+        # 3 (c1, unconfirmed) of 5 -> 60; were it not met, 0.
+        assert score_percent(records) == 60
+        assert is_passed(records) is True
+
+    def test_a_met_whose_second_quote_falls_too_is_unconfirmed(self) -> None:
+        # The state the code already had (quote_not_found): now it passes.
+        first = _one(_met("c1", _ABSENT))
+        records = settle_verdicts(
+            _ONE, first, _answer(_met("c1", _ABSENT)), work=_WORK, earlier={}
+        )
+        assert (records[0].verdict, records[0].quote_not_found) == (NOT_MET, True)
+        assert is_passed(records) is True
+        assert score_percent(records) == 100
+
+    def test_a_point_really_not_met_beside_an_unconfirmed_one_fails(self) -> None:
+        criteria = _in_force(_criterion("c1", "must", points=2))
+        first = _answer(_met("c1.p1", _SHORT), _not_met("c1.p2"))
+        repeat = _answer(_not_met("c1.p1", "The quote is too short."))
+        records = settle_verdicts(criteria, first, repeat, work=_WORK, earlier={})
+        settled = {record.item_id: record for record in records}
+        assert settled["c1.p1"].quote_not_found is True
+        assert (settled["c1"].verdict, settled["c1"].quote_not_found) == (
+            NOT_MET,
+            False,
+        )
+        assert is_passed(records) is False
+        assert score_percent(records) == 0
+
+    def test_a_point_met_beside_an_unconfirmed_one_leaves_it_unconfirmed(
+        self,
+    ) -> None:
+        criteria = _in_force(_criterion("c1", "must", points=2))
+        first = _answer(_met("c1.p1", _SHORT), _met("c1.p2", "def fibonacci(n):"))
+        repeat = _answer(_not_met("c1.p1", "The quote is too short."))
+        records = settle_verdicts(criteria, first, repeat, work=_WORK, earlier={})
+        c1 = records[0]
+        assert (c1.item_id, c1.verdict, c1.quote_not_found) == ("c1", NOT_MET, True)
+        assert is_passed(records) is True
+        assert score_percent(records) == 100
+
+    def test_stored_rows_read_unconfirmed_as_the_records_do(self) -> None:
+        work = _project(_GITIGNORE_PIECE)
+        first = _answer(_met("c1.p1", _VENV), _not_met("c2"))
+        repeat = _answer(_not_met("c1.p1", _VENV_SENTENCE))
+        records = settle_verdicts(_VENV_LIST, first, repeat, work=work, earlier={})
+        rows = [
+            SubmissionCriterionVerdict(
+                item_id=record.item_id,
+                item_kind=record.item_kind.value,
+                weight=record.weight.value if record.weight else None,
+                verdict=record.verdict.value,
+                quote_not_found=record.quote_not_found,
+            )
+            for record in records
+        ]
+        # 3 (c1, unconfirmed) of 5 -> 60.
+        assert (score_percent(rows), is_passed(rows)) == (60, True)
+        assert (score_percent(records), is_passed(records)) == (60, True)
+
+    def test_the_safeguard_still_keeps_an_earlier_met(self) -> None:
+        earlier = {"c1": _Earlier(quote="def fibonacci(n):")}
+        first = _one(_met("c1", _SHORT))
+        repeat = _answer(_not_met("c1", "The quote is too short."))
+        c1 = settle_verdicts(_ONE, first, repeat, work=_WORK, earlier=earlier)[0]
+        assert (c1.verdict, c1.model_verdict, c1.quote) == (
+            MET,
+            MET,
+            "def fibonacci(n):",
+        )
+        assert c1.quote_not_found is True
+        assert c1.safeguard_submission_id == _EARLIER_SUBMISSION
+
+
+class TestARealNotMet:
+    """Decision 2 (2026-11-07): a "not met" of the first answer is "not met"."""
+
+    def test_a_not_met_in_the_first_answer_fails_a_must(self) -> None:
+        first = _one(_not_met("c1", "No base case."))
+        assert items_to_ask_again(first, _WORK) == ()
+        records = settle_verdicts(_ONE, first, None, work=_WORK, earlier={})
+        c1 = records[0]
+        assert (c1.verdict, c1.model_verdict, c1.quote_not_found) == (
+            NOT_MET,
+            NOT_MET,
+            False,
+        )
+        assert c1.missing == "No base case."
+        assert is_passed(records) is False
+        # 2 (c3) of 5 -> 40.
+        assert score_percent(records) == 40
+
+    def test_a_not_met_still_not_met_on_the_repeat_fails_a_must(self) -> None:
+        silent = {"id": "c1", "verdict": "not_met", "quote": None, "missing": None}
+        repeat = _answer(_not_met("c1", "No base case."))
+        records = settle_verdicts(_ONE, _one(silent), repeat, work=_WORK, earlier={})
+        c1 = records[0]
+        assert (c1.verdict, c1.quote_not_found, c1.missing) == (
+            NOT_MET,
+            False,
+            "No base case.",
+        )
+        assert is_passed(records) is False
+
+    def test_a_not_met_on_a_met_that_stood_is_not_a_take_back(self) -> None:
+        # Only a quote's reason makes a "not met" unconfirmed.
+        first = _one(_met("c1", "def fibonacci(n):"))
+        assert items_to_ask_again(first, _WORK) == ()
+        repeat = _answer(_not_met("c1", "No base case."))
+        records = settle_verdicts(_ONE, first, repeat, work=_WORK, earlier={})
+        c1 = records[0]
+        assert (c1.verdict, c1.model_verdict, c1.quote_not_found) == (
+            NOT_MET,
+            NOT_MET,
+            False,
+        )
+        assert is_passed(records) is False
 
 
 def test_documentation_examples_run() -> None:

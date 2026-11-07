@@ -21,7 +21,11 @@ worker hit, 1A). Deterministic, zero LLM. It:
 4. computes the base-vs-submission delta (derived on read from the two
    persisted manifests, not persisted here) and LOGS its counts;
 5. builds the rich Mentor delta-context ``submission_text`` for safety →
-   sanity → review via the pure :func:`build_mentor_context` (P4).
+   sanity → review via the pure :func:`build_mentor_context` (P4);
+6. hands the evaluation stage the student's files -- new and changed against
+   the base, as the screen read them -- and the base version of each changed
+   one (project chain K1). Today's Mentor reads neither: the text, the safety
+   text and its review are what they were.
 
 The context is the H2-budgeted trusted/untrusted delta assembly: a
 system-computed trusted block (base tree + two-level delta + F2 metrics +
@@ -37,6 +41,7 @@ import uuid
 import zipfile
 from contextlib import ExitStack
 from pathlib import PurePosixPath
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import structlog
@@ -46,7 +51,11 @@ from course_supporter.homework.doors import (
     not_opened_block,
     persist_door_refusal,
 )
-from course_supporter.homework.mentor_context import Side, build_mentor_context
+from course_supporter.homework.mentor_context import (
+    ReadText,
+    Side,
+    build_mentor_context,
+)
 from course_supporter.homework.text_budget import project_context_budget_chars
 from course_supporter.normalizer import (
     _PROJECT_NORMALIZE_LIMITS,
@@ -71,10 +80,12 @@ from course_supporter.security.text_screen import screen_text
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from course_supporter.homework.criteria_verdicts import WorkFile
+    from course_supporter.normalizer import Delta
     from course_supporter.storage.homework_repository import HomeworkRepository
     from course_supporter.storage.orm import HomeworkSubmission, ProjectBase
     from course_supporter.storage.s3 import S3Client
@@ -238,6 +249,11 @@ async def process_project_submission(
             base_version=base_version,
             latest_version=latest_version,
         )
+        # After the context, and by the same reader: the text above is the one
+        # it always was, and the base snapshot is still open.
+        files, base_files = _student_work(
+            delta, snapshot.manifest, base_manifest, read_text, log=log
+        )
 
     # Oversize guard (step E) -- the ONE size limit on this branch. The
     # assembled context is measured against the budget derived from the FIRST
@@ -272,7 +288,71 @@ async def process_project_submission(
         )
         return None
 
-    return DoorReading(text=context, not_opened=screen.not_opened, flags=screen.flags)
+    return DoorReading(
+        text=context,
+        not_opened=screen.not_opened,
+        flags=screen.flags,
+        files=files,
+        base_files=base_files,
+    )
+
+
+def _student_work(
+    delta: Delta,
+    sub_manifest: Manifest,
+    base_manifest: Manifest,
+    read_text: ReadText,
+    *,
+    log: Any,
+) -> tuple[tuple[WorkFile, ...], Mapping[str, str]]:
+    """The student's files, and the base version of each changed one (K1).
+
+    The student's files are the ones the delta names new or changed: an
+    unchanged file is the author's, a deleted one is not in the work, and an
+    excluded one never reached the snapshot. Each carries the text the screen
+    read for the models, so a binary file and a file the screen set aside
+    (named in ``not_opened``) have none and are left out. A document's lines
+    are an artefact of extraction, as on the text path, so it has none. In
+    order of path.
+
+    The base version of a changed file is read by the ``read_text`` the delta
+    context reads the base by. A new file has none, and without a base every
+    file is new.
+    """
+    from course_supporter.homework.criteria_verdicts import WorkFile
+
+    sub_by = {entry.path: entry for entry in sub_manifest.included}
+    base_by = {entry.path: entry for entry in base_manifest.included}
+    changed = set(delta.changed)
+    files: list[WorkFile] = []
+    base_files: dict[str, str] = {}
+    for path in sorted((*delta.changed, *delta.new)):
+        entry = sub_by[path]
+        text = read_text("sub", entry)
+        if text is None:
+            continue
+        files.append(WorkFile(path, text, entry.cls is not EntryClass.DOCUMENT))
+        if path in changed:
+            base_text = _base_version(read_text, base_by[path], log=log)
+            if base_text is not None:
+                base_files[path] = base_text
+    return tuple(files), MappingProxyType(base_files)
+
+
+def _base_version(read_text: ReadText, entry: ManifestEntry, *, log: Any) -> str | None:
+    """The base's text of one changed file; ``None`` when it cannot be read.
+
+    The base is opened here for files the delta context never opens it for (a
+    small changed file is shown whole), and the author's documents are not
+    read when the base is stored. A base docx or pdf the extractor cannot open
+    is no reason to fail a submission that today's Mentor reviews without it:
+    the file simply has no base version.
+    """
+    try:
+        return read_text("base", entry)
+    except Exception:
+        log.warning("project_submission.base_version_unread", path=entry.path)
+        return None
 
 
 class _SnapshotScreen:

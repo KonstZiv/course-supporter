@@ -28,29 +28,41 @@ Interface:
     and the pass, from rows.
 
 The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
-9.8, 9.10; the item-level repeat, ratified 2026-10-02):
+9.8, 9.10; the item-level repeat, ratified 2026-10-02; the whole line and
+"unconfirmed", ratified 2026-11-07):
 
 * A "met" stands on a quote of one line and at most :data:`MAX_QUOTE_CHARS`
   characters that IS in the work. Quote and work are compared in NFC,
   without the byte-order mark and without any whitespace, inside one file's
   text at a time. A quote of fewer than :data:`MIN_QUOTE_CHARS`
-  non-whitespace characters is not found: a quote that short is found in any
-  work and proves nothing. A "not met" stands on a sentence on what is
-  missing.
+  non-whitespace characters is not found — a quote that short is found in
+  any work and proves nothing — unless it is a WHOLE line of a file with
+  lines: then the line is all the evidence there is (``.venv/`` in a
+  ``.gitignore``), and the quote is placed on that line. A blank line is
+  never evidence. A "not met" stands on a sentence on what is missing.
 * Only a defect of the answer as a whole — not JSON of this form, an item
   missing, unknown or repeated — repeats the whole answer. A verdict that
   cannot stand as given — a "met" without a quote that stands, a "not met"
   without a sentence — is asked about once more on its own, with its reason.
   The field a verdict does not use — the sentence of a "met", the quote of a
   "not met" — is ignored, never a defect.
-* A "met" that still does not stand after the repeat is flagged for the
-  author and reads "not met" — unless the safeguard keeps an earlier "met";
-  a "not met" still without a sentence reads "not met" without one.
-* A criterion checked by mandatory points is met when every point is.
+* A "met" that still does not stand after the repeat — the repeat gave
+  another quote that does not stand, or took back as "not met" a "met" whose
+  quote was too short but in the work — is UNCONFIRMED: it reads "not met",
+  flagged for the author (``quote_not_found``), unless the safeguard keeps
+  an earlier "met". The model said "done", and the check found no line to
+  bear it out: that is not the same as "not done". A "met" taken back after
+  any other defect of its quote — a short quote the work does not have, a
+  quote not found in the work — is "not met": the model most likely erred
+  first. A "not met" given in the first answer is "not met";
+  one still without a sentence reads "not met" without one.
+* A criterion checked by mandatory points is met when every point is, and
+  unconfirmed when every point is met or unconfirmed — one at least
+  unconfirmed.
 * The score is the share of the weights of the met criteria (3 / 2 / 1) in
   the sum of all weights, in whole percent, rounded DOWN — 100 only when
-  everything is met. Passed means every "must" criterion is met; a list with
-  no "must" is passed.
+  everything is met or unconfirmed. Passed means every "must" criterion is
+  met or unconfirmed; a list with no "must" is passed.
 * The resubmission safeguard: a "not met" on an item whose LATEST earlier
   verdict on the same list was "met", and whose quote is still in the work
   word for word, stays "met" — and says so in its row.
@@ -60,7 +72,8 @@ Replacing:
     rule replaces a function's body, not its signature. The score formula is
     :func:`score_percent` alone, the matching of a quote is
     :meth:`SubmittedWork.find` alone, what lets a single verdict stand is
-    ``_repeat_reason`` alone, the safeguard's condition is
+    ``_repeat_reason`` alone, which of the model's words an item is settled
+    on is ``_word_to_settle`` alone, the safeguard's condition is
     ``_kept_by_safeguard`` alone.
 """
 
@@ -70,11 +83,12 @@ import bisect
 import unicodedata
 import uuid
 from collections import Counter
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import count
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final, NamedTuple, Protocol
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -103,7 +117,8 @@ MIN_QUOTE_CHARS: Final = 8
 """Non-whitespace characters of a quote at least (``PRE-FLIGHT.md`` 9.4).
 
 A shorter quote counts as not found and is asked about again: ``x = 1`` is in
-almost any work, so finding it proves nothing about the criterion.
+almost any work, so finding it proves nothing about the criterion. A shorter
+quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 """
 
 _BOM: Final = chr(0xFEFF)
@@ -293,6 +308,57 @@ class _SearchableFile:
         """The physical line, from 1, of the squeezed character at ``offset``."""
         return bisect.bisect_right(self.line_starts, offset)
 
+    def lines(self) -> Iterator[tuple[int, int, int]]:
+        """Each physical line: its number from 1, and its squeezed span.
+
+        Nothing for a file without lines, whose lines are an artefact of text
+        extraction (:attr:`WorkFile.has_lines`), not lines the student wrote.
+        """
+        if not self.file.has_lines:
+            return
+        ends = [*self.line_starts[1:], len(self.squeezed)]
+        yield from zip(count(1), self.line_starts, ends)
+
+    def whole_line(self, needle: str) -> int | None:
+        """The first physical line, from 1, that is ``needle`` and nothing else.
+
+        Both squeezed. ``None`` for an empty needle — a blank line proves
+        nothing — and for a file without lines (:meth:`lines`).
+        """
+        if not needle:
+            return None
+        for number, start, end in self.lines():
+            if end - start == len(needle) and self.squeezed.startswith(needle, start):
+                return number
+        return None
+
+    def line_holding(self, needle: str) -> int | None:
+        """The first physical line, from 1, holding ``needle`` whole or as a piece.
+
+        Both squeezed. ``None`` for an empty needle and for a file without
+        lines (:meth:`lines`).
+        """
+        if not needle:
+            return None
+        for number, start, end in self.lines():
+            if self.squeezed.find(needle, start, end) >= 0:
+                return number
+        return None
+
+    def place_of(self, needle: str) -> QuotePlace | None:
+        """Where the squeezed ``needle`` first stands in this file, or ``None``."""
+        if len(needle) < MIN_QUOTE_CHARS:
+            line = self.whole_line(needle)
+            return None if line is None else QuotePlace(self.file.name, (line, line))
+        start = self.squeezed.find(needle)
+        if start < 0:
+            return None
+        if not self.file.has_lines:
+            return QuotePlace(file=self.file.name, lines=None)
+        first = self.line_of(start)
+        last = self.line_of(start + len(needle) - 1)
+        return QuotePlace(file=self.file.name, lines=(first, last))
+
 
 class SubmittedWork:
     """A submitted work, searchable for the quotes verdicts stand on.
@@ -309,10 +375,26 @@ class SubmittedWork:
     QuotePlace(file='main.py', lines=(2, 2))
     >>> work.find("n * 2") is None
     True
+    >>> SubmittedWork([WorkFile(".gitignore", "*.pyc\\n  .venv/\\n", True)]).find(
+    ...     ".venv/"
+    ... )
+    QuotePlace(file='.gitignore', lines=(2, 2))
     """
 
     def __init__(self, files: Sequence[WorkFile]) -> None:
         self._files = tuple(_SearchableFile(file) for file in files)
+
+    def is_in_a_line(self, quote: str) -> bool:
+        """Whether ``quote`` is in a line of the work, whole or as a piece.
+
+        Compared as :meth:`find` compares, but at any length and only inside
+        one line of a file with lines: it tells a quote too short to stand
+        that IS in the work from one the work does not have.
+        """
+        needle = _squeezed(quote)
+        return any(
+            searchable.line_holding(needle) is not None for searchable in self._files
+        )
 
     def find(self, quote: str) -> QuotePlace | None:
         """Where ``quote`` first stands in the work, or ``None``.
@@ -320,20 +402,15 @@ class SubmittedWork:
         Compared without whitespace, in NFC and without the byte-order mark on
         both sides, so line breaks, indentation, CRLF and a decomposed accent
         do not hide a quote the student did write. A quote with fewer than
-        :data:`MIN_QUOTE_CHARS` non-whitespace characters is not found.
+        :data:`MIN_QUOTE_CHARS` non-whitespace characters is found only as a
+        whole line of a file with lines — compared the same way — and placed
+        on that line; anywhere else it is not found.
         """
         needle = _squeezed(quote)
-        if len(needle) < MIN_QUOTE_CHARS:
-            return None
         for searchable in self._files:
-            start = searchable.squeezed.find(needle)
-            if start < 0:
-                continue
-            if not searchable.file.has_lines:
-                return QuotePlace(file=searchable.file.name, lines=None)
-            first = searchable.line_of(start)
-            last = searchable.line_of(start + len(needle) - 1)
-            return QuotePlace(file=searchable.file.name, lines=(first, last))
+            place = searchable.place_of(needle)
+            if place is not None:
+                return place
         return None
 
 
@@ -399,10 +476,14 @@ def _standing_quote(
         return RepeatReason.QUOTE_NOT_ONE_LINE
     if len(unicodedata.normalize("NFC", text)) > MAX_QUOTE_CHARS:
         return RepeatReason.QUOTE_TOO_LONG
+    place = work.find(text)
+    if place is not None:
+        return place
+    # A short quote the search did not take as a whole line is named as too
+    # short: a longer quote is what mends it, not another place to look.
     if len(_squeezed(text)) < MIN_QUOTE_CHARS:
         return RepeatReason.QUOTE_TOO_SHORT
-    place = work.find(text)
-    return RepeatReason.QUOTE_NOT_FOUND if place is None else place
+    return RepeatReason.QUOTE_NOT_FOUND
 
 
 def _repeat_reason(item: ItemVerdict, work: SubmittedWork) -> RepeatReason | None:
@@ -467,7 +548,9 @@ def settle_verdicts(
     """The verdict rows of a submission, from the model's answers.
 
     For every item, the model's last word: the repeat's for the items it was
-    asked about again, the first answer's for the rest. Then, item by item:
+    asked about again, the first answer's for the rest — except a "met" whose
+    quote was too short but in the work and which the repeat took back,
+    settled on that "met" (:func:`_word_to_settle`). Then, item by item:
 
     1. "met" on a quote that stands (:func:`items_to_ask_again`) — met,
        placed;
@@ -476,14 +559,15 @@ def settle_verdicts(
        within one list only — task 08, decision 21), said "met", and its quote
        is still in the work — met, kept, with the earlier submission named;
     3. otherwise not met — and a "met" whose quote did not stand is flagged
-       for the author.
+       for the author: unconfirmed.
 
     The field a verdict does not use is ignored and not stored: the sentence
     of a "met", the quote of a "not met". A "not met" without a sentence is
     stored without one.
 
     A criterion checked by mandatory points is then met when all of its
-    points are — after the safeguard, so a kept point counts.
+    points are, and unconfirmed when each is met or unconfirmed — after the
+    safeguard, so a kept point counts.
 
     Args:
         criteria: The list in force the answers were given against.
@@ -507,17 +591,15 @@ def settle_verdicts(
     if first.keys() != set(expected) or not again.keys() <= set(expected):
         msg = f"the answers do not cover exactly the items {list(expected)}"
         raise ValueError(msg)
-    said = first | again
-    retried = again.keys()
 
     def judged(
         item_id: str, kind: VerdictItemKind, weight: WeightCategory | None
     ) -> VerdictRecord:
         return _judged(
-            said[item_id],
+            _word_to_settle(first[item_id], again.get(item_id), work),
             kind=kind,
             weight=weight,
-            retried=item_id in retried,
+            retried=item_id in again,
             criteria=criteria,
             work=work,
             earlier=earlier,
@@ -534,18 +616,79 @@ def settle_verdicts(
             judged(point.id, VerdictItemKind.POINT, None)
             for point in criterion.mandatory_points
         ]
-        every_point_met = all(p.verdict is VerdictValue.MET for p in points)
-        records.append(
-            VerdictRecord(
-                item_id=criterion.id,
-                item_kind=VerdictItemKind.CRITERION,
-                weight=criterion.weight,
-                verdict=VerdictValue.MET if every_point_met else VerdictValue.NOT_MET,
-                model_verdict=None,
-            )
-        )
+        records.append(_from_points(criterion, points))
         records.extend(points)
     return tuple(records)
+
+
+def _word_to_settle(
+    first: ItemVerdict, repeat: ItemVerdict | None, work: SubmittedWork
+) -> ItemVerdict:
+    """The verdict an item is settled on: the model's last word, but one case.
+
+    A "met" whose quote was too short (:attr:`RepeatReason.QUOTE_TOO_SHORT`)
+    and IS in the work — in a line of a file with lines, as a piece
+    (:meth:`SubmittedWork.is_in_a_line`) — taken back as "not met" on the
+    repeat, is settled on that first "met": so it reads unconfirmed, as a
+    "met" whose second quote did not stand either, and not "not met"
+    (ratified 2026-11-07). The evidence was in the work and the rule on a
+    quote's length refused it: the repeat answered that refusal, not a
+    question about the work — in the student's problem 2 a line too short to
+    quote at more length was taken back with a sentence on the quote's
+    length. That sentence is about the check, not the work, so it is not
+    stored, and the explanation, which reads the stored rows, is told the
+    state alone, never the check's mechanics.
+
+    A "met" taken back after any other defect of its quote — a short quote
+    the work does not have, a quote not in the work, none, of several lines,
+    too long — is "not met", as before the decision: the model most likely
+    erred the first time (narrowed by the Mentor session, 2026-11-07). Every
+    other item is settled on its last word too: a "not met" of the first
+    answer stays one, and the repeat's word on a "not met" without a
+    sentence stands.
+    """
+    if repeat is None:
+        return first
+    took_back = repeat.verdict is VerdictValue.NOT_MET
+    too_short_of_the_work = (
+        first.verdict is VerdictValue.MET
+        and _repeat_reason(first, work) is RepeatReason.QUOTE_TOO_SHORT
+        and work.is_in_a_line(first.quote or "")
+    )
+    return first if took_back and too_short_of_the_work else repeat
+
+
+def _unconfirmed(item: ScoredItem) -> bool:
+    """The model said "met" and no line of the work bore it out: unconfirmed.
+
+    Not "not done" — the check could not confirm it. The flag for the author
+    is ``quote_not_found`` on a row that reads "not met"; one the safeguard
+    kept reads "met" and is met.
+    """
+    return item.verdict == VerdictValue.NOT_MET and item.quote_not_found
+
+
+def _from_points(
+    criterion: Criterion, points: Sequence[VerdictRecord]
+) -> VerdictRecord:
+    """The code's verdict on a criterion checked by mandatory points.
+
+    Met when every point is; unconfirmed — "not met" with the author's flag,
+    as an unconfirmed point reads — when every point is met or unconfirmed;
+    not met otherwise (decision 3; unconfirmed since 2026-11-07).
+    """
+    every_met = all(point.verdict is VerdictValue.MET for point in points)
+    unconfirmed = not every_met and all(
+        point.verdict is VerdictValue.MET or _unconfirmed(point) for point in points
+    )
+    return VerdictRecord(
+        item_id=criterion.id,
+        item_kind=VerdictItemKind.CRITERION,
+        weight=criterion.weight,
+        verdict=VerdictValue.MET if every_met else VerdictValue.NOT_MET,
+        model_verdict=None,
+        quote_not_found=unconfirmed,
+    )
 
 
 def _judged(
@@ -649,19 +792,34 @@ class ScoredItem(Protocol):
     @property
     def verdict(self) -> str: ...
 
+    @property
+    def quote_not_found(self) -> bool: ...
 
-def _criteria_outcomes(
-    items: Iterable[ScoredItem],
-) -> list[tuple[WeightCategory, bool]]:
-    """Each criterion's weight and whether it is met; points are left out."""
-    outcomes: list[tuple[WeightCategory, bool]] = []
+
+class _Outcome(NamedTuple):
+    """One criterion as the score and the pass read it."""
+
+    weight: WeightCategory
+    met: bool
+    unconfirmed: bool
+
+
+def _criteria_outcomes(items: Iterable[ScoredItem]) -> list[_Outcome]:
+    """Each criterion's weight and state; points are left out."""
+    outcomes: list[_Outcome] = []
     for item in items:
         if item.item_kind != VerdictItemKind.CRITERION:
             continue
         if item.weight is None:
             msg = f"criterion {item.item_id} has no weight"
             raise ValueError(msg)
-        outcomes.append((WeightCategory(item.weight), item.verdict == VerdictValue.MET))
+        outcomes.append(
+            _Outcome(
+                weight=WeightCategory(item.weight),
+                met=item.verdict == VerdictValue.MET,
+                unconfirmed=_unconfirmed(item),
+            )
+        )
     return outcomes
 
 
@@ -669,8 +827,8 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
     """The share of the met criteria's weights, in whole percent, rounded down.
 
     Rounded down so a score never overstates and 100 means everything is met
-    (``PRE-FLIGHT.md`` 9.10); the portal reads 100 as "correct". Points do not
-    count on their own — their criterion does.
+    — or unconfirmed (below) — (``PRE-FLIGHT.md`` 9.10); the portal reads 100
+    as "correct". Points do not count on their own — their criterion does.
 
     Raises:
         ValueError: There is no criterion among ``items``, or one has no
@@ -687,10 +845,16 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
     66
     """
     met = total = 0
-    for weight, done in _criteria_outcomes(items):
-        number = WEIGHT_NUMBERS[weight]
+    for outcome in _criteria_outcomes(items):
+        number = WEIGHT_NUMBERS[outcome.weight]
         total += number
-        if done:
+        # An unconfirmed criterion counts as met: the model said "done" and
+        # the check could not bear it out, which is no evidence the work
+        # lacks it — a score that took its weight off would read a fault of
+        # the check as the student's. The Mentor session's own choice of
+        # 2026-11-07, beside the operator's on the pass (is_passed); undone
+        # by dropping ``or outcome.unconfirmed`` here alone.
+        if outcome.met or outcome.unconfirmed:
             met += number
     if total == 0:
         msg = "verdicts without a criterion have no score"
@@ -699,13 +863,18 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
 
 
 def is_passed(items: Iterable[ScoredItem]) -> bool:
-    """Whether every "must" criterion is met; with no "must", passed.
+    """Whether every "must" criterion is met or unconfirmed; with no "must", passed.
 
     The score shows how complete the work is; it does not decide the pass
     (decision 2). An author's pass mark is outside the first echelon.
+
+    An unconfirmed "must" does not fail the work (the operator's decision of
+    2026-11-07): the model said "done", and that no line of the work could
+    bear it out is the check's limit, not the student's fault. The author
+    sees the flag on its row.
     """
     return all(
-        done
-        for weight, done in _criteria_outcomes(items)
-        if weight is WeightCategory.MUST
+        outcome.met or outcome.unconfirmed
+        for outcome in _criteria_outcomes(items)
+        if outcome.weight is WeightCategory.MUST
     )

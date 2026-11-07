@@ -38,6 +38,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+from course_supporter.agents.review_explainer import ExplanationInput, render_context
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
     VerdictItemKind,
@@ -56,6 +57,8 @@ from course_supporter.homework.criteria_verdicts import (
     RepeatItem,
     RepeatReason,
     WorkFile,
+    is_passed,
+    score_percent,
 )
 from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_config import (
@@ -69,6 +72,7 @@ from course_supporter.homework.path_stages import (
     StageOutcome,
     _execution,
 )
+from course_supporter.homework.verdict_explanation import explanation_facts
 from course_supporter.llm.error_categories import (
     ErrorCategory,
     LadderExhaustedError,
@@ -291,13 +295,14 @@ def _context(
     submission: HomeworkSubmission,
     *,
     work: tuple[WorkFile, ...] = _FILES,
+    submission_text: str = _WORK,
 ) -> StageContext:
     config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
     return StageContext(
         session=session,
         router=router,
         submission=submission,
-        submission_text=_WORK,
+        submission_text=submission_text,
         language="ukr",
         path_key=PathKey(AssignmentType.TASK, SubmissionState.FIRST),
         stage_name=CRITERIA_EVALUATION,
@@ -314,8 +319,11 @@ async def _evaluate(
     *,
     source: _Source | None = None,
     work: tuple[WorkFile, ...] = _FILES,
+    submission_text: str = _WORK,
 ) -> StageOutcome:
-    context = _context(session, router, submission, work=work)
+    context = _context(
+        session, router, submission, work=work, submission_text=submission_text
+    )
     return await evaluate_criteria(
         context,
         execution=_execution(context),
@@ -781,3 +789,300 @@ class TestWithoutFiles:
             await _evaluate(db_session, router, submission, work=())
 
         assert router.requests == []
+
+
+# The student's problem 2 (2026-11-07), through the stage: a mandatory point
+# asks for the line ".venv/" in .gitignore — six characters, under the
+# minimum of a quote, and the whole line. c1 "must" by one point, c2 "should":
+# weights 3 + 2 = 5.
+_GITIGNORE_CRITERIA = (_criterion("c1", "must", points=1), _criterion("c2", "should"))
+_MAIN_PY = "print('hello, world')\n"
+_VENV = ".venv/"
+_C2_QUOTE = "print('hello, world')"
+_LENGTH_SENTENCE = (
+    "Рядок .venv/ є, але цитата має менше 8 символів, тож її не прийнято."
+)
+
+
+def _project(gitignore: str) -> tuple[WorkFile, ...]:
+    return (
+        WorkFile("main.py", _MAIN_PY, True),
+        WorkFile(".gitignore", gitignore, True),
+    )
+
+
+def _framed(gitignore: str) -> str:
+    """The work as the doors frame it for the model."""
+    return f"--- main.py ---\n{_MAIN_PY}--- .gitignore ---\n{gitignore}"
+
+
+def _gitignore_source() -> _Source:
+    return _Source(
+        CriteriaInForce(
+            criteria=_GITIGNORE_CRITERIA, layer=CriteriaLayer.MODEL, source_id=_LIST_ID
+        )
+    )
+
+
+async def _evaluate_project(
+    session: AsyncSession,
+    router: _Router,
+    submission: HomeworkSubmission,
+    gitignore: str,
+) -> dict[str, SubmissionCriterionVerdict]:
+    outcome = await _evaluate(
+        session,
+        router,
+        submission,
+        source=_gitignore_source(),
+        work=_project(gitignore),
+        submission_text=_framed(gitignore),
+    )
+    assert outcome == StageOutcome.ok()
+    return await _rows(session, submission)
+
+
+class TestAShortWholeLineIsAQuote:
+    """The whole-line lock, end to end through the stage.
+
+    The recorded answer, the rows written, the score and the pass recounted
+    from the stored rows as the review's builder does.
+    """
+
+    async def _assert_met_on_line_3_without_a_repeat(
+        self,
+        session: AsyncSession,
+        submission: HomeworkSubmission,
+        gitignore: str,
+    ) -> None:
+        router = _Router(_answer(_met("c1.p1", _VENV), _met("c2", _C2_QUOTE)))
+
+        rows = await _evaluate_project(session, router, submission, gitignore)
+
+        assert len(router.requests) == 1
+        point = rows["c1.p1"]
+        assert point.verdict == VerdictValue.MET
+        assert (point.quote, point.quote_file) == (_VENV, ".gitignore")
+        assert (point.quote_line_start, point.quote_line_end) == (3, 3)
+        assert (point.retried, point.quote_not_found) == (False, False)
+        assert rows["c1"].verdict == VerdictValue.MET
+        stored = list(rows.values())
+        assert is_passed(stored) is True
+        assert score_percent(stored) == 100
+
+    async def test_the_venv_line_of_a_gitignore_is_met_without_a_repeat(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        await self._assert_met_on_line_3_without_a_repeat(
+            db_session, submission, "__pycache__/\n*.pyc\n.venv/\n"
+        )
+
+    async def test_the_venv_line_with_spaces_around_is_met_without_a_repeat(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        await self._assert_met_on_line_3_without_a_repeat(
+            db_session, submission, "__pycache__/\n*.pyc\n   .venv/  \t\n"
+        )
+
+
+_PIECE = "__pycache__/\n*.pyc\ncache/.venv/old\n"  # ".venv/" is a piece of line 3
+
+
+class TestAShortPieceOfALongerLine:
+    """A short quote inside a longer line is too short, as before 2026-11-07."""
+
+    async def test_it_is_asked_again_as_too_short(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        router = _Router(
+            _answer(_met("c1.p1", _VENV), _met("c2", _C2_QUOTE)),
+            _answer(_met("c1.p1", "cache/.venv/old")),
+        )
+
+        rows = await _evaluate_project(db_session, router, submission, _PIECE)
+
+        _, again = router.requests
+        (note,) = again["render"]["repeat"]
+        assert note["id"] == "c1.p1"
+        assert (
+            note["problem"]
+            == RepeatItem("c1.p1", RepeatReason.QUOTE_TOO_SHORT).feedback
+        )
+        assert rows["c1.p1"].verdict == VerdictValue.MET
+        assert rows["c1.p1"].retried is True
+        assert (rows["c1.p1"].quote_line_start, rows["c1.p1"].quote_line_end) == (3, 3)
+
+
+class TestAMetTakenBackAfterItsQuoteFell:
+    """Unconfirmed: it does not fail the work, and the explanation is told
+    the state, never the check's mechanics."""
+
+    async def _settled(
+        self, session: AsyncSession, submission: HomeworkSubmission
+    ) -> dict[str, SubmissionCriterionVerdict]:
+        router = _Router(
+            _answer(_met("c1.p1", _VENV), _met("c2", _C2_QUOTE)),
+            _answer(_not_met("c1.p1", _LENGTH_SENTENCE)),
+        )
+        rows = await _evaluate_project(session, router, submission, _PIECE)
+        assert len(router.requests) == 2
+        return rows
+
+    async def test_it_reads_unconfirmed_and_does_not_fail_the_work(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        rows = await self._settled(db_session, submission)
+
+        point = rows["c1.p1"]
+        assert point.verdict == VerdictValue.NOT_MET
+        assert point.model_verdict == VerdictValue.MET
+        assert (point.quote, point.quote_file) == (_VENV, None)
+        assert point.missing is None
+        assert (point.retried, point.quote_not_found) == (True, True)
+        criterion = rows["c1"]
+        assert (criterion.verdict, criterion.quote_not_found) == (
+            VerdictValue.NOT_MET,
+            True,
+        )
+        stored = list(rows.values())
+        assert is_passed(stored) is True
+        # 3 (c1, unconfirmed, counted as met) + 2 (c2) of 5 -> 100.
+        assert score_percent(stored) == 100
+
+    async def test_the_explanation_is_shown_its_state_and_no_mechanics(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        rows = await self._settled(db_session, submission)
+
+        facts = explanation_facts(_GITIGNORE_CRITERIA, rows.values())
+        shown = render_context(
+            ExplanationInput(
+                task_title="Project setup",
+                task_description="Set the project up.",
+                task_text="Add a .gitignore that keeps the virtual environment out.",
+                facts=facts,
+                submission_text=_framed(_PIECE),
+                language="Ukrainian",
+                course_links={},
+            )
+        )
+
+        c1, _ = shown["criteria"]
+        assert c1["points"] == [
+            {
+                "id": "c1.p1",
+                "text": "Point 1 of c1",
+                "verdict": "not_met",
+                "missing": None,
+                "quote_not_found": True,
+            }
+        ]
+        assert shown["result"] == {"passed": True, "score": 100}
+        rendered = json.dumps(shown, ensure_ascii=False)
+        assert _LENGTH_SENTENCE not in rendered
+        for word in ("символ", "цитат", "не прийнято", "не знайдено", "too short"):
+            assert word not in rendered, word
+
+
+class TestARealNotMetStays:
+    """A "not met" of the first answer fails a "must", as before 2026-11-07;
+    so does a "met" on a quote the work lacks — of any length — taken back on
+    the repeat."""
+
+    async def test_a_not_met_in_the_first_answer_fails_the_work(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        missing = "У .gitignore немає рядка .venv/."
+        router = _Router(_answer(_not_met("c1.p1", missing), _met("c2", _C2_QUOTE)))
+
+        rows = await _evaluate_project(
+            db_session, router, submission, "__pycache__/\n*.pyc\n"
+        )
+
+        assert len(router.requests) == 1
+        point = rows["c1.p1"]
+        assert (point.verdict, point.quote_not_found, point.missing) == (
+            VerdictValue.NOT_MET,
+            False,
+            missing,
+        )
+        assert (rows["c1"].verdict, rows["c1"].quote_not_found) == (
+            VerdictValue.NOT_MET,
+            False,
+        )
+        stored = list(rows.values())
+        assert is_passed(stored) is False
+        # 2 (c2) of 5 -> 40.
+        assert score_percent(stored) == 40
+
+    async def test_a_met_on_a_quote_the_work_lacks_taken_back_fails_the_work(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        missing = "У .gitignore немає рядка venv/."
+        router = _Router(
+            _answer(_met("c1.p1", "venv/  # local env"), _met("c2", _C2_QUOTE)),
+            _answer(_not_met("c1.p1", missing)),
+        )
+
+        rows = await _evaluate_project(
+            db_session, router, submission, "__pycache__/\n*.pyc\n"
+        )
+
+        _, again = router.requests
+        (note,) = again["render"]["repeat"]
+        assert (
+            note["problem"]
+            == RepeatItem("c1.p1", RepeatReason.QUOTE_NOT_FOUND).feedback
+        )
+        point = rows["c1.p1"]
+        assert (point.verdict, point.model_verdict) == (
+            VerdictValue.NOT_MET,
+            VerdictValue.NOT_MET,
+        )
+        assert (point.quote_not_found, point.missing, point.retried) == (
+            False,
+            missing,
+            True,
+        )
+        assert (rows["c1"].verdict, rows["c1"].quote_not_found) == (
+            VerdictValue.NOT_MET,
+            False,
+        )
+        stored = list(rows.values())
+        assert is_passed(stored) is False
+        # 2 (c2) of 5 -> 40.
+        assert score_percent(stored) == 40
+
+    async def test_a_too_short_met_the_work_lacks_taken_back_fails_the_work(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        missing = "У .gitignore немає рядка .venv/."
+        router = _Router(
+            _answer(_met("c1.p1", _VENV), _met("c2", _C2_QUOTE)),
+            _answer(_not_met("c1.p1", missing)),
+        )
+
+        rows = await _evaluate_project(
+            db_session, router, submission, "__pycache__/\n*.pyc\n"
+        )
+
+        _, again = router.requests
+        (note,) = again["render"]["repeat"]
+        assert (
+            note["problem"]
+            == RepeatItem("c1.p1", RepeatReason.QUOTE_TOO_SHORT).feedback
+        )
+        point = rows["c1.p1"]
+        assert (point.verdict, point.model_verdict) == (
+            VerdictValue.NOT_MET,
+            VerdictValue.NOT_MET,
+        )
+        assert (point.quote_not_found, point.missing) == (False, missing)
+        assert (rows["c1"].verdict, rows["c1"].quote_not_found) == (
+            VerdictValue.NOT_MET,
+            False,
+        )
+        stored = list(rows.values())
+        assert is_passed(stored) is False
+        # 2 (c2) of 5 -> 40.
+        assert score_percent(stored) == 40

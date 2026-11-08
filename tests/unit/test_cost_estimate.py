@@ -46,6 +46,7 @@ from course_supporter.homework.path_config import (
 )
 from course_supporter.llm.ladder_config import StageConfig, load_ladder_config
 from course_supporter.llm.registry import ModelRegistryConfig, load_registry
+from course_supporter.llm.token_budget import tokens_for_chars
 from course_supporter.models.source import AssignmentType
 
 CONFIG = Path("config")
@@ -257,10 +258,10 @@ class TestReview:
     ) -> None:
         """10 000 characters -> 2 857 tokens of work beside each prompt.
 
-        safety              mistral-small  10287 in, 65 out   0.001582050
-        attempt_classifier  mistral-small  9051 in, 120 out   0.001429650
-        criteria_evaluation qwen3.7-max   12225 in, 8548 out x 2  0.124984796
-        review_explanation  qwen3.7-max   15178 in, 8192 out (cap) 0.065602292
+        safety              mistral-small   5962 in, 65 out    0.000933300
+        attempt_classifier  mistral-small   5270 in, 120 out   0.000862500
+        criteria_evaluation qwen3.7-max    7727 in, 8548 out x 2  0.110141396
+        review_explanation  qwen3.7-max   13256 in, 8192 out (cap) 0.062430992
         """
         estimate = _review(
             paths, settings, catalog, AssignmentType.TASK, SubmissionState.FIRST, 10_000
@@ -268,12 +269,12 @@ class TestReview:
         assert [
             (s.step, s.model, s.tokens_in, s.tokens_out) for s in estimate.steps
         ] == [
-            ("safety", "mistral-small-latest", 10287, 65),
-            ("attempt_classifier", "mistral-small-latest", 9051, 120),
-            ("criteria_evaluation", "qwen3.7-max", 12225, 8548),
-            ("review_explanation", "qwen3.7-max", 15178, 8192),
+            ("safety", "mistral-small-latest", 5962, 65),
+            ("attempt_classifier", "mistral-small-latest", 5270, 120),
+            ("criteria_evaluation", "qwen3.7-max", 7727, 8548),
+            ("review_explanation", "qwen3.7-max", 13256, 8192),
         ]
-        assert estimate.e_usd == Decimal("0.193598788")
+        assert estimate.e_usd == Decimal("0.174368188")
         assert not estimate.uncalibrated
         assert estimate.catalog_version == catalog.version
         assert estimate.inputs["path_key"] == "task/first"
@@ -705,7 +706,7 @@ class TestCalibratedLiveBounds:
             f"action {sub_id}: fact {fact_usd} >= E {estimate.e_usd}"
         )
         ratio = fact_usd / estimate.e_usd
-        assert Decimal("0.50") <= ratio <= Decimal("0.95"), (
+        assert Decimal("0.55") <= ratio <= Decimal("0.85"), (
             f"action {sub_id}: ratio {ratio} out of bounds"
         )
 
@@ -728,6 +729,46 @@ class TestCalibratedLiveBounds:
             f"task_preparation: fact {FACT_TASK_PREP_01A1AA2E} >= E {estimate.e_usd}"
         )
         ratio = FACT_TASK_PREP_01A1AA2E / estimate.e_usd
-        assert Decimal("0.75") <= ratio <= Decimal("0.95"), (
+        assert Decimal("0.75") <= ratio <= Decimal("0.85"), (
             f"task_preparation: ratio {ratio} out of bounds"
         )
+
+    @pytest.mark.parametrize(
+        ("stage_name", "chars", "unit_in"),
+        [
+            ("safety", 10_589, 5_509),
+            ("attempt_classifier", 10_589, 4_955),
+            ("criteria_evaluation", 10_589, 6_921),
+            ("review_explanation", 1_238, 8_672),
+        ],
+    )
+    def test_review_stage_prompt_plus_work_does_not_double_count(
+        self,
+        settings: EstimateSettings,
+        stage_name: str,
+        chars: int,
+        unit_in: int,
+    ) -> None:
+        """Prompt tokens + work must not exceed observed unit_in * 1.25 + 1.
+
+        Verifies that prompt_tokens was calibrated by subtracting work from
+        observed unit_in, rather than taking max(unit_in) * 1.25 which would
+        double count the submission text.
+        """
+        prompt_tokens = settings.review[stage_name].prompt_tokens
+        work = tokens_for_chars(chars)
+        est_in = prompt_tokens + work
+        assert est_in <= unit_in * 1.25 + 1
+
+    def test_task_preparation_prompt_plus_work_does_not_double_count(
+        self,
+        settings: EstimateSettings,
+    ) -> None:
+        """criteria_decomposition prompt + task work <= unit_in * 1.25 + 1."""
+        prompt_tokens = settings.task_preparation[
+            "criteria_decomposition"
+        ].prompt_tokens
+        work = 894  # 2602 - 1708
+        unit_in = 11_148
+        est_in = prompt_tokens + work
+        assert est_in <= unit_in * 1.25 + 1

@@ -37,37 +37,28 @@ guard_minutes: 15     # a peak that starts within this many minutes prices as pe
 # concept finder over the database, homework/course_links.py) adds 0 to E,
 # and that is right. A path without stages — `test` — gives E = 0.
 review:
-  # prompt: prompts/safety_check/v1.md, measured. output: no measured number
-  # in code or fixtures — the stage's output ceiling (8192), стеля.
-  safety:             {prompt_tokens: 2301, output_tokens: 8192, calibrated: false}
-  # prompt: prompts/sanity_check/v1.md, measured. output: стеля (8192).
-  attempt_classifier: {prompt_tokens: 698, output_tokens: 8192, calibrated: false}
-  # prompt: submission_paths.yaml `criteria_evaluation` money comment — 56 021
-  # tokens at the largest input minus the work at its budget (37 449) = 18 572
-  # (task ~20 000 chars, 37 criteria, prompt). output: first-rung pin 16384,
-  # стеля; qwen's reasoning (not in the pin) is not counted. calls: 1 — the
-  # repeat about verdicts that cannot stand starts at 0 (operator, BIL-D).
-  criteria_evaluation: {prompt_tokens: 18572, output_tokens: 16384, calls: 1, calibrated: false}
-  # prompt: 22 286 (BIL-D: submission_paths.yaml `review_explanation` money
-  # comment for prompt v1 — 59 735 minus the work at its budget, 37 449) plus
-  # the template v1 -> v2 (K5), +443 = 22 729. Measured 2026-11-04 (BIL-CAL):
-  # each template rendered by llm/prompt_loader_md.py (load_prompt, render)
-  # with its slots empty — v1 6 132 chars = 1 752 tokens, v2 7 684 chars =
-  # 2 195 — at the router's 3.5 characters a token (llm/token_budget.py:34).
-  # Not in the number: <course_links> at its worst case — all 37 criteria not
-  # met, 3 places each (an excerpt of 300 characters, a title of 120, id and
-  # position), rendered as the slot renders it: 59 016 chars ≈ 16 861 tokens,
-  # ≈ 39 590 with it. A worst case, not a typical size; live data of the new
-  # path calibrates it. output: pin 8192, стеля. calls: 1 — the retry with
-  # the reason starts at 0 (operator, BIL-D).
-  review_explanation: {prompt_tokens: 22729, output_tokens: 8192, calls: 1, calibrated: false}
+  # калібрування етап 2, 2026-11-07: max спостережена підказка (5509 - 3025) 2484 × 1,25, READING-2026-11-07.md
+  # калібрування етап 2, 2026-11-07: max спостережене 52 × 1,25, READING-2026-11-07.md
+  safety:             {prompt_tokens: 3105, output_tokens: 65, calibrated: true}
+  # калібрування етап 2, 2026-11-07: max спостережена підказка (4955 - 3025) 1930 × 1,25, READING-2026-11-07.md
+  # калібрування етап 2, 2026-11-07: max спостережене 96 × 1,25, READING-2026-11-07.md
+  attempt_classifier: {prompt_tokens: 2413, output_tokens: 120, calibrated: true}
+  # калібрування етап 2, 2026-11-07: max спостережена підказка (6921 - 3025) 3896 × 1,25, READING-2026-11-07.md
+  # калібрування етап 2, 2026-11-07: max спостережене 6838 × 1,25, READING-2026-11-07.md
+  # calls: 2 — наживо у 5 із 5 дій task стадія робить два запити (READING-2026-11-07.md)
+  criteria_evaluation: {prompt_tokens: 4870, output_tokens: 8548, calls: 2, calibrated: true}
+  # калібрування етап 2, 2026-11-07: max спостережена підказка (8672 - 353) 8319 × 1,25, READING-2026-11-07.md
+  # калібрування етап 2, 2026-11-07: max спостережене 6780 × 1,25, READING-2026-11-07.md
+  # найгірший випадок — <course_links> для всіх незарахованих критеріїв ≈ 16 861 токен понад підказку (≈ 39 590 разом);
+  # у спостережених даних такого випадку не було, калібрування його не покриває.
+  review_explanation: {prompt_tokens: 10399, output_tokens: 8475, calls: 1, calibrated: true}
 
 # ── Task preparation: input = the task document + prompt_tokens ──
 task_preparation:
-  # prompt: prompts/criteria_decomposition/v2.md, measured. output: 7696 —
-  # the largest successful output in the prod register (ladders_mentor.yaml,
-  # criteria_decomposition rung 1 comment: 7696, 6345).
-  criteria_decomposition: {prompt_tokens: 1708, output_tokens: 7696, calibrated: false}
+  # калібрування етап 2, 2026-11-07: підказка max 10254 × 1,25, READING-2026-11-07.md
+  # робота 894 = 2 602 (вхід рядка оцінки) − 1 708 (підказка в config на 74eaf29)
+  # калібрування етап 2, 2026-11-07: max спостережене 9230 × 1,25, READING-2026-11-07.md
+  criteria_decomposition: {prompt_tokens: 12818, output_tokens: 11538, calibrated: true}
   # prompt: prompts/key_explanation/v2.md, measured. output: no measured
   # number (ladders_mentor.yaml: "NOT CALIBRATED") — rung-1 pin 32768, стеля.
   key_explanation: {prompt_tokens: 1059, output_tokens: 32768, calibrated: false}

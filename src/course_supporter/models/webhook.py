@@ -59,6 +59,10 @@ class WebhookReviewedPayload(BaseModel):
     is switched — and is null on a review of today's Mentor, which has no
     structure to send. A consumer reading only the fields it knows is unaffected;
     the rule above says what kind of addition this is and what kind is not.
+
+    ``attempt_no`` is the second such field, by the decision ratified
+    2026-11-04 (mentor-rebuild task 13): optional, null for a submission made
+    before attempts were counted.
     """
 
     event: Literal["reviewed"] = "reviewed"
@@ -68,6 +72,10 @@ class WebhookReviewedPayload(BaseModel):
     structure: ReviewStructureV1 | None = Field(
         default=None,
         description="Versioned review structure; null when the review has none.",
+    )
+    attempt_no: int | None = Field(
+        default=None,
+        description="Which attempt at the task this is; null when not counted.",
     )
     timestamp: datetime
 

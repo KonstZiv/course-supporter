@@ -61,6 +61,7 @@ class TestWebhookReviewedPayloadContract:
             # only kind of change ``reviewed`` accepts. The rule beside the
             # models says so.
             "structure",
+            "attempt_no",
             "timestamp",
         }
 

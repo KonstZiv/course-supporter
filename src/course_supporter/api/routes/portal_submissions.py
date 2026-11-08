@@ -453,6 +453,7 @@ def _to_list_item(submission: HomeworkSubmission) -> PortalSubmissionListItem:
         rejection=curated_rejection(submission),
         not_opened=curated_not_opened(submission),
         recovered_encoding=curated_recovered_encoding(submission),
+        attempt_no=submission.attempt_no,
     )
 
 
@@ -546,6 +547,7 @@ def _to_detail(
         rejection=curated_rejection(submission),
         not_opened=curated_not_opened(submission),
         recovered_encoding=curated_recovered_encoding(submission),
+        attempt_no=submission.attempt_no,
     )
 
 

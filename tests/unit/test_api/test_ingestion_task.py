@@ -121,6 +121,7 @@ def _mock_entry(source_url: str = "https://example.com") -> MagicMock:
     """Create a mock AuthoredDocument."""
     entry = MagicMock()
     entry.source_url = source_url
+    entry.slide_keys = None
     return entry
 
 
@@ -708,6 +709,93 @@ class TestArqIngestMaterial:
             mid, slide_keys=persist_keys
         )
         mock_cb_cls.return_value.on_success.assert_awaited_once()
+
+    async def test_presentation_reingest_with_fewer_slides_enqueues_s3_cleanup(
+        self,
+    ) -> None:
+        """DD-6-E: Re-ingesting a presentation with fewer slides enqueues orphaned
+        tail slides for S3 cleanup after commit.
+        """
+        from course_supporter.ingestion.presentation import (
+            PresentationProcessor,
+            SlideRaw,
+        )
+
+        job_id = str(uuid.uuid4())
+        material_id = str(uuid.uuid4())
+        mid = uuid.UUID(material_id)
+
+        doc = SourceDocument(
+            source_type=SourceType.PRESENTATION,
+            source_url="http://localhost:9000/bucket/deck.pdf",
+        )
+        slides = [
+            SlideRaw(slide_number=1, raw_text="a", image_bytes=b"\x89PNG"),
+        ]
+        pres_proc = MagicMock(spec=PresentationProcessor)
+        pres_proc.process_raw = AsyncMock(return_value=doc)
+        pres_proc.process_macro = AsyncMock(return_value=_default_summary_draft())
+        pres_proc.process_detail = AsyncMock(return_value=[])
+        pres_proc.rendered_slides = slides
+
+        ctx = _make_arq_ctx()
+        ctx["s3_client"] = AsyncMock()
+        old_keys = [
+            "tenants/t/nodes/n/slides/d/0001.webp",
+            "tenants/t/nodes/n/slides/d/0002.webp",
+            "tenants/t/nodes/n/slides/d/0003.webp",
+        ]
+        new_keys = ["tenants/t/nodes/n/slides/d/0001.webp"]
+
+        mock_entry = _mock_entry()
+        mock_entry.slide_keys = old_keys
+        mock_entry.course_node_id = uuid.uuid4()
+
+        with (
+            patch("course_supporter.job_priority.check_work_window"),
+            patch(
+                "course_supporter.storage.job_repository.JobRepository"
+            ) as mock_job_cls,
+            patch(_ENTRY_REPO) as mock_entry_cls,
+            patch(
+                "course_supporter.ingestion_callback.IngestionCallback"
+            ) as mock_cb_cls,
+            patch(_HEAVY),
+            patch(_FACTORY, return_value={SourceType.PRESENTATION: pres_proc}),
+            patch(
+                "course_supporter.ingestion.slide_persist.persist_slide_webps",
+                new=AsyncMock(return_value=new_keys),
+            ),
+            patch(
+                "course_supporter.api.tasks.enqueue_s3_cleanup",
+                new=AsyncMock(),
+            ) as mock_cleanup,
+        ):
+            mock_job_cls.return_value.update_status = AsyncMock()
+            mock_job_cls.return_value.update_stage = AsyncMock()
+            mock_entry_cls.return_value.get_by_id = AsyncMock(return_value=mock_entry)
+            mock_entry_cls.return_value.set_pending = AsyncMock()
+            mock_entry_cls.return_value.store_safety_result = AsyncMock()
+            mock_entry_cls.return_value.set_slide_keys = AsyncMock()
+            mock_cb_cls.return_value.on_success = AsyncMock()
+            mock_cb_cls.return_value.on_failure = AsyncMock()
+
+            await _body(
+                ctx,
+                job_id,
+                material_id,
+                "presentation",
+                "http://localhost:9000/bucket/deck.pdf",
+            )
+
+        mock_entry_cls.return_value.set_slide_keys.assert_awaited_once_with(
+            mid, slide_keys=new_keys
+        )
+        mock_cleanup.assert_awaited_once()
+        assert mock_cleanup.call_args.kwargs["file_keys"] == [
+            "tenants/t/nodes/n/slides/d/0002.webp",
+            "tenants/t/nodes/n/slides/d/0003.webp",
+        ]
 
     async def test_non_presentation_skips_slide_persist(self) -> None:
         """Non-presentation ingest never touches the slide-persist seam."""

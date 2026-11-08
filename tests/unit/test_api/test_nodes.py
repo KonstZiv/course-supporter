@@ -570,6 +570,7 @@ class TestDeleteNode:
         """
         doc = MagicMock()
         doc.source_url = "http://localhost:9000/bucket/tenants/t/file.pdf"
+        doc.slide_keys = None
         node = _mock_node()
         tree_node = _mock_node(node_id=node.id)
         tree_node.documents = [doc]
@@ -603,6 +604,52 @@ class TestDeleteNode:
         assert kwargs["course_node_id"] == node.id
         assert kwargs["tenant_id"] == STUB_TENANT.tenant_id
 
+    async def test_subtree_presentation_slide_keys_included_in_s3_cleanup(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """DD-6-R: Subtree delete collects presentation slide_keys into cleanup
+        (mirrors single-doc).
+        """
+        doc = MagicMock()
+        doc.source_url = "http://localhost:9000/bucket/tenants/t/deck.pptx"
+        doc.slide_keys = [
+            "tenants/t/nodes/n/slides/d/0001.webp",
+            "tenants/t/nodes/n/slides/d/0002.webp",
+        ]
+        node = _mock_node()
+        tree_node = _mock_node(node_id=node.id)
+        tree_node.documents = [doc]
+        tree_node.children = []
+        mock_s3.extract_key = MagicMock(return_value="tenants/t/deck.pptx")
+        cascade_mock = AsyncMock()
+        enqueue_mock = AsyncMock()
+        with (
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(
+                CourseNodeRepository,
+                "get_subtree_with_active_documents",
+                return_value=[tree_node],
+            ),
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+            patch(
+                "course_supporter.api.routes.nodes.enqueue_s3_cleanup",
+                enqueue_mock,
+            ),
+        ):
+            resp = await client.delete(f"/api/v1/nodes/{node.id}")
+        assert resp.status_code == 204
+        cascade_mock.assert_awaited_once()
+        enqueue_mock.assert_awaited_once()
+        assert enqueue_mock.call_args.kwargs["file_keys"] == [
+            "tenants/t/deck.pptx",
+            "tenants/t/nodes/n/slides/d/0001.webp",
+            "tenants/t/nodes/n/slides/d/0002.webp",
+        ]
+
     async def test_no_enqueue_when_no_s3_keys(
         self, client: AsyncClient, mock_s3: AsyncMock
     ) -> None:
@@ -613,6 +660,7 @@ class TestDeleteNode:
         """
         doc = MagicMock()
         doc.source_url = "https://example.com/video.mp4"
+        doc.slide_keys = None
         node = _mock_node()
         tree_node = _mock_node(node_id=node.id)
         tree_node.documents = [doc]

@@ -28,6 +28,7 @@ and the check it holds every answer to. The locks:
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -44,14 +45,24 @@ from course_supporter.agents.review_explainer import (
     render_context,
 )
 from course_supporter.agents.wire_schema import wire_schema
-from course_supporter.criteria_kinds import VerdictValue
+from course_supporter.criteria_kinds import CriteriaLayer, VerdictValue
 from course_supporter.homework.criteria_form import Criterion
-from course_supporter.homework.criteria_verdicts import QuotePlace
+from course_supporter.homework.criteria_list_service import CriteriaInForce
+from course_supporter.homework.criteria_verdicts import (
+    QuotePlace,
+    RepeatReason,
+    SubmittedWork,
+    WorkFile,
+    items_to_ask_again,
+    read_answer,
+    settle_verdicts,
+)
 from course_supporter.homework.verdict_explanation import (
     CriterionFacts,
     ExplanationAnswer,
     ExplanationFacts,
     JudgedItem,
+    explanation_facts,
 )
 from course_supporter.llm.error_categories import (
     ErrorCategory,
@@ -66,6 +77,7 @@ from course_supporter.llm.response_schema import mentions_json, strict_json_sche
 from course_supporter.llm.schemas import LLMRequest, LLMResponse, SchemaMode
 from course_supporter.llm.stage_router import StageExecution, StageResult, StageRouter
 from course_supporter.models.review_structure import Position
+from course_supporter.storage.submission_verdict_repository import _row
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PROMPT_REF = "prompts/review_explanation/v2.md"
@@ -626,3 +638,114 @@ class TestThePromptRules:
         system = _system(replace(_SHOWN, language=language))
 
         assert f"Write every text in **{language}**" in system
+
+
+class TestAnUnconfirmedItemIsExplainedByItsStateAlone:
+    """Decision 4 (2026-11-07): the check's mechanics never reach the explanation.
+
+    The student's problem 2: the model said "met" on the line ``.venv/``, the
+    check refused the quote as too short, and the repeat said "not met" with
+    a sentence on the quote's length — which the explanation retold to the
+    student as the reason. The item is unconfirmed now, and the explanation
+    is shown it in the form the prompt knows: ``not_met`` with
+    ``quote_not_found``, no sentence.
+    """
+
+    _SENTENCE = "Рядок .venv/ є, але цитата має менше 8 символів, тож її не прийнято."
+    _GITIGNORE = "__pycache__/\n*.pyc\ncache/.venv/old\n"
+
+    def _rendered(self) -> dict[str, Any]:
+        criteria = (_criterion("c1", "must", points=1), _criterion("c2", "should"))
+        in_force = CriteriaInForce(
+            criteria=criteria, layer=CriteriaLayer.MODEL, source_id=uuid.uuid4()
+        )
+        work = SubmittedWork(
+            [
+                WorkFile("main.py", "print('hello, world')\n", True),
+                WorkFile(".gitignore", self._GITIGNORE, True),
+            ]
+        )
+        first = read_answer(
+            json.dumps(
+                {
+                    "verdicts": [
+                        {
+                            "id": "c1.p1",
+                            "verdict": "met",
+                            "quote": ".venv/",
+                            "missing": None,
+                        },
+                        {
+                            "id": "c2",
+                            "verdict": "met",
+                            "quote": "print('hello, world')",
+                            "missing": None,
+                        },
+                    ]
+                }
+            ),
+            ["c1.p1", "c2"],
+        )
+        (asked,) = items_to_ask_again(first, work)
+        assert asked.reason is RepeatReason.QUOTE_TOO_SHORT
+        repeat = read_answer(
+            json.dumps(
+                {
+                    "verdicts": [
+                        {
+                            "id": "c1.p1",
+                            "verdict": "not_met",
+                            "quote": None,
+                            "missing": self._SENTENCE,
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            ["c1.p1"],
+        )
+        records = settle_verdicts(in_force, first, repeat, work=work, earlier={})
+        # The rows as the repository stores them: what the stage reads back.
+        rows = [
+            _row(
+                record,
+                tenant_id=uuid.uuid4(),
+                submission_id=uuid.uuid4(),
+                criteria_layer=in_force.layer,
+                criteria_source_id=in_force.source_id,
+            )
+            for record in records
+        ]
+        facts = explanation_facts(criteria, rows)
+        return render_context(
+            ExplanationInput(
+                task_title="Project setup",
+                task_description="Set the project up.",
+                task_text="Add a .gitignore that keeps the virtual environment out.",
+                facts=facts,
+                submission_text="--- .gitignore ---\n" + self._GITIGNORE,
+                language="Ukrainian",
+                course_links={},
+            )
+        )
+
+    def test_the_point_is_shown_as_the_prompt_knows_it(self) -> None:
+        context = self._rendered()
+        (c1, _) = context["criteria"]
+        assert c1["verdict"] == "not_met"
+        assert c1["points"] == [
+            {
+                "id": "c1.p1",
+                "text": "Point 1 of c1",
+                "verdict": "not_met",
+                "missing": None,
+                "quote_not_found": True,
+            }
+        ]
+        assert context["result"] == {"passed": True, "score": 100}
+
+    def test_no_sentence_on_the_checks_mechanics_is_shown(self) -> None:
+        shown = json.dumps(self._rendered(), ensure_ascii=False)
+        assert self._SENTENCE not in shown
+        for word in ("символ", "цитат", "не прийнято", "не знайдено", "too short"):
+            assert word not in shown, word

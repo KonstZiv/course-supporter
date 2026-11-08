@@ -19,8 +19,11 @@ Interface:
       first, unchanged.
     * :class:`DoorReading` — what the doors read, as both bodies carry it on:
       the text, what was not opened, how the file was read, and what the
-      signal screen noticed (task 11). :func:`carry_door_reading` puts the
-      last three onto the Stage 2 verdict, where the read path finds them.
+      signal screen noticed (task 11); for the evaluation stage, the files
+      (task 09b) and, for a project, the base versions of the changed ones
+      (project chain K1). :func:`carry_door_reading` puts what was not
+      opened, the encoding and the flags onto the Stage 2 verdict, where the
+      read path finds them.
       :attr:`DoorReading.safety_text` is the one place the safety check's
       input is cut from the text: the student's files, without the lines the
       doors add for the models that review the work.
@@ -44,9 +47,10 @@ Extending:
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
 
 from course_supporter.security.schemas import NotOpenedEntry, ScreenFlag
 
@@ -62,6 +66,9 @@ if TYPE_CHECKING:
 STUDENT_NOTE_SOURCE = "student_note"
 """The ``source`` of a flag found in the student's comment."""
 
+_NO_BASE_FILES: Final[Mapping[str, str]] = MappingProxyType({})
+"""The read-only empty default of :attr:`DoorReading.base_files`."""
+
 
 @dataclass(frozen=True, slots=True)
 class DoorReading:
@@ -76,9 +83,17 @@ class DoorReading:
             question does not apply (archive, document, project, test).
         flags: What the signal screen noticed -- in the files, their names and
             the comment. For Stage 2 and the trace only (task 11, decision 2).
-        files: ``text`` file by file, for the quotes of the evaluation stage
-            (task 09b); empty where nothing was read as files (a test, a
-            project).
+        files: The student's files as the doors read them, for the quotes of
+            the evaluation stage (task 09b): ``text`` file by file for a file
+            or an archive; for a project, each file new or changed against
+            the author's base, by path (project chain K1) -- the unchanged
+            files of the base are the author's, not the student's. Empty for
+            a test.
+        base_files: A project's base version of each changed file in
+            :attr:`files`, by path, read as the delta context reads the base,
+            so a quote found in it too can be told apart from the student's
+            own (project chain K1). Empty for a new file, a project without a
+            base and every other type.
     """
 
     text: str
@@ -86,6 +101,7 @@ class DoorReading:
     recovered_encoding: str | None = None
     flags: tuple[ScreenFlag, ...] = ()
     files: tuple[WorkFile, ...] = ()
+    base_files: Mapping[str, str] = _NO_BASE_FILES
 
     @property
     def safety_text(self) -> str:

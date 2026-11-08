@@ -2285,6 +2285,14 @@ class PortalSubmissionListItem(BaseModel):
         "null when the question does not apply (an archive recovers its "
         "members individually; a document arrives already decoded).",
     )
+    attempt_no: int | None = Field(
+        default=None,
+        description=(
+            "Which attempt at the task this submission is: 1 for the first "
+            "reviewed attempt. Null for a submission made before attempts were "
+            "counted."
+        ),
+    )
 
 
 class PortalDeltaReceipt(BaseModel):
@@ -2434,6 +2442,14 @@ class PortalSubmissionDetail(BaseModel):
         "established one and the review was written from that reading, or "
         "null when the question does not apply (an archive recovers its "
         "members individually; a document arrives already decoded).",
+    )
+    attempt_no: int | None = Field(
+        default=None,
+        description=(
+            "Which attempt at the task this submission is: 1 for the first "
+            "reviewed attempt. Null for a submission made before attempts were "
+            "counted."
+        ),
     )
 
 

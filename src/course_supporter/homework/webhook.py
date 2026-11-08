@@ -112,6 +112,7 @@ def build_reviewed_payload(
             response_language=submission.response_language or "en",
         ),
         structure=structure,
+        attempt_no=submission.attempt_no,
         timestamp=datetime.now(UTC),
     )
 

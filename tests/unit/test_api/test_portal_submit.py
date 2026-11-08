@@ -413,6 +413,7 @@ class TestPortalReadList:
             "rejection",
             "not_opened",
             "recovered_encoding",
+            "attempt_no",
         }
         assert item["verdict"] == {"passed": True, "correctness": "correct"}
         assert "review_markdown" not in item
@@ -524,6 +525,7 @@ class TestPortalReadDetail:
             "rejection",
             "not_opened",
             "recovered_encoding",
+            "attempt_no",
         }
         assert data["status"] == "completed"
         assert data["score"] == 87

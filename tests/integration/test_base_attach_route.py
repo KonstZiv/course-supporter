@@ -233,6 +233,7 @@ class TestAttachProjectBase:
         project_env: dict[str, uuid.UUID],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        s3_mock, _ = _wire
         doc_id = project_env["project_doc_id"]
 
         async def _raise(**_kwargs: object) -> None:
@@ -248,3 +249,32 @@ class TestAttachProjectBase:
             )
         assert resp.status_code == 409
         assert resp.json()["detail"]["code"] == "BASE_VERSION_CONFLICT"
+        s3_mock.delete_object.assert_awaited_once()
+
+    async def test_version_collision_409_cleanup_s3_error_still_returns_409(
+        self,
+        _wire: tuple[AsyncMock, AsyncMock],
+        project_env: dict[str, uuid.UUID],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """DD-6-U: S3 cleanup failure on 409 is logged as warning and does
+        not change response.
+        """
+        s3_mock, _ = _wire
+        s3_mock.delete_object = AsyncMock(side_effect=Exception("S3 unreachable"))
+        doc_id = project_env["project_doc_id"]
+
+        async def _raise(**_kwargs: object) -> None:
+            raise IntegrityError("INSERT ...", {}, Exception("dup version"))
+
+        monkeypatch.setattr(
+            documents_module, "enqueue_base_normalize", AsyncMock(side_effect=_raise)
+        )
+        async with _client() as client:
+            resp = await client.post(
+                f"/api/v1/documents/{doc_id}/base",
+                files={"file": ("base.zip", _zip_bytes(), "application/zip")},
+            )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "BASE_VERSION_CONFLICT"
+        s3_mock.delete_object.assert_awaited_once()

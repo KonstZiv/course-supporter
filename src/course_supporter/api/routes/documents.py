@@ -218,6 +218,34 @@ def _processing_estimate() -> ProcessingEstimate:
     )
 
 
+async def _cleanup_s3_best_effort(s3: S3Client, key: str) -> None:
+    """Best-effort cleanup of newly uploaded S3 object on rejection/failure path
+    (DD-3.3c-L, DD-6-U).
+    """
+    try:
+        await s3.delete_object(key)
+    except Exception:
+        logger.warning(
+            "rejection_s3_cleanup_failed",
+            key=key,
+            exc_info=True,
+        )
+
+
+def _should_cleanup_confirm_reject(exc: HTTPException) -> bool:
+    """Decide whether confirm_upload rejection should delete client's S3 object
+    (DD-3.3c-L).
+
+    Permanent rejections before commit (400 Stage 1 / slide cap, 422 duration
+    probe failure) clean up the orphaned S3 object.
+    Temporary rejections (503 INTAKE_OVERLOADED / INTAKE_PROBE_UNAVAILABLE)
+    preserve the object so client can retry confirm_upload later with the same key.
+    """
+    if exc.status_code == 503:
+        return False
+    return exc.status_code in (400, 422)
+
+
 async def _intake_video_duration_sec(
     source_type: SourceType,
     *,
@@ -834,6 +862,7 @@ async def create_document(
     raw_hash: str | None = None
     raw_size_bytes: int | None = None
     duration_sec: float | None = None
+    uploaded_s3_key: str | None = None
     if file is not None:
         # KD-2.1-E — Strategy A: SHA-256 from the bytes already loaded
         # for Stage 1 (line ~217 above). No streaming wrapper needed --
@@ -856,38 +885,52 @@ async def create_document(
             content_type=content_type,
             file_size=file.size,
         )
+        uploaded_s3_key = key
         logger.info("file_uploaded", key=key, size=uploaded_bytes)
-        # DD-3.3c-I-B: probe video duration at intake (ffprobe on the
-        # already-in-memory upload bytes) for the admission gate.
-        duration_sec = await _intake_video_duration_sec(
-            source_type, content=upload_content, filename=upload_filename
-        )
     elif source_url is not None:
         actual_url = source_url
-        # DD-3.3c-I-B: resolve video duration via yt-dlp metadata (no
-        # download) for the admission gate.
-        duration_sec = await _intake_video_duration_sec(source_type, url=actual_url)
 
-    document_repo = AuthoredDocumentRepository(session)
-    document = await document_repo.create(
-        node_id=node_id,
-        source_type=source_type,
-        source_url=actual_url,
-        filename=actual_filename,
-        material_role=material_role,
-        task_type=task_type,
-        language=language,
-        raw_hash=raw_hash,
-        raw_size_bytes=raw_size_bytes,
-    )
+    try:
+        if file is not None:
+            # DD-3.3c-I-B: probe video duration at intake (ffprobe on the
+            # already-in-memory upload bytes) for the admission gate.
+            duration_sec = await _intake_video_duration_sec(
+                source_type, content=upload_content, filename=upload_filename
+            )
+        elif source_url is not None:
+            # DD-3.3c-I-B: resolve video duration via yt-dlp metadata (no
+            # download) for the admission gate.
+            duration_sec = await _intake_video_duration_sec(source_type, url=actual_url)
 
-    job = await _enqueue_document_flow(
-        redis=arq,
-        session=session,
-        tenant_id=tenant.tenant_id,
-        document=document,
-        duration_sec=duration_sec,
-    )
+        document_repo = AuthoredDocumentRepository(session)
+        document = await document_repo.create(
+            node_id=node_id,
+            source_type=source_type,
+            source_url=actual_url,
+            filename=actual_filename,
+            material_role=material_role,
+            task_type=task_type,
+            language=language,
+            raw_hash=raw_hash,
+            raw_size_bytes=raw_size_bytes,
+        )
+
+        job = await _enqueue_document_flow(
+            redis=arq,
+            session=session,
+            tenant_id=tenant.tenant_id,
+            document=document,
+            duration_sec=duration_sec,
+        )
+    except HTTPException:
+        # DD-3.3c-L: All admission, validation, and probe rejections before
+        # commit are HTTPExceptions (400, 422, 503). Clean up the newly uploaded
+        # S3 object on pre-commit rejection. Errors after commit (e.g. Redis
+        # enqueue failures) are NOT HTTPExceptions, preserving the S3 object
+        # for the committed AuthoredDocument.
+        if uploaded_s3_key is not None:
+            await _cleanup_s3_best_effort(s3, uploaded_s3_key)
+        raise
     # The flow helper owns the commit (QQ5 helper-owns-commit) — it has already
     # durably committed the document INSERT + Job before dispatch. A code doc
     # enters DOCUMENT_PREPARATION here (BE8); every other type is unchanged (I6).
@@ -1022,90 +1065,102 @@ async def confirm_upload(
             detail=("File not found in S3. Upload may have failed or expired."),
         )
 
-    actual_filename = body.filename or body.key.rsplit("/", 1)[-1]
+    try:
+        actual_filename = body.filename or body.key.rsplit("/", 1)[-1]
 
-    # KD-2.1-D — full Stage 1 on the confirm_upload path. Mirrors the
-    # multipart create_document Stage 1 block (lines ~192-233). Size
-    # pre-check via head_response.ContentLength fast-fails before the
-    # bytes fetch; full Stage 1 (libmagic MIME + extension match +
-    # archive structure + unicode + regex) gates AuthoredDocument
-    # creation. Closes DD-1.2-4 — confirm_upload was Stage-1-less
-    # since Phase 1.2 (KD14 explicit gap noted in §6.1(a) ratify).
-    upload_ext = extension_of(actual_filename)
-    _enforce_code_routing(body.source_type, upload_ext)
-    max_size = get_max_size_for_extension(upload_ext, AUTHORED_POLICY)
-    content_length = head_response["ContentLength"]
-    if content_length > max_size:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "SECURITY_REJECTED",
-                "category": ErrorCategory.SIZE_LIMIT.value,
-                "details": (
-                    f"file size {content_length} bytes exceeds authored "
-                    f"limit {max_size} bytes for {upload_ext!r}"
-                ),
-            },
-        )
-
-    body_bytes = await s3.get_object(body.key)
-    if body.source_type == SourceType.CODE:
-        # Light gate (task-code-materials R8): mirror of the multipart
-        # create_document code branch — extension routing + size cap only;
-        # ``run_stage1`` deliberately skipped (see create_document).
-        pass
-    else:
-        try:
-            run_stage1(
-                filename=actual_filename,
-                content=body_bytes,
-                context="authored",
-                languages=await _verification_languages(
-                    session,
-                    node_id=node_id,
-                    tenant_id=tenant.tenant_id,
-                    explicit=body.language,
-                ),
-            )
-            _enforce_presentation_slide_cap(body.source_type, upload_ext, body_bytes)
-        except SecurityRejectedError as exc:
+        # KD-2.1-D — full Stage 1 on the confirm_upload path. Mirrors the
+        # multipart create_document Stage 1 block (lines ~192-233). Size
+        # pre-check via head_response.ContentLength fast-fails before the
+        # bytes fetch; full Stage 1 (libmagic MIME + extension match +
+        # archive structure + unicode + regex) gates AuthoredDocument
+        # creation. Closes DD-1.2-4 — confirm_upload was Stage-1-less
+        # since Phase 1.2 (KD14 explicit gap noted in §6.1(a) ratify).
+        upload_ext = extension_of(actual_filename)
+        _enforce_code_routing(body.source_type, upload_ext)
+        max_size = get_max_size_for_extension(upload_ext, AUTHORED_POLICY)
+        content_length = head_response["ContentLength"]
+        if content_length > max_size:
             raise HTTPException(
                 status_code=400,
                 detail={
                     "code": "SECURITY_REJECTED",
-                    "category": exc.category.value,
-                    "details": exc.detail,
+                    "category": ErrorCategory.SIZE_LIMIT.value,
+                    "details": (
+                        f"file size {content_length} bytes exceeds authored "
+                        f"limit {max_size} bytes for {upload_ext!r}"
+                    ),
                 },
-            ) from exc
+            )
 
-    s3_url = s3.get_object_url(body.key)
+        body_bytes = await s3.get_object(body.key)
+        if body.source_type == SourceType.CODE:
+            # Light gate (task-code-materials R8): mirror of the multipart
+            # create_document code branch — extension routing + size cap only;
+            # ``run_stage1`` deliberately skipped (see create_document).
+            pass
+        else:
+            try:
+                run_stage1(
+                    filename=actual_filename,
+                    content=body_bytes,
+                    context="authored",
+                    languages=await _verification_languages(
+                        session,
+                        node_id=node_id,
+                        tenant_id=tenant.tenant_id,
+                        explicit=body.language,
+                    ),
+                )
+                _enforce_presentation_slide_cap(
+                    body.source_type, upload_ext, body_bytes
+                )
+            except SecurityRejectedError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "SECURITY_REJECTED",
+                        "category": exc.category.value,
+                        "details": exc.detail,
+                    },
+                ) from exc
 
-    # DD-3.3c-I-B: probe video duration at intake (ffprobe on the fetched
-    # S3 bytes) for the admission gate.
-    duration_sec = await _intake_video_duration_sec(
-        body.source_type, content=body_bytes, filename=actual_filename
-    )
+        s3_url = s3.get_object_url(body.key)
 
-    document_repo = AuthoredDocumentRepository(session)
-    document = await document_repo.create(
-        node_id=node_id,
-        source_type=body.source_type,
-        source_url=s3_url,
-        filename=actual_filename,
-        material_role=body.material_role,
-        task_type=body.task_type,
-        language=body.language,
-        raw_hash=hashlib.sha256(body_bytes).hexdigest(),
-        raw_size_bytes=len(body_bytes),
-    )
+        # DD-3.3c-I-B: probe video duration at intake (ffprobe on the fetched
+        # S3 bytes) for the admission gate.
+        duration_sec = await _intake_video_duration_sec(
+            body.source_type, content=body_bytes, filename=actual_filename
+        )
 
-    job = await _enqueue_document_flow(
-        redis=arq,
-        session=session,
-        tenant_id=tenant.tenant_id,
-        document=document,
-        duration_sec=duration_sec,
-    )
+        document_repo = AuthoredDocumentRepository(session)
+        document = await document_repo.create(
+            node_id=node_id,
+            source_type=body.source_type,
+            source_url=s3_url,
+            filename=actual_filename,
+            material_role=body.material_role,
+            task_type=body.task_type,
+            language=body.language,
+            raw_hash=hashlib.sha256(body_bytes).hexdigest(),
+            raw_size_bytes=len(body_bytes),
+        )
+
+        job = await _enqueue_document_flow(
+            redis=arq,
+            session=session,
+            tenant_id=tenant.tenant_id,
+            document=document,
+            duration_sec=duration_sec,
+        )
+    except HTTPException as exc:
+        # DD-3.3c-L: On confirm_upload (direct client upload), clean up S3 object
+        # only on permanent pre-commit rejections (400 Stage 1, 422 duration probe).
+        # Temporary 503 rejections (INTAKE_OVERLOADED, INTAKE_PROBE_UNAVAILABLE)
+        # preserve the file so client can retry confirm_upload with the same key.
+        # Errors after commit are not HTTPExceptions and preserve the file.
+        if _should_cleanup_confirm_reject(exc):
+            await _cleanup_s3_best_effort(s3, body.key)
+        raise
     # The flow helper owns the commit (QQ5 helper-owns-commit); a code doc enters
     # DOCUMENT_PREPARATION here (BE8), every other type is unchanged (I6).
 
@@ -1215,10 +1270,10 @@ async def attach_project_base(
             archive_key=archive_key,
         )
     except IntegrityError as exc:
-        # A concurrent re-upload won the UNIQUE(doc, version) race. The stored
-        # S3 object is orphaned (uuid-scoped — no overwrite of the winner);
-        # cleanup folds into the deferred base-S3-cleanup debt (sibling DD-6-R).
+        # A concurrent re-upload won the UNIQUE(doc, version) race. Clean up the
+        # newly-uploaded archive_key best-effort (DD-6-U).
         await session.rollback()
+        await _cleanup_s3_best_effort(s3, archive_key)
         raise HTTPException(
             status_code=409,
             detail={
@@ -1569,6 +1624,21 @@ async def delete_document(
     # the ingest seam) — no extract_key round-trip needed.
     if document.slide_keys:
         file_keys.extend(document.slide_keys)
+    # Project base versions (Phase 6 KD18) store raw archives and normalized
+    # snapshots in S3; collect archive_key and snapshot_key before cascade-delete
+    # removes the project_bases rows (DD-6-U).
+    if document.task_type in (
+        AssignmentType.PROJECT,
+        AssignmentType.PROJECT.value,
+        "project",
+    ):
+        base_repo = ProjectBaseRepository(session)
+        bases = await base_repo.list_for_documents([document_id])
+        for base in bases:
+            if base.archive_key:
+                file_keys.append(base.archive_key)
+            if base.snapshot_key:
+                file_keys.append(base.snapshot_key)
 
     # (3) Cascade soft-delete. Class-level ``__scrub_callable__``
     # dispatch (models-fix-3) clears KD3 fields on the AuthoredDocument

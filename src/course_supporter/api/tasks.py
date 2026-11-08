@@ -32,6 +32,7 @@ from course_supporter.service_logging import (
     set_progress_writer,
     set_tenant_from_job,
 )
+from course_supporter.services.s3_cleanup_orchestration import enqueue_s3_cleanup
 
 if TYPE_CHECKING:
     from arq.connections import ArqRedis
@@ -522,6 +523,7 @@ async def arq_ingest_material(
             # (material-complete iff ingest-success). The processor is
             # untouched bar a read-only accessor (``rendered_slides``); the
             # LLM contour (KD-2.3-F) is byte-identical.
+            orphaned_slide_keys: list[str] = []
             if isinstance(processor, PresentationProcessor) and s3 is not None:
                 if root_node is None:
                     msg = (
@@ -529,6 +531,7 @@ async def arq_ingest_material(
                         "cannot key slide objects"
                     )
                     raise ValueError(msg)
+                old_slide_keys = list(entry.slide_keys) if entry.slide_keys else []
                 slide_keys = await persist_slide_webps(
                     s3,
                     tenant_id=root_node.tenant_id,
@@ -542,8 +545,21 @@ async def arq_ingest_material(
                     material_id=material_id,
                     slide_count=len(slide_keys),
                 )
+                new_keys_set = set(slide_keys)
+                orphaned_slide_keys = [
+                    k for k in old_slide_keys if k not in new_keys_set
+                ]
 
-            await session.commit()
+            if orphaned_slide_keys and root_node is not None:
+                await enqueue_s3_cleanup(
+                    session=session,
+                    arq=redis,
+                    file_keys=orphaned_slide_keys,
+                    tenant_id=root_node.tenant_id,
+                    course_node_id=entry.course_node_id,
+                )
+            else:
+                await session.commit()
             # ── /Pass 2b ──
 
             # ── /Pass 2b — the body's domain work is committed. ──

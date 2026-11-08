@@ -281,3 +281,18 @@ class TestQQ5OrderingInvariant:
         assert observed_job_id["value"] == job_id
 
         await _cleanup(s3orch_session_factory, [tenant_id], [job_id])
+
+    async def test_commit_failure_prevents_arq_enqueue(self) -> None:
+        """When DB commit fails, arq.enqueue_job is NOT called (no orphan
+        cleanup task).
+        """
+        session = AsyncMock()
+        session.commit = AsyncMock(side_effect=Exception("DB commit error"))
+        arq = AsyncMock()
+        with pytest.raises(Exception, match="DB commit error"):
+            await enqueue_s3_cleanup(
+                session=session,
+                arq=arq,
+                file_keys=["k1"],
+            )
+        arq.enqueue_job.assert_not_called()

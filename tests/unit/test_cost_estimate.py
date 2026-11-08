@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -256,10 +257,10 @@ class TestReview:
     ) -> None:
         """10 000 characters -> 2 857 tokens of work beside each prompt.
 
-        safety              mistral-small  5158 in, 8192 out  0.0056889
-        attempt_classifier  mistral-small  3555 in, 8192 out  0.00544845
-        criteria_evaluation qwen3.7-max   21429 in, 16384 out 0.116475034
-        review_explanation  qwen3.7-max   25586 in, 8192 out  0.082775492
+        safety              mistral-small  10287 in, 65 out   0.001582050
+        attempt_classifier  mistral-small  9051 in, 120 out   0.001429650
+        criteria_evaluation qwen3.7-max   12225 in, 8548 out x 2  0.124984796
+        review_explanation  qwen3.7-max   15178 in, 8192 out (cap) 0.065602292
         """
         estimate = _review(
             paths, settings, catalog, AssignmentType.TASK, SubmissionState.FIRST, 10_000
@@ -267,15 +268,36 @@ class TestReview:
         assert [
             (s.step, s.model, s.tokens_in, s.tokens_out) for s in estimate.steps
         ] == [
-            ("safety", "mistral-small-latest", 5158, 8192),
-            ("attempt_classifier", "mistral-small-latest", 3555, 8192),
-            ("criteria_evaluation", "qwen3.7-max", 21429, 16384),
-            ("review_explanation", "qwen3.7-max", 25586, 8192),
+            ("safety", "mistral-small-latest", 10287, 65),
+            ("attempt_classifier", "mistral-small-latest", 9051, 120),
+            ("criteria_evaluation", "qwen3.7-max", 12225, 8548),
+            ("review_explanation", "qwen3.7-max", 15178, 8192),
         ]
-        assert estimate.e_usd == Decimal("0.210387876")
-        assert estimate.uncalibrated
+        assert estimate.e_usd == Decimal("0.193598788")
+        assert not estimate.uncalibrated
         assert estimate.catalog_version == catalog.version
         assert estimate.inputs["path_key"] == "task/first"
+
+    def test_criteria_evaluation_counts_two_requests(
+        self, paths: PathConfig, settings: EstimateSettings, catalog: Catalog
+    ) -> None:
+        """Stage 2 calibration (READING-2026-11-07.md): criteria_evaluation
+        runs two requests on live new-path task actions (first request + repeat
+        about verdicts that cannot stand). The estimate prices two calls."""
+        estimate = _review(
+            paths, settings, catalog, AssignmentType.TASK, SubmissionState.FIRST, 10_000
+        )
+        [crit] = [s for s in estimate.steps if s.step == "criteria_evaluation"]
+        assert crit.calls == Decimal(2)
+        assert crit.price_in_per_1k_usd is not None
+        assert crit.price_out_per_1k_usd is not None
+        assert crit.tokens_in is not None
+        assert crit.tokens_out is not None
+        single_call_cost = (
+            crit.tokens_in * crit.price_in_per_1k_usd
+            + crit.tokens_out * crit.price_out_per_1k_usd
+        ) / Decimal(1000)
+        assert crit.cost_usd == single_call_cost * 2
 
     def test_a_repeat_skips_the_attempt_classifier(
         self, paths: PathConfig, settings: EstimateSettings, catalog: Catalog
@@ -571,13 +593,14 @@ class TestSettings:
         assert settings.units_per_usd == Decimal(1700)
         assert settings.guard_minutes == 15
 
-    def test_nothing_is_calibrated_yet(self, settings: EstimateSettings) -> None:
-        steps = [
-            *settings.review.values(),
-            *settings.task_preparation.values(),
-            *settings.processing.steps.values(),
-        ]
-        assert not any(s.calibrated for s in steps)
+    def test_calibration_flags(self, settings: EstimateSettings) -> None:
+        """Stage 2 calibration (READING-2026-11-07.md): review stages and
+        criteria_decomposition have calibrated=True. key_explanation and
+        processing stages remain uncalibrated."""
+        assert all(s.calibrated for s in settings.review.values())
+        assert settings.task_preparation["criteria_decomposition"].calibrated
+        assert not settings.task_preparation["key_explanation"].calibrated
+        assert not any(s.calibrated for s in settings.processing.steps.values())
 
     @pytest.mark.parametrize(
         "change",
@@ -600,3 +623,111 @@ class TestSettings:
     def test_a_missing_file_is_refused(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             load_estimate_settings(tmp_path / "absent.yaml")
+
+
+# ── Live calibrated bounds (READING-2026-11-07.md) ──
+
+# Fact costs from SQL queries in READING-2026-11-07.md:
+# 01a1aa2e: 10 589 chars, task/first (READING-2026-11-07.md:152, 439)
+FACT_TASK_01A1AA2E: Final = Decimal("0.100061")
+# 01a1aa46: 12 811 chars, task/repeat_without_replies (READING-2026-11-07.md:155, 440)
+FACT_TASK_01A1AA46: Final = Decimal("0.098725")
+# 01a1aa80: 1 238 chars, task/repeat_without_replies (READING-2026-11-07.md:156)
+FACT_TASK_01A1AA80: Final = Decimal("0.134982")
+# 01a1ad2a: 12 838 chars, task/repeat_without_replies (READING-2026-11-07.md:157, 441)
+FACT_TASK_01A1AD2A: Final = Decimal("0.109401")
+# 01a1b354: 12 838 chars, task/repeat_without_replies (READING-2026-11-07.md:158, 442)
+FACT_TASK_01A1B354: Final = Decimal("0.118365")
+# criteria_decomposition in job 01a1aa2e (READING-2026-11-07.md:88, 352, 378)
+FACT_TASK_PREP_01A1AA2E: Final = Decimal("0.025633")
+
+
+class TestCalibratedLiveBounds:
+    """Table test for the 5 live task review actions and 1 task_preparation action
+    observed on 2026-11-07 (READING-2026-11-07.md).
+
+    In all actions: fact < E (no underestimate), and fact / E is within target bounds.
+    """
+
+    @pytest.mark.parametrize(
+        ("sub_id", "task_type", "state", "chars", "fact_usd"),
+        [
+            (
+                "01a1aa2e",
+                AssignmentType.TASK,
+                SubmissionState.FIRST,
+                10_589,
+                FACT_TASK_01A1AA2E,
+            ),
+            (
+                "01a1aa46",
+                AssignmentType.TASK,
+                SubmissionState.REPEAT_WITHOUT_REPLIES,
+                12_811,
+                FACT_TASK_01A1AA46,
+            ),
+            (
+                "01a1aa80",
+                AssignmentType.TASK,
+                SubmissionState.REPEAT_WITHOUT_REPLIES,
+                1_238,
+                FACT_TASK_01A1AA80,
+            ),
+            (
+                "01a1ad2a",
+                AssignmentType.TASK,
+                SubmissionState.REPEAT_WITHOUT_REPLIES,
+                12_838,
+                FACT_TASK_01A1AD2A,
+            ),
+            (
+                "01a1b354",
+                AssignmentType.TASK,
+                SubmissionState.REPEAT_WITHOUT_REPLIES,
+                12_838,
+                FACT_TASK_01A1B354,
+            ),
+        ],
+    )
+    def test_task_review_actions_fact_over_e_bounds(
+        self,
+        paths: PathConfig,
+        settings: EstimateSettings,
+        catalog: Catalog,
+        sub_id: str,
+        task_type: AssignmentType,
+        state: SubmissionState,
+        chars: int,
+        fact_usd: Decimal,
+    ) -> None:
+        estimate = _review(paths, settings, catalog, task_type, state, chars)
+        assert estimate.e_usd > fact_usd, (
+            f"action {sub_id}: fact {fact_usd} >= E {estimate.e_usd}"
+        )
+        ratio = fact_usd / estimate.e_usd
+        assert Decimal("0.50") <= ratio <= Decimal("0.95"), (
+            f"action {sub_id}: ratio {ratio} out of bounds"
+        )
+
+    def test_task_preparation_fact_over_e_bounds(
+        self,
+        settings: EstimateSettings,
+        catalog: Catalog,
+        ladders: dict[str, StageConfig],
+    ) -> None:
+        """criteria_decomposition in job 01a1aa2e (READING-2026-11-07.md:352)."""
+        estimate = estimate_task_preparation(
+            kind="criteria_decomposition",
+            ladders=ladders,
+            settings=settings,
+            catalog=catalog,
+            task_chars=3129,
+            at=datetime(2026, 11, 5, 5, 28, tzinfo=UTC),
+        )
+        assert estimate.e_usd > FACT_TASK_PREP_01A1AA2E, (
+            f"task_preparation: fact {FACT_TASK_PREP_01A1AA2E} >= E {estimate.e_usd}"
+        )
+        ratio = FACT_TASK_PREP_01A1AA2E / estimate.e_usd
+        assert Decimal("0.75") <= ratio <= Decimal("0.95"), (
+            f"task_preparation: ratio {ratio} out of bounds"
+        )

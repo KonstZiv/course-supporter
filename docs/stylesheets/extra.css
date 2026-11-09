@@ -78,7 +78,7 @@
   --md-footer-bg-color--dark: var(--color-canvas-dark);
   --md-footer-fg-color: var(--color-ink-light);
   --md-footer-fg-color--light: var(--color-ink-light);
-  --md-footer-fg-color--lighter: var(--color-ink-muted);
+  --md-footer-fg-color--lighter: var(--color-ink-light);
 }
 
 .md-typeset h1,

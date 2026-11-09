@@ -32,8 +32,10 @@ from functools import lru_cache
 import structlog
 
 from course_supporter.config import get_settings
+from course_supporter.homework.path_config import ModelStage, PathConfig
 from course_supporter.llm.ladder_config import load_ladder_config
-from course_supporter.llm.registry import load_registry
+from course_supporter.llm.registry import ModelRegistryConfig, load_registry
+from course_supporter.models.source import AssignmentType
 from course_supporter.security.archive import ClassifiedEntry, ExtractedFile
 from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
 from course_supporter.security.schemas import NotOpenedEntry
@@ -221,6 +223,51 @@ def project_context_budget_chars() -> int:
         budget_chars=budget,
     )
     return budget
+
+
+def path_context_budget_chars(
+    task_type: AssignmentType,
+    config: PathConfig,
+    registry: ModelRegistryConfig,
+) -> int | None:
+    """Characters of input that still reach every FIRST rung of a type's new path.
+
+    The new-path counterpart of :func:`project_context_budget_chars`, which
+    reads today's Mentor's ladders. Here the stages are those a type's paths
+    list in the submission-path file: for every MODEL stage on any of the
+    type's paths that declares ``input_budget_ratio``, the first rung's window
+    times that stage's own ratio, times the conservative characters-per-token
+    of this module; the budget is the smallest of these. Stages may declare
+    different ratios, so each is applied to its own stage rather than one ratio
+    shared by all. A code stage reads no input and a ``null`` ratio skips no
+    rung, so neither bounds the input. ``None`` when no stage does.
+
+    Pure: the configuration and the registry are passed in, so the caller
+    decides which files they came from.
+
+    Raises:
+        RuntimeError: when a bounding stage's first-rung model declares no
+            window — guessing it would mean guessing what the model can hold.
+    """
+    declared = config.task_types.get(task_type)
+    if declared is None:
+        return None
+    names = {name for stage_names in declared.paths.values() for name in stage_names}
+    budgets: list[int] = []
+    for name in sorted(names):
+        stage = config.stages.get(name)
+        if not isinstance(stage, ModelStage) or stage.input_budget_ratio is None:
+            continue
+        model = registry.models.get(stage.ladder[0].model)
+        if model is None or model.max_context is None:
+            raise RuntimeError(
+                f"first rung of {name!r} declares no max_context; the input "
+                "budget of the new path cannot be derived and must not be guessed"
+            )
+        budgets.append(
+            int(model.max_context * stage.input_budget_ratio * _CHARS_PER_TOKEN)
+        )
+    return min(budgets) if budgets else None
 
 
 def ensure_single_file_fits(text: str, *, filename: str, budget_chars: int) -> None:

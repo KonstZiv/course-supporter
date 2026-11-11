@@ -94,6 +94,17 @@ jobs:
     name: Tests
     # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.
     runs-on: ubuntu-24.04
+    env:
+      # ffmpeg is a pinned static build, not apt: on 2026-11-11 the runner could
+      # not resolve the Ubuntu archive hosts and the apt install hung ~50
+      # minutes. 7.1.5 is the version prod gets from Debian trixie
+      # (python:3.13-slim). The build is the last one of July 2026 from
+      # FFmpeg-Builds/FFmpeg-Builds (formerly BtbN/FFmpeg-Builds), which keeps
+      # the last build of each month for two years; the sum is the one in that
+      # release's checksums.sha256.
+      FFMPEG_RELEASE: autobuild-2026-07-31-14-10
+      FFMPEG_ASSET: ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz
+      FFMPEG_SHA256: c1e6caf48923dd8e6bc5e54d51ba70c321175b8162ae9c414c392990e72f0e79
     steps:
       - uses: actions/checkout@v4
 
@@ -105,19 +116,34 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --group dev
 
-      # The requires_ffmpeg tests run here, as in the local full gate.
-      # The runner's apt mirror list puts azure.archive.ubuntu.com first; on
-      # 2026-11-11 it did not resolve and this step hung ~50 minutes until it
-      # was cancelled. Drop that mirror, and bound the step so it fails fast.
+      # The requires_ffmpeg tests run here, as in the local full gate. Without
+      # ffmpeg/ffprobe on PATH they are skipped, not failed (tests/conftest.py),
+      # so the step checks both binaries before it adds them to PATH.
+      - name: Cache the ffmpeg archive
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ffmpeg-archive
+          key: ffmpeg-${{ env.FFMPEG_ASSET }}-${{ env.FFMPEG_SHA256 }}
+
       - name: Install ffmpeg
         timeout-minutes: 8
+        shell: bash
         run: |
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/apt-mirrors.txt
-            cat /etc/apt/apt-mirrors.txt
+          archive="$HOME/.cache/ffmpeg-archive/$FFMPEG_ASSET"
+          if [ -f "$archive" ]; then
+            echo "Archive restored from the cache."
+          else
+            mkdir -p "$(dirname "$archive")"
+            curl -fsSL --retry 3 -o "$archive" \
+              "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/$FFMPEG_RELEASE/$FFMPEG_ASSET"
           fi
-          sudo apt-get update -q -o Acquire::Retries=3
-          sudo apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 ffmpeg
+          echo "$FFMPEG_SHA256  $archive" | sha256sum -c -
+          dest="$RUNNER_TEMP/ffmpeg"
+          mkdir -p "$dest"
+          tar -xJf "$archive" -C "$dest" --strip-components=1
+          "$dest/bin/ffmpeg" -version | sed -n 1p
+          "$dest/bin/ffprobe" -version | sed -n 1p
+          echo "$dest/bin" >> "$GITHUB_PATH"
 
       # Local test values only (no secrets): read by the app settings and by
       # docker compose for the services below.

@@ -106,10 +106,18 @@ jobs:
         run: uv sync --frozen --group dev
 
       # The requires_ffmpeg tests run here, as in the local full gate.
+      # The runner's apt mirror list puts azure.archive.ubuntu.com first; on
+      # 2026-11-11 it did not resolve and this step hung ~50 minutes until it
+      # was cancelled. Drop that mirror, and bound the step so it fails fast.
       - name: Install ffmpeg
+        timeout-minutes: 8
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ffmpeg
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' /etc/apt/apt-mirrors.txt
+            cat /etc/apt/apt-mirrors.txt
+          fi
+          sudo apt-get update -q -o Acquire::Retries=3
+          sudo apt-get install -y -q --no-install-recommends -o Acquire::Retries=3 ffmpeg
 
       # Local test values only (no secrets): read by the app settings and by
       # docker compose for the services below.

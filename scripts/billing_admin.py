@@ -70,6 +70,15 @@ audited (the scheduler's runs are not either), so there is no --actor:
     run-periodic --task billing_purge --dry-run
         # count what the five-year destruction would delete now
 
+Costs (BIL-COSTS). Real platform external service spend (USD) by author
+(tenant) and by student for an inclusive UTC calendar interval. Read-only;
+no writes, no audit entries, and no --actor (defaults: current UTC month
+up to today, all tenants, --by both, --format table):
+    costs
+    costs --from 2026-11-01 --to 2026-11-30 --tenant "Python Academy"
+    costs --by student --format csv
+    costs --from 2026-11-01 --to 2026-11-15 --by author
+
 Exit status: 0 on success; 1 when the operation is refused (the message says
 why; nothing is written) or a periodic task failed or found its lock held;
 2 on a usage error.
@@ -79,16 +88,26 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
+import io
+import re
 import sys
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from course_supporter.billing import accounts, admin, ledger
-from course_supporter.billing.errors import BillingError, BillingNotFoundError
+from course_supporter.billing import costs as billing_costs
+from course_supporter.billing.errors import (
+    BillingError,
+    BillingInvalidError,
+    BillingNotFoundError,
+)
 from course_supporter.billing.kinds import ActionKind, Benefit, RuleScope
 from course_supporter.billing.periodic import BILLING_TASKS
 from course_supporter.config import get_settings
@@ -120,6 +139,9 @@ async def resolve_tenant_id(session: AsyncSession, value: str) -> uuid.UUID:
     return tenant_id
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def _instant(value: str) -> datetime:
     """A date or an ISO instant; without a zone it is UTC."""
     try:
@@ -127,6 +149,16 @@ def _instant(value: str) -> datetime:
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"not a date: {value!r}") from exc
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _utc_date(value: str) -> date:
+    """Parse a strict YYYY-MM-DD calendar date."""
+    if _DATE_RE.match(value) is None:
+        raise argparse.ArgumentTypeError(f"not a YYYY-MM-DD date: {value!r}")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a YYYY-MM-DD date: {value!r}") from exc
 
 
 def _yes_no(value: str) -> bool:
@@ -376,6 +408,374 @@ async def run_periodic(args: argparse.Namespace) -> str:
     return line
 
 
+def _format_decimal_usd(value: Decimal) -> str:
+    if value == billing_costs.ZERO_USD:
+        return "0.000000"
+    fixed12 = f"{value:.12f}".rstrip("0")
+    whole, _, frac = fixed12.partition(".")
+    if len(frac) < 6:
+        frac = frac.ljust(6, "0")
+    return f"{whole}.{frac}"
+
+
+def _fmt_usd(value: Decimal) -> str:
+    return f"${_format_decimal_usd(value)}"
+
+
+def _fmt_bucket(bucket: billing_costs.ActionSpend) -> str:
+    base = f"{bucket.calls} / {_fmt_usd(bucket.known_usd)}"
+    if bucket.unknown_calls > 0:
+        return f"{base} (невідомо: {bucket.unknown_calls})"
+    return base
+
+
+def _format_ascii_table(
+    headers: list[str],
+    rows: list[list[str]],
+    total_row: list[str],
+    *,
+    right_align: set[int],
+) -> list[str]:
+    all_rows = [headers, *rows, total_row]
+    widths = [max(len(r[i]) for r in all_rows) for i in range(len(headers))]
+
+    def _render_row(cells: list[str]) -> str:
+        formatted = [
+            cell.rjust(widths[idx]) if idx in right_align else cell.ljust(widths[idx])
+            for idx, cell in enumerate(cells)
+        ]
+        return "  ".join(formatted).rstrip()
+
+    separator = "  ".join("-" * w for w in widths)
+    lines = [_render_row(headers), separator]
+    lines.extend(_render_row(row) for row in rows)
+    lines.append(separator)
+    lines.append(_render_row(total_row))
+    return lines
+
+
+def _render_author_table(report: billing_costs.CostReport) -> list[str]:
+    has_other = report.authors_total.other.calls > 0
+    headers = [
+        "орендар_id",
+        "орендар",
+        "виклики",
+        "сума_usd",
+        "exact",
+        "estimated",
+        "unknown",
+        "обробка",
+        "підготовка завдань",
+        "перевірка робіт студентів",
+    ]
+    if has_other:
+        headers.append("інше")
+
+    def _cells(
+        tenant_id_str: str,
+        tenant_name_str: str,
+        spend: billing_costs.SpendSummary,
+        processing: billing_costs.ActionSpend,
+        prep: billing_costs.ActionSpend,
+        review: billing_costs.ActionSpend,
+        other: billing_costs.ActionSpend,
+    ) -> list[str]:
+        cells = [
+            tenant_id_str,
+            tenant_name_str,
+            str(spend.calls),
+            _fmt_usd(spend.known_usd),
+            f"{spend.exact_calls} / {_fmt_usd(spend.exact_usd)}",
+            f"{spend.estimated_calls} / {_fmt_usd(spend.estimated_usd)}",
+            str(spend.unknown_calls),
+            _fmt_bucket(processing),
+            _fmt_bucket(prep),
+            _fmt_bucket(review),
+        ]
+        if has_other:
+            cells.append(_fmt_bucket(other))
+        return cells
+
+    rows = [
+        _cells(
+            str(row.tenant_id) if row.tenant_id is not None else "-",
+            row.tenant_name or "-",
+            row.spend,
+            row.processing,
+            row.task_preparation,
+            row.review,
+            row.other,
+        )
+        for row in report.authors
+    ]
+    totals = report.authors_total
+    total_row = _cells(
+        "разом",
+        "",
+        totals.spend,
+        totals.processing,
+        totals.task_preparation,
+        totals.review,
+        totals.other,
+    )
+    lines = ["По авторах:"]
+    lines.extend(_format_ascii_table(headers, rows, total_row, right_align={2, 3, 6}))
+    lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
+    return lines
+
+
+def _render_student_table(report: billing_costs.CostReport) -> list[str]:
+    headers = [
+        "орендар_id",
+        "орендар",
+        "студент_id",
+        "подачі",
+        "виклики",
+        "сума_usd",
+        "exact",
+        "estimated",
+        "unknown",
+    ]
+
+    def _cells(
+        tenant_id_str: str,
+        tenant_name_str: str,
+        student_id_str: str,
+        submissions: int,
+        spend: billing_costs.SpendSummary,
+    ) -> list[str]:
+        return [
+            tenant_id_str,
+            tenant_name_str,
+            student_id_str,
+            str(submissions),
+            str(spend.calls),
+            _fmt_usd(spend.known_usd),
+            f"{spend.exact_calls} / {_fmt_usd(spend.exact_usd)}",
+            f"{spend.estimated_calls} / {_fmt_usd(spend.estimated_usd)}",
+            str(spend.unknown_calls),
+        ]
+
+    rows = [
+        _cells(
+            str(row.tenant_id),
+            row.tenant_name or "-",
+            str(row.student_id),
+            row.submissions,
+            row.spend,
+        )
+        for row in report.students
+    ]
+    totals = report.students_total
+    total_row = _cells("разом", "", "", totals.submissions, totals.spend)
+    lines = ["По студентах:"]
+    lines.extend(
+        _format_ascii_table(headers, rows, total_row, right_align={3, 4, 5, 8})
+    )
+    lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
+    return lines
+
+
+def _render_cost_table(
+    report: billing_costs.CostReport, *, tenant_label: str | None
+) -> str:
+    tenant_text = tenant_label or "усі"
+    lines = [
+        (
+            f"Період (UTC): {report.from_date.isoformat()} .. "
+            f"{report.to_date.isoformat()} (включно) | Орендар: {tenant_text}"
+        )
+    ]
+    if report.by in ("author", "both"):
+        lines.append("")
+        lines.extend(_render_author_table(report))
+    if report.by in ("student", "both"):
+        lines.append("")
+        lines.extend(_render_student_table(report))
+    return "\n".join(lines)
+
+
+_CSV_FIELDNAMES = (
+    "section",
+    "row_kind",
+    "tenant_id",
+    "tenant_name",
+    "student_id",
+    "submissions",
+    "calls",
+    "total_usd",
+    "exact_calls",
+    "exact_usd",
+    "estimated_calls",
+    "estimated_usd",
+    "unknown_calls",
+    "processing_calls",
+    "processing_usd",
+    "task_preparation_calls",
+    "task_preparation_usd",
+    "review_calls",
+    "review_usd",
+    "other_calls",
+    "other_usd",
+    "note",
+)
+
+_EMPTY_ACTION_CSV: dict[str, str] = {
+    "processing_calls": "",
+    "processing_usd": "",
+    "task_preparation_calls": "",
+    "task_preparation_usd": "",
+    "review_calls": "",
+    "review_usd": "",
+    "other_calls": "",
+    "other_usd": "",
+}
+
+
+def _spend_csv_fields(spend: billing_costs.SpendSummary) -> dict[str, str]:
+    return {
+        "calls": str(spend.calls),
+        "total_usd": _format_decimal_usd(spend.known_usd),
+        "exact_calls": str(spend.exact_calls),
+        "exact_usd": _format_decimal_usd(spend.exact_usd),
+        "estimated_calls": str(spend.estimated_calls),
+        "estimated_usd": _format_decimal_usd(spend.estimated_usd),
+        "unknown_calls": str(spend.unknown_calls),
+    }
+
+
+def _action_csv_fields(
+    processing: billing_costs.ActionSpend,
+    prep: billing_costs.ActionSpend,
+    review: billing_costs.ActionSpend,
+    other: billing_costs.ActionSpend,
+) -> dict[str, str]:
+    return {
+        "processing_calls": str(processing.calls),
+        "processing_usd": _format_decimal_usd(processing.known_usd),
+        "task_preparation_calls": str(prep.calls),
+        "task_preparation_usd": _format_decimal_usd(prep.known_usd),
+        "review_calls": str(review.calls),
+        "review_usd": _format_decimal_usd(review.known_usd),
+        "other_calls": str(other.calls),
+        "other_usd": _format_decimal_usd(other.known_usd),
+    }
+
+
+def _render_cost_csv(report: billing_costs.CostReport) -> str:
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_CSV_FIELDNAMES, lineterminator="\n")
+    writer.writeheader()
+
+    if report.by in ("author", "both"):
+        for row in report.authors:
+            writer.writerow(
+                {
+                    "section": "author",
+                    "row_kind": "row",
+                    "tenant_id": str(row.tenant_id) if row.tenant_id else "",
+                    "tenant_name": row.tenant_name or "",
+                    "student_id": "",
+                    "submissions": "",
+                    **_spend_csv_fields(row.spend),
+                    **_action_csv_fields(
+                        row.processing, row.task_preparation, row.review, row.other
+                    ),
+                    "note": "",
+                }
+            )
+        totals = report.authors_total
+        writer.writerow(
+            {
+                "section": "author",
+                "row_kind": "total",
+                "tenant_id": "",
+                "tenant_name": "разом",
+                "student_id": "",
+                "submissions": "",
+                **_spend_csv_fields(totals.spend),
+                **_action_csv_fields(
+                    totals.processing,
+                    totals.task_preparation,
+                    totals.review,
+                    totals.other,
+                ),
+                "note": f"вартість невідома: {totals.spend.unknown_calls} викликів",
+            }
+        )
+
+    if report.by in ("student", "both"):
+        for srow in report.students:
+            writer.writerow(
+                {
+                    "section": "student",
+                    "row_kind": "row",
+                    "tenant_id": str(srow.tenant_id),
+                    "tenant_name": srow.tenant_name or "",
+                    "student_id": str(srow.student_id),
+                    "submissions": str(srow.submissions),
+                    **_spend_csv_fields(srow.spend),
+                    **_EMPTY_ACTION_CSV,
+                    "note": "",
+                }
+            )
+        stotals = report.students_total
+        writer.writerow(
+            {
+                "section": "student",
+                "row_kind": "total",
+                "tenant_id": "",
+                "tenant_name": "разом",
+                "student_id": "",
+                "submissions": str(stotals.submissions),
+                **_spend_csv_fields(stotals.spend),
+                **_EMPTY_ACTION_CSV,
+                "note": f"вартість невідома: {stotals.spend.unknown_calls} викликів",
+            }
+        )
+
+    return buf.getvalue().rstrip("\n")
+
+
+async def costs_cmd(session: AsyncSession, args: argparse.Namespace) -> str:
+    """Report real USD external service spend per author and per student."""
+    # Enforce read-only at Postgres level before any query in this transaction.
+    try:
+        bind = session.get_bind()
+    except (AttributeError, SQLAlchemyError):
+        bind = None
+    if bind is not None and bind.dialect.name == "postgresql":
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+
+    default_from, default_to = billing_costs.default_month_bounds()
+    from_date = args.from_date or default_from
+    to_date = args.to_date or default_to
+    if from_date > to_date:
+        raise BillingInvalidError(
+            f"--from ({from_date.isoformat()}) must be <= --to ({to_date.isoformat()})"
+        )
+
+    tenant_id: uuid.UUID | None = None
+    tenant_label: str | None = None
+    if args.tenant is not None:
+        tenant_id = await resolve_tenant_id(session, args.tenant)
+        tenant = await session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise BillingNotFoundError(f"tenant {args.tenant!r} not found")
+        tenant_label = f"{tenant.name} ({tenant.id})"
+
+    report = await billing_costs.build_cost_report(
+        session,
+        from_date=from_date,
+        to_date=to_date,
+        tenant_id=tenant_id,
+        by=args.by,
+    )
+    if args.fmt == "csv":
+        return _render_cost_csv(report)
+    return _render_cost_table(report, tenant_label=tenant_label)
+
+
 COMMANDS: dict[str, Handler] = {
     "show-account": show_account,
     "get-settings": get_settings_cmd,
@@ -389,6 +789,7 @@ COMMANDS: dict[str, Handler] = {
     "credit": credit,
     "balance": balance,
     "statement": statement,
+    "costs": costs_cmd,
 }
 
 # Commands that open their own transactions rather than run in the one of run().
@@ -460,6 +861,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--account", required=True, type=uuid.UUID)
     p.add_argument("--from", dest="since", type=_instant, help="from (inclusive)")
     p.add_argument("--to", dest="until", type=_instant, help="to (exclusive)")
+
+    p = command("costs", "report real USD external service spend", changes=False)
+    p.add_argument(
+        "--from",
+        dest="from_date",
+        type=_utc_date,
+        help="start UTC date YYYY-MM-DD, inclusive (default: 1st of UTC month)",
+    )
+    p.add_argument(
+        "--to",
+        dest="to_date",
+        type=_utc_date,
+        help="end UTC date YYYY-MM-DD, inclusive (default: today UTC)",
+    )
+    p.add_argument("--tenant", help="tenant id or name (default: all)")
+    p.add_argument(
+        "--by",
+        choices=("author", "student", "both"),
+        default="both",
+        help="grouping scope (default: both)",
+    )
+    p.add_argument(
+        "--format",
+        dest="fmt",
+        choices=("table", "csv"),
+        default="table",
+        help="output format (default: table)",
+    )
 
     p = command("run-periodic", "run a periodic task by hand", changes=False)
     p.add_argument(

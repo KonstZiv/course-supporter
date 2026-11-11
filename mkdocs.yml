@@ -48,6 +48,7 @@ nav:
       - Завдання: uk/authors/tasks.md
       - Тести: uk/authors/tests.md
       - "Описи розділів: Методист": uk/authors/methodist.md
+      - Витрати й історія: uk/authors/costs-history.md
       - Якщо щось пішло не так: uk/authors/troubleshooting.md
       - Тести й критерії через API: uk/authors/api.md
   - Для студентів: uk/students/index.md

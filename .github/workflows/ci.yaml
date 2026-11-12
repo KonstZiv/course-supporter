@@ -35,6 +35,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
         run: |
+          set +e
+          docs_only=false
+
           if [ "$EVENT_NAME" != "pull_request" ]; then
             echo "Event is $EVENT_NAME (not pull_request); running full CI."
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
@@ -45,19 +48,16 @@ jobs:
             git fetch origin "${BASE_REF}" || true
           fi
 
-          if ! changed=$(git -c core.quotePath=false diff --no-renames --name-only "origin/${BASE_REF}...HEAD"); then
-            echo "git diff failed; running full CI."
+          changed=$(git -c core.quotePath=false diff --no-renames --name-only "origin/${BASE_REF}...HEAD" 2>/dev/null)
+          diff_rc=$?
+
+          if [ $diff_rc -ne 0 ] || [ -z "$changed" ]; then
+            echo "git diff failed ($diff_rc) or empty diff; running full CI."
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [ -z "$changed" ]; then
-            echo "Empty diff; running full CI."
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          docs_only=true
+          is_docs=true
           file_count=0
           while IFS= read -r file; do
             [ -z "$file" ] && continue
@@ -65,18 +65,20 @@ jobs:
             case "$file" in
               docs/*|mkdocs.yml) ;;
               */*)
-                docs_only=false
+                is_docs=false
                 break
                 ;;
               *.md) ;;
               *)
-                docs_only=false
+                is_docs=false
                 break
                 ;;
             esac
           done <<< "$changed"
 
-          if [ "$file_count" -eq 0 ]; then
+          if [ "$file_count" -gt 0 ] && [ "$is_docs" = "true" ]; then
+            docs_only=true
+          else
             docs_only=false
           fi
 
@@ -88,6 +90,7 @@ jobs:
   lint:
     name: Lint & Format
     needs: changes
+    if: ${{ !cancelled() }}
     # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.
     runs-on: ubuntu-24.04
     steps:
@@ -120,6 +123,7 @@ jobs:
   typecheck:
     name: Type Check
     needs: changes
+    if: ${{ !cancelled() }}
     # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.
     runs-on: ubuntu-24.04
     steps:
@@ -184,6 +188,7 @@ jobs:
   test:
     name: Tests
     needs: changes
+    if: ${{ !cancelled() }}
     # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.
     runs-on: ubuntu-24.04
     env:

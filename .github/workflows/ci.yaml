@@ -22,6 +22,11 @@ jobs:
     outputs:
       docs_only: ${{ steps.filter.outputs.docs_only }}
     steps:
+      - name: Intentional failure before output
+        run: |
+          echo "Simulating failure in changes job before output is set."
+          exit 1
+
       - name: Checkout
         if: github.event_name == 'pull_request'
         uses: actions/checkout@v4

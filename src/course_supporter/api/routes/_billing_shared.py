@@ -64,7 +64,11 @@ async def open_checkout(
     except CheckoutNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PaymentProviderError as exc:
-        logger.exception("billing_checkout_provider_failed", provider=body.provider)
+        logger.exception(
+            "billing_checkout_provider_failed",
+            provider=body.provider or registry.names[0],
+            package_id=body.package_id,
+        )
         raise HTTPException(
             status_code=502, detail="The payment provider did not answer."
         ) from exc

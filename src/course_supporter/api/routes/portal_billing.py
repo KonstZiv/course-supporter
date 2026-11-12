@@ -184,14 +184,13 @@ async def post_billing_checkout(
     account = await get_or_create_student_account(
         session, tenant_id=student.tenant_id, student_id=student.student_id
     )
-    response = await open_checkout(
+    await session.commit()  # no transaction stays open across the provider's call
+    portal = settings.portal_base_url.rstrip("/")
+    return await open_checkout(
         body,
         registry=registry,
         catalog=catalog,
         account_id=account.id,
         language=student.preferred_language,
-        return_page=f"{settings.portal_base_url.rstrip('/')}/{student.tenant_id}"
-        "/billing",
+        return_page=f"{portal}/{student.tenant_id}/billing",
     )
-    await session.commit()
-    return response

@@ -136,13 +136,13 @@ async def post_author_checkout(
     """Open a checkout of a package; the units go to the tenant's author account."""
     require_payment(registry)
     account = await get_or_create_author_account(session, tenant_id=tenant.tenant_id)
-    response = await open_checkout(
+    await session.commit()  # no transaction stays open across the provider's call
+    author_app = get_settings().author_app_base_url.rstrip("/")
+    return await open_checkout(
         body,
         registry=registry,
         catalog=catalog,
         account_id=account.id,
         language=None,
-        return_page=f"{get_settings().author_app_base_url.rstrip('/')}/billing",
+        return_page=f"{author_app}/billing",
     )
-    await session.commit()
-    return response

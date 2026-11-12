@@ -50,6 +50,11 @@ from course_supporter.api.deps import (
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.billing.payments.catalog import Catalog, Package
 from course_supporter.billing.payments.fake import FAKE, SIGNATURE_HEADER, FakeProvider
+from course_supporter.billing.payments.port import (
+    Checkout,
+    CheckoutRequest,
+    PaymentProviderError,
+)
 from course_supporter.billing.payments.registry import ProviderRegistry
 from course_supporter.billing.refunds import refund_hold
 from course_supporter.config import get_settings
@@ -793,6 +798,18 @@ class TestPortalCheckout:
             await _consent(client)
             response = await client.post(CHECKOUT, json=body)
         assert response.status_code == 404
+
+    async def test_a_provider_that_does_not_answer_is_502(self, world: World) -> None:
+        class Down(FakeProvider):
+            async def create_checkout(self, request: CheckoutRequest) -> Checkout:
+                raise PaymentProviderError("the provider timed out")
+
+        world.providers[:] = [Down()]
+        async with _client() as client:
+            await _consent(client)
+            response = await client.post(CHECKOUT, json={"package_id": "starter"})
+        assert response.status_code == 502
+        assert response.json() == {"detail": "The payment provider did not answer."}
 
     async def test_a_body_with_more_is_422(self) -> None:
         async with _client() as client:

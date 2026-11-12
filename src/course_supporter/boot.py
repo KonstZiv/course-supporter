@@ -11,6 +11,7 @@ pool, S3, routes and middleware, worker functions -- is not configuration and
 does not belong here.
 """
 
+# Test comment for CI docs filter verification
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

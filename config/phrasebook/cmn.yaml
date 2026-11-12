@@ -40,3 +40,8 @@ test.explanations_in_course_language: 解释以课程语言提供。
 position.audio: 音频, {time}
 link.later_in_course: 详见课程后续内容
 review.unchanged: 作业自上一次尝试以来没有变化（第 {attempt} 次尝试），因此重复了之前的评审，未进行新的检查。
+verdict.rule.author_musts_met: 您已满足作者设定的全部必选标准，得分为 {score}（满分 100）。对于设有作者必选标准的作业，及格线为 {threshold}，因此作业已通过。
+verdict.rule.author_musts_unmet: 未满足作者设定的必选标准，因此作业未通过。您的得分为 {score}（满分 100）。
+verdict.rule.author_musts_below_threshold: 您已满足作者设定的全部必选标准，但得分为 {score}（满分 100），低于设有作者必选标准的作业的及格线 {threshold}，因此作业未通过。
+verdict.rule.no_author_musts_passed: 作者未为此作业确认必选标准。此类作业的及格线为 {threshold}（满分 100）；您的得分为 {score}，因此作业已通过。
+verdict.rule.no_author_musts_failed: 作者未为此作业确认必选标准。此类作业的及格线为 {threshold}（满分 100）；您的得分为 {score}，因此作业未通过。

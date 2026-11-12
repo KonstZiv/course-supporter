@@ -40,3 +40,8 @@ test.explanations_in_course_language: Maelezo yametolewa kwa lugha ya kozi.
 position.audio: sauti, {time}
 link.later_in_course: Maelezo zaidi — baadaye katika kozi
 review.unchanged: Kazi haijabadilika tangu jaribio lililopita (jaribio {attempt}), kwa hivyo mapitio yamerudiwa bila ukaguzi mpya.
+verdict.rule.author_musts_met: Umetimiza vigezo vyote vya lazima vya mwandishi na umepata {score} kati ya 100. Kwa kazi zenye vigezo vya lazima vya mwandishi, kiwango cha kupita ni {threshold}, kwa hivyo kazi imepitishwa.
+verdict.rule.author_musts_unmet: Vigezo vya lazima vya mwandishi havijatimizwa, kwa hivyo kazi haikupitishwa. Alama zako ni {score} kati ya 100.
+verdict.rule.author_musts_below_threshold: Umetimiza vigezo vyote vya lazima vya mwandishi, lakini umepata {score} kati ya 100 — chini ya kiwango cha {threshold} kwa kazi zenye vigezo vya lazima vya mwandishi, kwa hivyo kazi haikupitishwa.
+verdict.rule.no_author_musts_passed: Mwandishi hajaidhinisha vigezo vya lazima kwa kazi hii. Kwa kazi kama hizi, kiwango cha kupita ni {threshold} kati ya 100; alama zako ni {score}, kwa hivyo kazi imepitishwa.
+verdict.rule.no_author_musts_failed: Mwandishi hajaidhinisha vigezo vya lazima kwa kazi hii. Kwa kazi kama hizi, kiwango cha kupita ni {threshold} kati ya 100; alama zako ni {score}, kwa hivyo kazi haikupitishwa.

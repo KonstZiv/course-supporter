@@ -21,10 +21,18 @@ from typing import Any, ClassVar
 
 import pytest
 
-from course_supporter.criteria_kinds import VerdictItemKind, VerdictValue
+from course_supporter.criteria_kinds import (
+    CriteriaLayer,
+    VerdictItemKind,
+    VerdictValue,
+)
 from course_supporter.homework import verdict_explanation
 from course_supporter.homework.criteria_form import Criterion
-from course_supporter.homework.criteria_verdicts import QuotePlace
+from course_supporter.homework.criteria_verdicts import (
+    QuotePlace,
+    is_passed,
+    score_percent,
+)
 from course_supporter.homework.verdict_explanation import (
     CriterionRemark,
     ExplanationAnswer,
@@ -56,12 +64,21 @@ def _criterion(cid: str, weight: str, points: int = 0) -> Criterion:
     )
 
 
-# c1 "must" on its own, c2 "should" by two points, c3 "may" on its own.
+# c1 "must" on its own, c2 "may" by two points, c3 "should" on its own: with
+# c2 alone unmet the work scores 83 and passes on any list (the pass rule of
+# 2026-11-12: 80 on the model's list, every "must" and 70 on the author's).
 _CRITERIA = (
     _criterion("c1", "must"),
-    _criterion("c2", "should", points=2),
-    _criterion("c3", "may"),
+    _criterion("c2", "may", points=2),
+    _criterion("c3", "should"),
 )
+
+
+def _facts(
+    rows: list[SubmissionCriterionVerdict],
+    layer: CriteriaLayer = CriteriaLayer.MODEL,
+) -> ExplanationFacts:
+    return explanation_facts(_CRITERIA, rows, layer=layer)
 
 
 def _row(
@@ -107,7 +124,7 @@ def _rows(c1: str = "met", p2: str = "not_met") -> list[SubmissionCriterionVerdi
             lines=(1, 1) if c1 == "met" else None,
             missing=None if c1 == "met" else "Немає функції.",
         ),
-        _row("c2", c2, weight="should"),
+        _row("c2", c2, weight="may"),
         _row(
             "c2.p1",
             "met",
@@ -126,7 +143,7 @@ def _rows(c1: str = "met", p2: str = "not_met") -> list[SubmissionCriterionVerdi
         _row(
             "c3",
             "met",
-            weight="may",
+            weight="should",
             quote="Пояснення в README.",
             quote_file="README.docx",
         ),
@@ -169,27 +186,43 @@ def _refusal(content: str, facts: ExplanationFacts) -> str:
 
 class TestTheFacts:
     def test_the_score_and_the_pass_are_the_evaluations_own(self) -> None:
-        """Weights 3 / 2 / 1: c1 and c3 met, c2 not — (3 + 1) of 6, rounded down."""
-        facts = explanation_facts(_CRITERIA, _rows())
+        """Weights 3 / 2 / 1: c1 and c3 met, c2 not — (3 + 2) of 6, rounded down."""
+        rows = _rows()
 
-        assert facts.passed is True
-        assert facts.score == 66
-        assert facts.unmet == ("c2",)
+        for layer in CriteriaLayer:
+            facts = _facts(rows, layer)
+            assert facts.passed is is_passed(rows, layer=layer) is True
+            assert facts.score == score_percent(rows) == 83
+            assert facts.unmet == ("c2",)
+
+    def test_the_pass_is_the_rule_of_the_lists_layer(self) -> None:
+        """The pass rule of 2026-11-12, as the facts tell it to the model.
+
+        c1 (the "must") and c2 met, c3 not: (3 + 1) of 6 is 66 — below both
+        thresholds; the facts say what the rule says, on either list.
+        """
+        rows = _rows(p2="met")
+        rows[-1] = _row("c3", "not_met", weight="should", missing="Немає README.")
+
+        for layer in CriteriaLayer:
+            facts = _facts(rows, layer)
+            assert facts.score == 66
+            assert facts.passed is is_passed(rows, layer=layer) is False
 
     def test_an_unmet_must_fails_the_pass(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows(c1="not_met"))
+        facts = _facts(_rows(c1="not_met"))
 
         assert facts.passed is False
-        assert facts.score == 16
+        assert facts.score == 33
         assert facts.unmet == ("c1", "c2")
 
     def test_everything_met_leaves_nothing_unmet(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows(p2="met"))
+        facts = _facts(_rows(p2="met"))
 
         assert (facts.passed, facts.score, facts.unmet) == (True, 100, ())
 
     def test_each_criterion_carries_its_verdict_in_the_lists_order(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows())
+        facts = _facts(_rows())
 
         c1, c2, c3 = facts.criteria
         assert [c.criterion.id for c in facts.criteria] == ["c1", "c2", "c3"]
@@ -229,11 +262,7 @@ class TestTheFacts:
             quote_not_found=True,
         )
 
-        (point,) = [
-            p
-            for p in explanation_facts(_CRITERIA, rows).criteria[1].points
-            if p.id == "c2.p2"
-        ]
+        (point,) = [p for p in _facts(rows).criteria[1].points if p.id == "c2.p2"]
 
         assert point == JudgedItem(
             id="c2.p2", verdict=VerdictValue.NOT_MET, quote_not_found=True
@@ -253,7 +282,7 @@ class TestTheFacts:
             safeguard_fired=True,
         )
 
-        judged = explanation_facts(_CRITERIA, rows).criteria[0].judged
+        judged = _facts(rows).criteria[0].judged
 
         assert judged is not None
         assert judged.verdict is VerdictValue.MET
@@ -293,28 +322,28 @@ class TestTheFacts:
     )
     def test_rows_of_another_list_are_a_defect(self, change: Any, fault: str) -> None:
         with pytest.raises(ValueError, match=fault):
-            explanation_facts(_CRITERIA, change(_rows()))
+            _facts(change(_rows()))
 
 
 class TestThePassIsRepeated:
     """Lock 7, first half: "passed" said of a work that is not is refused."""
 
     def test_passed_said_of_a_work_that_is_not_is_refused(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows(c1="not_met"))
+        facts = _facts(_rows(c1="not_met"))
 
         feedback = _refusal(_answer(passed=True, remarks=["c1", "c2"]), facts)
 
         assert feedback.startswith("passed must be false:")
 
     def test_not_passed_said_of_a_work_that_is_is_refused(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows())
+        facts = _facts(_rows())
 
         feedback = _refusal(_answer(passed=False, remarks=["c2"]), facts)
 
         assert feedback.startswith("passed must be true:")
 
     def test_the_pass_repeated_rightly_is_read(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows(c1="not_met"))
+        facts = _facts(_rows(c1="not_met"))
 
         answer = read_explanation(_answer(passed=False, remarks=["c1", "c2"]), facts)
 
@@ -326,7 +355,7 @@ class TestEveryUnmetCriterionHasItsRemark:
     """Lock 7, second half: no unmet criterion goes without its remark."""
 
     def test_an_unmet_must_without_its_remark_is_refused(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows(c1="not_met"))
+        facts = _facts(_rows(c1="not_met"))
 
         feedback = _refusal(_answer(passed=False, remarks=["c2"]), facts)
 
@@ -334,7 +363,7 @@ class TestEveryUnmetCriterionHasItsRemark:
 
     def test_an_unmet_should_without_its_remark_is_refused(self) -> None:
         """``PRE-FLIGHT.md`` 9.7: every unmet criterion, whatever its weight."""
-        facts = explanation_facts(_CRITERIA, _rows())
+        facts = _facts(_rows())
 
         feedback = _refusal(_answer(passed=True, remarks=[]), facts)
 
@@ -352,7 +381,7 @@ class TestEveryUnmetCriterionHasItsRemark:
     def test_a_remark_where_none_belongs_is_refused(
         self, remarks: list[str], fault: str
     ) -> None:
-        facts = explanation_facts(_CRITERIA, _rows())
+        facts = _facts(_rows())
 
         feedback = _refusal(_answer(passed=True, remarks=remarks), facts)
 
@@ -360,7 +389,7 @@ class TestEveryUnmetCriterionHasItsRemark:
         assert "Give one remark for each of ['c2'] and no others." in feedback
 
     def test_everything_met_takes_no_remark(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows(p2="met"))
+        facts = _facts(_rows(p2="met"))
 
         answer = read_explanation(_answer(passed=True, remarks=[]), facts)
 
@@ -370,7 +399,7 @@ class TestEveryUnmetCriterionHasItsRemark:
 class TestTheTextsAreThere:
     @pytest.mark.parametrize("blank", ["", "  \n "])
     def test_an_empty_reason_or_remark_part_is_refused(self, blank: str) -> None:
-        facts = explanation_facts(_CRITERIA, _rows())
+        facts = _facts(_rows())
         body = json.loads(_answer(passed=True, remarks=["c2"], why=blank))
         body["remarks"][0]["todo"] = blank
 
@@ -379,14 +408,14 @@ class TestTheTextsAreThere:
         assert "these texts are empty: ['why', 'remarks[c2].todo']" in feedback
 
     def test_no_word_of_the_mentors_own_is_a_null(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows())
+        facts = _facts(_rows())
 
         answer = read_explanation(_answer(passed=True, remarks=["c2"]), facts)
 
         assert answer.mentor_voice is None
 
     def test_every_disagreement_is_named_at_once(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows(c1="not_met"))
+        facts = _facts(_rows(c1="not_met"))
 
         feedback = _refusal(_answer(passed=True, remarks=["c3"], why=" "), facts)
 
@@ -440,7 +469,7 @@ class TestTheForm:
     def test_an_answer_of_another_form_is_refused(
         self, content: str, fault: str
     ) -> None:
-        facts = explanation_facts(_CRITERIA, _rows())
+        facts = _facts(_rows())
 
         assert fault in _refusal(content, facts)
 
@@ -449,7 +478,7 @@ class TestTheLinks:
     """Task 10, K5: the course links an answer names, and what is kept of them."""
 
     def test_links_are_read_as_given(self) -> None:
-        facts = explanation_facts(_CRITERIA, _rows(c1="not_met"))
+        facts = _facts(_rows(c1="not_met"))
 
         answer = read_explanation(
             _answer(
@@ -462,7 +491,7 @@ class TestTheLinks:
 
     def test_a_made_up_link_is_no_disagreement(self) -> None:
         """A link is not a fact: it is cut later, never paid for with a retry."""
-        facts = explanation_facts(_CRITERIA, _rows())
+        facts = _facts(_rows())
 
         answer = read_explanation(
             _answer(passed=True, remarks=["c2"], links={"c2": ["c9.l7"]}), facts

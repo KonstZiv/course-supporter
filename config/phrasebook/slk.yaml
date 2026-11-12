@@ -40,3 +40,8 @@ test.explanations_in_course_language: Vysvetlenie je uvedené v jazyku kurzu.
 position.audio: audio, {time}
 link.later_in_course: Podrobnejšie — ďalej v kurze
 review.unchanged: Práca sa od predchádzajúceho pokusu nezmenila (pokus {attempt}), preto je recenzia zopakovaná bez novej kontroly.
+verdict.rule.author_musts_met: Splnili ste všetky povinné kritériá autora a získali {score} zo 100. Pri úlohách s povinnými kritériami autora je hranica na započítanie {threshold}, preto je práca započítaná.
+verdict.rule.author_musts_unmet: Povinné kritériá autora nie sú splnené, preto práca nie je započítaná. Vaše skóre je {score} zo 100.
+verdict.rule.author_musts_below_threshold: Splnili ste všetky povinné kritériá autora, ale získali {score} zo 100 — pod hranicou {threshold} pre úlohy s povinnými kritériami autora, preto práca nie je započítaná.
+verdict.rule.no_author_musts_passed: Autor pre túto úlohu neschválil povinné kritériá. Pri takýchto úlohách je hranica na započítanie {threshold} zo 100; vaše skóre je {score}, preto je práca započítaná.
+verdict.rule.no_author_musts_failed: Autor pre túto úlohu neschválil povinné kritériá. Pri takýchto úlohách je hranica na započítanie {threshold} zo 100; vaše skóre je {score}, preto práca nie je započítaná.

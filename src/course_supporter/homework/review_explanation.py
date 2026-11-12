@@ -22,7 +22,9 @@ Steps:
        author's edit may have replaced since
        (:func:`~course_supporter.homework.judged_list.read_judged_list`).
     2. The facts
-       (:func:`~course_supporter.homework.verdict_explanation.explanation_facts`).
+       (:func:`~course_supporter.homework.verdict_explanation.explanation_facts`),
+       the pass by the rule of the list's layer, read from the same address
+       (:func:`~course_supporter.homework.judged_list.judged_layer`).
     3. The course links the search step kept (task 10, K5): for each
        criterion that is not met, up to three places under local
        identifiers (:func:`links_to_show`). No row kept — a path that did not
@@ -68,7 +70,7 @@ from course_supporter.agents.review_explainer import (
 )
 from course_supporter.homework.course_link_position import link_position
 from course_supporter.homework.course_links import FoundCourseLinks
-from course_supporter.homework.judged_list import read_judged_list
+from course_supporter.homework.judged_list import judged_layer, read_judged_list
 from course_supporter.homework.path_stages import StageOutcome
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.homework.verdict_explanation import (
@@ -123,7 +125,7 @@ async def explain_verdicts(
         )
         raise ValueError(msg)
     criteria = await read_judged_list(context.session, submission, rows)
-    facts = explanation_facts(criteria, rows)
+    facts = explanation_facts(criteria, rows, layer=judged_layer(rows))
     kept_links = await verdicts.get_candidates(
         tenant_id=submission.tenant_id, submission_id=submission.id
     )

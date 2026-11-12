@@ -40,3 +40,8 @@ test.explanations_in_course_language: Paskaidrojumi ir sniegti kursa valodā.
 position.audio: audio, {time}
 link.later_in_course: Sīkāk — kursā vēlāk
 review.unchanged: Darbs kopš iepriekšējā mēģinājuma nav mainījies (mēģinājums {attempt}), tāpēc recenzija atkārtota bez jaunas pārbaudes.
+verdict.rule.author_musts_met: Jūs izpildījāt visus autora obligātos kritērijus un saņēmāt vērtējumu {score} no 100. Uzdevumiem ar autora obligātajiem kritērijiem ieskaites slieksnis ir {threshold}, tāpēc darbs ir ieskaitīts.
+verdict.rule.author_musts_unmet: Autora obligātie kritēriji nav izpildīti, tāpēc darbs nav ieskaitīts. Jūsu vērtējums ir {score} no 100.
+verdict.rule.author_musts_below_threshold: Jūs izpildījāt visus autora obligātos kritērijus, bet saņēmāt vērtējumu {score} no 100 — zem sliekšņa {threshold} uzdevumiem ar autora obligātajiem kritērijiem, tāpēc darbs nav ieskaitīts.
+verdict.rule.no_author_musts_passed: Autors šim uzdevumam nav apstiprinājis obligātos kritērijus. Šādiem uzdevumiem ieskaites slieksnis ir {threshold} no 100; jūsu vērtējums ir {score}, tāpēc darbs ir ieskaitīts.
+verdict.rule.no_author_musts_failed: Autors šim uzdevumam nav apstiprinājis obligātos kritērijus. Šādiem uzdevumiem ieskaites slieksnis ir {threshold} no 100; jūsu vērtējums ir {score}, tāpēc darbs nav ieskaitīts.

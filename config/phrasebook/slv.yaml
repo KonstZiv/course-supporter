@@ -40,3 +40,8 @@ test.explanations_in_course_language: Pojasnilo je v jeziku tečaja.
 position.audio: zvočni posnetek, {time}
 link.later_in_course: Podrobneje — v nadaljevanju tečaja
 review.unchanged: Delo se od prejšnjega poskusa ni spremenilo (poskus {attempt}), zato je recenzija ponovljena brez novega preverjanja.
+verdict.rule.author_musts_met: Izpolnili ste vsa obvezna merila avtorja in dosegli {score} od 100. Za naloge z obveznimi merili avtorja je prag za opravljeno {threshold}, zato je delo opravljeno.
+verdict.rule.author_musts_unmet: Obvezna merila avtorja niso izpolnjena, zato delo ni opravljeno. Vaš rezultat je {score} od 100.
+verdict.rule.author_musts_below_threshold: Izpolnili ste vsa obvezna merila avtorja, vendar dosegli {score} od 100 — pod pragom {threshold} za naloge z obveznimi merili avtorja, zato delo ni opravljeno.
+verdict.rule.no_author_musts_passed: Avtor za to nalogo ni potrdil obveznih meril. Za takšne naloge je prag za opravljeno {threshold} od 100; vaš rezultat je {score}, zato je delo opravljeno.
+verdict.rule.no_author_musts_failed: Avtor za to nalogo ni potrdil obveznih meril. Za takšne naloge je prag za opravljeno {threshold} od 100; vaš rezultat je {score}, zato delo ni opravljeno.

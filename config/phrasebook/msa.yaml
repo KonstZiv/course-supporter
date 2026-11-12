@@ -40,3 +40,8 @@ test.explanations_in_course_language: Penjelasan diberikan dalam bahasa kursus.
 position.audio: audio, {time}
 link.later_in_course: Butiran lanjut — kemudian dalam kursus
 review.unchanged: Kerja tidak berubah sejak cubaan sebelumnya (cubaan {attempt}), jadi ulasan diulang tanpa semakan baharu.
+verdict.rule.author_musts_met: Anda telah memenuhi semua kriteria wajib penulis dan mendapat {score} daripada 100. Bagi tugasan dengan kriteria wajib penulis, had lulus ialah {threshold}, jadi kerja ini lulus.
+verdict.rule.author_musts_unmet: Kriteria wajib penulis tidak dipenuhi, jadi kerja ini gagal. Skor anda ialah {score} daripada 100.
+verdict.rule.author_musts_below_threshold: Anda telah memenuhi semua kriteria wajib penulis, tetapi mendapat {score} daripada 100 — di bawah had {threshold} bagi tugasan dengan kriteria wajib penulis, jadi kerja ini gagal.
+verdict.rule.no_author_musts_passed: Penulis tidak meluluskan kriteria wajib untuk tugasan ini. Bagi tugasan seperti ini, had lulus ialah {threshold} daripada 100; skor anda ialah {score}, jadi kerja ini lulus.
+verdict.rule.no_author_musts_failed: Penulis tidak meluluskan kriteria wajib untuk tugasan ini. Bagi tugasan seperti ini, had lulus ialah {threshold} daripada 100; skor anda ialah {score}, jadi kerja ini gagal.

@@ -99,7 +99,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from course_supporter.concept_dedup import normalization_key
-from course_supporter.homework.judged_list import read_judged_list
+from course_supporter.homework.judged_list import judged_layer, read_judged_list
 from course_supporter.homework.verdict_explanation import explanation_facts
 from course_supporter.learning_order import MaterialPlace, TreeNode, in_learning_order
 from course_supporter.storage.document_segment_repository import (
@@ -609,7 +609,7 @@ async def look_up_course_links(
         )
         raise ValueError(msg)
     criteria = await read_judged_list(session, submission, rows)
-    unmet = set(explanation_facts(criteria, rows).unmet)
+    unmet = set(explanation_facts(criteria, rows, layer=judged_layer(rows)).unmet)
     failed = [
         FailedCriterion(id=c.id, text=c.text, concepts=tuple(c.concepts))
         for c in criteria

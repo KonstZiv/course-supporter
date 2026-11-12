@@ -52,6 +52,7 @@ from collections.abc import Mapping, Sequence
 
 from course_supporter.models.review_structure import (
     SECTION_ORDER,
+    PassRule,
     Position,
     Reference,
     Remark,
@@ -104,6 +105,26 @@ def _fill(text: str, value: str) -> str:
         rest = rest[end + 1 :]
     out.append(rest)
     return "".join(out)
+
+
+def _fill_named(text: str, values: Mapping[str, str]) -> str:
+    """Put each value into the placeholder of its name, wherever the language put it.
+
+    For a phrase with more than one placeholder, each with its own value: the
+    names are the source's, and a translation is refused at startup unless it
+    carries the same ones (``phrasebook.placeholder_faults``).
+    """
+    for name, value in values.items():
+        text = text.replace(f"{{{name}}}", value)
+    return text
+
+
+def _rule_line(rule: PassRule, phrases: Mapping[str, str], language: str) -> str:
+    """Why the verdict is what it is: the pass rule's phrase, numbers put in."""
+    phrase = _phrase(phrases, f"verdict.rule.{rule.basis}", language)
+    return _fill_named(
+        phrase, {"score": str(rule.score), "threshold": str(rule.threshold)}
+    )
 
 
 def _position_text(
@@ -357,11 +378,16 @@ def _section(
         if verdict is None:
             return None
         key = "verdict.passed" if verdict.passed else "verdict.failed"
-        # A test's score stands right under the verdict it decided; a verdict
-        # without a test always says why (the structure refuses otherwise).
+        # A test's score stands right under the verdict it decided, as does
+        # the pass rule of a criteria list (2026-11-12); a verdict without a
+        # test always says why (the structure refuses otherwise).
         body: list[str] = []
         if structure.test is not None:
             body.append(_score_line(structure.test, phrases, language))
+        if verdict.rule is not None:
+            if body:
+                body.append("")
+            body.append(_rule_line(verdict.rule, phrases, language))
         if verdict.why is not None:
             body.extend(("", verdict.why) if body else (verdict.why,))
         return _phrase(phrases, key, language), body

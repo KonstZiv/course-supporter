@@ -47,10 +47,9 @@ Extending:
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from course_supporter.security.schemas import NotOpenedEntry, ScreenFlag
 
@@ -65,9 +64,6 @@ if TYPE_CHECKING:
 
 STUDENT_NOTE_SOURCE = "student_note"
 """The ``source`` of a flag found in the student's comment."""
-
-_NO_BASE_FILES: Final[Mapping[str, str]] = MappingProxyType({})
-"""The read-only empty default of :attr:`DoorReading.base_files`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,10 +85,11 @@ class DoorReading:
             the author's base, by path (project chain K1) -- the unchanged
             files of the base are the author's, not the student's. Empty for
             a test.
-        base_files: The text of every file of a project's base -- the
-            author's code -- by path, read as :attr:`files` are (the encoding
-            recovered, NFC), so a quote found in it can be told apart from
-            the student's own (project chain K3). Every file, not only the
+        base_files: Every text file of a project's base -- the author's
+            code -- file by file as :attr:`files` are, read as they are (the
+            encoding recovered, NFC; a document without lines), so the same
+            search that finds a quote in the work can tell it apart from the
+            author's (project chain K3). Every file, not only the
             changed ones: the author's code moved or renamed sits in a "new"
             file of the work. Read only for the new path and only after the
             size check; empty for today's Mentor, a project without a base
@@ -104,7 +101,7 @@ class DoorReading:
     recovered_encoding: str | None = None
     flags: tuple[ScreenFlag, ...] = ()
     files: tuple[WorkFile, ...] = ()
-    base_files: Mapping[str, str] = _NO_BASE_FILES
+    base_files: tuple[WorkFile, ...] = ()
 
     @property
     def safety_text(self) -> str:

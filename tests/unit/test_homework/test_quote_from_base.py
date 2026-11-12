@@ -1,9 +1,10 @@
 """A quote of the author's code is not the student's (project chain K3).
 
 Pure rules, no session and no model. A project is the author's base with the
-student's work on top; a quote that is in any text file of the base --
-compared as every quote is, without whitespace, in NFC -- is the author's,
-however it reached the student's files: unchanged lines of a changed file, a
+student's work on top; a quote that the work's own search finds in any text
+file of the base -- without whitespace, in NFC, a piece of a line for a quote
+of eight characters or more, a whole line for a shorter one -- is the
+author's, however it reached the student's files: unchanged lines of a changed file, a
 file moved or renamed, a file the student never touched. It is asked about
 once more (``RepeatReason.QUOTE_FROM_BASE``); a "met" that still stands on
 the base after the repeat, or that the repeat took back, is "not met" with
@@ -56,7 +57,10 @@ _BASE_APP = (
     "    with open(path) as handle:\n"  # 2
     "        return handle.read()\n"  # 3
 )
-_BASE = {"app.py": _BASE_APP, "README.md": "# Word count\n\nRun `python app.py`.\n"}
+_BASE = (
+    WorkFile("app.py", _BASE_APP, True),
+    WorkFile("README.md", "# Word count\n\nRun `python app.py`.\n", True),
+)
 
 # The student's work: app.py changed -- the loader kept, a counter added --
 # and a new file of their own.
@@ -68,7 +72,7 @@ _APP = (
 )
 _STATS = "def mean(values):\n    return sum(values) / len(values)\n"
 _FILES = (WorkFile("app.py", _APP, True), WorkFile("lib/stats.py", _STATS, True))
-_WORK = SubmittedWork(_FILES, base=_BASE.values())
+_WORK = SubmittedWork(_FILES, base=_BASE)
 
 _AUTHORS = "with open(path) as handle:"  # line 2 of app.py: the base's
 _STUDENTS = "return len(text.split())"  # line 6 of app.py: the student's
@@ -226,7 +230,7 @@ class TestUnchangedLinesOfAChangedFile:
         base = "x = 1\r\n# Café: the author's note\r\n"
         work = SubmittedWork(
             [WorkFile("a.py", "x = 2\n#   Café:  the author's note\n", True)],
-            base=[base],
+            base=[WorkFile("a.py", base, True)],
         )
         first = _answer(_met("c1", "# Café: the author's note"), _not_met("c2"))
 
@@ -238,7 +242,10 @@ class TestUnchangedLinesOfAChangedFile:
 class TestTheAuthorsCodeElsewhere:
     def test_c_a_renamed_file_is_the_authors(self) -> None:
         """Lock c: base a.py, work b.py of the same text -- "new" to the delta."""
-        work = SubmittedWork([WorkFile("b.py", _BASE_APP, True)], base=[_BASE_APP])
+        work = SubmittedWork(
+            [WorkFile("b.py", _BASE_APP, True)],
+            base=[WorkFile("a.py", _BASE_APP, True)],
+        )
         first = _answer(_met("c1", _AUTHORS), _not_met("c2"))
 
         assert work.find(_AUTHORS) is not None
@@ -267,6 +274,51 @@ class TestTheAuthorsCodeElsewhere:
             True,
             False,
         )
+
+
+# A short quote: a whole line of the student's .gitignore (answer 5 of the
+# Mentor session on #649 -- the base is searched as the work is).
+_VENV = ".venv/"
+_GITIGNORE = WorkFile(".gitignore", "__pycache__/\n.venv/\n", True)
+
+
+class TestTheSameSearchAsInTheWork:
+    """A quote is the base's when the work's own search finds it there."""
+
+    def _first(self, *base: WorkFile) -> tuple[EvaluationAnswer, SubmittedWork]:
+        work = SubmittedWork((*_FILES, _GITIGNORE), base=base)
+        return _answer(_met("c1", _VENV), _met("c2", _STUDENTS)), work
+
+    def test_a_short_whole_line_only_a_piece_of_a_line_of_the_base_stands(
+        self,
+    ) -> None:
+        readme = WorkFile("README.md", "Create .venv/ with `uv venv`.\n", True)
+        first, work = self._first(*_BASE, readme)
+
+        assert work.is_from_base(_VENV) is False
+        assert items_to_ask_again(first, work) == ()
+        row = _settle(first, work=work)["c1"]
+        assert (row.verdict, row.quote_file, row.quote_lines) == (
+            MET,
+            ".gitignore",
+            (2, 2),
+        )
+        assert row.quote_from_base is False
+
+    def test_the_same_whole_line_in_the_base_is_the_bases(self) -> None:
+        base_gitignore = WorkFile(".gitignore", "# the author's\n  .venv/\n", True)
+        first, work = self._first(*_BASE, base_gitignore)
+
+        assert items_to_ask_again(first, work) == (
+            RepeatItem("c1", RepeatReason.QUOTE_FROM_BASE),
+        )
+
+    def test_a_whole_line_of_a_base_document_is_no_line(self) -> None:
+        """A document's lines are an artefact of extraction, as in the work."""
+        notes = WorkFile("notes.docx", "Ignore\n.venv/\n", has_lines=False)
+        first, work = self._first(*_BASE, notes)
+
+        assert items_to_ask_again(first, work) == ()
 
 
 class TestTheRestOfTheRules:

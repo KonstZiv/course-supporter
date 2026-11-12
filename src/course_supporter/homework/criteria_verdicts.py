@@ -67,13 +67,15 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
   verdict on the same list was "met", and whose quote is still in the work
   word for word, stays "met" — and says so in its row.
 * A quote of the author's code is not the student's (project chain K3): a
-  quote that, compared as above, is in ANY text file of the project's base —
-  in the unchanged lines of a changed file, in a file moved or renamed, or in
-  a file the student did not touch — is asked about once more like any other
-  that does not stand. A "met" that still stands on the base after the
-  repeat, or that the repeat took back, is "not met" with the author's flag
-  ``quote_from_base`` — not unconfirmed: the quote was found, and it is not
-  the student's. The safeguard does not keep a quote of the base either.
+  quote that the search above finds in ANY text file of the project's base —
+  a piece of a line for a quote of :data:`MIN_QUOTE_CHARS` or more, a whole
+  line for a shorter one — in the unchanged lines of a changed file, in a
+  file moved or renamed, or in a file the student did not touch, is asked
+  about once more like any other that does not stand. A "met" that still
+  stands on the base after the repeat, or that the repeat took back, is "not
+  met" with the author's flag ``quote_from_base`` — not unconfirmed: the
+  quote was found, and it is not the student's. The safeguard does not keep
+  a quote of the base either.
   Without a base (every type but a project) nothing changes.
 
 Replacing:
@@ -394,8 +396,8 @@ class SubmittedWork:
     files (their names, the list of what was not opened) are not text of the
     work, so a quote of them is not found.
 
-    ``base`` is the author's code the work was built on -- for a project, the
-    text of every file of its base (project chain K3); empty for every other
+    ``base`` is the author's code the work was built on -- for a project,
+    every text file of its base (project chain K3); empty for every other
     type. A quote found in it is the author's, not the student's
     (:meth:`is_from_base`).
 
@@ -412,29 +414,33 @@ class SubmittedWork:
     QuotePlace(file='.gitignore', lines=(2, 2))
     """
 
-    def __init__(self, files: Sequence[WorkFile], *, base: Iterable[str] = ()) -> None:
+    def __init__(
+        self, files: Sequence[WorkFile], *, base: Sequence[WorkFile] = ()
+    ) -> None:
         self._files = tuple(_SearchableFile(file) for file in files)
-        # One string for the whole base: a squeezed text has no newline, so
-        # the one joining two files keeps a quote from spanning them.
-        self._base = "\n".join(_squeezed(text) for text in base)
+        self._base = tuple(_SearchableFile(file) for file in base)
 
     def is_from_base(self, quote: str) -> bool:
-        """Whether ``quote`` is in a file of the base, compared as :meth:`find` does.
+        """Whether :meth:`find` would find ``quote`` in a file of the base.
 
-        Anywhere in a file -- the base's lines are not the student's, so no
-        line is asked for -- and at any length but none.
+        The same search on the author's files: a piece of a line for a quote
+        of :data:`MIN_QUOTE_CHARS` or more, a whole line of a file with lines
+        for a shorter one. A short quote that is only a piece of a longer
+        line of the base is not the base's -- it is in almost any code.
 
         >>> work = SubmittedWork(
-        ...     [WorkFile("b.py", "def solve(n):\\n    return n\\n", True)],
-        ...     base=["def solve(n):\\n    return n\\n"],
+        ...     [WorkFile(".gitignore", "*.pyc\\n.venv/\\n", True)],
+        ...     base=[WorkFile("README.md", "Create .venv/ with uv.\\n", True)],
         ... )
-        >>> work.is_from_base("def solve(n):")
-        True
-        >>> SubmittedWork([]).is_from_base("def solve(n):")
+        >>> work.is_from_base(".venv/")
         False
+        >>> SubmittedWork(
+        ...     [], base=[WorkFile(".gitignore", ".venv/\\n", True)]
+        ... ).is_from_base(".venv/")
+        True
         """
         needle = _squeezed(quote)
-        return bool(needle) and needle in self._base
+        return any(base.place_of(needle) is not None for base in self._base)
 
     def is_in_a_line(self, quote: str) -> bool:
         """Whether ``quote`` is in a line of the work, whole or as a piece.

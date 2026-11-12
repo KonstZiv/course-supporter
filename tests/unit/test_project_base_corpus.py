@@ -75,6 +75,11 @@ PROJECT: dict[str, bytes] = {
 }
 
 
+def _base_texts(reading: DoorReading) -> dict[str, str]:
+    """The base the door read, by path."""
+    return {file.name: file.text for file in reading.base_files}
+
+
 class _Reads:
     """Counts the reads of the base corpus, then reads it."""
 
@@ -131,7 +136,7 @@ async def _door(
 
 def _asked_again(reading: DoorReading, quote: str) -> tuple[RepeatItem, ...]:
     """What the evaluation would ask again of a "met" on ``quote``."""
-    work = SubmittedWork(reading.files, base=reading.base_files.values())
+    work = SubmittedWork(reading.files, base=reading.base_files)
     content = json.dumps(
         {"verdicts": [{"id": "c1", "verdict": "met", "quote": quote, "missing": None}]}
     )
@@ -145,8 +150,8 @@ class TestTheCorpus:
         reading, _ = await _door(monkeypatch, PROJECT, BASE)
 
         assert reading is not None
-        assert sorted(reading.base_files) == ["app.py", "stats.py"]
-        assert reading.base_files["app.py"] == BASE["app.py"].decode()
+        assert sorted(_base_texts(reading)) == ["app.py", "stats.py"]
+        assert _base_texts(reading)["app.py"] == BASE["app.py"].decode()
 
     async def test_c_a_renamed_file_through_the_door(
         self, monkeypatch: pytest.MonkeyPatch
@@ -156,7 +161,7 @@ class TestTheCorpus:
 
         assert reading is not None
         assert [f.name for f in reading.files] == ["b.py"]
-        assert dict(reading.base_files) == {"a.py": _SOLVE.decode()}
+        assert _base_texts(reading) == {"a.py": _SOLVE.decode()}
         assert _asked_again(reading, "return sorted(set(numbers))") == (
             RepeatItem("c1", RepeatReason.QUOTE_FROM_BASE),
         )
@@ -168,7 +173,7 @@ class TestTheCorpus:
         reading, _ = await _door(monkeypatch, PROJECT, BASE)
 
         assert reading is not None
-        assert reading.base_files["stats.py"] == _CP1251_TEXT
+        assert _base_texts(reading)["stats.py"] == _CP1251_TEXT
         assert _asked_again(reading, _AUTHORS_CYRILLIC) == (
             RepeatItem("c1", RepeatReason.QUOTE_FROM_BASE),
         )
@@ -200,7 +205,7 @@ class TestTheCorpus:
             )
 
         assert reading is not None
-        assert dict(reading.base_files) == {"app.py": "x = 1\n"}
+        assert _base_texts(reading) == {"app.py": "x = 1\n"}
         assert [
             (log["event"], log["log_level"], log["path"])
             for log in logs
@@ -218,7 +223,7 @@ class TestTheCorpus:
         )
 
         assert reading is not None
-        assert dict(reading.base_files) == {"app.py": "x = 1\n"}
+        assert _base_texts(reading) == {"app.py": "x = 1\n"}
 
 
 class TestOnceAndAfterTheSizeCheck:

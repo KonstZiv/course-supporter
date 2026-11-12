@@ -43,7 +43,6 @@ import uuid
 import zipfile
 from contextlib import ExitStack
 from pathlib import PurePosixPath
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import structlog
@@ -82,7 +81,7 @@ from course_supporter.security.text_screen import read_as_screened, screen_text
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -96,9 +95,6 @@ logger = structlog.get_logger(__name__)
 
 # A project is the student's text: the mode their policy names (task 11).
 _MODE: Final = HOMEWORK_POLICY.text_screen_mode
-
-_NO_BASE: Final[Mapping[str, str]] = MappingProxyType({})
-"""What :attr:`DoorReading.base_files` holds when the base is not read."""
 
 # An empty base manifest — the "no base attached" case. compute_delta against it
 # yields every submission path as "new" (KD18: base absent → delta "all new").
@@ -303,7 +299,7 @@ async def process_project_submission(
     # The author's base, for the evaluation's quotes (K3): only now, so a
     # submission refused for its size never pays for reading it, and from the
     # snapshot already fetched, so S3 is asked for it once.
-    base_files = _NO_BASE
+    base_files: tuple[WorkFile, ...] = ()
     if base_corpus and base_bytes is not None:
         base_files = _read_base_corpus(base_bytes, base_manifest, languages, log=log)
 
@@ -342,8 +338,8 @@ def _student_work(
 
 def _read_base_corpus(
     base_zip: bytes, manifest: Manifest, languages: Sequence[str], *, log: Any
-) -> Mapping[str, str]:
-    """The text of every file of the author's base, by path (K3).
+) -> tuple[WorkFile, ...]:
+    """Every text file of the author's base, as the work's files are (K3).
 
     Every file, not only the ones the student changed: the author's code a
     student moved or renamed is in a "new" file of the work, and the delta
@@ -355,10 +351,12 @@ def _read_base_corpus(
     A binary file has no text, and a text whose encoding cannot be
     established is left out, as the student's would be. A base document the
     extractor cannot open is no reason to fail the student's submission: it
-    is logged and left out.
+    is logged and left out. A document has no lines, as in the work.
     """
+    from course_supporter.homework.criteria_verdicts import WorkFile
+
     extractor = DefaultTextExtractor()
-    corpus: dict[str, str] = {}
+    corpus: list[WorkFile] = []
     with zipfile.ZipFile(io.BytesIO(base_zip)) as zf:
         for entry in manifest.included:
             if entry.cls is EntryClass.BINARY:
@@ -374,12 +372,13 @@ def _read_base_corpus(
                     )
                     continue
             try:
-                corpus[entry.path] = read_as_screened(
-                    content, name=entry.path, languages=languages
-                )
+                text = read_as_screened(content, name=entry.path, languages=languages)
             except SecurityRejectedError:
                 continue
-    return MappingProxyType(corpus)
+            corpus.append(
+                WorkFile(entry.path, text, entry.cls is not EntryClass.DOCUMENT)
+            )
+    return tuple(corpus)
 
 
 class _SnapshotScreen:

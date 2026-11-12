@@ -1111,7 +1111,10 @@ class TestARealNotMetStays:
 # Project chain K3: the author's base the student built on. The work is
 # solution.py as above; the author gave its first line -- the signature -- and
 # the student wrote the body.
-_BASE_FILES = {"solution.py": "def fibonacci(n):\n    pass\n", "README.md": "# Fib\n"}
+_BASE_FILES = (
+    WorkFile("README.md", "# Fib\n", True),
+    WorkFile("solution.py", "def fibonacci(n):\n    pass\n", True),
+)
 _PROJECT_DOOR = DoorReading(text=_WORK, files=_FILES, base_files=_BASE_FILES)
 
 

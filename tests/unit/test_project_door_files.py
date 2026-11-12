@@ -154,6 +154,11 @@ def _context_as_before(project: dict[str, bytes], base: dict[str, bytes]) -> str
     return context + not_opened_block(screen.not_opened)
 
 
+def _base_texts(reading: DoorReading) -> dict[str, str]:
+    """The base the door read, by path."""
+    return {file.name: file.text for file in reading.base_files}
+
+
 class TestTheFixture:
     def test_it_holds_every_class_of_file(self) -> None:
         """What the locks below rest on: each class is there, as named."""
@@ -199,10 +204,10 @@ class TestTheStudentsFiles:
         """
         reading, s3 = await _door(monkeypatch, PROJECT, BASE)
 
-        assert dict(reading.base_files) == {
+        assert _base_texts(reading) == {
             path: BASE[path].decode() for path in ("app.py", "old.py", "util.py")
         }
-        assert "lib/extra.py" not in reading.base_files
+        assert "lib/extra.py" not in _base_texts(reading)
         assert s3.get_calls == ["base/k"]
 
     async def test_c_a_document_has_no_lines(
@@ -229,7 +234,7 @@ class TestTheStudentsFiles:
         assert "Slides of the project" in files["slides.pdf"].text
         old_text = DefaultTextExtractor().extract(EntryClass.DOCUMENT, old_report)
         assert old_text is not None
-        assert reading.base_files["report.docx"] == unicodedata.normalize(
+        assert _base_texts(reading)["report.docx"] == unicodedata.normalize(
             "NFC", old_text
         )
 
@@ -254,7 +259,7 @@ class TestTheStudentsFiles:
         )
 
         assert [f.name for f in reading.files] == ["app.py", "report.docx"]
-        assert dict(reading.base_files) == {"app.py": "x = 1\n"}
+        assert _base_texts(reading) == {"app.py": "x = 1\n"}
 
     async def test_the_same_project_as_its_base_has_no_files(
         self, monkeypatch: pytest.MonkeyPatch
@@ -263,7 +268,7 @@ class TestTheStudentsFiles:
 
         assert reading.files == ()
         # The base is all the author's, and is there to tell its quotes by.
-        assert sorted(reading.base_files) == ["app.py", "old.py", "util.py"]
+        assert sorted(_base_texts(reading)) == ["app.py", "old.py", "util.py"]
 
 
 class TestTheTextIsUntouched:

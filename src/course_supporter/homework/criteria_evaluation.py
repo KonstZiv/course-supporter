@@ -148,7 +148,7 @@ async def evaluate_criteria(
             "the evaluation stage needs the work file by file, and the doors gave none"
         )
         raise ValueError(msg)
-    base = context.door.base_files.values() if context.door is not None else ()
+    base = context.door.base_files if context.door is not None else ()
     work = SubmittedWork(context.work, base=base)
 
     title, description, text = await load_task_context(

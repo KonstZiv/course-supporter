@@ -64,7 +64,11 @@ from pydantic import (
     model_validator,
 )
 
-from course_supporter.criteria_kinds import VerdictItemKind, VerdictValue
+from course_supporter.criteria_kinds import (
+    CriteriaLayer,
+    VerdictItemKind,
+    VerdictValue,
+)
 from course_supporter.homework.criteria_form import CheckMethod, Criterion
 from course_supporter.homework.criteria_verdicts import (
     QuotePlace,
@@ -172,7 +176,8 @@ class ExplanationFacts:
     """Everything the explanation may not contradict.
 
     Attributes:
-        passed: Every "must" criterion is met (decision 2).
+        passed: The pass rule's answer
+            (:func:`~course_supporter.homework.criteria_verdicts.is_passed`).
         score: The share of the met criteria's weights, in whole percent.
         criteria: Every criterion of the list, in its order.
     """
@@ -192,12 +197,18 @@ class ExplanationFacts:
 
 
 def explanation_facts(
-    criteria: Sequence[Criterion], rows: Iterable[StoredVerdict]
+    criteria: Sequence[Criterion],
+    rows: Iterable[StoredVerdict],
+    *,
+    layer: CriteriaLayer,
 ) -> ExplanationFacts:
     """The facts of one submission, from its list and its verdict rows.
 
     The score and the pass are counted by the evaluation's own functions, as
-    the review's builder counts them — nothing derived is stored.
+    the review's builder counts them — nothing derived is stored. ``layer``
+    is whose list it is (the rows' address,
+    :func:`~course_supporter.homework.judged_list.judged_layer`): the pass
+    rule depends on it.
 
     Raises:
         ValueError: The rows were not written against this list: a criterion
@@ -243,7 +254,9 @@ def explanation_facts(
         msg = f"verdict rows of items the list does not have: {foreign}"
         raise ValueError(msg)
     return ExplanationFacts(
-        passed=is_passed(stored), score=score_percent(stored), criteria=tuple(facts)
+        passed=is_passed(stored, layer=layer),
+        score=score_percent(stored),
+        criteria=tuple(facts),
     )
 
 

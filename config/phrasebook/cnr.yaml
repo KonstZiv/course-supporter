@@ -40,3 +40,8 @@ test.explanations_in_course_language: Objašnjenja su data na jeziku kursa.
 position.audio: audio, {time}
 link.later_in_course: Detaljnije — kasnije u kursu
 review.unchanged: Rad se nije promijenio od prethodnog pokušaja (pokušaj {attempt}), pa je recenzija ponovljena bez nove provjere.
+verdict.rule.author_musts_met: Ispunili ste sve obavezne kriterijume autora i ostvarili {score} poena. Za zadatke sa obaveznim kriterijumima autora prag za prihvatanje je {threshold}, pa je rad prihvaćen.
+verdict.rule.author_musts_unmet: Obavezni kriterijumi autora nijesu ispunjeni, pa rad nije prihvaćen. Vaš rezultat je {score}.
+verdict.rule.author_musts_below_threshold: Ispunili ste sve obavezne kriterijume autora, ali je vaš rezultat {score} — ispod praga {threshold} za zadatke sa obaveznim kriterijumima autora, pa rad nije prihvaćen.
+verdict.rule.no_author_musts_passed: Autor nije potvrdio obavezne kriterijume za ovaj zadatak. Za takve zadatke prag za prihvatanje je {threshold}; vaš rezultat je {score}, pa je rad prihvaćen.
+verdict.rule.no_author_musts_failed: Autor nije potvrdio obavezne kriterijume za ovaj zadatak. Za takve zadatke prag za prihvatanje je {threshold}; vaš rezultat je {score}, pa rad nije prihvaćen.

@@ -40,3 +40,8 @@ test.explanations_in_course_language: Selgitused on esitatud kursuse keeles.
 position.audio: audio, {time}
 link.later_in_course: Täpsemalt — kursuse edasises osas
 review.unchanged: Töö pole pärast eelmist katset muutunud (katse {attempt}), seega korrati retsensiooni ilma uue kontrollita.
+verdict.rule.author_musts_met: Täitsite kõik autori kohustuslikud kriteeriumid ja saite tulemuseks {score}. Autori kohustuslike kriteeriumidega ülesannete puhul on arvestuse lävi {threshold}, seega on töö arvestatud.
+verdict.rule.author_musts_unmet: Autori kohustuslikud kriteeriumid ei ole täidetud, seega ei ole töö arvestatud. Teie tulemus on {score}.
+verdict.rule.author_musts_below_threshold: Täitsite kõik autori kohustuslikud kriteeriumid, kuid saite tulemuseks {score} — see jääb alla autori kohustuslike kriteeriumidega ülesannete läve {threshold}, seega ei ole töö arvestatud.
+verdict.rule.no_author_musts_passed: Autor ei ole selle ülesande jaoks kohustuslikke kriteeriume kinnitanud. Selliste ülesannete puhul on arvestuse lävi {threshold}; teie tulemus on {score}, seega on töö arvestatud.
+verdict.rule.no_author_musts_failed: Autor ei ole selle ülesande jaoks kohustuslikke kriteeriume kinnitanud. Selliste ülesannete puhul on arvestuse lävi {threshold}; teie tulemus on {score}, seega ei ole töö arvestatud.

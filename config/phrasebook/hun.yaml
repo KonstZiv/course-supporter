@@ -40,3 +40,8 @@ test.explanations_in_course_language: A magyarázat a kurzus nyelvén olvasható
 position.audio: hanganyag, {time}
 link.later_in_course: Bővebben — a kurzus későbbi részében
 review.unchanged: A munka az előző próbálkozás óta nem változott ({attempt}. próbálkozás), ezért az értékelést új ellenőrzés nélkül megismételtük.
+verdict.rule.author_musts_met: Ön teljesítette a szerző összes kötelező szempontját, és {score} pontszámot ért el. A szerző kötelező szempontjait tartalmazó feladatoknál az elfogadási küszöb {threshold}, ezért a munka el van fogadva.
+verdict.rule.author_musts_unmet: A szerző kötelező szempontjai nem teljesültek, ezért a munka nincs elfogadva. Az Ön pontszáma {score}.
+verdict.rule.author_musts_below_threshold: Ön teljesítette a szerző összes kötelező szempontját, de {score} pontszámot ért el — ez a szerző kötelező szempontjait tartalmazó feladatokra vonatkozó {threshold} küszöb alatt van, ezért a munka nincs elfogadva.
+verdict.rule.no_author_musts_passed: A szerző nem hagyott jóvá kötelező szempontokat ehhez a feladathoz. Az ilyen feladatoknál az elfogadási küszöb {threshold}; az Ön pontszáma {score}, ezért a munka el van fogadva.
+verdict.rule.no_author_musts_failed: A szerző nem hagyott jóvá kötelező szempontokat ehhez a feladathoz. Az ilyen feladatoknál az elfogadási küszöb {threshold}; az Ön pontszáma {score}, ezért a munka nincs elfogadva.

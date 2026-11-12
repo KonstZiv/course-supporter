@@ -40,3 +40,8 @@ test.explanations_in_course_language: La explicación está en el idioma del cur
 position.audio: audio, {time}
 link.later_in_course: Más detalles — más adelante en el curso
 review.unchanged: El trabajo no ha cambiado desde el intento anterior (intento {attempt}), por eso la revisión se repite sin una nueva comprobación.
+verdict.rule.author_musts_met: Ha cumplido todos los criterios obligatorios del autor y ha obtenido una puntuación de {score}. Para las tareas con criterios obligatorios del autor, el umbral de aprobado es {threshold}, por lo que el trabajo está aprobado.
+verdict.rule.author_musts_unmet: No se han cumplido los criterios obligatorios del autor, por lo que el trabajo no está aprobado. Su puntuación es {score}.
+verdict.rule.author_musts_below_threshold: Ha cumplido todos los criterios obligatorios del autor, pero ha obtenido una puntuación de {score}, por debajo del umbral de {threshold} para las tareas con criterios obligatorios del autor, por lo que el trabajo no está aprobado.
+verdict.rule.no_author_musts_passed: El autor no ha aprobado criterios obligatorios para esta tarea. Para estas tareas, el umbral de aprobado es {threshold}; su puntuación es {score}, por lo que el trabajo está aprobado.
+verdict.rule.no_author_musts_failed: El autor no ha aprobado criterios obligatorios para esta tarea. Para estas tareas, el umbral de aprobado es {threshold}; su puntuación es {score}, por lo que el trabajo no está aprobado.

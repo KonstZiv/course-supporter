@@ -40,3 +40,8 @@ test.explanations_in_course_language: Giải thích bằng ngôn ngữ của kh�
 position.audio: âm thanh, {time}
 link.later_in_course: Chi tiết hơn — ở phần sau của khóa học
 review.unchanged: Bài làm không thay đổi so với lần thử trước (lần thử {attempt}), vì vậy bài đánh giá được lặp lại mà không kiểm tra lại.
+verdict.rule.author_musts_met: Bạn đã đáp ứng tất cả tiêu chí bắt buộc của tác giả và đạt {score} điểm. Với các bài có tiêu chí bắt buộc của tác giả, ngưỡng đạt là {threshold}, vì vậy bài làm đã đạt.
+verdict.rule.author_musts_unmet: Các tiêu chí bắt buộc của tác giả chưa được đáp ứng, vì vậy bài làm chưa đạt. Điểm của bạn là {score}.
+verdict.rule.author_musts_below_threshold: Bạn đã đáp ứng tất cả tiêu chí bắt buộc của tác giả, nhưng chỉ đạt {score} điểm — thấp hơn ngưỡng {threshold} của các bài có tiêu chí bắt buộc của tác giả, vì vậy bài làm chưa đạt.
+verdict.rule.no_author_musts_passed: Tác giả chưa phê duyệt tiêu chí bắt buộc cho bài này. Với những bài như vậy, ngưỡng đạt là {threshold}; điểm của bạn là {score}, vì vậy bài làm đã đạt.
+verdict.rule.no_author_musts_failed: Tác giả chưa phê duyệt tiêu chí bắt buộc cho bài này. Với những bài như vậy, ngưỡng đạt là {threshold}; điểm của bạn là {score}, vì vậy bài làm chưa đạt.

@@ -40,3 +40,8 @@ test.explanations_in_course_language: Selitykset ovat kurssin kielellä.
 position.audio: ääni, {time}
 link.later_in_course: Lisää myöhemmin kurssilla
 review.unchanged: Työ ei ole muuttunut edellisen yrityksen jälkeen (yritys {attempt}), joten arviointi toistettiin ilman uutta tarkistusta.
+verdict.rule.author_musts_met: Täytit kaikki tekijän pakolliset kriteerit ja sait pistemäärän {score}. Tehtävissä, joissa on tekijän pakollisia kriteerejä, hyväksymisraja on {threshold}, joten työ on hyväksytty.
+verdict.rule.author_musts_unmet: Tekijän pakolliset kriteerit eivät täyty, joten työtä ei ole hyväksytty. Pistemääräsi on {score}.
+verdict.rule.author_musts_below_threshold: Täytit kaikki tekijän pakolliset kriteerit, mutta sait pistemäärän {score} — se jää alle rajan {threshold}, joka koskee tehtäviä, joissa on tekijän pakollisia kriteerejä, joten työtä ei ole hyväksytty.
+verdict.rule.no_author_musts_passed: Tekijä ei ole vahvistanut pakollisia kriteerejä tälle tehtävälle. Tällaisissa tehtävissä hyväksymisraja on {threshold}; pistemääräsi on {score}, joten työ on hyväksytty.
+verdict.rule.no_author_musts_failed: Tekijä ei ole vahvistanut pakollisia kriteerejä tälle tehtävälle. Tällaisissa tehtävissä hyväksymisraja on {threshold}; pistemääräsi on {score}, joten työtä ei ole hyväksytty.

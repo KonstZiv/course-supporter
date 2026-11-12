@@ -40,3 +40,8 @@ test.explanations_in_course_language: Forklaringer er på kursets sprog.
 position.audio: Lyd, {time}
 link.later_in_course: Mere om det senere i kurset
 review.unchanged: Arbejdet er ikke ændret siden det forrige forsøg (forsøg {attempt}), så gennemgangen er gentaget uden en ny kontrol.
+verdict.rule.author_musts_met: Du har opfyldt alle forfatterens obligatoriske kriterier og fået en score på {score}. For opgaver med forfatterens obligatoriske kriterier er grænsen for godkendelse {threshold}, så arbejdet er godkendt.
+verdict.rule.author_musts_unmet: Forfatterens obligatoriske kriterier er ikke opfyldt, så arbejdet er ikke godkendt. Din score er {score}.
+verdict.rule.author_musts_below_threshold: Du har opfyldt alle forfatterens obligatoriske kriterier, men fået en score på {score} — under grænsen på {threshold} for opgaver med forfatterens obligatoriske kriterier, så arbejdet er ikke godkendt.
+verdict.rule.no_author_musts_passed: Forfatteren har ikke godkendt obligatoriske kriterier for denne opgave. For sådanne opgaver er grænsen for godkendelse {threshold}; din score er {score}, så arbejdet er godkendt.
+verdict.rule.no_author_musts_failed: Forfatteren har ikke godkendt obligatoriske kriterier for denne opgave. For sådanne opgaver er grænsen for godkendelse {threshold}; din score er {score}, så arbejdet er ikke godkendt.

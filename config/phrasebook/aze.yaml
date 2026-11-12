@@ -40,3 +40,8 @@ test.explanations_in_course_language: İzah kursun dilində verilib.
 position.audio: audio, {time}
 link.later_in_course: Ətraflı — kursun davamında
 review.unchanged: İş əvvəlki cəhddən bəri dəyişməyib (cəhd {attempt}), buna görə rəy yeni yoxlama olmadan təkrarlanıb.
+verdict.rule.author_musts_met: Siz müəllifin bütün məcburi meyarlarını yerinə yetirdiniz və {score} bal topladınız. Müəllifin məcburi meyarları olan tapşırıqlar üçün keçid həddi {threshold} baldır, buna görə iş qəbul edildi.
+verdict.rule.author_musts_unmet: Müəllifin məcburi meyarları yerinə yetirilməyib, buna görə iş qəbul edilmədi. Sizin balınız — {score}.
+verdict.rule.author_musts_below_threshold: Siz müəllifin bütün məcburi meyarlarını yerinə yetirdiniz, lakin {score} bal topladınız — bu, müəllifin məcburi meyarları olan tapşırıqlar üçün {threshold} keçid həddindən aşağıdır, buna görə iş qəbul edilmədi.
+verdict.rule.no_author_musts_passed: Müəllif bu tapşırıq üçün məcburi meyarları təsdiqləməyib. Belə tapşırıqlar üçün keçid həddi {threshold} baldır; sizin balınız — {score}, buna görə iş qəbul edildi.
+verdict.rule.no_author_musts_failed: Müəllif bu tapşırıq üçün məcburi meyarları təsdiqləməyib. Belə tapşırıqlar üçün keçid həddi {threshold} baldır; sizin balınız — {score}, buna görə iş qəbul edilmədi.

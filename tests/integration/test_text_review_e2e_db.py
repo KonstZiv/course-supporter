@@ -94,6 +94,7 @@ from course_supporter.homework.text_result import (
 from course_supporter.llm.ladder_config import StageConfig
 from course_supporter.llm.stage_router import StageResult
 from course_supporter.models.review_structure import (
+    PassRule,
     Position,
     Reference,
     Remark,
@@ -189,7 +190,9 @@ _SECOND_EVALUATION = _evaluation(
     _verdict("c3", "not_met", missing="Немає докстрінга."),
 )
 
-_WHY = "Робота зарахована: функція solve є й подвоює число."
+# 50 on the model's list: below the threshold of 80 (the pass rule of
+# 2026-11-12), so the code's pass — which the explanation repeats — is false.
+_WHY = "Робота не зарахована: функція solve є, але бракує перевірок і докстрінга."
 _VOICE = "Назва функції говорить сама за себе."
 
 
@@ -208,7 +211,7 @@ def _remark(cid: str) -> dict[str, Any]:
 # the builder puts heaviest first.
 _EXPLANATION = json.dumps(
     {
-        "passed": True,
+        "passed": False,
         "why": _WHY,
         "remarks": [_remark("c3"), _remark("c2")],
         "mentor_voice": _VOICE,
@@ -754,8 +757,11 @@ class TestAFirstSubmissionIsReviewedFromItsVerdicts:
         structure = ReviewStructureV1.model_validate(submission.review_result)
         assert structure.language == "ukr"
         assert structure.verdict is not None
-        assert structure.verdict.passed is True
+        assert structure.verdict.passed is False
         assert structure.verdict.why == _WHY
+        assert structure.verdict.rule == PassRule(
+            basis="no_author_musts_failed", score=50, threshold=80
+        )
         assert structure.new_remarks == [
             Remark(
                 what=_remark(cid)["what"],
@@ -771,12 +777,12 @@ class TestAFirstSubmissionIsReviewedFromItsVerdicts:
         [payload] = _reviewed(webhook)
         assert payload.structure == structure
         assert payload.review.score == 50
-        assert payload.review.passed is True
+        assert payload.review.passed is False
         assert payload.review.correctness == "partially_correct"
         assert payload.review.review_text == submission.review_markdown
         assert curated_verdict(
             submission.review_result, score=submission.score
-        ) == PortalVerdict(passed=True, correctness="partially_correct")
+        ) == PortalVerdict(passed=False, correctness="partially_correct")
 
         # ── After delivery: two criteria not met, neither linked (K6) ──
         assert await _metrics(session_factory, submission_id) == [(0.0, None)]
@@ -884,7 +890,7 @@ class TestASecondSubmissionKeepsWhatTheFirstEarned:
         assert second.score == 50
         structure = ReviewStructureV1.model_validate(second.review_result)
         assert structure.verdict is not None
-        assert structure.verdict.passed is True
+        assert structure.verdict.passed is False
         [payload] = _reviewed(webhook)
         assert payload.review.score == 50
 
@@ -1176,7 +1182,7 @@ _LINKED_CRITERIA = (
 # The model chooses the one place shown for c3; c2 had none to choose from.
 _LINKED_EXPLANATION = json.dumps(
     {
-        "passed": True,
+        "passed": False,
         "why": _WHY,
         "remarks": [{**_remark("c3"), "links": ["c3.l1"]}, _remark("c2")],
         "mentor_voice": None,

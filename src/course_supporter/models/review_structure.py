@@ -26,6 +26,9 @@ Interface:
     ``ReviewStructureV1.unchanged_from_attempt`` — the earlier attempt a
     review repeats when the work did not change (task 13, K3). Optional, so
     the version stays ``"1"`` and a review stored before it reads unchanged.
+    ``Verdict.rule`` (:class:`PassRule`, :data:`PassBasis`) — which branch of
+    a criteria list's pass rule decided, with the score and the threshold
+    (2026-11-12). Optional on the same terms.
 
 Two rules the model enforces rather than documents:
 
@@ -94,6 +97,26 @@ for one."""
 ReplyKind = Literal["question", "objection", "comment"]
 """What the student's remark was. The three are answered alike but named apart:
 an objection answered as if it were a question reads as a brush-off."""
+
+PassBasis = Literal[
+    "author_musts_met",
+    "author_musts_unmet",
+    "author_musts_below_threshold",
+    "no_author_musts_passed",
+    "no_author_musts_failed",
+]
+"""Which branch of a criteria list's pass rule decided (2026-11-12).
+
+``author_musts_*`` — the author's list with a "must" in it: every "must" met
+or unconfirmed and the score at the threshold or above (``met``), a "must" not
+met (``unmet``), or every "must" met and the score below it
+(``below_threshold``). ``no_author_musts_*`` — the model's list, or the
+author's without a "must": the score at the threshold or above, or below it.
+Each has its own phrase (``verdict.rule.<basis>``)."""
+
+_PASSING_BASES: Final[frozenset[str]] = frozenset(
+    {"author_musts_met", "no_author_musts_passed"}
+)
 
 _LANGUAGE_CODE = re.compile(r"^[a-z]{3}$")
 
@@ -245,6 +268,24 @@ class Reply(BaseModel):
     answer: str = Field(min_length=1, description="The Mentor's answer to it.")
 
 
+class PassRule(BaseModel):
+    """Why a work judged by a criteria list is passed or not (2026-11-12).
+
+    The branch of the rule that decided, and the two numbers its phrase names:
+    the score and the threshold of that branch. The code's, never the model's
+    (``homework/criteria_verdicts.py``, ``pass_decision``); the student reads
+    it as one sentence of the phrasebook under the verdict.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    basis: PassBasis = Field(description="The branch of the rule that decided.")
+    score: int = Field(ge=0, le=100, description="The work's score, whole percent.")
+    threshold: int = Field(
+        ge=0, le=100, description="The pass threshold of that branch, whole percent."
+    )
+
+
 class Verdict(BaseModel):
     """Passed or not, and why.
 
@@ -266,6 +307,31 @@ class Verdict(BaseModel):
             "verdict, whose reason is the score."
         ),
     )
+    # Left out of the dump when absent, as ``unchanged_from_attempt`` is: a
+    # test's verdict and every review stored before the rule read key for key
+    # as before.
+    rule: PassRule | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "The pass rule of a criteria list, as it decided this verdict: the "
+            "assembler prints its phrase under the verdict. None for a test's "
+            "verdict and for every review stored before the rule (2026-11-12)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _the_rule_agrees(self) -> Self:
+        """A rule that says "passed" stands under a passed verdict, and only there."""
+        if self.rule is not None and (
+            (self.rule.basis in _PASSING_BASES) is not self.passed
+        ):
+            msg = (
+                f"the pass rule's basis {self.rule.basis!r} disagrees with "
+                f"passed={self.passed}"
+            )
+            raise ValueError(msg)
+        return self
 
 
 class Verification(BaseModel):

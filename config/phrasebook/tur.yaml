@@ -40,3 +40,8 @@ test.explanations_in_course_language: Açıklamalar kurs dilinde verilmiştir.
 position.audio: ses kaydı, {time}
 link.later_in_course: Ayrıntılar — kursun ilerleyen bölümlerinde
 review.unchanged: Çalışma önceki denemeden bu yana değişmedi (deneme {attempt}), bu yüzden değerlendirme yeni bir kontrol yapılmadan tekrarlandı.
+verdict.rule.author_musts_met: Yazarın tüm zorunlu ölçütlerini karşıladınız ve {score} puan aldınız. Yazarın zorunlu ölçütleri olan görevlerde geçme sınırı {threshold}, bu nedenle çalışma kabul edildi.
+verdict.rule.author_musts_unmet: Yazarın zorunlu ölçütleri karşılanmadı, bu nedenle çalışma kabul edilmedi. Puanınız {score}.
+verdict.rule.author_musts_below_threshold: Yazarın tüm zorunlu ölçütlerini karşıladınız, ancak {score} puan aldınız — bu, yazarın zorunlu ölçütleri olan görevler için {threshold} sınırının altında, bu nedenle çalışma kabul edilmedi.
+verdict.rule.no_author_musts_passed: Yazar bu görev için zorunlu ölçüt onaylamadı. Bu tür görevlerde geçme sınırı {threshold}; puanınız {score}, bu nedenle çalışma kabul edildi.
+verdict.rule.no_author_musts_failed: Yazar bu görev için zorunlu ölçüt onaylamadı. Bu tür görevlerde geçme sınırı {threshold}; puanınız {score}, bu nedenle çalışma kabul edilmedi.

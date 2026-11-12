@@ -40,3 +40,8 @@ test.explanations_in_course_language: L-ispjegazzjoni tingħata fil-lingwa tal-k
 position.audio: awdjo, {time}
 link.later_in_course: Aktar dettalji — aktar 'il quddiem fil-kors
 review.unchanged: Ix-xogħol ma nbidilx mit-tentattiv ta' qabel (tentattiv {attempt}), għalhekk ir-reviżjoni ġiet ripetuta mingħajr kontroll ġdid.
+verdict.rule.author_musts_met: Issodisfajt il-kriterji obbligatorji kollha tal-awtur u ksibt punteġġ ta' {score}. Għall-kompiti b'kriterji obbligatorji tal-awtur, il-limitu biex tgħaddi huwa {threshold}, għalhekk ix-xogħol huwa aċċettat.
+verdict.rule.author_musts_unmet: Il-kriterji obbligatorji tal-awtur mhumiex sodisfatti, għalhekk ix-xogħol mhuwiex aċċettat. Il-punteġġ tiegħek huwa {score}.
+verdict.rule.author_musts_below_threshold: Issodisfajt il-kriterji obbligatorji kollha tal-awtur, iżda ksibt punteġġ ta' {score} — taħt il-limitu ta' {threshold} għall-kompiti b'kriterji obbligatorji tal-awtur, għalhekk ix-xogħol mhuwiex aċċettat.
+verdict.rule.no_author_musts_passed: L-awtur ma approvax kriterji obbligatorji għal dan il-kompitu. Għal kompiti bħal dawn, il-limitu biex tgħaddi huwa {threshold}; il-punteġġ tiegħek huwa {score}, għalhekk ix-xogħol huwa aċċettat.
+verdict.rule.no_author_musts_failed: L-awtur ma approvax kriterji obbligatorji għal dan il-kompitu. Għal kompiti bħal dawn, il-limitu biex tgħaddi huwa {threshold}; il-punteġġ tiegħek huwa {score}, għalhekk ix-xogħol mhuwiex aċċettat.

@@ -40,3 +40,8 @@ test.explanations_in_course_language: Die Erklärung ist in der Kurssprache.
 position.audio: Audio, {time}
 link.later_in_course: Mehr dazu später im Kurs
 review.unchanged: Die Arbeit hat sich seit dem vorherigen Versuch nicht geändert (Versuch {attempt}), daher wurde die Rezension ohne neue Prüfung wiederholt.
+verdict.rule.author_musts_met: Sie haben alle Pflichtkriterien des Autors erfüllt und ein Ergebnis von {score} erreicht. Für Aufgaben mit Pflichtkriterien des Autors liegt die Bestehensgrenze bei {threshold}, daher ist die Arbeit bestanden.
+verdict.rule.author_musts_unmet: Die Pflichtkriterien des Autors sind nicht erfüllt, daher ist die Arbeit nicht bestanden. Ihr Ergebnis ist {score}.
+verdict.rule.author_musts_below_threshold: Sie haben alle Pflichtkriterien des Autors erfüllt, aber ein Ergebnis von {score} erreicht — unter der Grenze von {threshold} für Aufgaben mit Pflichtkriterien des Autors, daher ist die Arbeit nicht bestanden.
+verdict.rule.no_author_musts_passed: Der Autor hat für diese Aufgabe keine Pflichtkriterien bestätigt. Für solche Aufgaben liegt die Bestehensgrenze bei {threshold}; Ihr Ergebnis ist {score}, daher ist die Arbeit bestanden.
+verdict.rule.no_author_musts_failed: Der Autor hat für diese Aufgabe keine Pflichtkriterien bestätigt. Für solche Aufgaben liegt die Bestehensgrenze bei {threshold}; Ihr Ergebnis ist {score}, daher ist die Arbeit nicht bestanden.

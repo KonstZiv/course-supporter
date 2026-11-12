@@ -40,3 +40,8 @@ test.explanations_in_course_language: Ang paliwanag ay nasa wika ng kurso.
 position.audio: Audio, {time}
 link.later_in_course: Higit pa rito — sa susunod na bahagi ng kurso
 review.unchanged: Hindi nagbago ang gawa mula sa nakaraang pagsubok (pagsubok {attempt}), kaya inulit ang pagsusuri nang walang bagong pagsisiyasat.
+verdict.rule.author_musts_met: Natugunan mo ang lahat ng mandatoryong pamantayan ng may-akda at nakakuha ka ng puntos na {score}. Para sa mga gawaing may mandatoryong pamantayan ng may-akda, ang hangganan para pumasa ay {threshold}, kaya pumasa ang gawa.
+verdict.rule.author_musts_unmet: Hindi natugunan ang mga mandatoryong pamantayan ng may-akda, kaya hindi pumasa ang gawa. Ang iyong puntos ay {score}.
+verdict.rule.author_musts_below_threshold: Natugunan mo ang lahat ng mandatoryong pamantayan ng may-akda, pero nakakuha ka ng puntos na {score} — mas mababa sa hangganang {threshold} para sa mga gawaing may mandatoryong pamantayan ng may-akda, kaya hindi pumasa ang gawa.
+verdict.rule.no_author_musts_passed: Hindi nag-apruba ang may-akda ng mandatoryong pamantayan para sa gawaing ito. Para sa ganitong mga gawain, ang hangganan para pumasa ay {threshold}; ang iyong puntos ay {score}, kaya pumasa ang gawa.
+verdict.rule.no_author_musts_failed: Hindi nag-apruba ang may-akda ng mandatoryong pamantayan para sa gawaing ito. Para sa ganitong mga gawain, ang hangganan para pumasa ay {threshold}; ang iyong puntos ay {score}, kaya hindi pumasa ang gawa.

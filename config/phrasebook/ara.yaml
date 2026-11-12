@@ -40,3 +40,8 @@ test.explanations_in_course_language: الشرح مقدم بلغة الدورة.
 position.audio: صوت، {time}
 link.later_in_course: التفاصيل لاحقًا في الدورة
 review.unchanged: لم يتغير العمل منذ المحاولة السابقة (المحاولة {attempt})، لذلك أُعيدت المراجعة دون فحص جديد.
+verdict.rule.author_musts_met: لقد استوفيت جميع المعايير الإلزامية التي حددها المؤلف وحصلت على درجة {score}. حد القبول للمهام ذات المعايير الإلزامية من المؤلف هو {threshold}، لذلك قُبل العمل.
+verdict.rule.author_musts_unmet: لم تُستوفَ المعايير الإلزامية التي حددها المؤلف، لذلك لم يُقبل العمل. درجتك هي {score}.
+verdict.rule.author_musts_below_threshold: لقد استوفيت جميع المعايير الإلزامية التي حددها المؤلف، لكنك حصلت على درجة {score}، وهي أقل من حد القبول {threshold} للمهام ذات المعايير الإلزامية من المؤلف، لذلك لم يُقبل العمل.
+verdict.rule.no_author_musts_passed: لم يعتمد المؤلف معايير إلزامية لهذه المهمة. حد القبول لمثل هذه المهام هو {threshold}؛ درجتك هي {score}، لذلك قُبل العمل.
+verdict.rule.no_author_musts_failed: لم يعتمد المؤلف معايير إلزامية لهذه المهمة. حد القبول لمثل هذه المهام هو {threshold}؛ درجتك هي {score}، لذلك لم يُقبل العمل.

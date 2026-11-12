@@ -22,6 +22,12 @@ What is the code's and what is the model's (``PRE-PLAN.md`` decisions 2, 3, 5):
       of it. The explanation is checked against the facts when it is written
       (``homework/verdict_explanation.py``); the field a school's platform
       gates on does not rest on that check having held.
+    * The pass rule depends on whose list the rows were judged against — the
+      layer of the address the rows carry, read by
+      :func:`~course_supporter.homework.judged_list.judged_layer`, the same
+      address the course links read the list by. ``verdict.rule`` keeps the
+      branch that decided, the score and the threshold; the assembler prints
+      its phrase under the verdict (2026-11-12).
     * The reason, the remarks and the Mentor's own word are the explanation's.
     * The course links are the model's choice among the places the code
       showed it, resolved and checked by code
@@ -66,6 +72,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
 from course_supporter.criteria_kinds import (
+    CriteriaLayer,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -78,9 +85,9 @@ from course_supporter.homework.course_links import FoundCourseLinks
 from course_supporter.homework.criteria_form import WEIGHT_NUMBERS
 from course_supporter.homework.criteria_verdicts import (
     ScoredItem,
-    is_passed,
-    score_percent,
+    pass_decision,
 )
+from course_supporter.homework.judged_list import judged_layer
 from course_supporter.homework.result_builders import (
     BuildContext,
     BuiltResult,
@@ -93,6 +100,7 @@ from course_supporter.homework.verdict_explanation import (
 )
 from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
 from course_supporter.models.review_structure import (
+    PassRule,
     Reference,
     Remark,
     ReviewStructureV1,
@@ -127,6 +135,7 @@ A failure on our side, not the student's: nothing in the work caused it.
 def build_text_review(
     *,
     rows: Sequence[ScoredItem],
+    layer: CriteriaLayer,
     explanation: ExplanationAnswer,
     language: str,
     reading: Mapping[str, Sequence[Reference]] | None = None,
@@ -135,6 +144,8 @@ def build_text_review(
 
     Args:
         rows: The submission's verdict rows, criteria and points alike.
+        layer: Whose list the rows were judged against: the pass rule
+            depends on it.
         explanation: The explanation stage's answer.
         language: The language the explanation is written in.
         reading: By criterion id, what its remark gives to read — the course
@@ -145,12 +156,20 @@ def build_text_review(
             weight (:func:`~course_supporter.homework.criteria_verdicts.score_percent`);
             or the explanation remarks on a criterion the rows do not have.
     """
-    score = score_percent(rows)
+    decided = pass_decision(rows, layer=layer)
     voice = explanation.mentor_voice
     structure = ReviewStructureV1(
         schema_version=REVIEW_SCHEMA_VERSION,
         language=language,
-        verdict=Verdict(passed=is_passed(rows), why=explanation.why),
+        verdict=Verdict(
+            passed=decided.passed,
+            why=explanation.why,
+            rule=PassRule(
+                basis=decided.basis,
+                score=decided.score,
+                threshold=decided.threshold,
+            ),
+        ),
         new_remarks=[
             Remark(
                 what=remark.what,
@@ -163,7 +182,7 @@ def build_text_review(
         # A blank voice is no voice: the assembler would print its block empty.
         mentor_voice=voice if voice is not None and voice.strip() else None,
     )
-    return structure, score
+    return structure, decided.score
 
 
 def _by_weight(
@@ -248,6 +267,7 @@ class TextResultBuilder:
         )
         structure, score = build_text_review(
             rows=rows,
+            layer=judged_layer(rows),
             explanation=answer,
             language=explained.language,
             reading={

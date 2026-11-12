@@ -9,8 +9,13 @@ Purpose:
     may have replaced since. One function does it for both, so the two cannot
     come to read two different lists.
 
+    The pass rule of 2026-11-12 depends on whose list that was
+    (``criteria_verdicts.pass_decision``); its layer is read from the same
+    address, by the same function, so the rule and the list cannot come apart.
+
 Interface:
     :func:`read_judged_list` — the criteria, in the list's order.
+    :func:`judged_layer` — whose list the rows were judged against.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ from course_supporter.homework.criteria_form import criteria_from_document
 from course_supporter.storage.orm import TaskCriteriaList, TaskCriteriaOverride
 
 if TYPE_CHECKING:
+    import uuid
     from collections.abc import Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +37,28 @@ if TYPE_CHECKING:
         HomeworkSubmission,
         SubmissionCriterionVerdict,
     )
+
+
+def judged_layer(rows: Sequence[SubmissionCriterionVerdict]) -> CriteriaLayer:
+    """Whose list the rows were judged against: the layer of their address.
+
+    Raises:
+        ValueError: The rows name more than one list, or none.
+    """
+    layer, _ = _judged_address(rows)
+    return layer
+
+
+def _judged_address(
+    rows: Sequence[SubmissionCriterionVerdict],
+) -> tuple[CriteriaLayer, uuid.UUID]:
+    """The one list the rows name: its layer and its row's id."""
+    addresses = {(row.criteria_layer, row.criteria_source_id) for row in rows}
+    if len(addresses) != 1:
+        msg = f"the verdict rows name {len(addresses)} lists, not one"
+        raise ValueError(msg)
+    ((layer, source_id),) = addresses
+    return CriteriaLayer(layer), source_id
 
 
 async def read_judged_list(
@@ -49,11 +77,7 @@ async def read_judged_list(
         ValueError: The rows name more than one list, or a list that is not
             there, not this task's, or without criteria.
     """
-    addresses = {(row.criteria_layer, row.criteria_source_id) for row in rows}
-    if len(addresses) != 1:
-        msg = f"the verdict rows name {len(addresses)} lists, not one"
-        raise ValueError(msg)
-    ((layer, source_id),) = addresses
+    layer, source_id = _judged_address(rows)
     listed: TaskCriteriaOverride | TaskCriteriaList | None = (
         await session.get(TaskCriteriaOverride, source_id)
         if layer == CriteriaLayer.AUTHOR

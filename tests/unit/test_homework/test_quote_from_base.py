@@ -206,7 +206,7 @@ class TestUnchangedLinesOfAChangedFile:
             quote_from_base=True,
         )
         # Not unconfirmed: the "must" fails the work and counts for nothing.
-        assert is_passed(rows.values()) is False
+        assert is_passed(rows.values(), layer=CriteriaLayer.MODEL) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(rows.values()) == 40
 
@@ -350,7 +350,7 @@ class TestTheRestOfTheRules:
             rows["c1"].quote_not_found,
             rows["c1"].quote_from_base,
         ) == (NOT_MET, False, True)
-        assert is_passed(rows.values()) is False
+        assert is_passed(rows.values(), layer=CriteriaLayer.MODEL) is False
 
     def test_after_the_base_the_students_code_badly_quoted_is_unconfirmed(
         self,
@@ -413,7 +413,7 @@ class TestTheRestOfTheRules:
             rows["c1"].quote_not_found,
             rows["c1"].quote_from_base,
         ) == (NOT_MET, False, True)
-        assert is_passed(rows.values()) is False
+        assert is_passed(rows.values(), layer=CriteriaLayer.MODEL) is False
 
     def test_a_criterion_whose_points_stand_carries_no_flag(self) -> None:
         criteria = CriteriaInForce(

@@ -17,7 +17,7 @@ env:
 jobs:
   changes:
     name: Detect changes
-    # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.
+    # Same runner as the other jobs; only git is used here.
     runs-on: ubuntu-24.04
     outputs:
       docs_only: ${{ steps.filter.outputs.docs_only }}

@@ -30,7 +30,13 @@ The journal of units (BIL-B):
     what each batch holds, the repayment of differences.
     :mod:`.benefit` — what the author's benefit covers; the monthly limit.
     :mod:`.expiry` — expiry of batches, annulment of differences.
-    :mod:`.refunds` — refunds of unused units through Paddle.
+    :mod:`.refunds` — refunds of unused units through the batch's provider.
+
+Payments (BIL-PAY):
+    :mod:`.payments` — the provider-neutral port of payment providers (each
+    provider an adapter of its own), the catalog of packages, the checkout,
+    the providers' webhooks and the contract invoice (B2B). Its map is its
+    docstring.
 
 Upkeep on the clock (BIL-B part 2):
     :mod:`.periodic` — the four periodic tasks the scheduler

@@ -1,8 +1,9 @@
 """The audit log of administrative changes to billing data (BIL-A).
 
-Every change made through :mod:`.admin`, :mod:`.accounts` or an
-administrator's credit of units (:func:`.ledger.credit_admin`) writes one entry
-in the same transaction as the change: who (the administrator's ``--actor``),
+Every change made through :mod:`.admin`, :mod:`.accounts`, an
+administrator's credit of units (:func:`.ledger.credit_admin`) or a contract
+invoice credited by the administrator (:mod:`.payments.invoice`) writes one
+entry in the same transaction as the change: who (the administrator's ``--actor``),
 when, what, which row, the row before and after. The table refuses UPDATE (a
 trigger), so an entry, once written, stays as written.
 
@@ -21,7 +22,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.billing.errors import BillingInvalidError
-from course_supporter.billing.kinds import AuditAction
+from course_supporter.billing.kinds import AuditAction, BatchSource
 from course_supporter.storage.orm import (
     BillingAccount,
     BillingAuditEntry,
@@ -76,8 +77,12 @@ def rule_snapshot(rule: BillingPaymentRule) -> dict[str, Any]:
 
 
 def batch_snapshot(batch: BillingBatch) -> dict[str, Any]:
-    """A batch as it arrived (BIL-B); a batch never changes afterwards."""
-    return {
+    """A batch as it arrived (BIL-B); a batch never changes afterwards.
+
+    A purchase (a contract invoice, BIL-PAY) adds what was paid and who took
+    the payment.
+    """
+    snapshot: dict[str, Any] = {
         "account_id": _id(batch.account_id),
         "source": batch.source,
         "units": batch.units,
@@ -85,6 +90,15 @@ def batch_snapshot(batch: BillingBatch) -> dict[str, Any]:
         "expires_at": _instant(batch.expires_at),
         "reason": batch.reason,
     }
+    if batch.source == BatchSource.PURCHASE.value:
+        snapshot |= {
+            "amount_paid_minor": batch.amount_paid_minor,
+            "currency": batch.currency,
+            "provider": batch.provider,
+            "provider_transaction_id": batch.provider_transaction_id,
+            "provider_line_id": batch.provider_line_id,
+        }
+    return snapshot
 
 
 def require_actor(actor: str) -> str:

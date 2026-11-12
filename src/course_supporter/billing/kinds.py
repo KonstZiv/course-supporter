@@ -1,4 +1,4 @@
-"""The closed vocabularies of billing (BIL-A, BIL-B).
+"""The closed vocabularies of billing (BIL-A, BIL-B, BIL-PAY).
 
 The values are the ones the ``billing_*`` tables' check constraints allow;
 a new value is a migration. The kind of action is the one of the shadow
@@ -22,6 +22,8 @@ __all__ = [
     "Benefit",
     "ConsentChannel",
     "DifferenceState",
+    "EventKind",
+    "EventState",
     "MovementKind",
     "PayerSource",
     "RefundState",
@@ -100,6 +102,8 @@ class AuditAction(StrEnum):
     PAYMENT_RULE_END = "payment_rule.end"
     ACCOUNT_ANONYMIZE = "account.anonymize"
     BATCH_ADMIN_CREDIT = "batch.admin_credit"
+    BATCH_INVOICE_CREDIT = "batch.invoice_credit"
+    """A contract invoice paid (B2B), credited by the administrator."""
 
 
 # ── The journal of units (BIL-B) ──
@@ -109,7 +113,9 @@ class BatchSource(StrEnum):
     """Where a batch of units came from."""
 
     PURCHASE = "purchase"
-    """Paid through Paddle; its unused free units are refundable."""
+    """Paid through a payment provider, or by a contract invoice (its
+    ``provider`` says which); the unused free units of a provider's purchase
+    are refundable through it."""
 
     ADMIN_CREDIT = "admin_credit"
     """Granted by the administrator; never refunded."""
@@ -149,7 +155,8 @@ class MovementKind(StrEnum):
     """Units of a platform-initiated re-processing; no batch."""
 
     REFUND_HOLD = "refund_hold"
-    """Free units of a purchase batch blocked while Paddle reviews a refund."""
+    """Free units of a purchase batch blocked while the provider reviews a
+    refund."""
 
     REFUND_COMPLETED = "refund_completed"
     """Refund approved: the held units leave the batch."""
@@ -187,8 +194,46 @@ class DifferenceState(StrEnum):
 
 
 class RefundState(StrEnum):
-    """Where a refund through Paddle stands."""
+    """Where a refund through the batch's provider stands."""
 
     HELD = "held"
     APPROVED = "approved"
     REJECTED = "rejected"
+
+
+# ── Webhook events of payment providers (BIL-PAY) ──
+
+
+class EventKind(StrEnum):
+    """A provider's event, as billing reads it (``billing.payments.port``)."""
+
+    PURCHASE_COMPLETED = "purchase_completed"
+    """A package was paid: its units are credited."""
+
+    REFUND_APPROVED = "refund_approved"
+    """The provider refunded: the held units leave the batch."""
+
+    REFUND_REJECTED = "refund_rejected"
+    """The provider refused the refund: the held units are free again."""
+
+    CHARGEBACK = "chargeback"
+    """The payer disputed a payment with their bank: recorded, nothing done."""
+
+    UNKNOWN = "unknown"
+    """Any other event of the provider: ignored."""
+
+
+class EventState(StrEnum):
+    """How a provider's event was handled."""
+
+    PROCESSED = "processed"
+    """The journal did what the event asks."""
+
+    IGNORED = "ignored"
+    """Not an event billing acts on."""
+
+    RECORDED = "recorded"
+    """Kept for a person to decide (a chargeback); the journal is untouched."""
+
+    FAILED = "failed"
+    """Not handled (``error`` says why); handled again when it comes again."""

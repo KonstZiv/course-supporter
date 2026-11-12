@@ -33,6 +33,7 @@ Locking:
 from __future__ import annotations
 
 import calendar
+import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -42,7 +43,11 @@ from typing import Final
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.billing.errors import BillingConflictError, BillingNotFoundError
+from course_supporter.billing.errors import (
+    BillingConflictError,
+    BillingInvalidError,
+    BillingNotFoundError,
+)
 from course_supporter.billing.kinds import (
     OUTFLOW_KINDS,
     AccountStatus,
@@ -64,6 +69,25 @@ from course_supporter.storage.orm import (
 
 VALIDITY_MONTHS: Final = 6
 """A batch is valid, and a difference stands, six calendar months."""
+
+PROVIDER_NAME: Final = re.compile(r"[a-z][a-z0-9_]{0,31}")
+"""How a payment provider is named in the journal — its adapter's name
+(``billing.payments``) or ``invoice``: the ``billing_*`` check constraints
+allow this spelling only, so one provider never stands under two names."""
+
+
+def require_provider(name: str) -> str:
+    """``name`` if it is a provider's name (:data:`PROVIDER_NAME`).
+
+    Raises:
+        BillingInvalidError: it is not.
+    """
+    if PROVIDER_NAME.fullmatch(name) is None:
+        raise BillingInvalidError(
+            f"{name!r} is not a provider's name: a-z first, then a-z, 0-9 or _, "
+            "32 at most"
+        )
+    return name
 
 
 def add_months(at: datetime, months: int) -> datetime:

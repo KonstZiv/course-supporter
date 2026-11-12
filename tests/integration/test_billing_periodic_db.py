@@ -153,6 +153,7 @@ class Scene:
                 units=units,
                 amount_paid_minor=1000,
                 currency="USD",
+                provider="fake",
                 now=at,
             )
             return done.batch.id
@@ -594,7 +595,8 @@ class TestPurge:
                 account_id=account,
                 batch_id=batch,
                 units=5,
-                paddle_adjustment_id=f"adj_{key()}",
+                provider="fake",
+                provider_adjustment_id=f"adj_{key()}",
                 now=before,
             )
         )

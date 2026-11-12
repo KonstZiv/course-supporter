@@ -18,11 +18,21 @@ The same work, judged alike:
 
     * its fingerprint (K1, stored by the ledger) is the submission's;
     * its ``task_version`` is the submission's;
+    * the evaluator that wrote its review is in force: the
+      ``evaluator_version`` of its receipt is among the versions of the
+      type's paths as the file stands now
+      (:func:`~course_supporter.homework.evaluator_version.evaluator_versions_in_force`
+      — not the one version of the path the submission walks: a first attempt
+      walks ``first``, every later one a ``repeat_*`` path, and the two are
+      two versions even when nothing changed). An edited prompt, another
+      first model, other verdict rules — the review is written anew;
     * for a text task (``short_task``, ``task``): the criteria list its
       verdicts were judged against is the list in force for the task now.
 
     Anything else — no fingerprint (the ledger did not write one), no version,
-    no list in force, any key different — is an ordinary review.
+    no evaluator's version (every review written before it was recorded, and
+    every review the submission's own path cannot version), no list in force,
+    any key different — is an ordinary review.
 
 The version of a criteria list:
     Nothing new: the ADDRESS every verdict row carries — ``criteria_layer`` +
@@ -45,9 +55,11 @@ What the submission gets:
     ``unchanged_from_attempt`` set to that attempt's number, the markdown
     assembled from it by the one assembler (the earlier text, opened by the
     phrase ``review.unchanged``), and its score — and ``dedup_of``, the same
-    number, in its attempt receipt. The body then finishes it as it finishes
-    any reviewed revision: ``reviewing``, ``completed``, the webhook,
-    ``delivered``; the portal reads the stored review as it reads any.
+    number, in its attempt receipt, beside the ``evaluator_version`` of that
+    review: the copy was written by the source's evaluator. The body then
+    finishes it as it finishes any reviewed revision: ``reviewing``,
+    ``completed``, the webhook, ``delivered``; the portal reads the stored
+    review as it reads any.
 
 Once:
     The copy and the receipt are flushed into the body's transaction, which
@@ -87,6 +99,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final
 
 import structlog
@@ -95,6 +108,11 @@ from sqlalchemy import select
 
 from course_supporter.homework.attempts import attempt_snapshotter_for
 from course_supporter.homework.criteria_list_service import load_in_force
+from course_supporter.homework.evaluator_version import (
+    EVALUATOR_VERSION_RECEIPT_KEY,
+    evaluator_versions_in_force,
+)
+from course_supporter.homework.path_config import PathConfig, PathKey
 from course_supporter.homework.review_assembler import assemble_review
 from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
@@ -135,26 +153,36 @@ class UnchangedAttempt:
         attempt_no: Its number — what the copy and the receipt name.
         review: Its review, read as a version-1 structure.
         score: Its score.
+        evaluator_version: The version of the evaluator that wrote the review.
     """
 
     submission_id: uuid.UUID
     attempt_no: int
     review: ReviewStructureV1
     score: int | None
+    evaluator_version: str
 
 
 async def repeat_unchanged_review(
-    session: AsyncSession, submission_id: uuid.UUID
+    session: AsyncSession,
+    submission_id: uuid.UUID,
+    *,
+    path: PathKey,
+    config: PathConfig,
 ) -> int | None:
     """Give the submission its earlier attempt's review, if the work is the same.
 
-    Call right after the attempt ledger, before any stage. On a match the copy
-    and the receipt are flushed into ``session`` for the caller to commit with
-    its status; nothing else is written. Returns the number of the attempt
+    Call right after the attempt ledger, before any stage. ``path`` is the
+    path the submission walks and ``config`` the file it was chosen from: the
+    evaluators in force are read from them. On a match the copy and the
+    receipt are flushed into ``session`` for the caller to commit with its
+    status; nothing else is written. Returns the number of the attempt
     repeated — also when an earlier run of this submission already repeated it
     — or ``None`` for an ordinary review.
     """
-    looked_up = await _in_a_savepoint(session, submission_id, _look_up)
+    looked_up = await _in_a_savepoint(
+        session, submission_id, partial(_look_up, path=path, config=config)
+    )
     if looked_up is None:
         return None
     receipt, source = looked_up
@@ -177,26 +205,38 @@ async def repeat_unchanged_review(
         score=source.score,
     )
     await hw_repo.store_dedup_of(
-        submission_id, dedup_of=source.attempt_no, receipt=receipt
+        submission_id,
+        dedup_of=source.attempt_no,
+        evaluator_version=source.evaluator_version,
+        receipt=receipt,
     )
     logger.info(
         "attempt_review_repeated",
         submission_id=str(submission_id),
         dedup_of=source.attempt_no,
         source_submission_id=str(source.submission_id),
+        evaluator_version=source.evaluator_version,
     )
     return source.attempt_no
 
 
 async def find_unchanged_attempt(
-    session: AsyncSession, submission_id: uuid.UUID
+    session: AsyncSession,
+    submission_id: uuid.UUID,
+    *,
+    path: PathKey,
+    config: PathConfig,
 ) -> UnchangedAttempt | None:
     """The earlier attempt of the same work, judged alike, or ``None``.
 
-    The rule is the module's. Never raises: the lookup runs in a savepoint,
-    and an error is logged and read as no match (:func:`_in_a_savepoint`).
+    The rule is the module's; ``path`` and ``config`` as on
+    :func:`repeat_unchanged_review`. Never raises: the lookup runs in a
+    savepoint, and an error is logged and read as no match
+    (:func:`_in_a_savepoint`).
     """
-    return await _in_a_savepoint(session, submission_id, _find)
+    return await _in_a_savepoint(
+        session, submission_id, partial(_find, path=path, config=config)
+    )
 
 
 async def _in_a_savepoint[T](
@@ -206,11 +246,11 @@ async def _in_a_savepoint[T](
 ) -> T | None:
     """Run a read of the dedup in a savepoint; ``None`` when it failed.
 
-    Everything the dedup asks the database before it decides — the receipt,
-    the lookup — goes through here. A query that fails aborts the database's
-    transaction; rolled back to the savepoint, the caller's session stays
-    usable, and the work is reviewed as usual: the funds port, the stages and
-    the review are written through that same session. The error is logged as
+    Everything the dedup asks before it decides — the receipt, the evaluators
+    in force, the lookup — goes through here. A query that fails aborts the
+    database's transaction; rolled back to the savepoint, the caller's session
+    stays usable, and the work is reviewed as usual: the funds port, the
+    stages and the review are written through that same session. The error is logged as
     a warning with the submission's id, as the attempt ledger logs its own.
     """
     try:
@@ -226,7 +266,11 @@ async def _in_a_savepoint[T](
 
 
 async def _look_up(
-    session: AsyncSession, submission_id: uuid.UUID
+    session: AsyncSession,
+    submission_id: uuid.UUID,
+    *,
+    path: PathKey,
+    config: PathConfig,
 ) -> tuple[dict[str, Any] | None, UnchangedAttempt | None]:
     """The submission's receipt, and the attempt to repeat when one is to be found.
 
@@ -241,11 +285,15 @@ async def _look_up(
     )
     if receipt is None or DEDUP_RECEIPT_KEY in receipt:
         return receipt, None
-    return receipt, await _find(session, submission_id)
+    return receipt, await _find(session, submission_id, path=path, config=config)
 
 
 async def _find(
-    session: AsyncSession, submission_id: uuid.UUID
+    session: AsyncSession,
+    submission_id: uuid.UUID,
+    *,
+    path: PathKey,
+    config: PathConfig,
 ) -> UnchangedAttempt | None:
     row = (
         await session.execute(
@@ -272,6 +320,9 @@ async def _find(
         or not attempt_snapshotter_for(row.task_type).dedup_enabled
     ):
         return None
+    evaluator_versions = evaluator_versions_in_force(path.task_type, path.state, config)
+    if not evaluator_versions:
+        return None
 
     criteria_list: tuple[str, uuid.UUID] | None = None
     if row.task_type in _JUDGED_AGAINST_A_LIST:
@@ -288,6 +339,7 @@ async def _find(
         fingerprint=row.fingerprint,
         task_version=row.task_version,
         criteria_list=criteria_list,
+        evaluator_versions=evaluator_versions,
     )
     if source is None or source.attempt_no is None:
         return None
@@ -304,7 +356,18 @@ async def _find(
         attempt_no=source.attempt_no,
         review=review,
         score=source.score,
+        evaluator_version=_evaluator_version_of(source.attempt_receipt),
     )
+
+
+def _evaluator_version_of(receipt: dict[str, Any] | None) -> str:
+    """The evaluator's version a matched source's receipt names (the lookup's key)."""
+    if receipt is None or not isinstance(
+        version := receipt.get(EVALUATOR_VERSION_RECEIPT_KEY), str
+    ):
+        msg = "a source of a copy names no evaluator's version"
+        raise ValueError(msg)
+    return version
 
 
 def _version_1_review(review_result: dict[str, Any] | None) -> ReviewStructureV1 | None:

@@ -74,7 +74,8 @@ Replacing:
     :meth:`SubmittedWork.find` alone, what lets a single verdict stand is
     ``_repeat_reason`` alone, which of the model's words an item is settled
     on is ``_word_to_settle`` alone, the safeguard's condition is
-    ``_kept_by_safeguard`` alone.
+    ``_kept_by_safeguard`` alone. A change of any of these rules raises
+    :data:`VERDICT_RULES_VERSION`.
 """
 
 from __future__ import annotations
@@ -119,6 +120,17 @@ MIN_QUOTE_CHARS: Final = 8
 A shorter quote counts as not found and is asked about again: ``x = 1`` is in
 almost any work, so finding it proves nothing about the criterion. A shorter
 quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
+"""
+
+VERDICT_RULES_VERSION: Final[int] = 2
+"""The version of the rules by which the code sets a verdict (task 13).
+
+Raise it every time those rules change: the quote check, "unconfirmed", the
+pass, the score. 2 — after the quote check was fixed on 2026-11-07. It enters
+the evaluator's version
+(:func:`~course_supporter.homework.evaluator_version.evaluator_version`), so a
+review written under other rules is never given again as a copy of unchanged
+work.
 """
 
 _BOM: Final = chr(0xFEFF)

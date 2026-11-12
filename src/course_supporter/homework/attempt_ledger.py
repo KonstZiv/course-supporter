@@ -21,8 +21,15 @@ What is recorded:
       (:func:`task_version_of`);
     * ``fingerprint`` — the K1 fingerprint of the work
       (:func:`~course_supporter.homework.attempts.attempt_snapshotter_for`);
-    * ``attempt_receipt`` — the four above and ``task_version_changed``; the
-      dedup adds ``dedup_of`` when it repeats an earlier attempt's review.
+    * ``attempt_receipt`` — the four above, ``task_version_changed``, and
+      which road serves the submission: ``path`` — the ``served_by`` of the
+      road that calls (``new_path`` or ``todays_mentor``) — and ``test_mode``
+      — a boolean, :func:`~course_supporter.homework.path_config.in_test_mode`
+      for the type. The daily activity report reads these two. The new path
+      adds ``evaluator_version`` when it reviews the work
+      (:mod:`~course_supporter.homework.evaluator_version`); the dedup adds
+      ``dedup_of`` and the source's ``evaluator_version`` when it repeats an
+      earlier attempt's review.
 
 Once:
     A continuation, a retry or a run re-entered after a crash opens the doors
@@ -56,6 +63,7 @@ import structlog
 from sqlalchemy import select
 
 from course_supporter.homework.attempts import AttemptWork, attempt_snapshotter_for
+from course_supporter.homework.path_config import PathConfig, ServedBy, in_test_mode
 from course_supporter.homework.test_doors import read_stored_answers
 from course_supporter.models.source import AssignmentType
 from course_supporter.normalizer import manifest_from_jsonb
@@ -81,6 +89,8 @@ class AttemptRecord:
     task_version: str | None
     task_version_changed: bool
     fingerprint: str
+    path: ServedBy
+    test_mode: bool
 
     def receipt(self) -> dict[str, Any]:
         """The receipt as stored in ``attempt_receipt`` (JSON)."""
@@ -94,6 +104,8 @@ class AttemptRecord:
             "task_version": self.task_version,
             "task_version_changed": self.task_version_changed,
             "fingerprint": self.fingerprint,
+            "path": self.path.value,
+            "test_mode": self.test_mode,
         }
 
 
@@ -119,17 +131,24 @@ async def record_attempt(
     session: AsyncSession,
     submission_id: uuid.UUID,
     reading: DoorReading,
+    *,
+    served_by: ServedBy,
+    config: PathConfig | None = None,
 ) -> AttemptRecord | None:
     """Record which attempt the submission is; once, never failing the review.
 
-    Call right after the doors read the work, before any stage. Returns what
-    was written, or ``None`` when nothing was: the record already exists, or
-    writing it failed (logged). The caller commits.
+    Call right after the doors read the work, before any stage. ``served_by``
+    names the road that calls; ``config`` is the submission-path file the road
+    serves by (the cached one by default). Returns what was written, or
+    ``None`` when nothing was: the record already exists, or writing it failed
+    (logged). The caller commits.
     """
     log = logger.bind(submission_id=str(submission_id))
     try:
         async with session.begin_nested():
-            record = await _record(session, submission_id, reading)
+            record = await _record(
+                session, submission_id, reading, served_by=served_by, config=config
+            )
     except Exception:
         log.exception("attempt_ledger_failed")
         return None
@@ -139,7 +158,12 @@ async def record_attempt(
 
 
 async def _record(
-    session: AsyncSession, submission_id: uuid.UUID, reading: DoorReading
+    session: AsyncSession,
+    submission_id: uuid.UUID,
+    reading: DoorReading,
+    *,
+    served_by: ServedBy,
+    config: PathConfig | None,
 ) -> AttemptRecord | None:
     # Read by column, not from the caller's ORM object: the project's snapshot
     # was written by a Core UPDATE that object never saw, and refreshing it
@@ -195,6 +219,8 @@ async def _record(
             and previous_version != task_version
         ),
         fingerprint=fingerprint,
+        path=served_by,
+        test_mode=in_test_mode(AssignmentType(row.task_type), config),
     )
     written = await hw_repo.store_attempt(
         submission_id,

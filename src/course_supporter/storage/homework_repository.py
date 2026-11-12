@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from sqlalchemy import exists, func, select, update
+from sqlalchemy import bindparam, exists, func, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -302,17 +304,20 @@ class HomeworkRepository:
         fingerprint: str,
         task_version: str,
         criteria_list: tuple[str, uuid.UUID] | None,
+        evaluator_versions: Collection[str],
     ) -> HomeworkSubmission | None:
         """The latest earlier attempt of the same work, judged alike (task 13, K3).
 
         Among the attempts :meth:`attempts_before` counts — live revisions that
         got a review, ``excluding`` the one asking — the latest, by the same
         order, whose recorded ``fingerprint`` and ``task_version`` are these,
-        which carries a number and a review, and — when ``criteria_list`` is a
-        list's address (``criteria_layer``, ``criteria_source_id``) — whose
-        verdicts were judged against that list. ``None`` for ``criteria_list``
-        means the type is judged against no list; the key is then the
-        fingerprint and the version alone. Read through the partial index
+        which carries a number and a review, whose receipt names an
+        ``evaluator_version`` among ``evaluator_versions`` (a receipt without
+        one — every review before the evaluator's version — never matches),
+        and — when ``criteria_list`` is a list's address (``criteria_layer``,
+        ``criteria_source_id``) — whose verdicts were judged against that list.
+        ``None`` for ``criteria_list`` means the type is judged against no
+        list; the key is then the rest alone. Read through the partial index
         ``ix_homework_submissions_attempt_fingerprint``.
         """
         conditions = [
@@ -326,6 +331,9 @@ class HomeworkRepository:
             HomeworkSubmission.task_version == task_version,
             HomeworkSubmission.attempt_no.is_not(None),
             HomeworkSubmission.review_result.is_not(None),
+            HomeworkSubmission.attempt_receipt["evaluator_version"].astext.in_(
+                list(evaluator_versions)
+            ),
         ]
         if criteria_list is not None:
             layer, source_id = criteria_list
@@ -349,17 +357,58 @@ class HomeworkRepository:
         return result.scalar_one_or_none()
 
     async def store_dedup_of(
-        self, submission_id: uuid.UUID, *, dedup_of: int, receipt: dict[str, Any]
+        self,
+        submission_id: uuid.UUID,
+        *,
+        dedup_of: int,
+        evaluator_version: str,
+        receipt: dict[str, Any],
     ) -> None:
         """Add ``dedup_of`` to the revision's attempt receipt (task 13, K3).
 
         ``receipt`` is the receipt as the ledger wrote it; the number of the
-        attempt whose review was repeated joins it. No status transition.
+        attempt whose review was repeated joins it, with the version of the
+        evaluator that wrote that review — the copy's own. No status
+        transition.
         """
         stmt = (
             update(HomeworkSubmission)
             .where(HomeworkSubmission.id == submission_id)
-            .values(attempt_receipt={**receipt, "dedup_of": dedup_of})
+            .values(
+                attempt_receipt={
+                    **receipt,
+                    "dedup_of": dedup_of,
+                    "evaluator_version": evaluator_version,
+                }
+            )
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
+    async def store_evaluator_version(
+        self, submission_id: uuid.UUID, *, evaluator_version: str | None
+    ) -> None:
+        """Add the evaluator's version to the revision's attempt receipt (task 13).
+
+        Written with the review the evaluator wrote. A revision with no receipt
+        (the ledger did not write one) is left as it is: without a fingerprint
+        it is the source of no copy anyway. No status transition.
+        """
+        stmt = (
+            update(HomeworkSubmission)
+            .where(
+                HomeworkSubmission.id == submission_id,
+                HomeworkSubmission.attempt_receipt.is_not(None),
+            )
+            .values(
+                attempt_receipt=HomeworkSubmission.attempt_receipt.op("||")(
+                    bindparam(
+                        "evaluator_version_entry",
+                        {"evaluator_version": evaluator_version},
+                        type_=JSONB,
+                    )
+                )
+            )
         )
         await self._session.execute(stmt)
         await self._session.flush()

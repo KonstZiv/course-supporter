@@ -837,6 +837,7 @@ async def arq_process_homework(
         submission_id: HomeworkSubmission UUID as string.
     """
     from course_supporter.homework.attempt_ledger import record_attempt
+    from course_supporter.homework.path_config import ServedBy
     from course_supporter.homework.project_submission import (
         process_project_submission,
     )
@@ -1143,7 +1144,9 @@ async def arq_process_homework(
                 )
                 # Attempt ledger (task 13, K2): once, from what the doors read.
                 # Bookkeeping only — nothing below reads it.
-                await record_attempt(session, sid, reading)
+                await record_attempt(
+                    session, sid, reading, served_by=ServedBy.TODAYS_MENTOR
+                )
                 await session.commit()
                 # Caller-side observability log (KD-1.2-H Variant A; pairs
                 # with StageRouter's ``stage_router_executing`` line).

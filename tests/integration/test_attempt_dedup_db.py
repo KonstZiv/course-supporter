@@ -20,6 +20,19 @@ The locks of the commit, one class each, on a real database and the real body:
 And the road of a failure: a lookup whose query breaks in the database leaves
 the body's session usable (a savepoint), and the work is reviewed as usual.
 
+The evaluator's version in the key (task 13), its locks б, в, г — one class
+each, named ``TestEvaluatorLock…``; its lock а is a unit lock
+(``tests/unit/test_homework/test_evaluator_version.py``), its lock ґ (the road
+and test mode in the receipt) is in ``test_attempt_ledger_db``:
+
+* б. a ``task`` submission gets its review and its receipt names the
+  evaluator; the same work again is a copy — no model asked — whose receipt
+  names the same evaluator and ``dedup_of``;
+* в. after the evaluator changed — the verdict rules raised, or the source's
+  receipt naming another evaluator — the same work is reviewed anew;
+* г. an attempt whose receipt names no evaluator (every one before this
+  commit) is no source of a copy.
+
 Lock д (a review stored without the new field) is a unit lock:
 ``tests/unit/test_review_unchanged_note.py``.
 
@@ -46,10 +59,15 @@ from structlog.testing import capture_logs
 from course_supporter.api.tasks import arq_process_homework
 from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.funds_port import SubmissionOutcome
+from course_supporter.homework import criteria_verdicts
 from course_supporter.homework.attempt_dedup import DEDUP_RECEIPT_KEY
 from course_supporter.homework.criteria_form import Criterion, criteria_to_document
 from course_supporter.homework.criteria_list_service import CriteriaInForce
-from course_supporter.homework.path_config import PathConfig
+from course_supporter.homework.evaluator_version import (
+    EVALUATOR_VERSION_RECEIPT_KEY,
+    evaluator_version,
+)
+from course_supporter.homework.path_config import PathConfig, SubmissionState
 from course_supporter.homework.path_stages import (
     ATTEMPT_CLASSIFIER,
     CRITERIA_EVALUATION,
@@ -312,11 +330,19 @@ async def _verdict_rows(
         )
 
 
+def _version_of(state: SubmissionState) -> str:
+    """The evaluator's version of a ``task`` path in the shipped file."""
+    version = evaluator_version(AssignmentType.TASK, state, _shipped())
+    assert version is not None
+    return version
+
+
 def _assert_reviewed_anew(submission: HomeworkSubmission) -> None:
-    """An ordinary review: no copy, no receipt of one."""
+    """An ordinary review: no copy, no receipt of one; its evaluator named."""
     assert submission.status == "delivered"
     assert submission.attempt_receipt is not None
     assert DEDUP_RECEIPT_KEY not in submission.attempt_receipt
+    assert submission.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY].startswith("ev1:")
     structure = ReviewStructureV1.model_validate(submission.review_result)
     assert structure.unchanged_from_attempt is None
     assert submission.review_markdown == assemble_review(structure)
@@ -401,6 +427,11 @@ class TestLockAEndToEnd:
         assert second.attempt_receipt[DEDUP_RECEIPT_KEY] == 1
         assert second.attempt_receipt["attempt_no"] == 2
         assert second.attempt_receipt["fingerprint"] == first.fingerprint
+        assert first.attempt_receipt is not None
+        assert (
+            second.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY]
+            == first.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY]
+        )
         # ── Finished as a review is: completed, the webhook, delivered ──
         assert second.status == "delivered"
         [payload] = _reviewed(webhook)
@@ -734,8 +765,16 @@ async def _reviewed_attempt(
     task_version: str,
     list_address: tuple[str, uuid.UUID] | None,
     status: str = "delivered",
+    evaluator: str | None = None,
 ) -> uuid.UUID:
-    """An attempt as the body leaves one: numbered, fingerprinted, reviewed."""
+    """An attempt as the body leaves one: numbered, fingerprinted, reviewed.
+
+    Its receipt names ``evaluator`` — none when ``None``, as every receipt
+    written before the evaluator's version.
+    """
+    receipt: dict[str, Any] = {"attempt_no": minute + 1, "fingerprint": fingerprint}
+    if evaluator is not None:
+        receipt[EVALUATOR_VERSION_RECEIPT_KEY] = evaluator
     submission_id = await _add(
         session_factory,
         world,
@@ -755,6 +794,7 @@ async def _reviewed_attempt(
             .values(
                 attempt_no=minute + 1,
                 fingerprint=fingerprint,
+                attempt_receipt=receipt,
                 review_result=review.model_dump(mode="json"),
                 review_markdown=assemble_review(review),
                 score=100,
@@ -786,12 +826,14 @@ class TestLockVEachKeyAtTheRepository:
 
     _FP = "f" * 64
     _LIST = "11111111-1111-1111-1111-111111111111"
+    _EVALUATOR = "ev1:" + "e" * 16
 
     def _key(self, **changed: Any) -> dict[str, Any]:
         key: dict[str, Any] = {
             "fingerprint": self._FP,
             "task_version": _VERSION_A,
             "criteria_list": (CriteriaLayer.MODEL.value, uuid.UUID(self._LIST)),
+            "evaluator_versions": frozenset({self._EVALUATOR}),
         }
         return key | changed
 
@@ -825,6 +867,7 @@ class TestLockVEachKeyAtTheRepository:
             fingerprint=key["fingerprint"],
             task_version=key["task_version"],
             list_address=key["criteria_list"],
+            evaluator=self._EVALUATOR,
         )
         latest = await _reviewed_attempt(
             session_factory,
@@ -833,6 +876,7 @@ class TestLockVEachKeyAtTheRepository:
             fingerprint=key["fingerprint"],
             task_version=key["task_version"],
             list_address=key["criteria_list"],
+            evaluator=self._EVALUATOR,
         )
 
         assert await self._lookup(session_factory, task_world, **key) == latest
@@ -844,8 +888,9 @@ class TestLockVEachKeyAtTheRepository:
             {"task_version": _VERSION_B},
             {"criteria_list": (CriteriaLayer.MODEL.value, uuid.uuid4())},
             {"criteria_list": (CriteriaLayer.AUTHOR.value, uuid.UUID(_LIST))},
+            {"evaluator_versions": frozenset({"ev1:" + "0" * 16})},
         ],
-        ids=["fingerprint", "task_version", "list_id", "list_layer"],
+        ids=["fingerprint", "task_version", "list_id", "list_layer", "evaluator"],
     )
     async def test_one_key_different_is_not_found(
         self,
@@ -861,6 +906,7 @@ class TestLockVEachKeyAtTheRepository:
             fingerprint=stored["fingerprint"],
             task_version=stored["task_version"],
             list_address=stored["criteria_list"],
+            evaluator=self._EVALUATOR,
         )
 
         assert (
@@ -881,6 +927,7 @@ class TestLockVEachKeyAtTheRepository:
             fingerprint=self._FP,
             task_version=_VERSION_A,
             list_address=None,
+            evaluator=self._EVALUATOR,
         )
 
         found = await self._lookup(
@@ -895,6 +942,46 @@ class TestLockVEachKeyAtTheRepository:
             )
             is None
         )
+
+    async def test_the_source_s_evaluator_among_those_in_force_is_found(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+    ) -> None:
+        """A review written on ``first`` is found for a ``repeat_*`` asking."""
+        source = await _reviewed_attempt(
+            session_factory,
+            task_world,
+            minute=0,
+            fingerprint=self._FP,
+            task_version=_VERSION_A,
+            list_address=self._key()["criteria_list"],
+            evaluator=self._EVALUATOR,
+        )
+        in_force = frozenset({"ev1:" + "1" * 16, self._EVALUATOR})
+
+        found = await self._lookup(
+            session_factory, task_world, **self._key(evaluator_versions=in_force)
+        )
+        assert found == source
+
+    async def test_a_receipt_that_names_no_evaluator_is_never_a_source(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+    ) -> None:
+        """Lock г of the evaluator's version, at the repository."""
+        await _reviewed_attempt(
+            session_factory,
+            task_world,
+            minute=0,
+            fingerprint=self._FP,
+            task_version=_VERSION_A,
+            list_address=self._key()["criteria_list"],
+            evaluator=None,
+        )
+
+        assert await self._lookup(session_factory, task_world, **self._key()) is None
 
 
 # ── г. Only an attempt is a source ──────────────────────────────────────────
@@ -1168,3 +1255,162 @@ class TestALookupThatFailsIsAnOrdinaryReview:
         [failed] = [e for e in logs if e["event"] == "attempt_dedup_lookup_failed"]
         assert failed["log_level"] == "warning"
         assert failed["submission_id"] == str(second_id)
+
+
+# ── The evaluator's version in the key (task 13) ────────────────────────────
+
+
+async def _name_the_evaluator(
+    session_factory: async_sessionmaker[AsyncSession],
+    submission_id: uuid.UUID,
+    evaluator: str | None,
+) -> None:
+    """Rewrite the evaluator a receipt names; ``None`` drops the key."""
+    async with session_factory() as session:
+        receipt = dict(
+            await session.scalar(
+                select(HomeworkSubmission.attempt_receipt).where(
+                    HomeworkSubmission.id == submission_id
+                )
+            )
+            or {}
+        )
+        if evaluator is None:
+            del receipt[EVALUATOR_VERSION_RECEIPT_KEY]
+        else:
+            receipt[EVALUATOR_VERSION_RECEIPT_KEY] = evaluator
+        await session.execute(
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == submission_id)
+            .values(attempt_receipt=receipt)
+        )
+        await session.commit()
+
+
+async def _the_same_work_again(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: dict[str, Any],
+    tmp_path: Path,
+) -> tuple[HomeworkSubmission, list[str]]:
+    """The same work as the first review's, walked with a router that answers."""
+    router = _RouterDouble(session_factory)
+    again_id = await _walk(
+        session_factory,
+        world,
+        _UTF8_LF,
+        tmp_path,
+        router=router,
+        source=_ListSource(world["in_force"]),
+    )
+    return await _row(session_factory, again_id), router.calls
+
+
+class TestEvaluatorLockBReviewedThenCopied:
+    """б. The review names its evaluator; the copy, made for nothing, the same."""
+
+    async def test_a_task_reviewed_then_the_same_work_copied_with_its_evaluator(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        first = await _first_review(session_factory, task_world, tmp_path)
+        assert first.attempt_receipt is not None
+        written_by = first.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY]
+        # The version of the path the review walked: the first attempt's.
+        assert written_by == _version_of(SubmissionState.FIRST)
+        register_before = await _register_rows(session_factory)
+
+        router = _NoModelRouter()
+        with _providers_watched() as providers:
+            second_id = await _walk(
+                session_factory,
+                task_world,
+                _UTF8_LF,
+                tmp_path,
+                router=router,
+                source=_ListSource(task_world["in_force"]),
+            )
+
+        # ── A copy: no model asked, no row in the register ──
+        assert router.calls == []
+        assert not any(mock.await_count for mock in providers)
+        assert await _register_rows(session_factory) == register_before
+        second = await _row(session_factory, second_id)
+        assert second.status == "delivered"
+        assert second.review_result == {
+            **(first.review_result or {}),
+            "unchanged_from_attempt": 1,
+        }
+        # ── Its receipt: the attempt repeated, and the evaluator that wrote it ──
+        assert second.attempt_receipt is not None
+        assert second.attempt_receipt[DEDUP_RECEIPT_KEY] == 1
+        assert second.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY] == written_by
+        # Inherited from the source, not the version of the path the copy walked.
+        assert written_by != _version_of(SubmissionState.REPEAT_WITHOUT_REPLIES)
+
+
+class TestEvaluatorLockVChangedEvaluatorReviewsAnew:
+    """в. Another evaluator than the source's: the same work is reviewed anew."""
+
+    async def test_after_the_verdict_rules_were_raised(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        first = await _first_review(session_factory, task_world, tmp_path)
+        assert first.attempt_receipt is not None
+        monkeypatch.setattr(
+            criteria_verdicts,
+            "VERDICT_RULES_VERSION",
+            criteria_verdicts.VERDICT_RULES_VERSION + 1,
+        )
+
+        again, calls = await _the_same_work_again(session_factory, task_world, tmp_path)
+
+        assert calls == [SAFETY, CRITERIA_EVALUATION, REVIEW_EXPLANATION]
+        _assert_reviewed_anew(again)
+        assert again.fingerprint == first.fingerprint is not None
+        assert again.attempt_receipt is not None
+        # Written by today's evaluator, under the rules raised.
+        written_by = again.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY]
+        assert written_by == _version_of(SubmissionState.REPEAT_WITHOUT_REPLIES)
+        assert written_by != first.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY]
+
+    async def test_the_source_written_by_another_evaluator(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        first = await _first_review(session_factory, task_world, tmp_path)
+        await _name_the_evaluator(session_factory, first.id, "ev1:" + "0" * 16)
+
+        again, calls = await _the_same_work_again(session_factory, task_world, tmp_path)
+
+        assert calls == [SAFETY, CRITERIA_EVALUATION, REVIEW_EXPLANATION]
+        _assert_reviewed_anew(again)
+
+
+class TestEvaluatorLockGNoEvaluatorNoSource:
+    """г. A receipt that names no evaluator — every one before — is no source."""
+
+    async def test_an_attempt_reviewed_before_the_evaluator_s_version(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        first = await _first_review(session_factory, task_world, tmp_path)
+        await _name_the_evaluator(session_factory, first.id, None)
+        source = await _row(session_factory, first.id)
+        assert source.attempt_receipt is not None
+        assert EVALUATOR_VERSION_RECEIPT_KEY not in source.attempt_receipt
+
+        again, calls = await _the_same_work_again(session_factory, task_world, tmp_path)
+
+        assert calls == [SAFETY, CRITERIA_EVALUATION, REVIEW_EXPLANATION]
+        _assert_reviewed_anew(again)
+        assert again.fingerprint == source.fingerprint is not None

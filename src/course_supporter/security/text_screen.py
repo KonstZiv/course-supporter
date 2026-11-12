@@ -21,6 +21,8 @@ Purpose:
 Interface:
     :func:`screen_text` -- bytes or text in, :class:`ScreenedText` out, or
     :class:`~course_supporter.security.exceptions.SecurityRejectedError`.
+    :func:`read_as_screened` -- the text :func:`screen_text` reads, for a
+    text that is searched and never reaches a model, without the screen.
     :func:`order_flags` and :func:`render_flags_for_stage2` are the two
     shapes a submission's flags take afterwards: the trace (capped at
     :data:`FLAG_TRAIL_LIMIT`) and the hint Stage 2 reads (capped at
@@ -130,6 +132,26 @@ def screen_text(
                 detail=exc.detail,
             )
         raise
+
+
+def read_as_screened(
+    content: bytes | str, *, name: str, languages: Sequence[str] = ()
+) -> str:
+    """The text :func:`screen_text` returns for ``content``, without the screen.
+
+    The same recovery of the encoding and the same NFC, and neither the
+    screen's refusals nor its flags: for a text that is only searched and
+    never reaches a model -- a project's base, where a student's quote is
+    looked for (project chain K3) -- so that a text reads the same on both
+    sides of the comparison.
+
+    Raises:
+        SecurityRejectedError: ``CHARSET_VIOLATION`` -- bytes that cannot be
+            read in ``languages``.
+    """
+    if isinstance(content, bytes):
+        content, _encoding = _recover(content, name=name, languages=languages)
+    return nfc_for_storage(content)
 
 
 def _screen(

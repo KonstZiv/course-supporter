@@ -706,9 +706,9 @@ class TestTheEvaluationReadsTheProjectsFiles:
         w = await world(_zip(files), None)
         handed: list[tuple[WorkFile, ...]] = []
 
-        def _record(given: tuple[WorkFile, ...]) -> SubmittedWork:
+        def _record(given: tuple[WorkFile, ...], **base: Any) -> SubmittedWork:
             handed.append(tuple(given))
-            return SubmittedWork(given)
+            return SubmittedWork(given, **base)
 
         with patch.object(criteria_evaluation, "SubmittedWork", side_effect=_record):
             _, submission = await _run(
@@ -724,6 +724,93 @@ class TestTheEvaluationReadsTheProjectsFiles:
         (work,) = handed
         assert all(f.has_lines for f in work)
         assert all("sk-live-do-not-leak" not in f.text for f in work)
+
+
+class TestAQuoteOfTheBaseIsNotTheStudents:
+    """Project chain K3, end to end: the worker, the database, S3, the prompt."""
+
+    async def test_k3_a_renamed_file_of_the_base_is_asked_again_then_flagged(
+        self,
+        world: Callable[..., Any],
+        session_factory: async_sessionmaker[AsyncSession],
+        s3_client: S3Client,
+    ) -> None:
+        from dataclasses import replace
+
+        from course_supporter.homework.criteria_verdicts import (
+            RepeatItem,
+            RepeatReason,
+        )
+        from course_supporter.normalizer import manifest_to_jsonb, normalize_archive
+        from course_supporter.storage.orm import ProjectBase
+        from course_supporter.storage.submission_verdict_repository import (
+            SubmissionVerdictRepository,
+        )
+
+        # The author gave app/solve.py; the student renamed it app/solver.py.
+        # The double quotes ``def solve(n):`` on both requests.
+        w = await world(_zip({**PROJECT, "app/solver.py": SOLUTION}), None)
+        base = normalize_archive(
+            _zip({"app/solve.py": SOLUTION, "README.md": b"# Agent\n"}),
+            archive_kind="zip",
+        )
+        base_key = f"base/one-door/{uuid.uuid4().hex}/snapshot.zip"
+        await s3_client.upload_file(base_key, base.canonical_zip, "application/zip")
+        try:
+            async with session_factory() as session:
+                stored = ProjectBase(
+                    authored_document_id=w.ids["doc_id"],
+                    version=1,
+                    archive_key="k/v1/original.zip",
+                    snapshot_key=base_key,
+                    snapshot_hash=base.snapshot_hash,
+                    manifest=manifest_to_jsonb(base.manifest),
+                    state="ready",
+                )
+                session.add(stored)
+                await session.flush()
+                submission = await session.get(
+                    HomeworkSubmission, w.ids["submission_id"]
+                )
+                assert submission is not None
+                submission.base_id = stored.id
+                await session.commit()
+
+            # The repeat goes to the rung that answered, so the double answers
+            # as the stage's first rung rather than as itself.
+            answer = _RouterDouble.execute_stage
+
+            async def _as_the_first_rung(
+                double: _RouterDouble, stage: StageConfig, name: str, /, **kw: Any
+            ) -> StageResult:
+                result = await answer(double, stage, name, **kw)
+                rung = stage.ladder[0]
+                return replace(
+                    result, provider_used=rung.provider, model_used=rung.model
+                )
+
+            with patch.object(_RouterDouble, "execute_stage", _as_the_first_rung):
+                run, submission = await _run(
+                    "new_path", w, session_factory, s3_client, evaluation=True
+                )
+        finally:
+            await s3_client.delete_object(base_key)
+
+        assert submission.status in {"completed", "delivered"}, submission.error_message
+        first, again = run.router.rendered[CRITERIA_EVALUATION]
+        feedback = RepeatItem("c1", RepeatReason.QUOTE_FROM_BASE).feedback
+        assert feedback not in first
+        assert feedback in again
+        async with session_factory() as session:
+            (row,) = await SubmissionVerdictRepository(session).list_for_submission(
+                tenant_id=w.ids["tenant_id"], submission_id=w.ids["submission_id"]
+            )
+        assert (row.item_id, row.verdict, row.model_verdict) == ("c1", "not_met", "met")
+        assert (row.quote_from_base, row.quote_not_found, row.retried) == (
+            True,
+            False,
+            True,
+        )
 
 
 @pytest.mark.parametrize("road", ROADS)

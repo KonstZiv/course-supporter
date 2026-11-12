@@ -66,6 +66,19 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
 * The resubmission safeguard: a "not met" on an item whose LATEST earlier
   verdict on the same list was "met", and whose quote is still in the work
   word for word, stays "met" — and says so in its row.
+* A quote of the author's code is not the student's (project chain K3): a
+  quote that the search above finds in ANY text file of the project's base —
+  a piece of a line for a quote of :data:`MIN_QUOTE_CHARS` or more, a whole
+  line for a shorter one — in the unchanged lines of a changed file, in a
+  file moved or renamed, or in a file the student did not touch, is asked
+  about once more like any other that does not stand. A "met" that still
+  stands on the base after the repeat, that the repeat took back, or whose
+  second quote is not in the student's work at all (made up, or none) is
+  "not met" with the author's flag ``quote_from_base`` — not unconfirmed:
+  the model never showed the student's code. A criterion checked by
+  mandatory points carries the flag when one of its points does. The
+  safeguard does not keep a quote of the base either. Without a base (every
+  type but a project) nothing changes.
 
 Replacing:
     The stage depends on the functions above and on their value types; a new
@@ -123,7 +136,8 @@ almost any work, so finding it proves nothing about the criterion. A shorter
 quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 """
 
-VERDICT_RULES_VERSION: Final[int] = 2
+# К3 шляху проєкту: цитата з коду бази  # noqa: RUF003
+VERDICT_RULES_VERSION: Final[int] = 3
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -131,7 +145,8 @@ Raise it on ANY change of code that changes what a review says: the verdicts
 check of the explanation against the facts (``verdict_explanation``), the
 search and the check of course links (``course_links``,
 ``course_link_delivery``), the builder (``text_result``, ``review_assembler``).
-2 — after the quote check was fixed on 2026-11-07. It enters the evaluator's
+2 — after the quote check was fixed on 2026-11-07; 3 — project chain K3: a
+quote of the base's code is not the student's. It enters the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,
 so a review written by other code is never given again as a copy of unchanged
@@ -385,6 +400,11 @@ class SubmittedWork:
     files (their names, the list of what was not opened) are not text of the
     work, so a quote of them is not found.
 
+    ``base`` is the author's code the work was built on -- for a project,
+    every text file of its base (project chain K3); empty for every other
+    type. A quote found in it is the author's, not the student's
+    (:meth:`is_from_base`).
+
     >>> work = SubmittedWork(
     ...     [WorkFile("main.py", "def double(n):\\r\\n    return n * 2\\n", True)]
     ... )
@@ -398,8 +418,33 @@ class SubmittedWork:
     QuotePlace(file='.gitignore', lines=(2, 2))
     """
 
-    def __init__(self, files: Sequence[WorkFile]) -> None:
+    def __init__(
+        self, files: Sequence[WorkFile], *, base: Sequence[WorkFile] = ()
+    ) -> None:
         self._files = tuple(_SearchableFile(file) for file in files)
+        self._base = tuple(_SearchableFile(file) for file in base)
+
+    def is_from_base(self, quote: str) -> bool:
+        """Whether :meth:`find` would find ``quote`` in a file of the base.
+
+        The same search on the author's files: a piece of a line for a quote
+        of :data:`MIN_QUOTE_CHARS` or more, a whole line of a file with lines
+        for a shorter one. A short quote that is only a piece of a longer
+        line of the base is not the base's -- it is in almost any code.
+
+        >>> work = SubmittedWork(
+        ...     [WorkFile(".gitignore", "*.pyc\\n.venv/\\n", True)],
+        ...     base=[WorkFile("README.md", "Create .venv/ with uv.\\n", True)],
+        ... )
+        >>> work.is_from_base(".venv/")
+        False
+        >>> SubmittedWork(
+        ...     [], base=[WorkFile(".gitignore", ".venv/\\n", True)]
+        ... ).is_from_base(".venv/")
+        True
+        """
+        needle = _squeezed(quote)
+        return any(base.place_of(needle) is not None for base in self._base)
 
     def is_in_a_line(self, quote: str) -> bool:
         """Whether ``quote`` is in a line of the work, whole or as a piece.
@@ -440,6 +485,8 @@ class RepeatReason(StrEnum):
     QUOTE_TOO_SHORT = "quote_too_short"
     """Too short to prove anything: counted as a quote not found (9.4)."""
     QUOTE_NOT_FOUND = "quote_not_found"
+    QUOTE_FROM_BASE = "quote_from_base"
+    """The quote is the author's: in a file of the project's base (K3)."""
     NO_SENTENCE = "no_sentence"
 
 
@@ -457,6 +504,10 @@ _REPEAT_FEEDBACK: Final[Mapping[RepeatReason, str]] = MappingProxyType(
             "spaces, too few to show anything"
         ),
         RepeatReason.QUOTE_NOT_FOUND: "the quote is not in the work word for word",
+        RepeatReason.QUOTE_FROM_BASE: (
+            "the quote is taken from the code the author gave; a quote from "
+            "the student's own code is needed"
+        ),
         RepeatReason.NO_SENTENCE: (
             "the verdict is 'not_met' but gives no sentence on what is missing"
         ),
@@ -495,11 +546,15 @@ def _standing_quote(
         return RepeatReason.QUOTE_TOO_LONG
     place = work.find(text)
     if place is not None:
-        return place
+        return RepeatReason.QUOTE_FROM_BASE if work.is_from_base(text) else place
     # A short quote the search did not take as a whole line is named as too
     # short: a longer quote is what mends it, not another place to look.
     if len(_squeezed(text)) < MIN_QUOTE_CHARS:
         return RepeatReason.QUOTE_TOO_SHORT
+    # Not in the student's files but in the author's -- an unchanged file the
+    # review's context shows: the author's code, not a quote made up.
+    if work.is_from_base(text):
+        return RepeatReason.QUOTE_FROM_BASE
     return RepeatReason.QUOTE_NOT_FOUND
 
 
@@ -517,11 +572,12 @@ def items_to_ask_again(
     """The verdicts that cannot stand as given, each with its reason.
 
     A "met" without a quote that stands — none, more than one line, over
-    :data:`MAX_QUOTE_CHARS` characters, too short or not in the work — and a
-    "not met" without a sentence. The stage asks once more about these alone,
-    naming each one's reason (decision 11, widened to every defect of a single
-    verdict on 2026-10-02); every other item keeps its first answer. The field
-    a verdict does not use is never a reason.
+    :data:`MAX_QUOTE_CHARS` characters, too short, not in the work or the
+    author's (in the project's base) — and a "not met" without a sentence.
+    The stage asks once more about these alone, naming each one's reason
+    (decision 11, widened to every defect of a single verdict on 2026-10-02);
+    every other item keeps its first answer. The field a verdict does not use
+    is never a reason.
     """
     return tuple(
         RepeatItem(item.id, reason)
@@ -576,7 +632,8 @@ def settle_verdicts(
        within one list only — task 08, decision 21), said "met", and its quote
        is still in the work — met, kept, with the earlier submission named;
     3. otherwise not met — and a "met" whose quote did not stand is flagged
-       for the author: unconfirmed.
+       for the author: unconfirmed; or, when the item falls for a quote of
+       the project's base (:func:`_from_base`), ``quote_from_base``.
 
     The field a verdict does not use is ignored and not stored: the sentence
     of a "met", the quote of a "not met". A "not met" without a sentence is
@@ -612,11 +669,13 @@ def settle_verdicts(
     def judged(
         item_id: str, kind: VerdictItemKind, weight: WeightCategory | None
     ) -> VerdictRecord:
+        settled = _word_to_settle(first[item_id], again.get(item_id), work)
         return _judged(
-            _word_to_settle(first[item_id], again.get(item_id), work),
+            settled,
             kind=kind,
             weight=weight,
             retried=item_id in again,
+            from_base=_from_base(first[item_id], settled, work),
             criteria=criteria,
             work=work,
             earlier=earlier,
@@ -675,6 +734,28 @@ def _word_to_settle(
     return first if took_back and too_short_of_the_work else repeat
 
 
+def _from_base(first: ItemVerdict, settled: ItemVerdict, work: SubmittedWork) -> bool:
+    """Whether the item falls for a quote of the project's base (K3).
+
+    Its last word is a "met" on a quote of the base; or its first "met" stood
+    on one and the repeat did not show the student's code either -- took it
+    back, or gave a quote the work does not have at all, or none (decision 2
+    of project chain K3; answer 1 of the Mentor session on #649). Then the
+    row reads "not met" with ``quote_from_base`` — never unconfirmed, which
+    would count the author's code for the student. A repeat that answers
+    with the student's own code settles as any other: on a quote that
+    stands, met; on one of theirs too long or too short, unconfirmed.
+    """
+    if _repeat_reason(settled, work) is RepeatReason.QUOTE_FROM_BASE:
+        return True
+    if _repeat_reason(first, work) is not RepeatReason.QUOTE_FROM_BASE:
+        return False
+    if settled.verdict is VerdictValue.NOT_MET:
+        return True
+    quote = settled.quote or ""
+    return work.find(quote) is None and not work.is_in_a_line(quote)
+
+
 def _unconfirmed(item: ScoredItem) -> bool:
     """The model said "met" and no line of the work bore it out: unconfirmed.
 
@@ -692,7 +773,8 @@ def _from_points(
 
     Met when every point is; unconfirmed — "not met" with the author's flag,
     as an unconfirmed point reads — when every point is met or unconfirmed;
-    not met otherwise (decision 3; unconfirmed since 2026-11-07).
+    not met otherwise (decision 3; unconfirmed since 2026-11-07). It carries
+    ``quote_from_base`` when one of its points does (project chain K3).
     """
     every_met = all(point.verdict is VerdictValue.MET for point in points)
     unconfirmed = not every_met and all(
@@ -705,6 +787,7 @@ def _from_points(
         verdict=VerdictValue.MET if every_met else VerdictValue.NOT_MET,
         model_verdict=None,
         quote_not_found=unconfirmed,
+        quote_from_base=any(point.quote_from_base for point in points),
     )
 
 
@@ -714,12 +797,15 @@ def _judged(
     kind: VerdictItemKind,
     weight: WeightCategory | None,
     retried: bool,
+    from_base: bool,
     criteria: CriteriaInForce,
     work: SubmittedWork,
     earlier: Mapping[str, EarlierVerdict],
 ) -> VerdictRecord:
     """The record of one item the model judged — steps 1 to 3 of settling."""
     said_met = item.verdict is VerdictValue.MET
+    # A "met" on the base's quote was found: the author's, not unconfirmed.
+    unconfirmed = said_met and not from_base
     quote = _given(item.quote) if said_met else None
     missing = None if said_met else _given(item.missing)
     if said_met:
@@ -753,7 +839,8 @@ def _judged(
             quote_lines=kept_place.lines,
             missing=missing,
             retried=retried,
-            quote_not_found=said_met,
+            quote_not_found=unconfirmed,
+            quote_from_base=from_base,
             safeguard_submission_id=before.submission_id,
         )
     return VerdictRecord(
@@ -765,7 +852,8 @@ def _judged(
         quote=quote,
         missing=missing,
         retried=retried,
-        quote_not_found=said_met,
+        quote_not_found=unconfirmed,
+        quote_from_base=from_base,
     )
 
 
@@ -786,7 +874,9 @@ def _kept_by_safeguard(
     ):
         return None
     place = work.find(before.quote)
-    return None if place is None else (before, place)
+    if place is None or work.is_from_base(before.quote):
+        return None
+    return before, place
 
 
 class ScoredItem(Protocol):

@@ -75,6 +75,13 @@ class VerdictRecord:
             work: unconfirmed, the author's flag. On a criterion checked by
             mandatory points: every point is met or so, one at least so
             (``homework/criteria_verdicts.py``).
+        quote_from_base: The item falls for a quote of the project's base,
+            the author's code: the model's last "met" stood on one, or its
+            first "met" did and the repeat showed none of the student's code
+            — "not met", the author's flag, never unconfirmed (project chain
+            K3). On a row the safeguard kept, as ``quote_not_found`` there:
+            what the model proposed. On a criterion derived from its points:
+            one of its points carries it.
         safeguard_submission_id: The earlier submission whose "met" the
             safeguard kept; ``None`` when it did not fire.
     """
@@ -90,6 +97,7 @@ class VerdictRecord:
     missing: str | None = None
     retried: bool = False
     quote_not_found: bool = False
+    quote_from_base: bool = False
     safeguard_submission_id: uuid.UUID | None = None
 
 
@@ -308,6 +316,7 @@ def _row(
         missing=record.missing,
         retried=record.retried,
         quote_not_found=record.quote_not_found,
+        quote_from_base=record.quote_from_base,
         safeguard_fired=record.safeguard_submission_id is not None,
         safeguard_submission_id=record.safeguard_submission_id,
     )

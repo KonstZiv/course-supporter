@@ -23,9 +23,11 @@ worker hit, 1A). Deterministic, zero LLM. It:
 5. builds the rich Mentor delta-context ``submission_text`` for safety →
    sanity → review via the pure :func:`build_mentor_context` (P4);
 6. hands the evaluation stage the student's files -- new and changed against
-   the base, as the screen read them -- and the base version of each changed
-   one (project chain K1). Today's Mentor reads neither: the text, the safety
-   text and its review are what they were.
+   the base, as the screen read them (project chain K1) -- and, when the
+   caller asks for it, the text of every file of the base, read as the
+   student's files are, so a quote of the author's code can be told apart
+   from the student's (chain K3). Today's Mentor reads neither: the text, the
+   safety text and its review are what they were.
 
 The context is the H2-budgeted trusted/untrusted delta assembly: a
 system-computed trusted block (base tree + two-level delta + F2 metrics +
@@ -41,7 +43,6 @@ import uuid
 import zipfile
 from contextlib import ExitStack
 from pathlib import PurePosixPath
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import structlog
@@ -76,11 +77,11 @@ from course_supporter.security.exceptions import (
 from course_supporter.security.policies import HOMEWORK_POLICY
 from course_supporter.security.schemas import NotOpenedEntry, ScreenFlag
 from course_supporter.security.stage1 import archive_kind_for_filename
-from course_supporter.security.text_screen import screen_text
+from course_supporter.security.text_screen import read_as_screened, screen_text
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -138,6 +139,7 @@ async def process_project_submission(
     file_bytes: bytes,
     raw_key: str,
     languages: Sequence[str] = (),
+    base_corpus: bool = False,
 ) -> DoorReading | None:
     """Normalize a project submission, screen its texts, persist its snapshot,
     log the delta, and return what the doors read — the rich Mentor
@@ -145,6 +147,13 @@ async def process_project_submission(
     ``None`` on a fail-closed rejection (already persisted; the caller returns).
 
     ``languages`` verifies a recovered encoding, exactly as for a single file.
+
+    ``base_corpus`` asks for the text of every file of the base in
+    :attr:`DoorReading.base_files` -- the new path's evaluation, which tells a
+    quote of the author's code from the student's (project chain K3). Read
+    once, from the base snapshot the delta context was built from, and only
+    for a submission that passed the size check. Today's Mentor does not ask:
+    its reading is what it was.
 
     Fail-closed on a content/structural rejection (a malformed / bomb archive):
     persist a ``{"source": "normalizer", "reason": ...}`` safety result, set the
@@ -226,6 +235,7 @@ async def process_project_submission(
     # from S3, and only when a base is attached. It closes once the pure builder
     # has read every body it needs (it reads lazily during assembly, entirely
     # within this ``with``).
+    base_bytes: bytes | None = None
     with ExitStack() as stack:
         base_zf: zipfile.ZipFile | None = None
         if base is not None and base.snapshot_key is not None:
@@ -250,10 +260,8 @@ async def process_project_submission(
             latest_version=latest_version,
         )
         # After the context, and by the same reader: the text above is the one
-        # it always was, and the base snapshot is still open.
-        files, base_files = _student_work(
-            delta, snapshot.manifest, base_manifest, read_text, log=log
-        )
+        # it always was.
+        files = _student_work(delta, snapshot.manifest, read_text)
 
     # Oversize guard (step E) -- the ONE size limit on this branch. The
     # assembled context is measured against the budget derived from the FIRST
@@ -288,6 +296,13 @@ async def process_project_submission(
         )
         return None
 
+    # The author's base, for the evaluation's quotes (K3): only now, so a
+    # submission refused for its size never pays for reading it, and from the
+    # snapshot already fetched, so S3 is asked for it once.
+    base_files: tuple[WorkFile, ...] = ()
+    if base_corpus and base_bytes is not None:
+        base_files = _read_base_corpus(base_bytes, base_manifest, languages, log=log)
+
     return DoorReading(
         text=context,
         not_opened=screen.not_opened,
@@ -298,61 +313,72 @@ async def process_project_submission(
 
 
 def _student_work(
-    delta: Delta,
-    sub_manifest: Manifest,
-    base_manifest: Manifest,
-    read_text: ReadText,
-    *,
-    log: Any,
-) -> tuple[tuple[WorkFile, ...], Mapping[str, str]]:
-    """The student's files, and the base version of each changed one (K1).
+    delta: Delta, sub_manifest: Manifest, read_text: ReadText
+) -> tuple[WorkFile, ...]:
+    """The student's files (K1): each new or changed against the base.
 
-    The student's files are the ones the delta names new or changed: an
-    unchanged file is the author's, a deleted one is not in the work, and an
-    excluded one never reached the snapshot. Each carries the text the screen
-    read for the models, so a binary file and a file the screen set aside
-    (named in ``not_opened``) have none and are left out. A document's lines
-    are an artefact of extraction, as on the text path, so it has none. In
-    order of path.
-
-    The base version of a changed file is read by the ``read_text`` the delta
-    context reads the base by. A new file has none, and without a base every
-    file is new.
+    An unchanged file is the author's, a deleted one is not in the work, and
+    an excluded one never reached the snapshot. Each carries the text the
+    screen read for the models, so a binary file and a file the screen set
+    aside (named in ``not_opened``) have none and are left out. A document's
+    lines are an artefact of extraction, as on the text path, so it has none.
+    In order of path; without a base every file is new.
     """
     from course_supporter.homework.criteria_verdicts import WorkFile
 
     sub_by = {entry.path: entry for entry in sub_manifest.included}
-    base_by = {entry.path: entry for entry in base_manifest.included}
-    changed = set(delta.changed)
     files: list[WorkFile] = []
-    base_files: dict[str, str] = {}
     for path in sorted((*delta.changed, *delta.new)):
         entry = sub_by[path]
         text = read_text("sub", entry)
-        if text is None:
-            continue
-        files.append(WorkFile(path, text, entry.cls is not EntryClass.DOCUMENT))
-        if path in changed:
-            base_text = _base_version(read_text, base_by[path], log=log)
-            if base_text is not None:
-                base_files[path] = base_text
-    return tuple(files), MappingProxyType(base_files)
+        if text is not None:
+            files.append(WorkFile(path, text, entry.cls is not EntryClass.DOCUMENT))
+    return tuple(files)
 
 
-def _base_version(read_text: ReadText, entry: ManifestEntry, *, log: Any) -> str | None:
-    """The base's text of one changed file; ``None`` when it cannot be read.
+def _read_base_corpus(
+    base_zip: bytes, manifest: Manifest, languages: Sequence[str], *, log: Any
+) -> tuple[WorkFile, ...]:
+    """Every text file of the author's base, as the work's files are (K3).
 
-    The base is opened here for files the delta context never opens it for (a
-    small changed file is shown whole), and the author's documents are not
-    read when the base is stored. A base docx or pdf the extractor cannot open
-    is no reason to fail a submission that today's Mentor reviews without it:
-    the file simply has no base version.
+    Every file, not only the ones the student changed: the author's code a
+    student moved or renamed is in a "new" file of the work, and the delta
+    cannot tell it from the student's own. Each is read as the student's
+    files are -- the encoding recovered in ``languages``, a document's text
+    extracted, NFC (:func:`read_as_screened`) -- so a quote reads the same
+    on both sides. Not screened: the base never reaches a model from here.
+
+    A binary file has no text, and a text whose encoding cannot be
+    established is left out, as the student's would be. A base document the
+    extractor cannot open is no reason to fail the student's submission: it
+    is logged and left out. A document has no lines, as in the work.
     """
-    try:
-        return read_text("base", entry)
-    except Exception:
-        log.warning("project_submission.base_version_unread", path=entry.path)
-        return None
+    from course_supporter.homework.criteria_verdicts import WorkFile
+
+    extractor = DefaultTextExtractor()
+    corpus: list[WorkFile] = []
+    with zipfile.ZipFile(io.BytesIO(base_zip)) as zf:
+        for entry in manifest.included:
+            if entry.cls is EntryClass.BINARY:
+                continue
+            raw = zf.read(entry.path)
+            content: bytes | str = raw
+            if entry.cls is EntryClass.DOCUMENT:
+                try:
+                    content = extractor.extract(entry.cls, raw) or ""
+                except Exception:
+                    log.warning(
+                        "project_submission.base_document_unread", path=entry.path
+                    )
+                    continue
+            try:
+                text = read_as_screened(content, name=entry.path, languages=languages)
+            except SecurityRejectedError:
+                continue
+            corpus.append(
+                WorkFile(entry.path, text, entry.cls is not EntryClass.DOCUMENT)
+            )
+    return tuple(corpus)
 
 
 class _SnapshotScreen:

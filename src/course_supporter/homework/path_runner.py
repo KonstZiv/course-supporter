@@ -668,6 +668,7 @@ async def _open_the_doors(
             file_bytes=file_bytes,
             raw_key=s3_key,
             languages=verify_languages,
+            base_corpus=True,
         )
         if project is None:
             return file_path, None, review_language.code

@@ -114,6 +114,21 @@ class Settings(BaseSettings):
     # Accounts destroyed per transaction.
     billing_purge_batch_size: int = Field(default=50, ge=1)
 
+    # --- Payments (BIL-PAY) ---
+    # The payment providers a checkout may use, by adapter name, as a JSON list
+    # (BILLING_PROVIDERS=["paddle"]); the first is the default. Empty — the
+    # default — means payment is unavailable: a checkout answers 503 and every
+    # provider's webhook 404. A name no adapter answers to stops the API's
+    # startup (billing.payments.registry); the test adapter "fake" answers in
+    # development and testing only.
+    billing_providers: list[str] = []
+    # The packages on sale and each provider's id of them.
+    billing_packages_path: Path = Path("config/billing_packages.yaml")
+    # Base URL of the author SPA: an author's checkout returns to
+    # {author_app_base_url}/billing (a student's to
+    # {portal_base_url}/{tenant_id}/billing). Set AUTHOR_APP_BASE_URL in prod.
+    author_app_base_url: str = "http://localhost:5173"
+
     # --- Periodic tasks (course_supporter.periodic) ---
     # ARQ cron jobs of WorkerSettings. Each task: a switch and a schedule of
     # five cron fields, UTC ("minute hour day month weekday"). A task switched

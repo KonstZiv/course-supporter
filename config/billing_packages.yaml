@@ -1,0 +1,30 @@
+# The catalog of packages of units (BIL-PAY). Shape and checks:
+# src/course_supporter/billing/payments/catalog.py. Read once per process.
+#
+# A package: its id, its units (a whole number), its price in minor units
+# (cents) per currency — EUR always, others where set — and whether it is on
+# sale (active). The units of a purchase are read from here when the provider
+# says it was paid, so an id stands for its units and prices for good: to
+# change a package, give it a new id.
+#
+# EVERY size and price below is a placeholder — рішення оператора; не
+# публікувати. The operator sets the real ones separately; until then no
+# package is on sale (active: false), so the portal lists none.
+
+packages:
+  - id: starter
+    units: 1000   # рішення оператора; не публікувати
+    prices_minor:
+      EUR: 1000   # рішення оператора; не публікувати
+    active: false
+  - id: standard
+    units: 5000   # рішення оператора; не публікувати
+    prices_minor:
+      EUR: 4500   # рішення оператора; не публікувати
+    active: false
+
+# A section per provider (its adapter's name, as in BILLING_PROVIDERS):
+# package id -> the provider's id of the product or price its checkout needs.
+# An empty section is allowed.
+providers:
+  paddle: {}   # Paddle price ids (pri_...): the Paddle adapter's task

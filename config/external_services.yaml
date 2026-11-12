@@ -65,6 +65,11 @@
 #   already passed; 2027 schedule read 2026-11-05 (国办发明电〔2026〕10号,
 #   https://www.gov.cn/zhengce/content/202611/content_7085101.htm).
 #   Compensatory weekend workdays are not peak.
+# 2026-11-12 BIL-PRICES (catalog 2026-11-12.1): Mistral prices updated for the
+#   EU regional endpoint (api.eu.mistral.ai) at 1.1x standard list pricing
+#   (+10% upcharge per https://docs.mistral.ai/inference/regional-inference,
+#   verified 2026-11-12). mistral-large-2512: 0.0005/0.0015 -> 0.00055/0.00165
+#   per 1k; mistral-small-latest: 0.00015/0.0006 -> 0.000165/0.00066 per 1k.
 #
 # ── Capabilities (task 09a, 2026-10-01) ──
 # The former ``structured_output`` label is split in two wire facts:
@@ -89,8 +94,8 @@
 # a pricing rule or a tariff therefore means: give the catalog a new version,
 # and paste the fingerprint the loader's error message prints.
 catalog:
-  version: "2026-11-05.2"
-  pricing_sha256: "774a4eb53237d5918979274eeac3ce86a507f750fa6c7b6b161d8b139eca1fe4"
+  version: "2026-11-12.1"
+  pricing_sha256: "17bce17d645e8077e07149896542fa73a73365554dd2e3d8f11ad37b4b1c5332"
 
 # ── Time-of-day tariffs (BIL-C, decision 3) ──
 # A model names its tariff with ``tariff:``; its cost_per_1k_* are then the
@@ -595,8 +600,10 @@ providers:
         max_context: 262144
         max_output_tokens: 8192
         unit_type: tokens
-        cost_per_1k_in: 0.0005
-        cost_per_1k_out: 0.0015
+        # EU (api.eu.mistral.ai), https://docs.mistral.ai/inference/regional-inference, перевірено 2026-11-12
+        # 1.1x standard list pricing ($0.5 / $1.5 -> $0.55 / $1.65 per 1M tokens)
+        cost_per_1k_in: 0.00055
+        cost_per_1k_out: 0.00165
         cost_per_1k_in_cached: null
         price_effective_from: null
         price_holds_to_input_tokens: null
@@ -638,8 +645,10 @@ providers:
         max_context: 131072
         max_output_tokens: 8192
         unit_type: tokens
-        cost_per_1k_in: 0.00015
-        cost_per_1k_out: 0.0006
+        # EU (api.eu.mistral.ai), https://docs.mistral.ai/inference/regional-inference, перевірено 2026-11-12
+        # 1.1x standard list pricing ($0.15 / $0.6 -> $0.165 / $0.66 per 1M tokens)
+        cost_per_1k_in: 0.000165
+        cost_per_1k_out: 0.00066
         cost_per_1k_in_cached: null
         price_effective_from: null
         price_holds_to_input_tokens: null

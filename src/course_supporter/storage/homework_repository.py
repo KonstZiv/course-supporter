@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Any
 
@@ -304,16 +303,16 @@ class HomeworkRepository:
         fingerprint: str,
         task_version: str,
         criteria_list: tuple[str, uuid.UUID] | None,
-        evaluator_versions: Collection[str],
+        evaluator_version: str,
     ) -> HomeworkSubmission | None:
         """The latest earlier attempt of the same work, judged alike (task 13, K3).
 
         Among the attempts :meth:`attempts_before` counts — live revisions that
         got a review, ``excluding`` the one asking — the latest, by the same
         order, whose recorded ``fingerprint`` and ``task_version`` are these,
-        which carries a number and a review, whose receipt names an
-        ``evaluator_version`` among ``evaluator_versions`` (a receipt without
-        one — every review before the evaluator's version — never matches),
+        which carries a number and a review, whose receipt names this
+        ``evaluator_version`` (a receipt without one — every review before the
+        evaluator's version — never matches),
         and — when ``criteria_list`` is a list's address (``criteria_layer``,
         ``criteria_source_id``) — whose verdicts were judged against that list.
         ``None`` for ``criteria_list`` means the type is judged against no
@@ -331,9 +330,8 @@ class HomeworkRepository:
             HomeworkSubmission.task_version == task_version,
             HomeworkSubmission.attempt_no.is_not(None),
             HomeworkSubmission.review_result.is_not(None),
-            HomeworkSubmission.attempt_receipt["evaluator_version"].astext.in_(
-                list(evaluator_versions)
-            ),
+            HomeworkSubmission.attempt_receipt["evaluator_version"].astext
+            == evaluator_version,
         ]
         if criteria_list is not None:
             layer, source_id = criteria_list

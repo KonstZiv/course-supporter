@@ -801,17 +801,35 @@ class TestSubmitHomework:
         assert "larger than" in detail["details"]
         mock_s3.delete_object.assert_awaited_once()
 
-    async def test_duplicate_file_returns_cached(
+    @pytest.mark.parametrize(
+        ("task_type", "filename", "turned_away"),
+        [
+            ("task", "solution.py", False),
+            ("short_task", "solution.py", False),
+            ("project", "proj.zip", True),
+        ],
+    )
+    async def test_an_identical_file_by_the_one_rule_of_the_same_work(
         self,
         client: AsyncClient,
         course_node_id: uuid.UUID,
         node_id: uuid.UUID,
+        task_type: str,
+        filename: str,
+        turned_away: bool,
     ) -> None:
-        """Identical file already reviewed returns cached result."""
+        """One rule of the same work (task 13), at the channel's entry too.
+
+        A text task, served and deduplicated by the new path: the raw-hash
+        check is not asked, a new submission is created. A project, on
+        today's Mentor: the identical file already reviewed is the cached
+        result, as before.
+        """
         student = _mock_student()
         existing = _mock_submission(student_id=student.id)
         existing.status = "completed"
         existing.job_id = uuid.uuid4()
+        created = _mock_submission(student_id=student.id)
 
         def get_node_by_id(requested_id: uuid.UUID) -> MagicMock | None:
             if requested_id == course_node_id:
@@ -832,12 +850,19 @@ class TestSubmitHomework:
             patch.object(
                 AuthoredDocumentRepository,
                 "get_by_id",
-                return_value=_mock_task_doc(course_root_id=course_node_id),
+                return_value=_mock_task_doc(
+                    course_root_id=course_node_id, task_type=task_type
+                ),
             ),
             patch.object(
                 DocumentSummaryRepository,
                 "get_by_authored_document_id",
                 return_value=_mock_summary(status="ready"),
+            ),
+            patch(
+                "course_supporter.api.routes.homework.project_preflight",
+                new_callable=AsyncMock,
+                return_value=None,
             ),
             patch.object(
                 StudentRepository,
@@ -848,7 +873,13 @@ class TestSubmitHomework:
                 HomeworkRepository,
                 "find_duplicate",
                 return_value=existing,
-            ),
+            ) as raw_hash_check,
+            patch.object(
+                HomeworkRepository, "create", return_value=created
+            ) as mock_create,
+            patch.object(HomeworkRepository, "set_job_id", return_value=None),
+            patch(CREATE_JOB_FUNC, new_callable=AsyncMock, return_value=_mock_job()),
+            patch(DISPATCH_FUNC, new_callable=AsyncMock, return_value=None),
         ):
             resp = await client.post(
                 "/api/v1/homework/submit",
@@ -858,7 +889,7 @@ class TestSubmitHomework:
                 ),
                 files={
                     "file": (
-                        "solution.py",
+                        filename,
                         io.BytesIO(b"print('hello')"),
                         "text/x-python",
                     )
@@ -867,9 +898,18 @@ class TestSubmitHomework:
 
         assert resp.status_code == 202
         data = resp.json()
-        assert data["submission_id"] == str(existing.id)
-        assert data["duplicate"] is True
-        assert data["status"] == "completed"
+        if turned_away:
+            assert data["submission_id"] == str(existing.id)
+            assert data["duplicate"] is True
+            assert data["status"] == "completed"
+            raw_hash_check.assert_awaited_once()
+            mock_create.assert_not_awaited()
+        else:
+            assert data["submission_id"] == str(created.id)
+            assert data["duplicate"] is False
+            assert data["status"] == "received"
+            raw_hash_check.assert_not_awaited()
+            mock_create.assert_awaited_once()
 
 
 class TestSubmitHomeworkOpenAPI:

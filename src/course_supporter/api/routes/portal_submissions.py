@@ -263,6 +263,7 @@ async def submit_portal_homework(
         course_node_id=course_root_id,
         node_id=node_id,
         authored_document_id=authored_document_id,
+        task_type=task_doc.task_type,
         file=file,
         delivery_mode="in_app",
         webhook_url=None,

@@ -265,6 +265,7 @@ async def submit_homework(
         course_node_id=course_node_id,
         node_id=node_id,
         authored_document_id=authored_document_id,
+        task_type=task_doc.task_type,
         file=file,
         delivery_mode="webhook",
         webhook_url=webhook_url,

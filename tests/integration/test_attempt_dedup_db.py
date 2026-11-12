@@ -67,7 +67,7 @@ from course_supporter.homework.evaluator_version import (
     EVALUATOR_VERSION_RECEIPT_KEY,
     evaluator_version,
 )
-from course_supporter.homework.path_config import PathConfig, SubmissionState
+from course_supporter.homework.path_config import PathConfig
 from course_supporter.homework.path_stages import (
     ATTEMPT_CLASSIFIER,
     CRITERIA_EVALUATION,
@@ -330,9 +330,9 @@ async def _verdict_rows(
         )
 
 
-def _version_of(state: SubmissionState) -> str:
-    """The evaluator's version of a ``task`` path in the shipped file."""
-    version = evaluator_version(AssignmentType.TASK, state, _shipped())
+def _version_of() -> str:
+    """The version of the evaluator of ``task`` in the shipped file."""
+    version = evaluator_version(AssignmentType.TASK, _shipped())
     assert version is not None
     return version
 
@@ -833,7 +833,7 @@ class TestLockVEachKeyAtTheRepository:
             "fingerprint": self._FP,
             "task_version": _VERSION_A,
             "criteria_list": (CriteriaLayer.MODEL.value, uuid.UUID(self._LIST)),
-            "evaluator_versions": frozenset({self._EVALUATOR}),
+            "evaluator_version": self._EVALUATOR,
         }
         return key | changed
 
@@ -888,7 +888,7 @@ class TestLockVEachKeyAtTheRepository:
             {"task_version": _VERSION_B},
             {"criteria_list": (CriteriaLayer.MODEL.value, uuid.uuid4())},
             {"criteria_list": (CriteriaLayer.AUTHOR.value, uuid.UUID(_LIST))},
-            {"evaluator_versions": frozenset({"ev1:" + "0" * 16})},
+            {"evaluator_version": "ev1:" + "0" * 16},
         ],
         ids=["fingerprint", "task_version", "list_id", "list_layer", "evaluator"],
     )
@@ -942,28 +942,6 @@ class TestLockVEachKeyAtTheRepository:
             )
             is None
         )
-
-    async def test_the_source_s_evaluator_among_those_in_force_is_found(
-        self,
-        session_factory: async_sessionmaker[AsyncSession],
-        task_world: dict[str, Any],
-    ) -> None:
-        """A review written on ``first`` is found for a ``repeat_*`` asking."""
-        source = await _reviewed_attempt(
-            session_factory,
-            task_world,
-            minute=0,
-            fingerprint=self._FP,
-            task_version=_VERSION_A,
-            list_address=self._key()["criteria_list"],
-            evaluator=self._EVALUATOR,
-        )
-        in_force = frozenset({"ev1:" + "1" * 16, self._EVALUATOR})
-
-        found = await self._lookup(
-            session_factory, task_world, **self._key(evaluator_versions=in_force)
-        )
-        assert found == source
 
     async def test_a_receipt_that_names_no_evaluator_is_never_a_source(
         self,
@@ -1317,8 +1295,9 @@ class TestEvaluatorLockBReviewedThenCopied:
         first = await _first_review(session_factory, task_world, tmp_path)
         assert first.attempt_receipt is not None
         written_by = first.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY]
-        # The version of the path the review walked: the first attempt's.
-        assert written_by == _version_of(SubmissionState.FIRST)
+        # The version of the evaluator of ``task``, though the review walked
+        # ``first`` and the copy below walks ``repeat_without_replies``.
+        assert written_by == _version_of()
         register_before = await _register_rows(session_factory)
 
         router = _NoModelRouter()
@@ -1346,8 +1325,6 @@ class TestEvaluatorLockBReviewedThenCopied:
         assert second.attempt_receipt is not None
         assert second.attempt_receipt[DEDUP_RECEIPT_KEY] == 1
         assert second.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY] == written_by
-        # Inherited from the source, not the version of the path the copy walked.
-        assert written_by != _version_of(SubmissionState.REPEAT_WITHOUT_REPLIES)
 
 
 class TestEvaluatorLockVChangedEvaluatorReviewsAnew:
@@ -1376,7 +1353,7 @@ class TestEvaluatorLockVChangedEvaluatorReviewsAnew:
         assert again.attempt_receipt is not None
         # Written by today's evaluator, under the rules raised.
         written_by = again.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY]
-        assert written_by == _version_of(SubmissionState.REPEAT_WITHOUT_REPLIES)
+        assert written_by == _version_of()
         assert written_by != first.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY]
 
     async def test_the_source_written_by_another_evaluator(

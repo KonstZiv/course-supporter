@@ -348,7 +348,6 @@ async def _run_path(
             student=student,
             tenant=tenant,
             entered_as=entered_as,
-            choice=choice,
             config=config,
             log=log,
         ):
@@ -508,7 +507,6 @@ async def _repeat_unchanged(
     student: Student | None,
     tenant: Tenant | None,
     entered_as: str,
-    choice: PathChoice,
     config: PathConfig,
     log: Any,
 ) -> bool:
@@ -522,9 +520,7 @@ async def _repeat_unchanged(
     stage runs, the funds port is not asked, and the builder's follow-up does
     not run: it follows up a review it built, and this one it did not.
     """
-    repeated = await repeat_unchanged_review(
-        session, submission.id, path=choice.key, config=config
-    )
+    repeated = await repeat_unchanged_review(session, submission.id, config=config)
     if repeated is None:
         return False
     if entered_as not in _RESULT_UNDER_WAY:
@@ -553,15 +549,15 @@ async def _record_evaluator_version(
 ) -> None:
     """Name in the receipt the evaluator that wrote the review; never fail it.
 
-    The version of the path the revision walked
+    The version of the evaluator of the revision's type
     (:func:`~course_supporter.homework.evaluator_version.evaluator_version`;
-    ``None`` for a path no model walks), flushed with the review for the
+    ``None`` for a type no model reviews), flushed with the review for the
     caller to commit. A version that cannot be read (logged) is not written:
     the review stands, and a receipt that names no evaluator is the source of
     no copy.
     """
     try:
-        version = evaluator_version(choice.key.task_type, choice.key.state, config)
+        version = evaluator_version(choice.key.task_type, config)
     except Exception:
         log.warning("path_evaluator_version_failed", exc_info=True)
         return

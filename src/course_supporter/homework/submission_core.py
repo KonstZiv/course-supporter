@@ -22,8 +22,13 @@ A test is answered with a structure rather than a file (task 07):
 ``create_and_dispatch_test_submission`` runs the test's doors, stores the
 canonical answers the way a file is stored, and shares everything after the
 upload with the file path — one private tail, so the two cannot drift. The one
-difference in the tail is deduplication: a file is deduplicated, a test is not,
-because every attempt at a test is scored anew (task 07, decision 7).
+difference in the tail is deduplication: a test is not deduplicated, because
+every attempt at it is scored anew (task 07, decision 7). A file is turned
+away by its raw hash ("already submitted", no new submission) only where the
+new path's dedup does not judge the same work — one rule of the same work,
+:func:`~course_supporter.homework.attempt_dedup.same_work_reaches_the_new_path`
+(task 13): for ``task`` and ``short_task`` an identical file is a new
+submission, met at the doors by that dedup.
 """
 
 from __future__ import annotations
@@ -48,6 +53,7 @@ from course_supporter.api.upload_validation import (
     file_extension,
 )
 from course_supporter.enqueue import create_homework_job, dispatch_homework
+from course_supporter.homework.attempt_dedup import same_work_reaches_the_new_path
 from course_supporter.homework.test_doors import check_test_answers, stored_answers
 from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
 from course_supporter.security.policies import HOMEWORK_POLICY
@@ -389,6 +395,7 @@ async def create_and_dispatch_submission(
     course_node_id: uuid.UUID,
     node_id: uuid.UUID,
     authored_document_id: uuid.UUID,
+    task_type: str,
     file: UploadFile,
     delivery_mode: str,
     webhook_url: str | None = None,
@@ -404,8 +411,11 @@ async def create_and_dispatch_submission(
     refuses a comment the review cannot take (:func:`check_student_note`, the
     last door, before anything is written), streams the file to S3 (computing
     its SHA-256), re-checks the uploaded size, then — inside an S3-cleanup
-    guard — resolves the student, dedupes, creates the submission + durable
-    Job, commits, and dispatches AFTER the commit (DD-3.2.6-A). A failure
+    guard — resolves the student, dedupes by the raw file's hash unless the
+    task's type is one whose same work the new path's dedup judges
+    (``task_type``, :func:`same_work_reaches_the_new_path`), creates the
+    submission + durable Job, commits, and dispatches AFTER the commit
+    (DD-3.2.6-A). A failure
     before the commit deletes the uploaded file; a dispatch failure leaves the
     committed submission re-dispatchable.
 
@@ -464,7 +474,7 @@ async def create_and_dispatch_submission(
         content_type=content_type,
         original_filename=file.filename,
         file_hash=file_hash,
-        deduplicate=True,
+        deduplicate=not same_work_reaches_the_new_path(task_type),
         delivery_mode=delivery_mode,
         webhook_url=webhook_url,
         response_language=response_language,
@@ -587,8 +597,10 @@ async def _record_and_dispatch(
 
         hw_repo = HomeworkRepository(session)
 
-        # Dedup: identical file already reviewed for this student + task. A
-        # test is not deduplicated: every attempt at it is scored anew.
+        # Dedup: identical file already reviewed for this student + task —
+        # only where the new path's dedup does not judge the same work (one
+        # rule, task 13). A test is not deduplicated: every attempt at it is
+        # scored anew.
         existing = (
             await hw_repo.find_duplicate(
                 student_id=student.id,

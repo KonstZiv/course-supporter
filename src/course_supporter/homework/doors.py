@@ -20,8 +20,8 @@ Interface:
     * :class:`DoorReading` — what the doors read, as both bodies carry it on:
       the text, what was not opened, how the file was read, and what the
       signal screen noticed (task 11); for the evaluation stage, the files
-      (task 09b) and, for a project, the base versions of the changed ones
-      (project chain K1). :func:`carry_door_reading` puts what was not
+      (task 09b) and, for a project on the new path, the text of every file
+      of its base (project chain K3). :func:`carry_door_reading` puts what was not
       opened, the encoding and the flags onto the Stage 2 verdict, where the
       read path finds them.
       :attr:`DoorReading.safety_text` is the one place the safety check's
@@ -89,11 +89,14 @@ class DoorReading:
             the author's base, by path (project chain K1) -- the unchanged
             files of the base are the author's, not the student's. Empty for
             a test.
-        base_files: A project's base version of each changed file in
-            :attr:`files`, by path, read as the delta context reads the base,
-            so a quote found in it too can be told apart from the student's
-            own (project chain K1). Empty for a new file, a project without a
-            base and every other type.
+        base_files: The text of every file of a project's base -- the
+            author's code -- by path, read as :attr:`files` are (the encoding
+            recovered, NFC), so a quote found in it can be told apart from
+            the student's own (project chain K3). Every file, not only the
+            changed ones: the author's code moved or renamed sits in a "new"
+            file of the work. Read only for the new path and only after the
+            size check; empty for today's Mentor, a project without a base
+            and every other type.
     """
 
     text: str

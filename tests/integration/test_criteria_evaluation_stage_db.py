@@ -18,7 +18,10 @@ section 5:
   and writes nothing;
 * K4 — a stage that got the list puts back the task's revisions that wait for
   it, in a session of its own, and a queue that refuses costs this submission
-  nothing.
+  nothing;
+* project chain K3 — a quote of the project's base is asked about again; a
+  second one, or a "met" taken back, is written "not met" with
+  ``quote_from_base``; a task without a base is asked exactly as before.
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -38,6 +41,10 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+from course_supporter.agents.criteria_evaluator import EvaluationInput
+from course_supporter.agents.criteria_evaluator import (
+    render_context as evaluation_render_context,
+)
 from course_supporter.agents.review_explainer import ExplanationInput, render_context
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
@@ -45,7 +52,10 @@ from course_supporter.criteria_kinds import (
     VerdictValue,
     WeightCategory,
 )
-from course_supporter.homework.criteria_evaluation import evaluate_criteria
+from course_supporter.homework.criteria_evaluation import (
+    _course_language,
+    evaluate_criteria,
+)
 from course_supporter.homework.criteria_form import Criterion
 from course_supporter.homework.criteria_list_service import (
     CriteriaInForce,
@@ -60,6 +70,7 @@ from course_supporter.homework.criteria_verdicts import (
     is_passed,
     score_percent,
 )
+from course_supporter.homework.doors import DoorReading
 from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_config import (
     PathKey,
@@ -72,6 +83,7 @@ from course_supporter.homework.path_stages import (
     StageOutcome,
     _execution,
 )
+from course_supporter.homework.task_context import load_task_context
 from course_supporter.homework.verdict_explanation import explanation_facts
 from course_supporter.llm.error_categories import (
     ErrorCategory,
@@ -296,6 +308,7 @@ def _context(
     *,
     work: tuple[WorkFile, ...] = _FILES,
     submission_text: str = _WORK,
+    door: DoorReading | None = None,
 ) -> StageContext:
     config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
     return StageContext(
@@ -308,6 +321,7 @@ def _context(
         stage_name=CRITERIA_EVALUATION,
         stage=config.stages[CRITERIA_EVALUATION],
         session_factory=AsyncMock(),
+        door=door,
         work=work,
     )
 
@@ -320,9 +334,15 @@ async def _evaluate(
     source: _Source | None = None,
     work: tuple[WorkFile, ...] = _FILES,
     submission_text: str = _WORK,
+    door: DoorReading | None = None,
 ) -> StageOutcome:
     context = _context(
-        session, router, submission, work=work, submission_text=submission_text
+        session,
+        router,
+        submission,
+        work=work,
+        submission_text=submission_text,
+        door=door,
     )
     return await evaluate_criteria(
         context,
@@ -1086,3 +1106,129 @@ class TestARealNotMetStays:
         assert is_passed(stored) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(stored) == 40
+
+
+# Project chain K3: the author's base the student built on. The work is
+# solution.py as above; the author gave its first line -- the signature -- and
+# the student wrote the body.
+_BASE_FILES = {"solution.py": "def fibonacci(n):\n    pass\n", "README.md": "# Fib\n"}
+_PROJECT_DOOR = DoorReading(text=_WORK, files=_FILES, base_files=_BASE_FILES)
+
+
+class TestAQuoteOfTheProjectsBase:
+    """Lock b on a real database: the row the author reads."""
+
+    async def _evaluate_with_base(
+        self, session: AsyncSession, router: _Router, submission: HomeworkSubmission
+    ) -> dict[str, SubmissionCriterionVerdict]:
+        outcome = await _evaluate(session, router, submission, door=_PROJECT_DOOR)
+        assert outcome == StageOutcome.ok()
+        return await _rows(session, submission)
+
+    async def test_it_is_asked_again_and_a_quote_of_the_students_stands(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        router = _Router(
+            _answer(_met("c1", _C1_QUOTE), _met("c2.p1", _P1_QUOTE), _not_met("c2.p2")),
+            _answer(_met("c1", "return fibonacci(n - 1)")),
+        )
+
+        rows = await self._evaluate_with_base(db_session, router, submission)
+
+        _, again = router.requests
+        assert again["render"]["items"] == ["c1"]
+        (note,) = again["render"]["repeat"]
+        assert (
+            note["problem"] == RepeatItem("c1", RepeatReason.QUOTE_FROM_BASE).feedback
+        )
+        assert (rows["c1"].verdict, rows["c1"].quote_line_start) == (
+            VerdictValue.MET,
+            4,
+        )
+        assert (rows["c1"].retried, rows["c1"].quote_from_base) == (True, False)
+        assert not any(row.quote_from_base for row in rows.values())
+
+    async def test_a_second_quote_of_the_base_is_not_met_with_the_flag(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        router = _Router(
+            _answer(_met("c1", _C1_QUOTE), _met("c2.p1", _P1_QUOTE), _not_met("c2.p2")),
+            _answer(_met("c1", _C1_QUOTE)),
+        )
+
+        with capture_logs() as logs:
+            rows = await self._evaluate_with_base(db_session, router, submission)
+
+        row = rows["c1"]
+        assert (row.verdict, row.model_verdict) == (
+            VerdictValue.NOT_MET,
+            VerdictValue.MET,
+        )
+        assert (row.quote, row.quote_file) == (_C1_QUOTE, None)
+        assert (row.quote_from_base, row.quote_not_found, row.retried) == (
+            True,
+            False,
+            True,
+        )
+        assert [
+            log["item_id"]
+            for log in logs
+            if log["event"] == ("criteria_evaluation_quote_from_base")
+        ] == ["c1"]
+        stored = list(rows.values())
+        assert is_passed(stored) is False
+        # c1 "must" (3) not met, c2 (2) not met: 0 of 5.
+        assert score_percent(stored) == 0
+
+    async def test_a_met_taken_back_is_not_met_with_the_flag(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        missing = "Сигнатуру дав автор; власного коду немає."
+        router = _Router(
+            _answer(_met("c1", _C1_QUOTE), _met("c2.p1", _P1_QUOTE), _not_met("c2.p2")),
+            _answer(_not_met("c1", missing)),
+        )
+
+        rows = await self._evaluate_with_base(db_session, router, submission)
+
+        row = rows["c1"]
+        assert (row.verdict, row.model_verdict, row.missing) == (
+            VerdictValue.NOT_MET,
+            VerdictValue.NOT_MET,
+            missing,
+        )
+        assert (row.quote_from_base, row.quote_not_found) == (True, False)
+
+
+class TestATaskWithoutABase:
+    """Lock d: a task's door carries no base, and the model is asked as before."""
+
+    async def test_one_request_rendered_as_without_the_rule(
+        self,
+        db_session: AsyncSession,
+        doc: AuthoredDocument,
+        submission: HomeworkSubmission,
+    ) -> None:
+        router = _Router(_ALL_STAND)
+        door = DoorReading(text=_WORK, files=_FILES)
+
+        await _evaluate(db_session, router, submission, door=door)
+
+        (request,) = router.requests
+        title, description, text = await load_task_context(db_session, doc.id)
+        shown = EvaluationInput(
+            task_title=title,
+            task_description=description,
+            task_text=text,
+            criteria=_CRITERIA,
+            submission_text=_WORK,
+            language=await _course_language(db_session, submission),
+        )
+        expected = evaluation_render_context(
+            shown, expected=["c1", "c2.p1", "c2.p2"], repeat=[]
+        )
+        assert json.dumps(request["render"], ensure_ascii=False, sort_keys=True) == (
+            json.dumps(expected, ensure_ascii=False, sort_keys=True)
+        )
+        rows = await _rows(db_session, submission)
+        assert not any(row.quote_from_base or row.retried for row in rows.values())

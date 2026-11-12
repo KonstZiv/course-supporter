@@ -25,9 +25,10 @@ Steps:
        it are put back in the queue (``PRE-FLIGHT.md`` 9.2, entry 1).
     2. One request about every item of the list.
     3. The verdicts that cannot stand as given — a quote not found, too long,
-       too short, of several lines, missing; a "not met" without a sentence —
-       are asked about once more, alone, each with its reason, of the rung
-       that answered (``PRE-FLIGHT.md`` 9.5 (a); widened 2026-10-02).
+       too short, of several lines, missing, or the author's (a project's
+       base, chain K3); a "not met" without a sentence — are asked about once
+       more, alone, each with its reason, of the rung that answered
+       (``PRE-FLIGHT.md`` 9.5 (a); widened 2026-10-02).
     4. The verdicts are settled — the resubmission safeguard reads the latest
        earlier verdicts of the same list — and written.
 
@@ -111,7 +112,8 @@ async def evaluate_criteria(
 
     Args:
         context: The stage's context; ``work`` must carry the files the doors
-            read.
+            read. For a project, ``door.base_files`` is the author's base its
+            quotes are told apart from (chain K3).
         execution: The stage's description as the router runs it.
         criteria_source: Where the list comes from; ``None`` — the production
             service, which composes the list on a miss in sessions of its own
@@ -146,7 +148,8 @@ async def evaluate_criteria(
             "the evaluation stage needs the work file by file, and the doors gave none"
         )
         raise ValueError(msg)
-    work = SubmittedWork(context.work)
+    base = context.door.base_files.values() if context.door is not None else ()
+    work = SubmittedWork(context.work, base=base)
 
     title, description, text = await load_task_context(
         context.session, submission.authored_document_id
@@ -270,11 +273,14 @@ def _log_settled(log: Any, records: Sequence[VerdictRecord], first: Evaluated) -
 
     The safeguard's every firing is logged (decision 7): it is the one rule
     that can hide a real decline, and the log is where that shows. So is every
-    quote that did not stand after the repeat — the flag for the author.
+    quote that did not stand after the repeat, and every item that fell for a
+    quote of the project's base — the flags for the author.
     """
     for record in records:
         if record.quote_not_found:
             log.info("criteria_evaluation_quote_not_found", item_id=record.item_id)
+        if record.quote_from_base:
+            log.info("criteria_evaluation_quote_from_base", item_id=record.item_id)
         if record.safeguard_submission_id is not None:
             log.info(
                 "criteria_evaluation_safeguard_kept",

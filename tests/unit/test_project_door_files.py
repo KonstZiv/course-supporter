@@ -3,15 +3,18 @@
 A project is the author's base with the student's work on top. What the
 evaluation of criteria may quote is the student's part: each file new or
 changed against the base, as the screen read it (``DoorReading.files``), and
-beside each changed file the base version it was changed from
-(``DoorReading.base_files``), so that a later step can tell a quote of the
-student's from one of the author's. The text the models read and the text the
-safety check reads stay exactly what they were.
+beside them the text of every file of the base (``DoorReading.base_files``,
+widened from the changed files' base versions by chain K3), so that a quote
+of the student's can be told from one of the author's. The text the models
+read and the text the safety check reads stay exactly what they were. The
+base's own locks -- its encoding, once, after the size check -- are K3's
+(``tests/unit/test_project_base_corpus.py``).
 """
 
 from __future__ import annotations
 
 import io
+import unicodedata
 import uuid
 import zipfile
 
@@ -79,7 +82,7 @@ async def _door(
     project: dict[str, bytes],
     base: dict[str, bytes] | None = None,
 ) -> tuple[DoorReading, _FakeS3]:
-    """The project's door, with ``base`` attached as its stored snapshot."""
+    """The new path's project door, with ``base`` attached as its snapshot."""
     monkeypatch.setattr(mod, "project_context_budget_chars", lambda: 1_000_000)
     s3 = _FakeS3()
     base_id = None
@@ -105,6 +108,7 @@ async def _door(
         file_bytes=_zip_bytes(project),
         raw_key="homework/t/s/proj.zip",
         languages=_LANGUAGES,
+        base_corpus=True,
     )
     assert reading is not None
     return reading, s3
@@ -185,13 +189,19 @@ class TestTheStudentsFiles:
             ("notes.txt", ErrorCategory.CHARSET_VIOLATION),
         ]
 
-    async def test_b_a_changed_file_carries_its_base_a_new_one_none(
+    async def test_b_the_base_is_every_text_file_of_the_base(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Lock b: the base's text word for word, from the one base snapshot."""
+        """Lock b, widened by K3: the changed, the unchanged and the deleted.
+
+        The base's text word for word, from the one base snapshot; its binary
+        file has none.
+        """
         reading, s3 = await _door(monkeypatch, PROJECT, BASE)
 
-        assert dict(reading.base_files) == {"app.py": BASE["app.py"].decode()}
+        assert dict(reading.base_files) == {
+            path: BASE[path].decode() for path in ("app.py", "old.py", "util.py")
+        }
         assert "lib/extra.py" not in reading.base_files
         assert s3.get_calls == ["base/k"]
 
@@ -217,8 +227,10 @@ class TestTheStudentsFiles:
         assert files["slides.pdf"].has_lines is False
         assert "друга версія" in files["report.docx"].text
         assert "Slides of the project" in files["slides.pdf"].text
-        assert reading.base_files["report.docx"] == DefaultTextExtractor().extract(
-            EntryClass.DOCUMENT, old_report
+        old_text = DefaultTextExtractor().extract(EntryClass.DOCUMENT, old_report)
+        assert old_text is not None
+        assert reading.base_files["report.docx"] == unicodedata.normalize(
+            "NFC", old_text
         )
 
     async def test_d_without_a_base_every_read_file_is_the_students(
@@ -231,7 +243,7 @@ class TestTheStudentsFiles:
         assert not reading.base_files
         assert s3.get_calls == []
 
-    async def test_a_base_document_that_cannot_be_read_has_no_base_version(
+    async def test_a_base_document_that_cannot_be_read_is_left_out_of_the_base(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The submission is not failed for the author's broken document."""
@@ -250,7 +262,8 @@ class TestTheStudentsFiles:
         reading, _ = await _door(monkeypatch, BASE, BASE)
 
         assert reading.files == ()
-        assert not reading.base_files
+        # The base is all the author's, and is there to tell its quotes by.
+        assert sorted(reading.base_files) == ["app.py", "old.py", "util.py"]
 
 
 class TestTheTextIsUntouched:

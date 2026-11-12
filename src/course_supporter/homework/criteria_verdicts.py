@@ -66,6 +66,15 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
 * The resubmission safeguard: a "not met" on an item whose LATEST earlier
   verdict on the same list was "met", and whose quote is still in the work
   word for word, stays "met" — and says so in its row.
+* A quote of the author's code is not the student's (project chain K3): a
+  quote that, compared as above, is in ANY text file of the project's base —
+  in the unchanged lines of a changed file, in a file moved or renamed, or in
+  a file the student did not touch — is asked about once more like any other
+  that does not stand. A "met" that still stands on the base after the
+  repeat, or that the repeat took back, is "not met" with the author's flag
+  ``quote_from_base`` — not unconfirmed: the quote was found, and it is not
+  the student's. The safeguard does not keep a quote of the base either.
+  Without a base (every type but a project) nothing changes.
 
 Replacing:
     The stage depends on the functions above and on their value types; a new
@@ -385,6 +394,11 @@ class SubmittedWork:
     files (their names, the list of what was not opened) are not text of the
     work, so a quote of them is not found.
 
+    ``base`` is the author's code the work was built on -- for a project, the
+    text of every file of its base (project chain K3); empty for every other
+    type. A quote found in it is the author's, not the student's
+    (:meth:`is_from_base`).
+
     >>> work = SubmittedWork(
     ...     [WorkFile("main.py", "def double(n):\\r\\n    return n * 2\\n", True)]
     ... )
@@ -398,8 +412,29 @@ class SubmittedWork:
     QuotePlace(file='.gitignore', lines=(2, 2))
     """
 
-    def __init__(self, files: Sequence[WorkFile]) -> None:
+    def __init__(self, files: Sequence[WorkFile], *, base: Iterable[str] = ()) -> None:
         self._files = tuple(_SearchableFile(file) for file in files)
+        # One string for the whole base: a squeezed text has no newline, so
+        # the one joining two files keeps a quote from spanning them.
+        self._base = "\n".join(_squeezed(text) for text in base)
+
+    def is_from_base(self, quote: str) -> bool:
+        """Whether ``quote`` is in a file of the base, compared as :meth:`find` does.
+
+        Anywhere in a file -- the base's lines are not the student's, so no
+        line is asked for -- and at any length but none.
+
+        >>> work = SubmittedWork(
+        ...     [WorkFile("b.py", "def solve(n):\\n    return n\\n", True)],
+        ...     base=["def solve(n):\\n    return n\\n"],
+        ... )
+        >>> work.is_from_base("def solve(n):")
+        True
+        >>> SubmittedWork([]).is_from_base("def solve(n):")
+        False
+        """
+        needle = _squeezed(quote)
+        return bool(needle) and needle in self._base
 
     def is_in_a_line(self, quote: str) -> bool:
         """Whether ``quote`` is in a line of the work, whole or as a piece.
@@ -440,6 +475,8 @@ class RepeatReason(StrEnum):
     QUOTE_TOO_SHORT = "quote_too_short"
     """Too short to prove anything: counted as a quote not found (9.4)."""
     QUOTE_NOT_FOUND = "quote_not_found"
+    QUOTE_FROM_BASE = "quote_from_base"
+    """The quote is the author's: in a file of the project's base (K3)."""
     NO_SENTENCE = "no_sentence"
 
 
@@ -457,6 +494,10 @@ _REPEAT_FEEDBACK: Final[Mapping[RepeatReason, str]] = MappingProxyType(
             "spaces, too few to show anything"
         ),
         RepeatReason.QUOTE_NOT_FOUND: "the quote is not in the work word for word",
+        RepeatReason.QUOTE_FROM_BASE: (
+            "the quote is taken from the code the author gave; a quote from "
+            "the student's own code is needed"
+        ),
         RepeatReason.NO_SENTENCE: (
             "the verdict is 'not_met' but gives no sentence on what is missing"
         ),
@@ -495,11 +536,15 @@ def _standing_quote(
         return RepeatReason.QUOTE_TOO_LONG
     place = work.find(text)
     if place is not None:
-        return place
+        return RepeatReason.QUOTE_FROM_BASE if work.is_from_base(text) else place
     # A short quote the search did not take as a whole line is named as too
     # short: a longer quote is what mends it, not another place to look.
     if len(_squeezed(text)) < MIN_QUOTE_CHARS:
         return RepeatReason.QUOTE_TOO_SHORT
+    # Not in the student's files but in the author's -- an unchanged file the
+    # review's context shows: the author's code, not a quote made up.
+    if work.is_from_base(text):
+        return RepeatReason.QUOTE_FROM_BASE
     return RepeatReason.QUOTE_NOT_FOUND
 
 
@@ -517,11 +562,12 @@ def items_to_ask_again(
     """The verdicts that cannot stand as given, each with its reason.
 
     A "met" without a quote that stands — none, more than one line, over
-    :data:`MAX_QUOTE_CHARS` characters, too short or not in the work — and a
-    "not met" without a sentence. The stage asks once more about these alone,
-    naming each one's reason (decision 11, widened to every defect of a single
-    verdict on 2026-10-02); every other item keeps its first answer. The field
-    a verdict does not use is never a reason.
+    :data:`MAX_QUOTE_CHARS` characters, too short, not in the work or the
+    author's (in the project's base) — and a "not met" without a sentence.
+    The stage asks once more about these alone, naming each one's reason
+    (decision 11, widened to every defect of a single verdict on 2026-10-02);
+    every other item keeps its first answer. The field a verdict does not use
+    is never a reason.
     """
     return tuple(
         RepeatItem(item.id, reason)
@@ -576,7 +622,8 @@ def settle_verdicts(
        within one list only — task 08, decision 21), said "met", and its quote
        is still in the work — met, kept, with the earlier submission named;
     3. otherwise not met — and a "met" whose quote did not stand is flagged
-       for the author: unconfirmed.
+       for the author: unconfirmed; or, when the item falls for a quote of
+       the project's base (:func:`_from_base`), ``quote_from_base``.
 
     The field a verdict does not use is ignored and not stored: the sentence
     of a "met", the quote of a "not met". A "not met" without a sentence is
@@ -612,11 +659,13 @@ def settle_verdicts(
     def judged(
         item_id: str, kind: VerdictItemKind, weight: WeightCategory | None
     ) -> VerdictRecord:
+        settled = _word_to_settle(first[item_id], again.get(item_id), work)
         return _judged(
-            _word_to_settle(first[item_id], again.get(item_id), work),
+            settled,
             kind=kind,
             weight=weight,
             retried=item_id in again,
+            from_base=_from_base(first[item_id], settled, work),
             criteria=criteria,
             work=work,
             earlier=earlier,
@@ -675,6 +724,20 @@ def _word_to_settle(
     return first if took_back and too_short_of_the_work else repeat
 
 
+def _from_base(first: ItemVerdict, settled: ItemVerdict, work: SubmittedWork) -> bool:
+    """Whether the item falls for a quote of the project's base (K3).
+
+    Its last word is a "met" on a quote of the base, or a "not met" that took
+    back a first "met" on one (decision 2 of project chain K3). Either way
+    the row reads "not met" with ``quote_from_base`` — never unconfirmed: the
+    quote was found, and it is the author's. A repeat that answers with a
+    quote of the student's own code settles as any other.
+    """
+    if settled.verdict is VerdictValue.MET:
+        return _repeat_reason(settled, work) is RepeatReason.QUOTE_FROM_BASE
+    return _repeat_reason(first, work) is RepeatReason.QUOTE_FROM_BASE
+
+
 def _unconfirmed(item: ScoredItem) -> bool:
     """The model said "met" and no line of the work bore it out: unconfirmed.
 
@@ -714,12 +777,15 @@ def _judged(
     kind: VerdictItemKind,
     weight: WeightCategory | None,
     retried: bool,
+    from_base: bool,
     criteria: CriteriaInForce,
     work: SubmittedWork,
     earlier: Mapping[str, EarlierVerdict],
 ) -> VerdictRecord:
     """The record of one item the model judged — steps 1 to 3 of settling."""
     said_met = item.verdict is VerdictValue.MET
+    # A "met" on the base's quote was found: the author's, not unconfirmed.
+    unconfirmed = said_met and not from_base
     quote = _given(item.quote) if said_met else None
     missing = None if said_met else _given(item.missing)
     if said_met:
@@ -753,7 +819,8 @@ def _judged(
             quote_lines=kept_place.lines,
             missing=missing,
             retried=retried,
-            quote_not_found=said_met,
+            quote_not_found=unconfirmed,
+            quote_from_base=from_base,
             safeguard_submission_id=before.submission_id,
         )
     return VerdictRecord(
@@ -765,7 +832,8 @@ def _judged(
         quote=quote,
         missing=missing,
         retried=retried,
-        quote_not_found=said_met,
+        quote_not_found=unconfirmed,
+        quote_from_base=from_base,
     )
 
 
@@ -786,7 +854,9 @@ def _kept_by_safeguard(
     ):
         return None
     place = work.find(before.quote)
-    return None if place is None else (before, place)
+    if place is None or work.is_from_base(before.quote):
+        return None
+    return before, place
 
 
 class ScoredItem(Protocol):

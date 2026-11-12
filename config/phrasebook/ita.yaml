@@ -40,8 +40,8 @@ test.explanations_in_course_language: Le spiegazioni sono fornite nella lingua d
 position.audio: Audio, {time}
 link.later_in_course: Maggiori dettagli più avanti nel corso
 review.unchanged: Il lavoro non è cambiato dal tentativo precedente (tentativo {attempt}), quindi la recensione è stata ripetuta senza un nuovo controllo.
-verdict.rule.author_musts_met: Ha soddisfatto tutti i criteri obbligatori dell'autore e ha ottenuto un punteggio di {score}. Per i compiti con criteri obbligatori dell'autore la soglia di approvazione è {threshold}, quindi il lavoro è approvato.
-verdict.rule.author_musts_unmet: I criteri obbligatori dell'autore non sono soddisfatti, quindi il lavoro non è approvato. Il suo punteggio è {score}.
-verdict.rule.author_musts_below_threshold: Ha soddisfatto tutti i criteri obbligatori dell'autore, ma ha ottenuto un punteggio di {score}, sotto la soglia di {threshold} per i compiti con criteri obbligatori dell'autore, quindi il lavoro non è approvato.
-verdict.rule.no_author_musts_passed: L'autore non ha approvato criteri obbligatori per questo compito. Per questi compiti la soglia di approvazione è {threshold}; il suo punteggio è {score}, quindi il lavoro è approvato.
-verdict.rule.no_author_musts_failed: L'autore non ha approvato criteri obbligatori per questo compito. Per questi compiti la soglia di approvazione è {threshold}; il suo punteggio è {score}, quindi il lavoro non è approvato.
+verdict.rule.author_musts_met: Ha soddisfatto tutti i criteri obbligatori dell'autore e ha ottenuto {score} su 100. Per i compiti con criteri obbligatori dell'autore la soglia di approvazione è {threshold}, quindi il lavoro è approvato.
+verdict.rule.author_musts_unmet: I criteri obbligatori dell'autore non sono soddisfatti, quindi il lavoro non è approvato. Il suo punteggio è {score} su 100.
+verdict.rule.author_musts_below_threshold: Ha soddisfatto tutti i criteri obbligatori dell'autore, ma ha ottenuto {score} su 100, sotto la soglia di {threshold} per i compiti con criteri obbligatori dell'autore, quindi il lavoro non è approvato.
+verdict.rule.no_author_musts_passed: L'autore non ha approvato criteri obbligatori per questo compito. Per questi compiti la soglia di approvazione è {threshold} su 100; il suo punteggio è {score}, quindi il lavoro è approvato.
+verdict.rule.no_author_musts_failed: L'autore non ha approvato criteri obbligatori per questo compito. Per questi compiti la soglia di approvazione è {threshold} su 100; il suo punteggio è {score}, quindi il lavoro non è approvato.

@@ -40,8 +40,8 @@ test.explanations_in_course_language: Penjelasan diberikan dalam bahasa kursus.
 position.audio: audio, {time}
 link.later_in_course: Selengkapnya — nanti di kursus ini
 review.unchanged: Pekerjaan tidak berubah sejak percobaan sebelumnya (percobaan {attempt}), sehingga ulasan diulang tanpa pemeriksaan baru.
-verdict.rule.author_musts_met: Anda telah memenuhi semua kriteria wajib dari penulis dan mendapat skor {score}. Untuk tugas dengan kriteria wajib dari penulis, batas lulus adalah {threshold}, sehingga tugas dinyatakan lulus.
-verdict.rule.author_musts_unmet: Kriteria wajib dari penulis tidak terpenuhi, sehingga tugas dinyatakan tidak lulus. Skor Anda adalah {score}.
-verdict.rule.author_musts_below_threshold: Anda telah memenuhi semua kriteria wajib dari penulis, tetapi mendapat skor {score} — di bawah batas {threshold} untuk tugas dengan kriteria wajib dari penulis, sehingga tugas dinyatakan tidak lulus.
-verdict.rule.no_author_musts_passed: Penulis belum menyetujui kriteria wajib untuk tugas ini. Untuk tugas seperti ini, batas lulus adalah {threshold}; skor Anda adalah {score}, sehingga tugas dinyatakan lulus.
-verdict.rule.no_author_musts_failed: Penulis belum menyetujui kriteria wajib untuk tugas ini. Untuk tugas seperti ini, batas lulus adalah {threshold}; skor Anda adalah {score}, sehingga tugas dinyatakan tidak lulus.
+verdict.rule.author_musts_met: Anda telah memenuhi semua kriteria wajib dari penulis dan mendapat {score} dari 100. Untuk tugas dengan kriteria wajib dari penulis, batas lulus adalah {threshold}, sehingga tugas dinyatakan lulus.
+verdict.rule.author_musts_unmet: Kriteria wajib dari penulis tidak terpenuhi, sehingga tugas dinyatakan tidak lulus. Skor Anda adalah {score} dari 100.
+verdict.rule.author_musts_below_threshold: Anda telah memenuhi semua kriteria wajib dari penulis, tetapi mendapat {score} dari 100 — di bawah batas {threshold} untuk tugas dengan kriteria wajib dari penulis, sehingga tugas dinyatakan tidak lulus.
+verdict.rule.no_author_musts_passed: Penulis belum menyetujui kriteria wajib untuk tugas ini. Untuk tugas seperti ini, batas lulus adalah {threshold} dari 100; skor Anda adalah {score}, sehingga tugas dinyatakan lulus.
+verdict.rule.no_author_musts_failed: Penulis belum menyetujui kriteria wajib untuk tugas ini. Untuk tugas seperti ini, batas lulus adalah {threshold} dari 100; skor Anda adalah {score}, sehingga tugas dinyatakan tidak lulus.

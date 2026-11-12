@@ -40,8 +40,8 @@ test.explanations_in_course_language: The explanation is provided in the course 
 position.audio: audio, {time}
 link.later_in_course: More on this later in the course
 review.unchanged: The work has not changed since the previous attempt (attempt {attempt}), so the review is repeated without a new check.
-verdict.rule.author_musts_met: You met all of the author's mandatory criteria and scored {score}. For tasks with the author's mandatory criteria the pass threshold is {threshold}, so the work has passed.
-verdict.rule.author_musts_unmet: The author's mandatory criteria are not met, so the work has not passed. Your score is {score}.
-verdict.rule.author_musts_below_threshold: You met all of the author's mandatory criteria, but scored {score}, below the threshold of {threshold} for tasks with the author's mandatory criteria, so the work has not passed.
-verdict.rule.no_author_musts_passed: The author has not approved mandatory criteria for this task. For such tasks the pass threshold is {threshold}; your score is {score}, so the work has passed.
-verdict.rule.no_author_musts_failed: The author has not approved mandatory criteria for this task. For such tasks the pass threshold is {threshold}; your score is {score}, so the work has not passed.
+verdict.rule.author_musts_met: You met all of the author's mandatory criteria and scored {score} out of 100. For tasks with the author's mandatory criteria the pass threshold is {threshold}, so the work has passed.
+verdict.rule.author_musts_unmet: The author's mandatory criteria are not met, so the work has not passed. Your score is {score} out of 100.
+verdict.rule.author_musts_below_threshold: You met all of the author's mandatory criteria, but scored {score} out of 100, below the threshold of {threshold} for tasks with the author's mandatory criteria, so the work has not passed.
+verdict.rule.no_author_musts_passed: The author has not approved mandatory criteria for this task. For such tasks the pass threshold is {threshold} out of 100; your score is {score}, so the work has passed.
+verdict.rule.no_author_musts_failed: The author has not approved mandatory criteria for this task. For such tasks the pass threshold is {threshold} out of 100; your score is {score}, so the work has not passed.

@@ -40,8 +40,8 @@ test.explanations_in_course_language: Wyjaśnienia podano w języku kursu.
 position.audio: audio, {time}
 link.later_in_course: Więcej — dalej w kursie
 review.unchanged: Praca nie zmieniła się od poprzedniej próby (próba {attempt}), dlatego recenzja została powtórzona bez ponownego sprawdzenia.
-verdict.rule.author_musts_met: Wszystkie obowiązkowe kryteria autora zostały spełnione, a wynik wynosi {score}. Dla zadań z obowiązkowymi kryteriami autora próg zaliczenia wynosi {threshold}, więc praca jest zaliczona.
-verdict.rule.author_musts_unmet: Obowiązkowe kryteria autora nie zostały spełnione, więc praca nie jest zaliczona. Wynik wynosi {score}.
-verdict.rule.author_musts_below_threshold: Wszystkie obowiązkowe kryteria autora zostały spełnione, ale wynik wynosi {score} — poniżej progu {threshold} dla zadań z obowiązkowymi kryteriami autora, więc praca nie jest zaliczona.
-verdict.rule.no_author_musts_passed: Autor nie zatwierdził obowiązkowych kryteriów dla tego zadania. Dla takich zadań próg zaliczenia wynosi {threshold}; wynik wynosi {score}, więc praca jest zaliczona.
-verdict.rule.no_author_musts_failed: Autor nie zatwierdził obowiązkowych kryteriów dla tego zadania. Dla takich zadań próg zaliczenia wynosi {threshold}; wynik wynosi {score}, więc praca nie jest zaliczona.
+verdict.rule.author_musts_met: Wszystkie obowiązkowe kryteria autora zostały spełnione, a wynik wynosi {score} na 100. Dla zadań z obowiązkowymi kryteriami autora próg zaliczenia wynosi {threshold}, więc praca jest zaliczona.
+verdict.rule.author_musts_unmet: Obowiązkowe kryteria autora nie zostały spełnione, więc praca nie jest zaliczona. Wynik wynosi {score} na 100.
+verdict.rule.author_musts_below_threshold: Wszystkie obowiązkowe kryteria autora zostały spełnione, ale wynik wynosi {score} na 100 — poniżej progu {threshold} dla zadań z obowiązkowymi kryteriami autora, więc praca nie jest zaliczona.
+verdict.rule.no_author_musts_passed: Autor nie zatwierdził obowiązkowych kryteriów dla tego zadania. Dla takich zadań próg zaliczenia wynosi {threshold} na 100; wynik wynosi {score}, więc praca jest zaliczona.
+verdict.rule.no_author_musts_failed: Autor nie zatwierdził obowiązkowych kryteriów dla tego zadania. Dla takich zadań próg zaliczenia wynosi {threshold} na 100; wynik wynosi {score}, więc praca nie jest zaliczona.

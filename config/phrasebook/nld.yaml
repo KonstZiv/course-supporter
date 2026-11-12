@@ -40,8 +40,8 @@ test.explanations_in_course_language: De uitleg is in de taal van de cursus.
 position.audio: audio, {time}
 link.later_in_course: Meer hierover later in de cursus
 review.unchanged: Het werk is sinds de vorige poging niet veranderd (poging {attempt}), dus de beoordeling is herhaald zonder nieuwe controle.
-verdict.rule.author_musts_met: U hebt aan alle verplichte criteria van de auteur voldaan en een score van {score} behaald. Voor taken met verplichte criteria van de auteur is de grens voor goedkeuring {threshold}, dus het werk is goedgekeurd.
-verdict.rule.author_musts_unmet: Niet aan de verplichte criteria van de auteur is voldaan, dus het werk is afgekeurd. Uw score is {score}.
-verdict.rule.author_musts_below_threshold: U hebt aan alle verplichte criteria van de auteur voldaan, maar een score van {score} behaald — onder de grens van {threshold} voor taken met verplichte criteria van de auteur, dus het werk is afgekeurd.
-verdict.rule.no_author_musts_passed: De auteur heeft voor deze taak geen verplichte criteria goedgekeurd. Voor zulke taken is de grens voor goedkeuring {threshold}; uw score is {score}, dus het werk is goedgekeurd.
-verdict.rule.no_author_musts_failed: De auteur heeft voor deze taak geen verplichte criteria goedgekeurd. Voor zulke taken is de grens voor goedkeuring {threshold}; uw score is {score}, dus het werk is afgekeurd.
+verdict.rule.author_musts_met: U hebt aan alle verplichte criteria van de auteur voldaan en {score} van de 100 behaald. Voor taken met verplichte criteria van de auteur is de grens voor goedkeuring {threshold}, dus het werk is goedgekeurd.
+verdict.rule.author_musts_unmet: Niet aan de verplichte criteria van de auteur is voldaan, dus het werk is afgekeurd. Uw score is {score} van de 100.
+verdict.rule.author_musts_below_threshold: U hebt aan alle verplichte criteria van de auteur voldaan, maar {score} van de 100 behaald — onder de grens van {threshold} voor taken met verplichte criteria van de auteur, dus het werk is afgekeurd.
+verdict.rule.no_author_musts_passed: De auteur heeft voor deze taak geen verplichte criteria goedgekeurd. Voor zulke taken is de grens voor goedkeuring {threshold} van de 100; uw score is {score}, dus het werk is goedgekeurd.
+verdict.rule.no_author_musts_failed: De auteur heeft voor deze taak geen verplichte criteria goedgekeurd. Voor zulke taken is de grens voor goedkeuring {threshold} van de 100; uw score is {score}, dus het werk is afgekeurd.

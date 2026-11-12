@@ -331,7 +331,7 @@ class TestLockD:
         assert "## Зараховано" in markdown
         assert (
             "Автор не затвердив обов'язкових критеріїв для цього завдання. Для "
-            "таких завдань поріг заліку — 80 балів; ваш бал — 82, тож роботу "
+            "таких завдань поріг заліку — 80 зі 100; ваш бал — 82, тож роботу "
             "зараховано."
         ) in markdown.splitlines()
         # The "must" is judged and shown: its remark is in the review.
@@ -356,6 +356,6 @@ class TestLockD:
         assert "## Не зараховано" in markdown
         assert (
             "Не виконано обов'язкові критерії автора, тому роботу не зараховано. "
-            "Ваш бал — 82."
+            "Ваш бал — 82 зі 100."
         ) in markdown.splitlines()
         assert "Зараз від'ємне n не перевіряється." in markdown

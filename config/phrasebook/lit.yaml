@@ -40,8 +40,8 @@ test.explanations_in_course_language: Paaiškinimai pateikti kurso kalba.
 position.audio: Garso įrašas, {time}
 link.later_in_course: Plačiau — vėliau kurse
 review.unchanged: Darbas nuo ankstesnio bandymo nepasikeitė (bandymas {attempt}), todėl recenzija pakartota be naujo patikrinimo.
-verdict.rule.author_musts_met: Įvykdėte visus privalomus autoriaus kriterijus ir gavote įvertinimą {score}. Užduotims su privalomais autoriaus kriterijais įskaitos riba yra {threshold}, todėl darbas įskaitytas.
-verdict.rule.author_musts_unmet: Privalomi autoriaus kriterijai neįvykdyti, todėl darbas neįskaitytas. Jūsų įvertinimas yra {score}.
-verdict.rule.author_musts_below_threshold: Įvykdėte visus privalomus autoriaus kriterijus, bet gavote įvertinimą {score} — žemiau ribos {threshold}, taikomos užduotims su privalomais autoriaus kriterijais, todėl darbas neįskaitytas.
-verdict.rule.no_author_musts_passed: Autorius šiai užduočiai nepatvirtino privalomų kriterijų. Tokioms užduotims įskaitos riba yra {threshold}; jūsų įvertinimas yra {score}, todėl darbas įskaitytas.
-verdict.rule.no_author_musts_failed: Autorius šiai užduočiai nepatvirtino privalomų kriterijų. Tokioms užduotims įskaitos riba yra {threshold}; jūsų įvertinimas yra {score}, todėl darbas neįskaitytas.
+verdict.rule.author_musts_met: Įvykdėte visus privalomus autoriaus kriterijus ir gavote įvertinimą {score} iš 100. Užduotims su privalomais autoriaus kriterijais įskaitos riba yra {threshold}, todėl darbas įskaitytas.
+verdict.rule.author_musts_unmet: Privalomi autoriaus kriterijai neįvykdyti, todėl darbas neįskaitytas. Jūsų įvertinimas yra {score} iš 100.
+verdict.rule.author_musts_below_threshold: Įvykdėte visus privalomus autoriaus kriterijus, bet gavote įvertinimą {score} iš 100 — žemiau ribos {threshold}, taikomos užduotims su privalomais autoriaus kriterijais, todėl darbas neįskaitytas.
+verdict.rule.no_author_musts_passed: Autorius šiai užduočiai nepatvirtino privalomų kriterijų. Tokioms užduotims įskaitos riba yra {threshold} iš 100; jūsų įvertinimas yra {score}, todėl darbas įskaitytas.
+verdict.rule.no_author_musts_failed: Autorius šiai užduočiai nepatvirtino privalomų kriterijų. Tokioms užduotims įskaitos riba yra {threshold} iš 100; jūsų įvertinimas yra {score}, todėl darbas neįskaitytas.

@@ -40,8 +40,8 @@ test.explanations_in_course_language: Explicațiile sunt oferite în limba cursu
 position.audio: audio, {time}
 link.later_in_course: Mai multe detalii — mai departe în curs
 review.unchanged: Lucrarea nu s-a schimbat de la încercarea anterioară (încercarea {attempt}), de aceea recenzia a fost repetată fără o nouă verificare.
-verdict.rule.author_musts_met: Ați îndeplinit toate criteriile obligatorii ale autorului și ați obținut scorul {score}. Pentru sarcinile cu criterii obligatorii ale autorului, pragul de admitere este {threshold}, așa că lucrarea este admisă.
-verdict.rule.author_musts_unmet: Criteriile obligatorii ale autorului nu sunt îndeplinite, așa că lucrarea nu este admisă. Scorul dumneavoastră este {score}.
-verdict.rule.author_musts_below_threshold: Ați îndeplinit toate criteriile obligatorii ale autorului, dar ați obținut scorul {score} — sub pragul de {threshold} pentru sarcinile cu criterii obligatorii ale autorului, așa că lucrarea nu este admisă.
-verdict.rule.no_author_musts_passed: Autorul nu a aprobat criterii obligatorii pentru această sarcină. Pentru astfel de sarcini, pragul de admitere este {threshold}; scorul dumneavoastră este {score}, așa că lucrarea este admisă.
-verdict.rule.no_author_musts_failed: Autorul nu a aprobat criterii obligatorii pentru această sarcină. Pentru astfel de sarcini, pragul de admitere este {threshold}; scorul dumneavoastră este {score}, așa că lucrarea nu este admisă.
+verdict.rule.author_musts_met: Ați îndeplinit toate criteriile obligatorii ale autorului și ați obținut scorul {score} din 100. Pentru sarcinile cu criterii obligatorii ale autorului, pragul de admitere este {threshold}, așa că lucrarea este admisă.
+verdict.rule.author_musts_unmet: Criteriile obligatorii ale autorului nu sunt îndeplinite, așa că lucrarea nu este admisă. Scorul dumneavoastră este {score} din 100.
+verdict.rule.author_musts_below_threshold: Ați îndeplinit toate criteriile obligatorii ale autorului, dar ați obținut scorul {score} din 100 — sub pragul {threshold} pentru sarcinile cu criterii obligatorii ale autorului, așa că lucrarea nu este admisă.
+verdict.rule.no_author_musts_passed: Autorul nu a aprobat criterii obligatorii pentru această sarcină. Pentru astfel de sarcini, pragul de admitere este {threshold} din 100; scorul dumneavoastră este {score}, așa că lucrarea este admisă.
+verdict.rule.no_author_musts_failed: Autorul nu a aprobat criterii obligatorii pentru această sarcină. Pentru astfel de sarcini, pragul de admitere este {threshold} din 100; scorul dumneavoastră este {score}, așa că lucrarea nu este admisă.

@@ -22,11 +22,14 @@ webhook — is ``tests/integration/test_pass_rule_e2e_db.py``.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
 
+from course_supporter.config import get_settings
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
     VerdictItemKind,
@@ -49,36 +52,39 @@ from course_supporter.homework.verdict_explanation import (
     ExplanationAnswer,
     explanation_facts,
 )
+from course_supporter.language import get_language_registry
 from course_supporter.models.review_structure import PassBasis, PassRule, Verdict
+from course_supporter.phrasebook import load_phrasebook, phrases_for
 from course_supporter.storage.orm import SubmissionCriterionVerdict
 
 AUTHOR, MODEL = CriteriaLayer.AUTHOR, CriteriaLayer.MODEL
 MUST, SHOULD, MAY = WeightCategory.MUST, WeightCategory.SHOULD, WeightCategory.MAY
 MET, NOT_MET = VerdictValue.MET, VerdictValue.NOT_MET
 
-# The source phrases as the owner ratified them, the numbers put in.
+# The source phrases as the owner ratified them (second edit: no word agrees
+# with a number), the numbers put in.
 _AUTHOR_MUSTS_MET = (
-    "Ви виконали всі обов'язкові критерії автора і отримали {score} балів. "
+    "Ви виконали всі обов'язкові критерії автора й отримали {score} зі 100. "
     "Для завдань з обов'язковими критеріями автора поріг заліку — {threshold}, "
     "тож роботу зараховано."
 )
 _AUTHOR_MUSTS_UNMET = (
     "Не виконано обов'язкові критерії автора, тому роботу не зараховано. "
-    "Ваш бал — {score}."
+    "Ваш бал — {score} зі 100."
 )
 _AUTHOR_MUSTS_BELOW = (
-    "Ви виконали всі обов'язкові критерії автора, але отримали {score} балів — "
+    "Ви виконали всі обов'язкові критерії автора, але отримали {score} зі 100 — "
     "нижче за поріг {threshold} для завдань з обов'язковими критеріями автора, "
     "тож роботу не зараховано."
 )
 _NO_AUTHOR_MUSTS_PASSED = (
     "Автор не затвердив обов'язкових критеріїв для цього завдання. Для таких "
-    "завдань поріг заліку — {threshold} балів; ваш бал — {score}, тож роботу "
+    "завдань поріг заліку — {threshold} зі 100; ваш бал — {score}, тож роботу "
     "зараховано."
 )
 _NO_AUTHOR_MUSTS_FAILED = (
     "Автор не затвердив обов'язкових критеріїв для цього завдання. Для таких "
-    "завдань поріг заліку — {threshold} балів; ваш бал — {score}, тож роботу не "
+    "завдань поріг заліку — {threshold} зі 100; ваш бал — {score}, тож роботу не "
     "зараховано."
 )
 
@@ -394,3 +400,36 @@ class TestTheStructure:
 
         assert verdict.model_dump(mode="json") == {"passed": True, "why": "Причина."}
         assert Verdict.model_validate({"passed": True, "why": "Причина."}) == verdict
+
+
+class TestThePhrasesCountNothing:
+    """The second edit of 2026-11-12: no word in a phrase agrees with a number.
+
+    The phrasebook has no plural forms (the note at the top of ``ukr.yaml``),
+    so a score is "{score} зі 100" — in each language its own "out of 100" —
+    and never "{score} балів", which reads wrong for 82 or 71.
+    """
+
+    _KEYS = tuple(f"verdict.rule.{basis}" for basis in get_args(PassBasis))
+
+    def test_the_source_puts_no_counted_noun_after_a_number(self) -> None:
+        phrases = phrases_for("ukr")
+
+        for key in self._KEYS:
+            assert not re.search(r"\{(score|threshold)\} бал", phrases[key]), key
+        for key in self._KEYS[:3]:
+            assert "{score} зі 100" in phrases[key], key
+        for key in self._KEYS[3:]:
+            assert "{threshold} зі 100" in phrases[key], key
+
+    def test_every_language_says_out_of_a_hundred(self) -> None:
+        book = load_phrasebook(get_settings().phrasebook_dir)
+
+        missing = [
+            f"{code}: {key}"
+            for code, phrases in book.items()
+            for key in self._KEYS
+            if "100" not in phrases[key].text
+        ]
+        assert missing == []
+        assert len(book) == len(get_language_registry().languages)

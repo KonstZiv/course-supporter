@@ -40,8 +40,8 @@ test.explanations_in_course_language: L'explicació es proporciona en l'idioma d
 position.audio: àudio, {time}
 link.later_in_course: Més detalls — més endavant al curs
 review.unchanged: El treball no ha canviat des de l'intent anterior (intent {attempt}), per això la revisió es repeteix sense una nova comprovació.
-verdict.rule.author_musts_met: Heu complert tots els criteris obligatoris de l'autor i heu obtingut una puntuació de {score}. Per a les tasques amb criteris obligatoris de l'autor, el llindar d'aprovat és {threshold}, de manera que el treball queda aprovat.
-verdict.rule.author_musts_unmet: No s'han complert els criteris obligatoris de l'autor, de manera que el treball no queda aprovat. La vostra puntuació és {score}.
-verdict.rule.author_musts_below_threshold: Heu complert tots els criteris obligatoris de l'autor, però heu obtingut una puntuació de {score}, per sota del llindar de {threshold} per a les tasques amb criteris obligatoris de l'autor, de manera que el treball no queda aprovat.
-verdict.rule.no_author_musts_passed: L'autor no ha aprovat criteris obligatoris per a aquesta tasca. Per a aquestes tasques, el llindar d'aprovat és {threshold}; la vostra puntuació és {score}, de manera que el treball queda aprovat.
-verdict.rule.no_author_musts_failed: L'autor no ha aprovat criteris obligatoris per a aquesta tasca. Per a aquestes tasques, el llindar d'aprovat és {threshold}; la vostra puntuació és {score}, de manera que el treball no queda aprovat.
+verdict.rule.author_musts_met: Heu complert tots els criteris obligatoris de l'autor i heu obtingut {score} sobre 100. Per a les tasques amb criteris obligatoris de l'autor, el llindar d'aprovat és {threshold}, de manera que el treball queda aprovat.
+verdict.rule.author_musts_unmet: No s'han complert els criteris obligatoris de l'autor, de manera que el treball no queda aprovat. La vostra puntuació és {score} sobre 100.
+verdict.rule.author_musts_below_threshold: Heu complert tots els criteris obligatoris de l'autor, però heu obtingut {score} sobre 100, per sota del llindar d'aprovat, que és {threshold} per a les tasques amb criteris obligatoris de l'autor, de manera que el treball no queda aprovat.
+verdict.rule.no_author_musts_passed: L'autor no ha aprovat criteris obligatoris per a aquesta tasca. Per a aquestes tasques, el llindar d'aprovat és {threshold} sobre 100; la vostra puntuació és {score}, de manera que el treball queda aprovat.
+verdict.rule.no_author_musts_failed: L'autor no ha aprovat criteris obligatoris per a aquesta tasca. Per a aquestes tasques, el llindar d'aprovat és {threshold} sobre 100; la vostra puntuació és {score}, de manera que el treball no queda aprovat.

@@ -40,8 +40,8 @@ test.explanations_in_course_language: Forklaringen er gitt på kursspråket.
 position.audio: Lyd, {time}
 link.later_in_course: Mer om dette senere i kurset
 review.unchanged: Arbeidet er ikke endret siden forrige forsøk (forsøk {attempt}), så tilbakemeldingen er gjentatt uten ny kontroll.
-verdict.rule.author_musts_met: Du har oppfylt alle forfatterens obligatoriske kriterier og fått en poengsum på {score}. For oppgaver med forfatterens obligatoriske kriterier er grensen for godkjenning {threshold}, så arbeidet er godkjent.
-verdict.rule.author_musts_unmet: Forfatterens obligatoriske kriterier er ikke oppfylt, så arbeidet er ikke godkjent. Poengsummen din er {score}.
-verdict.rule.author_musts_below_threshold: Du har oppfylt alle forfatterens obligatoriske kriterier, men fått en poengsum på {score} — under grensen på {threshold} for oppgaver med forfatterens obligatoriske kriterier, så arbeidet er ikke godkjent.
-verdict.rule.no_author_musts_passed: Forfatteren har ikke godkjent obligatoriske kriterier for denne oppgaven. For slike oppgaver er grensen for godkjenning {threshold}; poengsummen din er {score}, så arbeidet er godkjent.
-verdict.rule.no_author_musts_failed: Forfatteren har ikke godkjent obligatoriske kriterier for denne oppgaven. For slike oppgaver er grensen for godkjenning {threshold}; poengsummen din er {score}, så arbeidet er ikke godkjent.
+verdict.rule.author_musts_met: Du har oppfylt alle forfatterens obligatoriske kriterier og fått {score} av 100. For oppgaver med forfatterens obligatoriske kriterier er grensen for godkjenning {threshold}, så arbeidet er godkjent.
+verdict.rule.author_musts_unmet: Forfatterens obligatoriske kriterier er ikke oppfylt, så arbeidet er ikke godkjent. Poengsummen din er {score} av 100.
+verdict.rule.author_musts_below_threshold: Du har oppfylt alle forfatterens obligatoriske kriterier, men fått {score} av 100 — under grensen på {threshold} for oppgaver med forfatterens obligatoriske kriterier, så arbeidet er ikke godkjent.
+verdict.rule.no_author_musts_passed: Forfatteren har ikke godkjent obligatoriske kriterier for denne oppgaven. For slike oppgaver er grensen for godkjenning {threshold} av 100; poengsummen din er {score}, så arbeidet er godkjent.
+verdict.rule.no_author_musts_failed: Forfatteren har ikke godkjent obligatoriske kriterier for denne oppgaven. For slike oppgaver er grensen for godkjenning {threshold} av 100; poengsummen din er {score}, så arbeidet er ikke godkjent.

@@ -40,8 +40,8 @@ test.explanations_in_course_language: As explicacións están no idioma do curso
 position.audio: Audio, {time}
 link.later_in_course: Máis detalles — máis adiante no curso
 review.unchanged: O traballo non cambiou desde o intento anterior (intento {attempt}), polo que a revisión repítese sen unha nova comprobación.
-verdict.rule.author_musts_met: Cumpriu todos os criterios obrigatorios do autor e obtivo unha puntuación de {score}. Para as tarefas con criterios obrigatorios do autor, o limiar de aprobado é {threshold}, polo que o traballo está aprobado.
-verdict.rule.author_musts_unmet: Non se cumpriron os criterios obrigatorios do autor, polo que o traballo non está aprobado. A súa puntuación é {score}.
-verdict.rule.author_musts_below_threshold: Cumpriu todos os criterios obrigatorios do autor, pero obtivo unha puntuación de {score}, por debaixo do limiar de {threshold} para as tarefas con criterios obrigatorios do autor, polo que o traballo non está aprobado.
-verdict.rule.no_author_musts_passed: O autor non aprobou criterios obrigatorios para esta tarefa. Para estas tarefas, o limiar de aprobado é {threshold}; a súa puntuación é {score}, polo que o traballo está aprobado.
-verdict.rule.no_author_musts_failed: O autor non aprobou criterios obrigatorios para esta tarefa. Para estas tarefas, o limiar de aprobado é {threshold}; a súa puntuación é {score}, polo que o traballo non está aprobado.
+verdict.rule.author_musts_met: Cumpriu todos os criterios obrigatorios do autor e obtivo {score} sobre 100. Para as tarefas con criterios obrigatorios do autor, o limiar de aprobado é {threshold}, polo que o traballo está aprobado.
+verdict.rule.author_musts_unmet: Non se cumpriron os criterios obrigatorios do autor, polo que o traballo non está aprobado. A súa puntuación é {score} sobre 100.
+verdict.rule.author_musts_below_threshold: Cumpriu todos os criterios obrigatorios do autor, pero obtivo {score} sobre 100, por debaixo do limiar de {threshold} para as tarefas con criterios obrigatorios do autor, polo que o traballo non está aprobado.
+verdict.rule.no_author_musts_passed: O autor non aprobou criterios obrigatorios para esta tarefa. Para estas tarefas, o limiar de aprobado é {threshold} sobre 100; a súa puntuación é {score}, polo que o traballo está aprobado.
+verdict.rule.no_author_musts_failed: O autor non aprobou criterios obrigatorios para esta tarefa. Para estas tarefas, o limiar de aprobado é {threshold} sobre 100; a súa puntuación é {score}, polo que o traballo non está aprobado.

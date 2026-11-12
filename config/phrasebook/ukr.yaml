@@ -85,10 +85,11 @@ review.unchanged: Робота не змінилась із попередньо
 # Printed under the verdict, before its reason; one per branch of the pass
 # rule (``criteria_verdicts.pass_decision``). The wording is the product
 # owner's, ratified 2026-11-12. ``{score}`` and ``{threshold}`` are whole
-# percent; they are numbers inside a sentence, which the note at the top of
-# this file warns of: the noun after them does not agree with every number.
-verdict.rule.author_musts_met: Ви виконали всі обов'язкові критерії автора і отримали {score} балів. Для завдань з обов'язковими критеріями автора поріг заліку — {threshold}, тож роботу зараховано.
-verdict.rule.author_musts_unmet: Не виконано обов'язкові критерії автора, тому роботу не зараховано. Ваш бал — {score}.
-verdict.rule.author_musts_below_threshold: Ви виконали всі обов'язкові критерії автора, але отримали {score} балів — нижче за поріг {threshold} для завдань з обов'язковими критеріями автора, тож роботу не зараховано.
-verdict.rule.no_author_musts_passed: Автор не затвердив обов'язкових критеріїв для цього завдання. Для таких завдань поріг заліку — {threshold} балів; ваш бал — {score}, тож роботу зараховано.
-verdict.rule.no_author_musts_failed: Автор не затвердив обов'язкових критеріїв для цього завдання. Для таких завдань поріг заліку — {threshold} балів; ваш бал — {score}, тож роботу не зараховано.
+# percent, numbers inside a sentence — so, as the note at the top of this file
+# asks, no word in them agrees with the number: the score reads "{score} зі
+# 100", and a translation uses its own "out of 100" (second edit, 2026-11-12).
+verdict.rule.author_musts_met: Ви виконали всі обов'язкові критерії автора й отримали {score} зі 100. Для завдань з обов'язковими критеріями автора поріг заліку — {threshold}, тож роботу зараховано.
+verdict.rule.author_musts_unmet: Не виконано обов'язкові критерії автора, тому роботу не зараховано. Ваш бал — {score} зі 100.
+verdict.rule.author_musts_below_threshold: Ви виконали всі обов'язкові критерії автора, але отримали {score} зі 100 — нижче за поріг {threshold} для завдань з обов'язковими критеріями автора, тож роботу не зараховано.
+verdict.rule.no_author_musts_passed: Автор не затвердив обов'язкових критеріїв для цього завдання. Для таких завдань поріг заліку — {threshold} зі 100; ваш бал — {score}, тож роботу зараховано.
+verdict.rule.no_author_musts_failed: Автор не затвердив обов'язкових критеріїв для цього завдання. Для таких завдань поріг заліку — {threshold} зі 100; ваш бал — {score}, тож роботу не зараховано.

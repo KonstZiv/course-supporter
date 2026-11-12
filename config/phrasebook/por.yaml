@@ -40,8 +40,8 @@ test.explanations_in_course_language: A explicação é fornecida no idioma do c
 position.audio: áudio, {time}
 link.later_in_course: Mais detalhes — mais adiante no curso
 review.unchanged: O trabalho não mudou desde a tentativa anterior (tentativa {attempt}), por isso a revisão foi repetida sem uma nova verificação.
-verdict.rule.author_musts_met: Você cumpriu todos os critérios obrigatórios do autor e obteve uma pontuação de {score}. Para tarefas com critérios obrigatórios do autor, o limite de aprovação é {threshold}, portanto o trabalho está aprovado.
-verdict.rule.author_musts_unmet: Os critérios obrigatórios do autor não foram cumpridos, portanto o trabalho não está aprovado. Sua pontuação é {score}.
-verdict.rule.author_musts_below_threshold: Você cumpriu todos os critérios obrigatórios do autor, mas obteve uma pontuação de {score}, abaixo do limite de {threshold} para tarefas com critérios obrigatórios do autor, portanto o trabalho não está aprovado.
-verdict.rule.no_author_musts_passed: O autor não aprovou critérios obrigatórios para esta tarefa. Para essas tarefas, o limite de aprovação é {threshold}; sua pontuação é {score}, portanto o trabalho está aprovado.
-verdict.rule.no_author_musts_failed: O autor não aprovou critérios obrigatórios para esta tarefa. Para essas tarefas, o limite de aprovação é {threshold}; sua pontuação é {score}, portanto o trabalho não está aprovado.
+verdict.rule.author_musts_met: Você cumpriu todos os critérios obrigatórios do autor e obteve {score} de 100. Para tarefas com critérios obrigatórios do autor, o limite de aprovação é {threshold}, portanto o trabalho está aprovado.
+verdict.rule.author_musts_unmet: Os critérios obrigatórios do autor não foram cumpridos, portanto o trabalho não está aprovado. Sua pontuação é {score} de 100.
+verdict.rule.author_musts_below_threshold: Você cumpriu todos os critérios obrigatórios do autor, mas obteve {score} de 100, abaixo do limite de {threshold} para tarefas com critérios obrigatórios do autor, portanto o trabalho não está aprovado.
+verdict.rule.no_author_musts_passed: O autor não aprovou critérios obrigatórios para esta tarefa. Para essas tarefas, o limite de aprovação é {threshold} de 100; sua pontuação é {score}, portanto o trabalho está aprovado.
+verdict.rule.no_author_musts_failed: O autor não aprovou critérios obrigatórios para esta tarefa. Para essas tarefas, o limite de aprovação é {threshold} de 100; sua pontuação é {score}, portanto o trabalho não está aprovado.

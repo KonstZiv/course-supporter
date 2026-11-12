@@ -20,6 +20,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from course_supporter import boot
 from course_supporter.api.middleware import RequestLoggingMiddleware
+from course_supporter.api.routes.billing import router as billing_router
 from course_supporter.api.routes.config import router as config_router
 from course_supporter.api.routes.cost import router as cost_router
 from course_supporter.api.routes.criteria import router as criteria_router
@@ -54,6 +55,7 @@ from course_supporter.api.routes.students import router as students_router
 from course_supporter.api.routes.test_objects import router as test_objects_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.auth.scopes import rate_limiter
+from course_supporter.billing.payments.registry import payment_registry
 from course_supporter.config import Settings, settings
 from course_supporter.logging_config import configure_logging
 from course_supporter.storage.database import async_session, engine
@@ -96,6 +98,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.stage_router = boot.build_checked_stage_router(
         settings, session_factory=async_session
     )
+    # The payment providers switched on (BILLING_PROVIDERS): a name without
+    # an adapter stops the startup here, not at the first checkout.
+    payment_registry()
 
     # ARQ Redis pool for job enqueue. expires_extra_ms overrides ARQ's 24h
     # default pending-job TTL so an admitted queue tail is not silently failed
@@ -289,6 +294,7 @@ app.include_router(config_router, prefix="/api/v1")
 app.include_router(portal_auth_router, prefix="/api/v1")
 app.include_router(portal_config_router, prefix="/api/v1")
 app.include_router(portal_billing_router, prefix="/api/v1")
+app.include_router(billing_router, prefix="/api/v1")
 app.include_router(portal_submissions_router, prefix="/api/v1")
 app.include_router(portal_materials_router, prefix="/api/v1")
 app.include_router(portal_courses_router, prefix="/api/v1")

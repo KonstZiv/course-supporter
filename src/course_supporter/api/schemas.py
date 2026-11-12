@@ -2707,3 +2707,49 @@ class BillingConsentResponse(BaseModel):
 
     terms_version: str = Field(description="The revision agreed to.")
     consented_at: datetime = Field(description="When the student agreed.")
+
+
+# ── Payments (BIL-PAY) ─────────────────────────────────────────────────
+
+
+class BillingPackageResponse(BaseModel):
+    """One package on sale: its units and prices — never a provider's id."""
+
+    id: str = Field(description="The package's id; name it to open a checkout.")
+    units: int = Field(description="Units the package brings (a whole number).")
+    prices_minor: dict[str, int] = Field(
+        description="Price per currency (ISO 4217) in its minor units (cents); "
+        "EUR always."
+    )
+
+
+class BillingPackagesResponse(BaseModel):
+    """GET /portal/billing/packages: the packages on sale."""
+
+    packages: list[BillingPackageResponse] = Field(
+        description="In the catalog's order; empty while nothing is on sale."
+    )
+
+
+class BillingCheckoutRequest(BaseModel):
+    """POST /portal/billing/checkout, POST /billing/checkout: open a checkout."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    package_id: str = Field(
+        min_length=1, max_length=64, description="A package on sale."
+    )
+    provider: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+        description="A payment provider switched on; the default one when omitted.",
+    )
+
+
+class BillingCheckoutResponse(BaseModel):
+    """The checkout opened: where the payer goes to pay."""
+
+    provider: str = Field(description="The payment provider of the checkout.")
+    checkout_id: str = Field(description="The provider's id of the checkout.")
+    checkout_url: str = Field(description="Open it to pay.")

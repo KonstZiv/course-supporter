@@ -18,6 +18,11 @@ from course_supporter.auth.student_session import (
     SessionTokenError,
     decode_session_token,
 )
+from course_supporter.billing.payments.catalog import Catalog, get_catalog
+from course_supporter.billing.payments.registry import (
+    ProviderRegistry,
+    payment_registry,
+)
 from course_supporter.llm.stage_router import StageRouter
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import APIKey, Student, StudentCredential, Tenant
@@ -28,8 +33,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "get_arq_redis",
+    "get_billing_catalog",
     "get_current_student",
     "get_current_tenant",
+    "get_payment_registry",
     "get_s3_client",
     "get_session",
     "get_stage_router",
@@ -165,3 +172,16 @@ async def get_s3_client(request: Request) -> S3Client:
     Initialized during lifespan startup.
     """
     return cast(S3Client, request.app.state.s3_client)
+
+
+def get_payment_registry() -> ProviderRegistry:
+    """The payment providers switched on (``BILLING_PROVIDERS``), built once.
+
+    Built at startup too (``lifespan``), so a broken setting stops the boot.
+    """
+    return payment_registry()
+
+
+def get_billing_catalog() -> Catalog:
+    """The catalog of packages (``config/billing_packages.yaml``), read once."""
+    return get_catalog()

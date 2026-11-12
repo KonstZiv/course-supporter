@@ -53,6 +53,19 @@ async def _run(*argv: str) -> str:
         ["anonymize-student", "--student", str(TENANT)],
         ["anonymize-tenant", "--tenant", str(TENANT)],
         ["credit", "--tenant", "t", "--units", "5", "--reason", "pilot"],
+        [
+            "credit-invoice",
+            "--tenant",
+            "t",
+            "--units",
+            "5",
+            "--amount-minor",
+            "100",
+            "--currency",
+            "EUR",
+            "--invoice",
+            "INV-1",
+        ],
     ],
 )
 def test_every_change_needs_an_actor(argv: list[str]) -> None:
@@ -226,6 +239,75 @@ async def test_credit_calls_the_services() -> None:
     }
     assert "100 units" in out and "repaid_difference=30" in out
     assert "available=500" in out
+
+
+@pytest.mark.parametrize("missing", ["--amount-minor", "--currency", "--invoice"])
+def test_an_invoice_names_its_amount_currency_and_number(missing: str) -> None:
+    argv = {
+        "--tenant": "t",
+        "--units": "5",
+        "--amount-minor": "100",
+        "--currency": "EUR",
+        "--invoice": "INV-1",
+        "--actor": "k",
+    }
+    del argv[missing]
+    with pytest.raises(SystemExit) as exc:
+        _args("credit-invoice", *(x for pair in argv.items() for x in pair))
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("created", [True, False])
+async def test_credit_invoice_calls_the_service(created: bool) -> None:
+    account = uuid.uuid4()
+    batch = MagicMock(
+        id=uuid.uuid4(),
+        account_id=account,
+        units=10000,
+        amount_paid_minor=50000,
+        currency="EUR",
+        provider_transaction_id="INV-2026-0042",
+        expires_at=datetime(2027, 5, 5, tzinfo=UTC),
+    )
+    with (
+        patch.object(
+            billing_admin.invoice,
+            "credit_invoice",
+            AsyncMock(
+                return_value=MagicMock(batch=batch, repaid_units=0, created=created)
+            ),
+        ) as service,
+        patch.object(billing_admin.ledger, "balance", AsyncMock(return_value=BALANCE)),
+    ):
+        out = await _run(
+            "credit-invoice",
+            "--tenant",
+            str(TENANT),
+            "--units",
+            "10000",
+            "--amount-minor",
+            "50000",
+            "--currency",
+            "EUR",
+            "--invoice",
+            "INV-2026-0042",
+            "--actor",
+            "k",
+        )
+    assert service.await_args.kwargs == {
+        "tenant_id": TENANT,
+        "units": 10000,
+        "amount_minor": 50000,
+        "currency": "EUR",
+        "invoice": "INV-2026-0042",
+        "actor": "k",
+    }
+    if created:
+        assert "credited invoice INV-2026-0042" in out
+        assert "10000 units" in out and "amount=50000 EUR" in out
+    else:
+        assert "was credited before" in out and "nothing changed" in out
+    assert f"account {account}" in out and "available=500" in out
 
 
 async def test_balance_of_an_owner_without_an_account() -> None:

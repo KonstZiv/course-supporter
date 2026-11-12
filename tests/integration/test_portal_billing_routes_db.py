@@ -2,10 +2,11 @@
 
 ``GET /portal/billing/terms`` and ``POST /portal/billing/consent`` run under
 the student's own portal session; the database is real (committed rows,
-removed afterwards). Also locked here: billing has no other route — by
-operator decision of 2026-11-05 the administrator works through
-``scripts/billing_admin.py`` only, until there is a decision on how an
-administrator signs in.
+removed afterwards). Also locked here: billing has no route but the
+student's, the author's checkout and the providers' webhook (BIL-PAY) — none
+for an administrator: by operator decision of 2026-11-05 the administrator
+works through ``scripts/billing_admin.py`` only, until there is a decision on
+how an administrator signs in.
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -145,11 +146,18 @@ async def test_terms_need_a_portal_session() -> None:
         assert response.status_code == 401
 
 
-def test_billing_has_no_routes_but_the_students_consent() -> None:
+def test_billing_has_no_administrator_route() -> None:
     billing = {
         (route.path, method)
         for route in app.routes
         if isinstance(route, APIRoute) and "billing" in route.path
         for method in route.methods
     }
-    assert billing == {(TERMS, "GET"), (CONSENT, "POST")}
+    assert billing == {
+        (TERMS, "GET"),
+        (CONSENT, "POST"),
+        ("/api/v1/portal/billing/packages", "GET"),
+        ("/api/v1/portal/billing/checkout", "POST"),
+        ("/api/v1/billing/checkout", "POST"),  # the author's, the tenant's key
+        ("/api/v1/billing/webhooks/{provider}", "POST"),  # the provider's signature
+    }

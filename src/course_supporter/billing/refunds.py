@@ -1,8 +1,10 @@
-"""Refunds of unused units, through Paddle (BIL-B, model 11).
+"""Refunds of unused units, through the batch's payment provider (BIL-B, model 11).
 
 Purpose:
-    The ledger side of a refund; the Paddle adapter (week 5) will call it when
-    a refund is requested and when Paddle decides. Nothing calls it yet.
+    The ledger side of a refund. The provider's webhook
+    (``billing.payments.webhooks``) calls :func:`refund_approve` /
+    :func:`refund_reject` when the provider decides; what asks the provider
+    for a refund and holds its units (:func:`refund_hold`) is not built yet.
 
 The rule:
     * Per purchase batch, proportionally:
@@ -11,16 +13,16 @@ The rule:
     * Only FREE units of a VALID batch — not reserved for an action, not
       already held for another refund; an expired batch has nothing to refund.
     * An administrator's credit is never refunded.
-    * While Paddle reviews the refund the units are held (:func:`refund_hold`):
-      not spendable, still in the balance. Approved (:func:`refund_approve`),
-      they leave the batch; rejected (:func:`refund_reject`), they are free
-      again — and, like any units that become free, repay a difference first
-      (operator 2026-11-05).
+    * While the provider reviews the refund the units are held
+      (:func:`refund_hold`): not spendable, still in the balance. Approved
+      (:func:`refund_approve`), they leave the batch; rejected
+      (:func:`refund_reject`), they are free again — and, like any units that
+      become free, repay a difference first (operator 2026-11-05).
 
 Idempotency:
-    One refund per Paddle adjustment id: a repeated hold returns the refund
-    there is; a repeated decision changes nothing; the opposite decision is
-    refused.
+    One refund per adjustment of a provider (``provider`` +
+    ``provider_adjustment_id``): a repeated hold returns the refund there is;
+    a repeated decision changes nothing; the opposite decision is refused.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from course_supporter.billing.journal import (
     lock_account,
     positions,
     repay_differences,
+    require_provider,
     write,
 )
 from course_supporter.billing.kinds import BatchSource, MovementKind, RefundState
@@ -65,10 +68,15 @@ def refund_amount(batch: BillingBatch, units: int) -> int:
 
 
 async def _refund(
-    session: AsyncSession, paddle_adjustment_id: str, *, lock: bool = False
+    session: AsyncSession,
+    provider: str,
+    provider_adjustment_id: str,
+    *,
+    lock: bool = False,
 ) -> BillingRefund | None:
     stmt = select(BillingRefund).where(
-        BillingRefund.paddle_adjustment_id == paddle_adjustment_id
+        BillingRefund.provider == provider,
+        BillingRefund.provider_adjustment_id == provider_adjustment_id,
     )
     if lock:
         stmt = stmt.with_for_update().execution_options(populate_existing=True)
@@ -81,22 +89,26 @@ async def refund_hold(
     account_id: uuid.UUID,
     batch_id: uuid.UUID,
     units: int,
-    paddle_adjustment_id: str,
+    provider: str,
+    provider_adjustment_id: str,
     now: datetime | None = None,
 ) -> BillingRefund:
-    """Hold free units of a purchase batch while Paddle reviews their refund.
+    """Hold free units of a purchase batch while its provider reviews their refund.
+
+    ``provider`` is the batch's: a refund goes back the way the money came.
 
     Raises:
         BillingNotFoundError: no such account or batch on it.
         BillingInvalidError: an administrator's credit; a number of units out
-            of range (:func:`refund_amount`).
+            of range (:func:`refund_amount`); not the batch's provider.
         BillingConflictError: more units than the batch has free (reserved or
             held units are not refundable; an expired batch has none); the
             adjustment already held with other figures.
     """
     now = now or datetime.now(UTC)
+    provider = require_provider(provider)
     await lock_account(session, account_id)
-    existing = await _refund(session, paddle_adjustment_id, lock=True)
+    existing = await _refund(session, provider, provider_adjustment_id, lock=True)
     if existing is not None:
         if (existing.account_id, existing.batch_id, existing.units) != (
             account_id,
@@ -104,8 +116,8 @@ async def refund_hold(
             units,
         ):
             raise BillingConflictError(
-                f"Paddle adjustment {paddle_adjustment_id} is already refund "
-                f"{existing.id} with other figures"
+                f"{provider} adjustment {provider_adjustment_id} is already "
+                f"refund {existing.id} with other figures"
             )
         return existing
     position = next(
@@ -118,6 +130,10 @@ async def refund_hold(
             f"batch {batch_id} not found on account {account_id}"
         )
     amount = refund_amount(batch, units)
+    if batch.provider != provider:
+        raise BillingInvalidError(
+            f"batch {batch_id} was paid through {batch.provider}, not {provider}"
+        )
     free = position.free if position is not None and position.valid(now) else 0
     if units > free:
         raise BillingConflictError(
@@ -131,7 +147,8 @@ async def refund_hold(
         units=units,
         amount_minor=amount,
         currency=batch.currency,
-        paddle_adjustment_id=paddle_adjustment_id,
+        provider=provider,
+        provider_adjustment_id=provider_adjustment_id,
         state=RefundState.HELD.value,
         created_at=now,
     )
@@ -152,17 +169,20 @@ async def refund_hold(
 
 async def _decide(
     session: AsyncSession,
-    paddle_adjustment_id: str,
+    provider: str,
+    provider_adjustment_id: str,
     state: RefundState,
     movement: MovementKind,
     now: datetime | None,
 ) -> BillingRefund:
     now = now or datetime.now(UTC)
-    found = await _refund(session, paddle_adjustment_id)
+    found = await _refund(session, provider, provider_adjustment_id)
     if found is None:
-        raise BillingNotFoundError(f"no refund for adjustment {paddle_adjustment_id}")
+        raise BillingNotFoundError(
+            f"no refund for {provider} adjustment {provider_adjustment_id}"
+        )
     await lock_account(session, found.account_id)
-    refund = await _refund(session, paddle_adjustment_id, lock=True)
+    refund = await _refund(session, provider, provider_adjustment_id, lock=True)
     assert refund is not None  # a refund is never deleted
     if refund.state == state.value:
         return refund
@@ -189,17 +209,22 @@ async def _decide(
 
 
 async def refund_approve(
-    session: AsyncSession, *, paddle_adjustment_id: str, now: datetime | None = None
+    session: AsyncSession,
+    *,
+    provider: str,
+    provider_adjustment_id: str,
+    now: datetime | None = None,
 ) -> BillingRefund:
-    """Paddle approved: the held units leave the batch.
+    """The provider approved: the held units leave the batch.
 
     Raises:
-        BillingNotFoundError: no refund for the adjustment.
+        BillingNotFoundError: no refund for the provider's adjustment.
         BillingConflictError: it was rejected.
     """
     return await _decide(
         session,
-        paddle_adjustment_id,
+        provider,
+        provider_adjustment_id,
         RefundState.APPROVED,
         MovementKind.REFUND_COMPLETED,
         now,
@@ -207,18 +232,24 @@ async def refund_approve(
 
 
 async def refund_reject(
-    session: AsyncSession, *, paddle_adjustment_id: str, now: datetime | None = None
+    session: AsyncSession,
+    *,
+    provider: str,
+    provider_adjustment_id: str,
+    now: datetime | None = None,
 ) -> BillingRefund:
-    """Paddle rejected: the held units are free again and repay a difference first.
+    """The provider rejected: the held units are free again and repay a
+    difference first.
 
     Raises:
-        BillingNotFoundError: no refund for the adjustment.
+        BillingNotFoundError: no refund for the provider's adjustment.
         BillingConflictError: it was approved.
     """
     now = now or datetime.now(UTC)
     refund = await _decide(
         session,
-        paddle_adjustment_id,
+        provider,
+        provider_adjustment_id,
         RefundState.REJECTED,
         MovementKind.REFUND_REJECTED,
         now,

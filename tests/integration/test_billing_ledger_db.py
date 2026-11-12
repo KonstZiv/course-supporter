@@ -70,6 +70,7 @@ LEDGER_TABLES = (
     "billing_movements",
 )
 ACTOR = "test-admin"
+PROVIDER = "fake"  # who took the payment: any provider's name does here
 T0 = datetime(2026, 1, 10, 12, 0, tzinfo=UTC)
 EXPIRY = add_months(T0, 6)  # 2026-07-10 12:00
 REVIEW = ActionKind.REVIEW
@@ -123,6 +124,7 @@ async def buy(
         units=units,
         amount_paid_minor=amount,
         currency="USD",
+        provider=PROVIDER,
         now=at,
     )
     return done.batch
@@ -231,7 +233,7 @@ class TestCredits:
         assert (view.balance, view.available, view.next_expiry) == (100, 100, EXPIRY)
         assert await journal(db_session, world.student) == [("credit", 100)]
 
-    async def test_a_purchase_is_idempotent_by_its_paddle_line(
+    async def test_a_purchase_is_idempotent_by_its_providers_line(
         self, db_session: AsyncSession, world: World
     ) -> None:
         args: dict[str, Any] = {
@@ -239,19 +241,39 @@ class TestCredits:
             "units": 100,
             "amount_paid_minor": 1999,
             "currency": "EUR",
-            "paddle_transaction_id": "txn_1",
-            "paddle_line_id": "txnitm_1",
+            "provider": PROVIDER,
+            "provider_transaction_id": "txn_1",
+            "provider_line_id": "txnitm_1",
             "now": T0,
         }
         first = await ledger.credit_purchase(db_session, **args)
         again = await ledger.credit_purchase(db_session, **args)
         assert (first.created, again.created) == (True, False)
         assert again.batch.id == first.batch.id
+        assert (first.batch.provider, first.batch.provider_line_id) == (
+            PROVIDER,
+            "txnitm_1",
+        )
         assert (await bal(db_session, world.student)).balance == 100
         with pytest.raises(BillingConflictError, match="other figures"):
             await ledger.credit_purchase(db_session, **{**args, "units": 200})
-        with pytest.raises(BillingInvalidError, match="both Paddle ids"):
-            await ledger.credit_purchase(db_session, **{**args, "paddle_line_id": None})
+        with pytest.raises(BillingConflictError, match="other figures"):
+            await ledger.credit_purchase(
+                db_session, **{**args, "provider_transaction_id": "txn_2"}
+            )
+        with pytest.raises(BillingInvalidError, match="both provider ids"):
+            await ledger.credit_purchase(
+                db_session, **{**args, "provider_line_id": None}
+            )
+        with pytest.raises(BillingInvalidError, match="not a provider's name"):
+            await ledger.credit_purchase(db_session, **{**args, "provider": "Pad dle"})
+        # The key is the provider's: another provider's line of the same id
+        # is another purchase.
+        other = await ledger.credit_purchase(
+            db_session, **{**args, "provider": "other"}
+        )
+        assert other.created and other.batch.id != first.batch.id
+        assert (await bal(db_session, world.student)).balance == 200
 
     async def test_an_admin_credit_is_a_batch_with_a_reason_and_an_audit_entry(
         self, db_session: AsyncSession, world: World
@@ -594,6 +616,7 @@ class TestDifference:
             units=100,
             amount_paid_minor=1000,
             currency="USD",
+            provider=PROVIDER,
             now=T0 + timedelta(days=1),
         )
         assert done.repaid_units == 30
@@ -997,7 +1020,8 @@ class TestRefunds:
             account_id=world.student,
             batch_id=batch.id,
             units=40,
-            paddle_adjustment_id="adj_1",
+            provider=PROVIDER,
+            provider_adjustment_id="adj_1",
             now=T0,
         )
         assert (refund.state, refund.amount_minor, refund.currency) == (
@@ -1011,15 +1035,19 @@ class TestRefunds:
         assert reservation.units == 60  # held units are not spent
 
         approved = await refund_approve(
-            db_session, paddle_adjustment_id="adj_1", now=T0
+            db_session, provider=PROVIDER, provider_adjustment_id="adj_1", now=T0
         )
         assert approved.state == "approved"
         view = await bal(db_session, world.student)
         assert (view.balance, view.held, view.available) == (60, 0, 0)
-        again = await refund_approve(db_session, paddle_adjustment_id="adj_1", now=T0)
+        again = await refund_approve(
+            db_session, provider=PROVIDER, provider_adjustment_id="adj_1", now=T0
+        )
         assert again.decided_at == approved.decided_at
         with pytest.raises(BillingConflictError, match="already approved"):
-            await refund_reject(db_session, paddle_adjustment_id="adj_1", now=T0)
+            await refund_reject(
+                db_session, provider=PROVIDER, provider_adjustment_id="adj_1", now=T0
+            )
 
     async def test_rejected_units_return_and_repay_the_difference(
         self, db_session: AsyncSession, world: World
@@ -1030,11 +1058,14 @@ class TestRefunds:
             account_id=world.student,
             batch_id=batch.id,
             units=100,
-            paddle_adjustment_id="adj_2",
+            provider=PROVIDER,
+            provider_adjustment_id="adj_2",
             now=T0,
         )
         await owe(db_session, world.student, 30)  # nothing available while held
-        rejected = await refund_reject(db_session, paddle_adjustment_id="adj_2", now=T0)
+        rejected = await refund_reject(
+            db_session, provider=PROVIDER, provider_adjustment_id="adj_2", now=T0
+        )
         assert rejected.state == "rejected"
         view = await bal(db_session, world.student)
         assert (view.balance, view.held, view.available, view.difference) == (
@@ -1055,7 +1086,8 @@ class TestRefunds:
                 account_id=world.student,
                 batch_id=batch.id,
                 units=30,
-                paddle_adjustment_id="adj_3",
+                provider=PROVIDER,
+                provider_adjustment_id="adj_3",
                 now=T0,
             )
 
@@ -1076,7 +1108,8 @@ class TestRefunds:
                 account_id=world.author,
                 batch_id=done.batch.id,
                 units=10,
-                paddle_adjustment_id="adj_4",
+                provider=PROVIDER,
+                provider_adjustment_id="adj_4",
                 now=T0,
             )
 
@@ -1090,11 +1123,27 @@ class TestRefunds:
                 account_id=world.student,
                 batch_id=batch.id,
                 units=10,
-                paddle_adjustment_id="adj_5",
+                provider=PROVIDER,
+                provider_adjustment_id="adj_5",
                 now=EXPIRY,
             )
 
-    async def test_one_refund_per_paddle_adjustment(
+    async def test_a_refund_goes_through_the_batchs_provider(
+        self, db_session: AsyncSession, world: World
+    ) -> None:
+        batch = await buy(db_session, world.student, 100)
+        with pytest.raises(BillingInvalidError, match=f"paid through {PROVIDER}"):
+            await refund_hold(
+                db_session,
+                account_id=world.student,
+                batch_id=batch.id,
+                units=10,
+                provider="other",
+                provider_adjustment_id="adj_7",
+                now=T0,
+            )
+
+    async def test_one_refund_per_providers_adjustment(
         self, db_session: AsyncSession, world: World
     ) -> None:
         batch = await buy(db_session, world.student, 100)
@@ -1102,7 +1151,8 @@ class TestRefunds:
             "account_id": world.student,
             "batch_id": batch.id,
             "units": 10,
-            "paddle_adjustment_id": "adj_6",
+            "provider": PROVIDER,
+            "provider_adjustment_id": "adj_6",
             "now": T0,
         }
         first = await refund_hold(db_session, **args)
@@ -1112,7 +1162,9 @@ class TestRefunds:
         with pytest.raises(BillingConflictError, match="other figures"):
             await refund_hold(db_session, **{**args, "units": 11})
         with pytest.raises(BillingNotFoundError):
-            await refund_approve(db_session, paddle_adjustment_id="adj_none", now=T0)
+            await refund_approve(
+                db_session, provider=PROVIDER, provider_adjustment_id="adj_none", now=T0
+            )
 
 
 # ── Statement ──────────────────────────────────────────────────────────
@@ -1221,7 +1273,8 @@ async def _journal_for_both(session: AsyncSession, world: World) -> None:
         account_id=world.author,
         batch_id=batch.id,
         units=10,
-        paddle_adjustment_id=f"adj-{uuid.uuid4().hex[:8]}",
+        provider=PROVIDER,
+        provider_adjustment_id=f"adj-{uuid.uuid4().hex[:8]}",
         now=T0,
     )
 

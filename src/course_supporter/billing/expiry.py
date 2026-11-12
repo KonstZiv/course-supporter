@@ -11,8 +11,8 @@ Batches (model 7):
     (a ``batch_expired`` movement). Units of it still reserved for an action
     wait for that action: the action is charged from them as from any reserve
     (:func:`.ledger.settle`); what the action leaves is released and burns at
-    the next run. Units held for a refund wait for Paddle's decision the same
-    way. Released units of an expired batch never repay a difference
+    the next run. Units held for a refund wait for the provider's decision the
+    same way. Released units of an expired batch never repay a difference
     (operator 2026-11-05): they are not available.
 
 Differences (model 8):

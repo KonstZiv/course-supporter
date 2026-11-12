@@ -48,9 +48,9 @@ Transactions and idempotency:
     The functions flush and never commit: the caller owns the transaction.
     Each function that changes units locks the account first
     (:func:`.journal.lock_account`) and is idempotent by its key — the
-    action's ``(kind, key)``, the Paddle line of a purchase, the Paddle
-    adjustment of a refund: a repeat changes nothing and returns what the
-    first call did. An administrator's credit has no such key: each call is a
+    action's ``(kind, key)``, the provider's line of a purchase, the
+    provider's adjustment of a refund: a repeat changes nothing and returns
+    what the first call did. An administrator's credit has no such key: each call is a
     new grant, and its audit entry says who made it.
 """
 
@@ -79,6 +79,7 @@ from course_supporter.billing.journal import (
     lock_account,
     positions,
     repay_differences,
+    require_provider,
     write,
 )
 from course_supporter.billing.kinds import (
@@ -112,7 +113,7 @@ class Balance:
     expired batches that still wait for their action or refund."""
     reserved: int
     held: int
-    """Units blocked while Paddle reviews a refund."""
+    """Units blocked while the provider reviews a refund."""
     available: int
     """``balance - reserved - held``: what a new action can use."""
     difference: int
@@ -263,37 +264,43 @@ async def credit_purchase(
     units: int,
     amount_paid_minor: int,
     currency: str,
-    paddle_transaction_id: str | None = None,
-    paddle_line_id: str | None = None,
+    provider: str,
+    provider_transaction_id: str | None = None,
+    provider_line_id: str | None = None,
     now: datetime | None = None,
 ) -> Credit:
     """A purchased package: a batch valid 6 months, then the difference repaid.
 
-    Idempotent by the Paddle line (``paddle_transaction_id`` + ``paddle_line_id``)
-    when given: a repeat returns the batch there is.
+    ``provider`` is who took the payment: a payment provider's adapter name
+    (``billing.payments``) or ``invoice`` for a contract invoice. Idempotent
+    by the provider's line (``provider`` + ``provider_line_id``) when the ids
+    are given: a repeat returns the batch there is.
 
     Raises:
         BillingInvalidError: not a positive number of units, a negative
-            amount, a currency that is not three capital letters, or only one
-            of the two Paddle ids.
+            amount, a currency that is not three capital letters, not a
+            provider's name (:func:`.journal.require_provider`), or only one
+            of the two provider ids.
         BillingNotFoundError / BillingConflictError: no such account; a
-            closed one; the Paddle line already credited with other figures.
+            closed one; the provider's line already credited with other
+            figures.
     """
     _positive(units, "a purchase")
     if amount_paid_minor < 0:
         raise BillingInvalidError("the amount paid cannot be negative")
     if len(currency) != 3 or not currency.isascii() or not currency.isupper():
         raise BillingInvalidError(f"currency {currency!r} is not an ISO 4217 code")
-    if (paddle_transaction_id is None) != (paddle_line_id is None):
-        raise BillingInvalidError("give both Paddle ids, or neither")
+    provider = require_provider(provider)
+    if (provider_transaction_id is None) != (provider_line_id is None):
+        raise BillingInvalidError("give both provider ids, or neither")
     now = now or datetime.now(UTC)
     await lock_account(session, account_id, active=True)
-    if paddle_transaction_id is not None:
+    if provider_line_id is not None:
         existing = (
             await session.execute(
                 select(BillingBatch).where(
-                    BillingBatch.paddle_transaction_id == paddle_transaction_id,
-                    BillingBatch.paddle_line_id == paddle_line_id,
+                    BillingBatch.provider == provider,
+                    BillingBatch.provider_line_id == provider_line_id,
                 )
             )
         ).scalar_one_or_none()
@@ -303,11 +310,18 @@ async def credit_purchase(
                 existing.units,
                 existing.amount_paid_minor,
                 existing.currency,
-            ) == (account_id, units, amount_paid_minor, currency)
+                existing.provider_transaction_id,
+            ) == (
+                account_id,
+                units,
+                amount_paid_minor,
+                currency,
+                provider_transaction_id,
+            )
             if not same:
                 raise BillingConflictError(
-                    f"Paddle line {paddle_transaction_id}/{paddle_line_id} is "
-                    f"already credited as batch {existing.id} with other figures"
+                    f"{provider} line {provider_line_id} is already credited "
+                    f"as batch {existing.id} with other figures"
                 )
             return Credit(batch=existing, repaid_units=0, created=False)
     batch = BillingBatch(
@@ -318,8 +332,9 @@ async def credit_purchase(
         expires_at=add_months(now, VALIDITY_MONTHS),
         amount_paid_minor=amount_paid_minor,
         currency=currency,
-        paddle_transaction_id=paddle_transaction_id,
-        paddle_line_id=paddle_line_id,
+        provider=provider,
+        provider_transaction_id=provider_transaction_id,
+        provider_line_id=provider_line_id,
     )
     repaid = await _new_batch(session, batch, now=now, actor=None)
     return Credit(batch=batch, repaid_units=repaid, created=True)

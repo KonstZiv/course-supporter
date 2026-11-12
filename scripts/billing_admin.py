@@ -49,6 +49,15 @@ the credit is audited (batch.admin_credit). Without --student — the author's
     statement --account <account-id> [--from 2026-11-01] [--to 2026-12-01]
         # movements in [from, to); dates or ISO instants, UTC
 
+Contract invoices (BIL-PAY, B2B). A partner platform paid its invoice: the
+units go to the tenant's author account as a purchase of provider "invoice"
+— valid 6 months, repaying the account's difference first — and the credit
+is audited (batch.invoice_credit). The invoice's number is the key: the same
+number again changes nothing; with other figures it is refused:
+    credit-invoice --tenant "Partner Academy" --units 10000 \
+        --amount-minor 50000 --currency EUR --invoice INV-2026-0042 \
+        --actor kostiantyn
+
 Anonymization, AFTER the tenant or the student was deleted by hand (there is
 no account-deletion flow yet; when one appears it calls the same functions).
 It closes and anonymizes the owner's accounts and ends the active payment
@@ -109,6 +118,7 @@ from course_supporter.billing.errors import (
     BillingNotFoundError,
 )
 from course_supporter.billing.kinds import ActionKind, Benefit, RuleScope
+from course_supporter.billing.payments import invoice
 from course_supporter.billing.periodic import BILLING_TASKS
 from course_supporter.config import get_settings
 from course_supporter.periodic.runner import TaskRun, run_task
@@ -346,6 +356,37 @@ async def statement(session: AsyncSession, args: argparse.Namespace) -> str:
         session, args.account, since=args.since, until=args.until
     )
     return "\n".join(_movement_line(m) for m in rows) or "no movements"
+
+
+async def credit_invoice(session: AsyncSession, args: argparse.Namespace) -> str:
+    """Credit a paid contract invoice (B2B) to the tenant's author account."""
+    tenant_id = await resolve_tenant_id(session, args.tenant)
+    done = await invoice.credit_invoice(
+        session,
+        tenant_id=tenant_id,
+        units=args.units,
+        amount_minor=args.amount_minor,
+        currency=args.currency,
+        invoice=args.invoice,
+        actor=args.actor,
+    )
+    batch = done.batch
+    head = (
+        f"credited invoice {batch.provider_transaction_id}: batch {batch.id}  "
+        f"{batch.units} units to account {batch.account_id}  "
+        f"amount={batch.amount_paid_minor} {batch.currency}  "
+        f"expires={batch.expires_at:%Y-%m-%d}  repaid_difference={done.repaid_units}"
+        if done.created
+        else f"invoice {batch.provider_transaction_id} was credited before as "
+        f"batch {batch.id}; nothing changed"
+    )
+    return (
+        head
+        + "\n"
+        + _balance_line(
+            batch.account_id, await ledger.balance(session, batch.account_id)
+        )
+    )
 
 
 def _anonymization_lines(done: accounts.Anonymization) -> str:
@@ -787,6 +828,7 @@ COMMANDS: dict[str, Handler] = {
     "anonymize-student": anonymize_student,
     "anonymize-tenant": anonymize_tenant,
     "credit": credit,
+    "credit-invoice": credit_invoice,
     "balance": balance,
     "statement": statement,
     "costs": costs_cmd,
@@ -852,6 +894,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--student", type=uuid.UUID, help="student id (else the author)")
     p.add_argument("--units", required=True, type=int)
     p.add_argument("--reason", required=True, help="why the units are granted")
+
+    p = command("credit-invoice", "credit a paid contract invoice", changes=True)
+    p.add_argument("--tenant", required=True, help="tenant id or name")
+    p.add_argument("--units", required=True, type=int)
+    p.add_argument(
+        "--amount-minor",
+        dest="amount_minor",
+        required=True,
+        type=int,
+        help="the amount paid, in minor units (cents)",
+    )
+    p.add_argument("--currency", required=True, help="ISO 4217 code, e.g. EUR")
+    p.add_argument("--invoice", required=True, help="the invoice's number")
 
     p = command("balance", "show the balance of an account", changes=False)
     p.add_argument("--tenant", required=True, help="tenant id or name")

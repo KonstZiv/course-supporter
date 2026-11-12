@@ -4424,7 +4424,8 @@ class BillingAuditEntry(Base):
     action: Mapped[str] = mapped_column(
         String(64),
         comment="What was done, e.g. author_settings.update, payment_rule.create, "
-        "payment_rule.end, account.anonymize, batch.admin_credit.",
+        "payment_rule.end, account.anonymize, batch.admin_credit, "
+        "batch.invoice_credit.",
     )
     entity: Mapped[str] = mapped_column(
         String(32),
@@ -4478,16 +4479,20 @@ _MOVEMENTS_OF_AN_ACTION = (
 _MOVEMENTS_WITH_PAYER = (
     "('debit', 'difference_arisen', 'benefit_covered', 'platform_covered')"
 )
+# The name of a payment provider's adapter (``billing.payments``), or
+# ``invoice`` for a contract invoice: one spelling per provider, so the same
+# provider never stands under two names in the keys of idempotency.
+_PROVIDER_NAME = "'^[a-z][a-z0-9_]{0,31}$'"
 
 
 class BillingBatch(Base):
     """A package of units that arrived on an account (BIL-B).
 
-    A purchase (through Paddle, by the adapter of week 5) or a credit by the
-    administrator. Valid six calendar months from its creation
-    (``expires_at``); units are taken from the batch that expires first.
-    Insert-only: what is left of it is the journal's business
-    (``billing.ledger``), never a column.
+    A purchase — through a payment provider's adapter (``billing.payments``)
+    or by a contract invoice (B2B) — or a credit by the administrator. Valid
+    six calendar months from its creation (``expires_at``); units are taken
+    from the batch that expires first. Insert-only: what is left of it is the
+    journal's business (``billing.ledger``), never a column.
     """
 
     __tablename__ = "billing_batches"
@@ -4501,14 +4506,15 @@ class BillingBatch(Base):
             "expires_at > created_at", name="ck_billing_batches_expires_after"
         ),
         CheckConstraint(
-            "source <> 'purchase' OR (amount_paid_minor IS NOT NULL "
-            "AND currency IS NOT NULL AND reason IS NULL AND actor IS NULL)",
+            "source <> 'purchase' OR (provider IS NOT NULL "
+            "AND amount_paid_minor IS NOT NULL AND currency IS NOT NULL "
+            "AND reason IS NULL AND actor IS NULL)",
             name="ck_billing_batches_purchase",
         ),
         CheckConstraint(
             "source <> 'admin_credit' OR (reason IS NOT NULL AND actor IS NOT NULL "
             "AND amount_paid_minor IS NULL AND currency IS NULL "
-            "AND paddle_transaction_id IS NULL)",
+            "AND provider IS NULL AND provider_transaction_id IS NULL)",
             name="ck_billing_batches_admin_credit",
         ),
         CheckConstraint(
@@ -4520,15 +4526,19 @@ class BillingBatch(Base):
             name="ck_billing_batches_currency",
         ),
         CheckConstraint(
-            "(paddle_transaction_id IS NULL) = (paddle_line_id IS NULL)",
-            name="ck_billing_batches_paddle_ids",
+            f"provider IS NULL OR provider ~ {_PROVIDER_NAME}",
+            name="ck_billing_batches_provider",
+        ),
+        CheckConstraint(
+            "(provider_transaction_id IS NULL) = (provider_line_id IS NULL)",
+            name="ck_billing_batches_provider_ids",
         ),
         Index(
-            "uq_billing_batches_paddle_line",
-            "paddle_transaction_id",
-            "paddle_line_id",
+            "uq_billing_batches_provider_line",
+            "provider",
+            "provider_line_id",
             unique=True,
-            postgresql_where=text("paddle_transaction_id IS NOT NULL"),
+            postgresql_where=text("provider_line_id IS NOT NULL"),
         ),
         {
             "comment": "A package of units on an account (BIL-B): a purchase or "
@@ -4544,8 +4554,8 @@ class BillingBatch(Base):
     )
     source: Mapped[str] = mapped_column(
         String(16),
-        comment="purchase (paid through Paddle, refundable) | admin_credit "
-        "(granted by the administrator, never refunded).",
+        comment="purchase (paid through a payment provider or by a contract "
+        "invoice) | admin_credit (granted by the administrator, never refunded).",
     )
     units: Mapped[int] = mapped_column(
         Integer, comment="Units the batch brought; never changes."
@@ -4569,14 +4579,20 @@ class BillingBatch(Base):
     currency: Mapped[str | None] = mapped_column(
         String(3), comment="Purchase: ISO 4217 code of the amount paid."
     )
-    paddle_transaction_id: Mapped[str | None] = mapped_column(
-        String(64),
-        comment="Purchase: Paddle transaction id; set by the Paddle adapter.",
+    provider: Mapped[str | None] = mapped_column(
+        String(32),
+        comment="Purchase: who took the payment, a payment provider's adapter "
+        "name (e.g. paddle) or invoice (a contract invoice). NULL on an admin "
+        "credit.",
     )
-    paddle_line_id: Mapped[str | None] = mapped_column(
+    provider_transaction_id: Mapped[str | None] = mapped_column(
         String(64),
-        comment="Purchase: Paddle line item id of the package within the "
-        "transaction; set by the Paddle adapter.",
+        comment="Purchase: the provider's transaction id (an invoice: its number).",
+    )
+    provider_line_id: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Purchase: the provider's id of the package's line within the "
+        "transaction (an invoice: its number); unique per provider.",
     )
     reason: Mapped[str | None] = mapped_column(
         Text, comment="Admin credit: why the units were granted."
@@ -4587,11 +4603,11 @@ class BillingBatch(Base):
 
 
 class BillingRefund(Base):
-    """A refund of unused units of one purchase batch, through Paddle (BIL-B).
+    """A refund of unused units of one purchase batch, through its provider (BIL-B).
 
-    While Paddle reviews it the units are held (not spendable); approved, they
-    leave the batch; rejected, they return to it. One row per Paddle
-    adjustment, so a repeated notice changes nothing.
+    While the provider reviews it the units are held (not spendable);
+    approved, they leave the batch; rejected, they return to it. One row per
+    adjustment of a provider, so a repeated notice changes nothing.
     """
 
     __tablename__ = "billing_refunds"
@@ -4608,12 +4624,17 @@ class BillingRefund(Base):
             "(state = 'held') = (decided_at IS NULL)",
             name="ck_billing_refunds_decided_at",
         ),
+        CheckConstraint(
+            f"provider ~ {_PROVIDER_NAME}", name="ck_billing_refunds_provider"
+        ),
         UniqueConstraint(
-            "paddle_adjustment_id", name="uq_billing_refunds_paddle_adjustment"
+            "provider",
+            "provider_adjustment_id",
+            name="uq_billing_refunds_provider_adjustment",
         ),
         {
             "comment": "Refund of unused units of a purchase batch (BIL-B): held "
-            "while Paddle reviews it, then approved or rejected."
+            "while the provider reviews it, then approved or rejected."
         },
     )
 
@@ -4639,15 +4660,20 @@ class BillingRefund(Base):
     currency: Mapped[str] = mapped_column(
         String(3), comment="The batch's currency (ISO 4217)."
     )
-    paddle_adjustment_id: Mapped[str] = mapped_column(
-        String(64), comment="Paddle adjustment (refund) id."
+    provider: Mapped[str] = mapped_column(
+        String(32),
+        comment="The payment provider the refund goes through: the batch's.",
+    )
+    provider_adjustment_id: Mapped[str] = mapped_column(
+        String(64),
+        comment="The provider's adjustment (refund) id; unique per provider.",
     )
     state: Mapped[str] = mapped_column(
         String(16),
         default="held",
         server_default="held",
-        comment="held (units blocked while Paddle reviews) | approved (units "
-        "gone) | rejected (units back in the batch).",
+        comment="held (units blocked while the provider reviews) | approved "
+        "(units gone) | rejected (units back in the batch).",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -4656,7 +4682,7 @@ class BillingRefund(Base):
     )
     decided_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
-        comment="When Paddle's decision was recorded; NULL while held.",
+        comment="When the provider's decision was recorded; NULL while held.",
     )
 
 
@@ -4948,4 +4974,140 @@ class BillingMovement(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         comment="When the units moved.",
+    )
+
+
+# ── BIL-PAY: the webhook events of payment providers ──
+#
+# One row per event a provider sent, keyed by the provider's own event id: a
+# repeat is recognised and changes nothing. Only the normalized fields the
+# journal needs are kept — never the raw body (its SHA-256 only) and never the
+# payer's e-mail, name or address. No foreign key at all: ``account_id`` is the
+# account the event NAMES, which may not exist (the event then failed and
+# waits for a person). Not insert-only — a failed event is handled again when
+# the provider repeats it — but nothing deletes a row: no foreign key, so no
+# cascade, reaches the table.
+
+_PROVIDER_EVENT_TYPES = (
+    "('purchase_completed', 'refund_approved', 'refund_rejected', 'chargeback', "
+    "'unknown')"
+)
+_PROVIDER_EVENT_STATES = "('processed', 'ignored', 'recorded', 'failed')"
+
+
+class BillingProviderEvent(Base):
+    """One webhook event of a payment provider and how it was handled (BIL-PAY).
+
+    Written by ``billing.payments.webhooks`` in the transaction of the event's
+    action, so the row and what the journal did land together; a failure is
+    recorded in a transaction of its own after the action is rolled back.
+    """
+
+    __tablename__ = "billing_provider_events"
+    __table_args__ = (
+        CheckConstraint(
+            f"provider ~ {_PROVIDER_NAME}",
+            name="ck_billing_provider_events_provider",
+        ),
+        CheckConstraint(
+            f"event_type IN {_PROVIDER_EVENT_TYPES}",
+            name="ck_billing_provider_events_event_type",
+        ),
+        CheckConstraint(
+            f"state IN {_PROVIDER_EVENT_STATES}",
+            name="ck_billing_provider_events_state",
+        ),
+        CheckConstraint(
+            "(state = 'failed') = (error IS NOT NULL)",
+            name="ck_billing_provider_events_error",
+        ),
+        CheckConstraint(
+            "body_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_billing_provider_events_body_sha256",
+        ),
+        CheckConstraint(
+            "currency IS NULL OR currency ~ '^[A-Z]{3}$'",
+            name="ck_billing_provider_events_currency",
+        ),
+        UniqueConstraint(
+            "provider", "provider_event_id", name="uq_billing_provider_events_event"
+        ),
+        {
+            "comment": "Webhook events of payment providers, one row per event "
+            "(BIL-PAY): the normalized fields and how the event was handled; "
+            "never the raw body or personal data."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    provider: Mapped[str] = mapped_column(
+        String(32),
+        comment="The provider's adapter name (BILLING_PROVIDERS), e.g. paddle.",
+    )
+    provider_event_id: Mapped[str] = mapped_column(
+        String(64),
+        comment="The provider's id of the event; unique per provider, so a "
+        "repeat is recognised.",
+    )
+    event_type: Mapped[str] = mapped_column(
+        String(32),
+        comment="purchase_completed | refund_approved | refund_rejected | "
+        "chargeback | unknown: the event as billing reads it.",
+    )
+    provider_event_type: Mapped[str] = mapped_column(
+        String(64), comment="The provider's own name of the event type."
+    )
+    state: Mapped[str] = mapped_column(
+        String(16),
+        comment="processed (the journal acted) | ignored (not an event billing "
+        "acts on) | recorded (a chargeback: kept, no action) | failed (see "
+        "error; handled again when the provider repeats the event).",
+    )
+    error: Mapped[str | None] = mapped_column(
+        Text,
+        comment="Why the handling failed, without personal data; NULL unless failed.",
+    )
+    body_sha256: Mapped[str] = mapped_column(
+        String(64),
+        comment="SHA-256 (hex) of the raw body last handled; the body itself is "
+        "not kept.",
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the event first arrived.",
+    )
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), comment="When the event was last handled."
+    )
+    occurred_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        comment="When it happened at the provider, by the provider's word.",
+    )
+    account_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        comment="The account the event's custom data names. No FK: it may name "
+        "none, and the event then failed.",
+    )
+    package_id: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Purchase: the package bought (config/billing_packages.yaml).",
+    )
+    amount_minor: Mapped[int | None] = mapped_column(
+        BigInteger,
+        comment="Purchase: the amount paid, tax included; refund, chargeback: "
+        "the amount. In minor units of currency.",
+    )
+    currency: Mapped[str | None] = mapped_column(
+        String(3), comment="ISO 4217 code of amount_minor."
+    )
+    provider_transaction_id: Mapped[str | None] = mapped_column(
+        String(64), comment="The provider's transaction id."
+    )
+    provider_line_id: Mapped[str | None] = mapped_column(
+        String(64),
+        comment="Purchase: the provider's id of the line within the transaction.",
+    )
+    provider_adjustment_id: Mapped[str | None] = mapped_column(
+        String(64), comment="Refund: the provider's adjustment id."
     )

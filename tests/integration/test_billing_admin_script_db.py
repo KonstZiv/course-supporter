@@ -257,3 +257,92 @@ def test_run_periodic_dry_run_then_run(
     assert "dry run" not in answer
     assert burned() == [100]
     engine.dispose()
+
+
+def test_credit_invoice_is_a_purchase_audited_once(
+    tenant: Tenant, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``credit-invoice`` (BIL-PAY, B2B): a purchase of provider "invoice" on
+    the tenant's author account, keyed by the invoice's number; the same
+    number again changes nothing, with other figures it is refused."""
+    number = f"INV-{uuid.uuid4().hex[:10]}"
+    argv = [
+        "credit-invoice",
+        "--tenant",
+        tenant.name,
+        "--units",
+        "10000",
+        "--amount-minor",
+        "50000",
+        "--currency",
+        "EUR",
+        "--invoice",
+        number,
+        "--actor",
+        "kostiantyn",
+    ]
+    assert billing_admin.main(argv) == 0
+    out = capsys.readouterr().out
+    assert f"credited invoice {number}" in out and "available=10000" in out
+
+    engine = create_engine(get_settings().database_url)
+
+    def written() -> tuple[BillingBatch, list[BillingAuditEntry], list[str]]:
+        with Session(engine) as session:
+            account = session.scalars(
+                select(BillingAccount).where(BillingAccount.tenant_id == tenant.id)
+            ).one()
+            assert account.kind == "author"
+            [batch] = session.scalars(
+                select(BillingBatch).where(BillingBatch.account_id == account.id)
+            ).all()
+            entries = list(
+                session.scalars(
+                    select(BillingAuditEntry).where(
+                        BillingAuditEntry.entity_id == batch.id
+                    )
+                )
+            )
+            kinds = list(
+                session.scalars(
+                    select(BillingMovement.kind).where(
+                        BillingMovement.account_id == account.id
+                    )
+                )
+            )
+            return batch, entries, kinds
+
+    batch, [entry], kinds = written()
+    assert (batch.source, batch.provider, batch.units) == ("purchase", "invoice", 10000)
+    assert (batch.provider_transaction_id, batch.provider_line_id) == (number, number)
+    assert (batch.amount_paid_minor, batch.currency) == (50000, "EUR")
+    assert (batch.reason, batch.actor) == (None, None)  # a purchase's row
+    assert (entry.actor, entry.action, entry.entity) == (
+        "kostiantyn",
+        "batch.invoice_credit",
+        "batch",
+    )
+    assert entry.after is not None
+    assert (entry.after["provider"], entry.after["provider_line_id"]) == (
+        "invoice",
+        number,
+    )
+    assert entry.after["amount_paid_minor"] == 50000
+    assert kinds == ["credit"]
+
+    assert billing_admin.main(argv) == 0  # the same invoice again
+    assert "nothing changed" in capsys.readouterr().out
+    again, entries, kinds = written()
+    assert (again.id, len(entries), kinds) == (batch.id, 1, ["credit"])
+
+    other = [*argv]
+    other[other.index("--units") + 1] = "20000"
+    assert billing_admin.main(other) == 1
+    assert "other figures" in capsys.readouterr().err
+    assert written()[0].id == batch.id
+
+    missing = [*argv]
+    missing[missing.index("--tenant") + 1] = f"no-such-{uuid.uuid4().hex[:6]}"
+    assert billing_admin.main(missing) == 1
+    assert "not found" in capsys.readouterr().err
+    engine.dispose()

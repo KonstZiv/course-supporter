@@ -15,44 +15,135 @@ env:
   UV_CACHE_DIR: /tmp/.uv-cache
 
 jobs:
+  changes:
+    name: Detect changes
+    # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.
+    runs-on: ubuntu-24.04
+    outputs:
+      docs_only: ${{ steps.filter.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if changes are docs-only
+        id: filter
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Event is $EVENT_NAME (not pull_request); running full CI."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git rev-parse --verify "origin/${BASE_REF}" >/dev/null 2>&1; then
+            git fetch origin "${BASE_REF}" || true
+          fi
+
+          if ! changed=$(git -c core.quotePath=false diff --no-renames --name-only "origin/${BASE_REF}...HEAD"); then
+            echo "git diff failed; running full CI."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "$changed" ]; then
+            echo "Empty diff; running full CI."
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          docs_only=true
+          file_count=0
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            file_count=$((file_count + 1))
+            case "$file" in
+              docs/*|mkdocs.yml) ;;
+              */*)
+                docs_only=false
+                break
+                ;;
+              *.md) ;;
+              *)
+                docs_only=false
+                break
+                ;;
+            esac
+          done <<< "$changed"
+
+          if [ "$file_count" -eq 0 ]; then
+            docs_only=false
+          fi
+
+          echo "Changed files:"
+          echo "$changed"
+          echo "docs_only=$docs_only"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint & Format
+    needs: changes
     # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.docs_only != 'true'
 
       - uses: astral-sh/setup-uv@v5
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
+        if: needs.changes.outputs.docs_only != 'true'
         run: uv sync --frozen --group dev
 
       - name: Ruff check
+        if: needs.changes.outputs.docs_only != 'true'
         run: uv run ruff check src/ tests/
 
       - name: Ruff format check
+        if: needs.changes.outputs.docs_only != 'true'
         run: uv run ruff format --check src/ tests/
+
+      - name: Skip notice (docs-only PR)
+        if: needs.changes.outputs.docs_only == 'true'
+        run: |
+          echo "Docs-only PR: skipping lint & format checks."
 
   typecheck:
     name: Type Check
+    needs: changes
     # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.docs_only != 'true'
 
       - uses: astral-sh/setup-uv@v5
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
+        if: needs.changes.outputs.docs_only != 'true'
         run: uv sync --frozen --group dev
 
       - name: Mypy
+        if: needs.changes.outputs.docs_only != 'true'
         run: uv run mypy
+
+      - name: Skip notice (docs-only PR)
+        if: needs.changes.outputs.docs_only == 'true'
+        run: |
+          echo "Docs-only PR: skipping type checks."
 
   docs:
     name: Docs build
@@ -92,6 +183,7 @@ jobs:
 
   test:
     name: Tests
+    needs: changes
     # Pinned: libmagic 5.46 on ubuntu-26.04 does not detect a zip read from memory; prod pins libmagic in Dockerfile; unpin only with a libmagic >= 5.47 check.
     runs-on: ubuntu-24.04
     env:
@@ -107,25 +199,30 @@ jobs:
       FFMPEG_SHA256: c1e6caf48923dd8e6bc5e54d51ba70c321175b8162ae9c414c392990e72f0e79
     steps:
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.docs_only != 'true'
 
       - uses: astral-sh/setup-uv@v5
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
+        if: needs.changes.outputs.docs_only != 'true'
         run: uv sync --frozen --group dev
 
       # The requires_ffmpeg tests run here, as in the local full gate. Without
       # ffmpeg/ffprobe on PATH they are skipped, not failed (tests/conftest.py),
       # so the step checks both binaries before it adds them to PATH.
       - name: Cache the ffmpeg archive
+        if: needs.changes.outputs.docs_only != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/ffmpeg-archive
           key: ffmpeg-${{ env.FFMPEG_ASSET }}-${{ env.FFMPEG_SHA256 }}
 
       - name: Install ffmpeg
+        if: needs.changes.outputs.docs_only != 'true'
         timeout-minutes: 8
         shell: bash
         run: |
@@ -148,20 +245,29 @@ jobs:
       # Local test values only (no secrets): read by the app settings and by
       # docker compose for the services below.
       - name: Create .env
+        if: needs.changes.outputs.docs_only != 'true'
         run: cp .env.example .env
 
       # Same images, settings and health checks as the local gate, from one file.
       - name: Start Postgres, Redis and SeaweedFS
+        if: needs.changes.outputs.docs_only != 'true'
         run: docker compose up -d --wait postgres redis seaweedfs
 
       - name: Apply migrations
+        if: needs.changes.outputs.docs_only != 'true'
         run: uv run alembic upgrade head
 
       - name: Run tests
+        if: needs.changes.outputs.docs_only != 'true'
         run: uv run pytest --run-db --run-redis --tb=short -q -rfEs
         env:
           ENVIRONMENT: testing
           TEST_REDIS_DB: "15"
+
+      - name: Skip notice (docs-only PR)
+        if: needs.changes.outputs.docs_only == 'true'
+        run: |
+          echo "Docs-only PR: skipping test execution and service spin-up."
 
 
   ai-review:

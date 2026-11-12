@@ -24,6 +24,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
     VerdictItemKind,
@@ -322,10 +324,55 @@ class TestTheSameSearchAsInTheWork:
 
 
 class TestTheRestOfTheRules:
-    def test_a_repeat_that_quotes_nothing_the_work_has_is_unconfirmed(self) -> None:
-        """The ordinary rule for a second quote that does not stand."""
+    @pytest.mark.parametrize(
+        "second",
+        [
+            pytest.param("def count_lines(text):", id="made-up"),
+            pytest.param(None, id="none"),
+        ],
+    )
+    def test_after_the_base_a_repeat_without_the_students_code_is_flagged(
+        self, second: str | None
+    ) -> None:
+        """Answer 1 (#649): the model never showed the student's code.
+
+        Not unconfirmed, which would count the author's code as met.
+        """
         first = _answer(_met("c1", _AUTHORS), _met("c2", _STUDENTS))
-        repeat = _answer(_met("c1", "def count_lines(text):"))
+        repeat = _answer(
+            {"id": "c1", "verdict": "met", "quote": second, "missing": None}
+        )
+
+        rows = _settle(first, repeat)
+
+        assert (
+            rows["c1"].verdict,
+            rows["c1"].quote_not_found,
+            rows["c1"].quote_from_base,
+        ) == (NOT_MET, False, True)
+        assert is_passed(rows.values()) is False
+
+    def test_after_the_base_the_students_code_badly_quoted_is_unconfirmed(
+        self,
+    ) -> None:
+        """The student's own code in a quote of two lines: the ordinary rule."""
+        first = _answer(_met("c1", _AUTHORS), _met("c2", _STUDENTS))
+        repeat = _answer(_met("c1", "def count_words(text):\n" + _STUDENTS))
+
+        row = _settle(first, repeat)["c1"]
+
+        assert (row.verdict, row.quote_not_found, row.quote_from_base) == (
+            NOT_MET,
+            True,
+            False,
+        )
+
+    def test_a_made_up_quote_without_the_base_is_unconfirmed_as_before(
+        self,
+    ) -> None:
+        """No quote of the base first: the ordinary rule, untouched."""
+        first = _answer(_met("c1", "def count_lines(text):"), _met("c2", _STUDENTS))
+        repeat = _answer(_met("c1", "def count_lines(words):"))
 
         row = _settle(first, repeat)["c1"]
 
@@ -360,8 +407,26 @@ class TestTheRestOfTheRules:
             NOT_MET,
             True,
         )
-        assert (rows["c1"].verdict, rows["c1"].quote_not_found) == (NOT_MET, False)
+        # Answer 2 (#649): the criterion carries its point's flag.
+        assert (
+            rows["c1"].verdict,
+            rows["c1"].quote_not_found,
+            rows["c1"].quote_from_base,
+        ) == (NOT_MET, False, True)
         assert is_passed(rows.values()) is False
+
+    def test_a_criterion_whose_points_stand_carries_no_flag(self) -> None:
+        criteria = CriteriaInForce(
+            criteria=(_criterion("c1", "must", points=2),),
+            layer=CriteriaLayer.MODEL,
+            source_id=_LIST_ID,
+        )
+        first = _answer(_met("c1.p1", _AUTHORS), _met("c1.p2", _STUDENTS))
+        repeat = _answer(_met("c1.p1", _NEW_FILE))
+
+        rows = _settle(first, repeat, criteria=criteria)
+
+        assert (rows["c1"].verdict, rows["c1"].quote_from_base) == (MET, False)
 
     def test_the_safeguard_does_not_keep_a_quote_of_the_base(self) -> None:
         @dataclass(frozen=True)

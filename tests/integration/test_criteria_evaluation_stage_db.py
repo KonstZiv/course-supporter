@@ -1202,6 +1202,54 @@ class TestAQuoteOfTheProjectsBase:
         )
         assert (row.quote_from_base, row.quote_not_found) == (True, False)
 
+    async def test_a_made_up_second_quote_is_not_met_with_the_flag(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        """Answer 1 (#649): the model never showed the student's code."""
+        router = _Router(
+            _answer(_met("c1", _C1_QUOTE), _met("c2.p1", _P1_QUOTE), _not_met("c2.p2")),
+            _answer(_met("c1", "def fib(n): pass")),
+        )
+
+        rows = await self._evaluate_with_base(db_session, router, submission)
+
+        row = rows["c1"]
+        assert (row.verdict, row.model_verdict, row.quote) == (
+            VerdictValue.NOT_MET,
+            VerdictValue.MET,
+            "def fib(n): pass",
+        )
+        assert (row.quote_from_base, row.quote_not_found) == (True, False)
+        assert is_passed(list(rows.values())) is False
+
+    async def test_a_criterion_carries_its_points_flag(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        """Answer 2 (#649): c2 is checked by points; c2.p1 fell for the base."""
+        router = _Router(
+            _answer(
+                _met("c1", _P1_QUOTE),
+                _met("c2.p1", _C1_QUOTE),
+                _met("c2.p2", _P1_QUOTE),
+            ),
+            _answer(_met("c2.p1", _C1_QUOTE)),
+        )
+
+        rows = await self._evaluate_with_base(db_session, router, submission)
+
+        assert (rows["c2.p1"].verdict, rows["c2.p1"].quote_from_base) == (
+            VerdictValue.NOT_MET,
+            True,
+        )
+        assert (rows["c2"].verdict, rows["c2"].quote_from_base) == (
+            VerdictValue.NOT_MET,
+            True,
+        )
+        assert (rows["c1"].quote_from_base, rows["c2.p2"].quote_from_base) == (
+            False,
+            False,
+        )
+
 
 class TestATaskWithoutABase:
     """Lock d: a task's door carries no base, and the model is asked as before."""

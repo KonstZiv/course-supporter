@@ -72,11 +72,13 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
   line for a shorter one — in the unchanged lines of a changed file, in a
   file moved or renamed, or in a file the student did not touch, is asked
   about once more like any other that does not stand. A "met" that still
-  stands on the base after the repeat, or that the repeat took back, is "not
-  met" with the author's flag ``quote_from_base`` — not unconfirmed: the
-  quote was found, and it is not the student's. The safeguard does not keep
-  a quote of the base either.
-  Without a base (every type but a project) nothing changes.
+  stands on the base after the repeat, that the repeat took back, or whose
+  second quote is not in the student's work at all (made up, or none) is
+  "not met" with the author's flag ``quote_from_base`` — not unconfirmed:
+  the model never showed the student's code. A criterion checked by
+  mandatory points carries the flag when one of its points does. The
+  safeguard does not keep a quote of the base either. Without a base (every
+  type but a project) nothing changes.
 
 Replacing:
     The stage depends on the functions above and on their value types; a new
@@ -134,7 +136,8 @@ almost any work, so finding it proves nothing about the criterion. A shorter
 quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 """
 
-VERDICT_RULES_VERSION: Final[int] = 2
+# К3 шляху проєкту: цитата з коду бази  # noqa: RUF003
+VERDICT_RULES_VERSION: Final[int] = 3
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -142,7 +145,8 @@ Raise it on ANY change of code that changes what a review says: the verdicts
 check of the explanation against the facts (``verdict_explanation``), the
 search and the check of course links (``course_links``,
 ``course_link_delivery``), the builder (``text_result``, ``review_assembler``).
-2 — after the quote check was fixed on 2026-11-07. It enters the evaluator's
+2 — after the quote check was fixed on 2026-11-07; 3 — project chain K3: a
+quote of the base's code is not the student's. It enters the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,
 so a review written by other code is never given again as a copy of unchanged
@@ -733,15 +737,23 @@ def _word_to_settle(
 def _from_base(first: ItemVerdict, settled: ItemVerdict, work: SubmittedWork) -> bool:
     """Whether the item falls for a quote of the project's base (K3).
 
-    Its last word is a "met" on a quote of the base, or a "not met" that took
-    back a first "met" on one (decision 2 of project chain K3). Either way
-    the row reads "not met" with ``quote_from_base`` — never unconfirmed: the
-    quote was found, and it is the author's. A repeat that answers with a
-    quote of the student's own code settles as any other.
+    Its last word is a "met" on a quote of the base; or its first "met" stood
+    on one and the repeat did not show the student's code either -- took it
+    back, or gave a quote the work does not have at all, or none (decision 2
+    of project chain K3; answer 1 of the Mentor session on #649). Then the
+    row reads "not met" with ``quote_from_base`` — never unconfirmed, which
+    would count the author's code for the student. A repeat that answers
+    with the student's own code settles as any other: on a quote that
+    stands, met; on one of theirs too long or too short, unconfirmed.
     """
-    if settled.verdict is VerdictValue.MET:
-        return _repeat_reason(settled, work) is RepeatReason.QUOTE_FROM_BASE
-    return _repeat_reason(first, work) is RepeatReason.QUOTE_FROM_BASE
+    if _repeat_reason(settled, work) is RepeatReason.QUOTE_FROM_BASE:
+        return True
+    if _repeat_reason(first, work) is not RepeatReason.QUOTE_FROM_BASE:
+        return False
+    if settled.verdict is VerdictValue.NOT_MET:
+        return True
+    quote = settled.quote or ""
+    return work.find(quote) is None and not work.is_in_a_line(quote)
 
 
 def _unconfirmed(item: ScoredItem) -> bool:
@@ -761,7 +773,8 @@ def _from_points(
 
     Met when every point is; unconfirmed — "not met" with the author's flag,
     as an unconfirmed point reads — when every point is met or unconfirmed;
-    not met otherwise (decision 3; unconfirmed since 2026-11-07).
+    not met otherwise (decision 3; unconfirmed since 2026-11-07). It carries
+    ``quote_from_base`` when one of its points does (project chain K3).
     """
     every_met = all(point.verdict is VerdictValue.MET for point in points)
     unconfirmed = not every_met and all(
@@ -774,6 +787,7 @@ def _from_points(
         verdict=VerdictValue.MET if every_met else VerdictValue.NOT_MET,
         model_verdict=None,
         quote_not_found=unconfirmed,
+        quote_from_base=any(point.quote_from_base for point in points),
     )
 
 

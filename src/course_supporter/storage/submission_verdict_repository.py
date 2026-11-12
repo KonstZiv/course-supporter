@@ -76,11 +76,12 @@ class VerdictRecord:
             mandatory points: every point is met or so, one at least so
             (``homework/criteria_verdicts.py``).
         quote_from_base: The item falls for a quote of the project's base,
-            the author's code: the model's last "met" stood on one, or it
-            took back a first "met" that did — "not met", the author's flag,
-            never unconfirmed (project chain K3). On a row the safeguard
-            kept, as ``quote_not_found`` there: what the model proposed.
-            ``False`` on a criterion derived from its points.
+            the author's code: the model's last "met" stood on one, or its
+            first "met" did and the repeat showed none of the student's code
+            — "not met", the author's flag, never unconfirmed (project chain
+            K3). On a row the safeguard kept, as ``quote_not_found`` there:
+            what the model proposed. On a criterion derived from its points:
+            one of its points carries it.
         safeguard_submission_id: The earlier submission whose "met" the
             safeguard kept; ``None`` when it did not fire.
     """

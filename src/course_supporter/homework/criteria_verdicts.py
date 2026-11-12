@@ -25,7 +25,10 @@ Interface:
     verdict on an earlier submission.
     :func:`settle_verdicts` — the verdict rows to store.
     :class:`ScoredItem`, :func:`score_percent`, :func:`is_passed` — the score
-    and the pass, from rows.
+    and the pass, from rows; :func:`pass_decision`, :class:`PassDecision` —
+    the pass with the branch of the rule that decided it, for the review's
+    phrase; :data:`PASS_THRESHOLD_AUTHOR_MUSTS`,
+    :data:`PASS_THRESHOLD_NO_AUTHOR_MUSTS` — its two thresholds.
 
 The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
 9.8, 9.10; the item-level repeat, ratified 2026-10-02; the whole line and
@@ -61,8 +64,12 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
   unconfirmed.
 * The score is the share of the weights of the met criteria (3 / 2 / 1) in
   the sum of all weights, in whole percent, rounded DOWN — 100 only when
-  everything is met or unconfirmed. Passed means every "must" criterion is
-  met or unconfirmed; a list with no "must" is passed.
+  everything is met or unconfirmed.
+* The pass (the product owner's decision of 2026-11-12) depends on whose
+  list the rows were judged against. The author's list with a "must": every
+  "must" met or unconfirmed AND a score of 70 or more. Any other list — the
+  model's, or the author's without a "must": a score of 80 or more; a "must"
+  the model put weighs in the score and is shown, but blocks nothing alone.
 * The resubmission safeguard: a "not met" on an item whose LATEST earlier
   verdict on the same list was "met", and whose quote is still in the work
   word for word, stays "met" — and says so in its row.
@@ -83,11 +90,11 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
 Replacing:
     The stage depends on the functions above and on their value types; a new
     rule replaces a function's body, not its signature. The score formula is
-    :func:`score_percent` alone, the matching of a quote is
-    :meth:`SubmittedWork.find` alone, what lets a single verdict stand is
-    ``_repeat_reason`` alone, which of the model's words an item is settled
-    on is ``_word_to_settle`` alone, the safeguard's condition is
-    ``_kept_by_safeguard`` alone. A change of any of these rules raises
+    :func:`score_percent` alone, the pass rule is :func:`pass_decision` alone,
+    the matching of a quote is :meth:`SubmittedWork.find` alone, what lets a
+    single verdict stand is ``_repeat_reason`` alone, which of the model's
+    words an item is settled on is ``_word_to_settle`` alone, the safeguard's
+    condition is ``_kept_by_safeguard`` alone. A change of any of these rules raises
     :data:`VERDICT_RULES_VERSION` — as does any other change of code that
     changes what a review says.
 """
@@ -108,6 +115,7 @@ from typing import Final, NamedTuple, Protocol
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from course_supporter.criteria_kinds import (
+    CriteriaLayer,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -119,6 +127,7 @@ from course_supporter.homework.criteria_form import (
 )
 from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.models.review_structure import PassBasis
 from course_supporter.storage.submission_verdict_repository import VerdictRecord
 
 MAX_QUOTE_CHARS: Final = 200
@@ -136,8 +145,9 @@ almost any work, so finding it proves nothing about the criterion. A shorter
 quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 """
 
-# К3 шляху проєкту: цитата з коду бази  # noqa: RUF003
-VERDICT_RULES_VERSION: Final[int] = 3
+# правило заліку: обов'язкові критерії автора
+# і пороги 70 / 80 (2026-11-12)  # noqa: RUF003
+VERDICT_RULES_VERSION: Final[int] = 4
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -146,7 +156,9 @@ check of the explanation against the facts (``verdict_explanation``), the
 search and the check of course links (``course_links``,
 ``course_link_delivery``), the builder (``text_result``, ``review_assembler``).
 2 — after the quote check was fixed on 2026-11-07; 3 — project chain K3: a
-quote of the base's code is not the student's. It enters the evaluator's
+quote of the base's code is not the student's; 4 — the pass rule of
+2026-11-12: the author's "must" criteria and the thresholds 70 / 80. It enters
+the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,
 so a review written by other code is never given again as a copy of unchanged
@@ -969,19 +981,105 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
     return (100 * met) // total
 
 
-def is_passed(items: Iterable[ScoredItem]) -> bool:
-    """Whether every "must" criterion is met or unconfirmed; with no "must", passed.
+# The product owner's decision of 2026-11-12: the pass of a work judged by a
+# criteria list. The control submission of 2026-11-12 showed a "must" the
+# model put on its own list blocking the pass where the model misjudged it.
+PASS_THRESHOLD_AUTHOR_MUSTS: Final = 70
+"""The score a work needs when the author's list has a "must" and every one is met.
 
-    The score shows how complete the work is; it does not decide the pass
-    (decision 2). An author's pass mark is outside the first echelon.
+The author approved those "must" criteria by saving the list
+(``PUT /documents/{id}/criteria/override``), so they decide the pass with
+this threshold beside them.
+"""
+
+PASS_THRESHOLD_NO_AUTHOR_MUSTS: Final = 80
+"""The score a work needs when no "must" of the author's stands behind the list.
+
+The model's list, or the author's without a "must": a "must" the model put is
+judged, shown and weighed in the score, but does not block the pass alone.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class PassDecision:
+    """A work's pass, and the branch of the rule that decided it.
+
+    Attributes:
+        passed: Whether the work is passed.
+        basis: The branch (:data:`~course_supporter.models.review_structure.PassBasis`):
+            the review prints its phrase.
+        score: :func:`score_percent` of the same rows.
+        threshold: The threshold of the branch.
+    """
+
+    passed: bool
+    basis: PassBasis
+    score: int
+    threshold: int
+
+
+def pass_decision(items: Iterable[ScoredItem], *, layer: CriteriaLayer) -> PassDecision:
+    """The pass of a work judged by a criteria list, and why (2026-11-12).
+
+    * The AUTHOR's list with at least one "must": passed when every "must" is
+      met or unconfirmed AND the score is :data:`PASS_THRESHOLD_AUTHOR_MUSTS`
+      or more.
+    * Otherwise — the MODEL's list, or the author's without a "must": passed
+      when the score is :data:`PASS_THRESHOLD_NO_AUTHOR_MUSTS` or more. A
+      "must" the model put still counts in the score by its weight and is
+      shown met or not met, but does not block the pass on its own.
 
     An unconfirmed "must" does not fail the work (the operator's decision of
     2026-11-07): the model said "done", and that no line of the work could
     bear it out is the check's limit, not the student's fault. The author
     sees the flag on its row.
+
+    Args:
+        items: The verdict rows, criteria and points alike.
+        layer: Whose list the rows were judged against — the address the rows
+            carry (``homework/judged_list.py``, ``judged_layer``).
+
+    Raises:
+        ValueError: See :func:`score_percent`.
+
+    >>> def criterion(weight, verdict):
+    ...     return VerdictRecord(
+    ...         "c1", VerdictItemKind.CRITERION, weight, verdict, model_verdict=None
+    ...     )
+    >>> rows = [criterion("must", "not_met"), criterion("should", "met"),
+    ...         criterion("should", "met"), criterion("should", "met"),
+    ...         criterion("should", "met"), criterion("should", "met"),
+    ...         criterion("should", "met")]
+    >>> pass_decision(rows, layer=CriteriaLayer.MODEL)
+    PassDecision(passed=True, basis='no_author_musts_passed', score=80, threshold=80)
+    >>> pass_decision(rows, layer=CriteriaLayer.AUTHOR).basis
+    'author_musts_unmet'
     """
-    return all(
-        outcome.met or outcome.unconfirmed
-        for outcome in _criteria_outcomes(items)
+    rows = list(items)
+    score = score_percent(rows)
+    musts = [
+        outcome
+        for outcome in _criteria_outcomes(rows)
         if outcome.weight is WeightCategory.MUST
-    )
+    ]
+    if layer is CriteriaLayer.AUTHOR and musts:
+        threshold = PASS_THRESHOLD_AUTHOR_MUSTS
+        if not all(outcome.met or outcome.unconfirmed for outcome in musts):
+            return PassDecision(False, "author_musts_unmet", score, threshold)
+        if score < threshold:
+            return PassDecision(False, "author_musts_below_threshold", score, threshold)
+        return PassDecision(True, "author_musts_met", score, threshold)
+    threshold = PASS_THRESHOLD_NO_AUTHOR_MUSTS
+    if score < threshold:
+        return PassDecision(False, "no_author_musts_failed", score, threshold)
+    return PassDecision(True, "no_author_musts_passed", score, threshold)
+
+
+def is_passed(items: Iterable[ScoredItem], *, layer: CriteriaLayer) -> bool:
+    """Whether the work is passed: :func:`pass_decision`, its answer alone.
+
+    Every place that counts the pass of a criteria list — the explanation's
+    facts, the review's builder, a recount from the stored rows — counts it
+    here; the webhook and the portal read the verdict the builder stored.
+    """
+    return pass_decision(items, layer=layer).passed

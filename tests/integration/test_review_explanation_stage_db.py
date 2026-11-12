@@ -118,7 +118,9 @@ def _criterion(cid: str, weight: str, points: int = 0, *, text: str = "") -> Cri
 
 _CRITERIA = (_criterion("c1", "must"), _criterion("c2", "should", points=2))
 
-# c1 met; c2 not — its second point is not: (3) of (3 + 2), passed.
+# c1 met; c2 not — its second point is not: (3) of (3 + 2) -> 60. Not passed
+# on either list (the pass rule of 2026-11-12): below 70 on the author's,
+# below 80 on the model's.
 _RECORDS = (
     VerdictRecord(
         "c1",
@@ -160,14 +162,14 @@ _RECORDS = (
 
 def _answer(
     *,
-    passed: bool = True,
+    passed: bool = False,
     remarks: tuple[str, ...] = ("c2",),
     links: tuple[str, ...] = (),
 ) -> str:
     return json.dumps(
         {
             "passed": passed,
-            "why": "Робота зарахована: функція є й рекурсивна.",
+            "why": "Робота не зарахована: функція є й рекурсивна, але тестів немає.",
             "remarks": [
                 {
                     "id": cid,
@@ -397,7 +399,7 @@ class TestTheExplanationIsKept:
         assert request["money_ceiling_usd"] == 0.24
         assert request["stop_on_output_ceiling"] is True
         render = request["render"]
-        assert render["result"] == {"passed": True, "score": 60}
+        assert render["result"] == {"passed": False, "score": 60}
         assert [c["id"] for c in render["criteria"]] == ["c1", "c2"]
         assert render["criteria"][0]["place"] == {
             "file": "solution.py",
@@ -603,7 +605,7 @@ class TestAnExplanationAgainstTheFacts:
         await _verdicts(
             db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
         )
-        wrong = _response(_answer(passed=False))
+        wrong = _response(_answer(passed=True))
         qwen = _provider(wrong, wrong)
         deepseek = _provider(wrong, wrong)
 

@@ -716,7 +716,7 @@ class TestAnUnconfirmedItemIsExplainedByItsStateAlone:
             )
             for record in records
         ]
-        facts = explanation_facts(criteria, rows)
+        facts = explanation_facts(criteria, rows, layer=in_force.layer)
         return render_context(
             ExplanationInput(
                 task_title="Project setup",

@@ -40,3 +40,8 @@ test.explanations_in_course_language: Vysvětlení je uvedeno v jazyce kurzu.
 position.audio: audio, {time}
 link.later_in_course: Podrobněji — dále v kurzu
 review.unchanged: Práce se od předchozího pokusu nezměnila (pokus {attempt}), proto je recenze zopakována bez nové kontroly.
+verdict.rule.author_musts_met: Splnili jste všechna povinná kritéria autora a získali {score} ze 100. U úloh s povinnými kritérii autora je hranice pro splnění {threshold}, proto je práce uznána.
+verdict.rule.author_musts_unmet: Povinná kritéria autora nejsou splněna, proto práce není uznána. Vaše skóre je {score} ze 100.
+verdict.rule.author_musts_below_threshold: Splnili jste všechna povinná kritéria autora, ale získali {score} ze 100 — pod hranicí {threshold} pro úlohy s povinnými kritérii autora, proto práce není uznána.
+verdict.rule.no_author_musts_passed: Autor pro tuto úlohu neschválil povinná kritéria. U takových úloh je hranice pro splnění {threshold} ze 100; vaše skóre je {score}, proto je práce uznána.
+verdict.rule.no_author_musts_failed: Autor pro tuto úlohu neschválil povinná kritéria. U takových úloh je hranice pro splnění {threshold} ze 100; vaše skóre je {score}, proto práce není uznána.

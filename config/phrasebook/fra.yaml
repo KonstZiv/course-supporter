@@ -40,3 +40,8 @@ test.explanations_in_course_language: Les explications sont dans la langue du co
 position.audio: audio, {time}
 link.later_in_course: Plus de détails — plus loin dans le cours
 review.unchanged: Le travail n'a pas changé depuis la tentative précédente (tentative {attempt}), l'évaluation est donc reprise sans nouvelle vérification.
+verdict.rule.author_musts_met: Vous avez rempli tous les critères obligatoires de l'auteur et obtenu {score} sur 100. Pour les tâches avec des critères obligatoires de l'auteur, le seuil de validation est de {threshold}, le travail est donc validé.
+verdict.rule.author_musts_unmet: Les critères obligatoires de l'auteur ne sont pas remplis, le travail n'est donc pas validé. Votre score est de {score} sur 100.
+verdict.rule.author_musts_below_threshold: Vous avez rempli tous les critères obligatoires de l'auteur, mais obtenu {score} sur 100, en dessous du seuil de {threshold} pour les tâches avec des critères obligatoires de l'auteur, le travail n'est donc pas validé.
+verdict.rule.no_author_musts_passed: L'auteur n'a pas approuvé de critères obligatoires pour cette tâche. Pour ces tâches, le seuil de validation est de {threshold} sur 100 ; votre score est de {score}, le travail est donc validé.
+verdict.rule.no_author_musts_failed: L'auteur n'a pas approuvé de critères obligatoires pour cette tâche. Pour ces tâches, le seuil de validation est de {threshold} sur 100 ; votre score est de {score}, le travail n'est donc pas validé.

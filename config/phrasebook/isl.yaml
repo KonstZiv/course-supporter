@@ -40,3 +40,8 @@ test.explanations_in_course_language: Útskýringar eru á tungumáli námskeið
 position.audio: hljóð, {time}
 link.later_in_course: Nánar síðar í námskeiðinu
 review.unchanged: Verkefnið hefur ekki breyst frá fyrri tilraun (tilraun {attempt}), svo yfirferðin er endurtekin án nýrrar athugunar.
+verdict.rule.author_musts_met: Þú uppfylltir öll skyldubundin viðmið höfundar og fékkst {score} af 100. Í verkefnum með skyldubundnum viðmiðum höfundar eru samþykktarmörkin {threshold}, svo verkefnið er samþykkt.
+verdict.rule.author_musts_unmet: Skyldubundin viðmið höfundar eru ekki uppfyllt, svo verkefnið er ekki samþykkt. Einkunn þín er {score} af 100.
+verdict.rule.author_musts_below_threshold: Þú uppfylltir öll skyldubundin viðmið höfundar en fékkst {score} af 100 — undir mörkunum {threshold} sem gilda um verkefni með skyldubundnum viðmiðum höfundar, svo verkefnið er ekki samþykkt.
+verdict.rule.no_author_musts_passed: Höfundur hefur ekki staðfest skyldubundin viðmið fyrir þetta verkefni. Í slíkum verkefnum eru samþykktarmörkin {threshold} af 100; einkunn þín er {score}, svo verkefnið er samþykkt.
+verdict.rule.no_author_musts_failed: Höfundur hefur ekki staðfest skyldubundin viðmið fyrir þetta verkefni. Í slíkum verkefnum eru samþykktarmörkin {threshold} af 100; einkunn þín er {score}, svo verkefnið er ekki samþykkt.

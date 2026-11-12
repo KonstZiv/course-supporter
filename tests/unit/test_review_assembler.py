@@ -25,7 +25,7 @@ from __future__ import annotations
 import doctest
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
@@ -38,6 +38,8 @@ from course_supporter.models import review_structure
 from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
 from course_supporter.models.review_structure import (
     SECTION_ORDER,
+    PassBasis,
+    PassRule,
     Position,
     Reference,
     Remark,
@@ -205,8 +207,9 @@ class TestAcceptance:
         A phrase nobody renders is a phrase nobody notices going wrong — and it
         was paid for in sixty languages. The reviews below are all it takes
         to reach every key: the maximal one, a passing verdict, which is the
-        only thing the first cannot be at the same time, a course link, and a
-        review repeated for unchanged work (task 13).
+        only thing the first cannot be at the same time, a course link, a
+        review repeated for unchanged work (task 13), and a verdict under each
+        branch of the pass rule of a criteria list (2026-11-12).
         """
         passed = ReviewStructureV1(
             schema_version=REVIEW_SCHEMA_VERSION,
@@ -218,6 +221,20 @@ class TestAcceptance:
             + assemble_review(passed)
             + assemble_review(review_with_a_course_link("ukr"))
             + assemble_review(passed.model_copy(update={"unchanged_from_attempt": 1}))
+            + "".join(
+                assemble_review(
+                    passed.model_copy(
+                        update={
+                            "verdict": Verdict(
+                                passed=basis.endswith(("_met", "_passed")),
+                                why="Why.",
+                                rule=PassRule(basis=basis, score=82, threshold=80),
+                            )
+                        }
+                    )
+                )
+                for basis in get_args(PassBasis)
+            )
         )
 
         unused = [

@@ -40,3 +40,8 @@ test.explanations_in_course_language: ההסבר מוצג בשפת הקורס.
 position.audio: אודיו, {time}
 link.later_in_course: פרטים נוספים — בהמשך הקורס
 review.unchanged: העבודה לא השתנתה מאז הניסיון הקודם (ניסיון {attempt}), ולכן הסקירה חוזרת ללא בדיקה חדשה.
+verdict.rule.author_musts_met: עמדתם בכל הקריטריונים המחייבים של המחבר וקיבלתם {score} מתוך 100. במשימות עם קריטריונים מחייבים של המחבר סף המעבר הוא {threshold}, ולכן העבודה אושרה.
+verdict.rule.author_musts_unmet: הקריטריונים המחייבים של המחבר לא התקיימו, ולכן העבודה לא אושרה. הציון שלכם הוא {score} מתוך 100.
+verdict.rule.author_musts_below_threshold: עמדתם בכל הקריטריונים המחייבים של המחבר, אבל קיבלתם {score} מתוך 100 — מתחת לסף {threshold} במשימות עם קריטריונים מחייבים של המחבר, ולכן העבודה לא אושרה.
+verdict.rule.no_author_musts_passed: המחבר לא אישר קריטריונים מחייבים למשימה זו. במשימות כאלה סף המעבר הוא {threshold} מתוך 100; הציון שלכם הוא {score}, ולכן העבודה אושרה.
+verdict.rule.no_author_musts_failed: המחבר לא אישר קריטריונים מחייבים למשימה זו. במשימות כאלה סף המעבר הוא {threshold} מתוך 100; הציון שלכם הוא {score}, ולכן העבודה לא אושרה.

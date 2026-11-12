@@ -16,6 +16,7 @@ import doctest
 import pytest
 
 from course_supporter.criteria_kinds import (
+    CriteriaLayer,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -31,7 +32,12 @@ from course_supporter.homework.verdict_explanation import (
     CriterionRemark,
     ExplanationAnswer,
 )
-from course_supporter.models.review_structure import Reference, Remark, Verdict
+from course_supporter.models.review_structure import (
+    PassRule,
+    Reference,
+    Remark,
+    Verdict,
+)
 from course_supporter.storage.submission_verdict_repository import VerdictRecord
 
 
@@ -66,6 +72,7 @@ def _explanation(
 
 
 MET, NOT_MET = VerdictValue.MET, VerdictValue.NOT_MET
+AUTHOR = CriteriaLayer.AUTHOR
 MUST, SHOULD, MAY = WeightCategory.MUST, WeightCategory.SHOULD, WeightCategory.MAY
 
 
@@ -87,7 +94,7 @@ class TestTheScore:
         ]
 
         _, score = build_text_review(
-            rows=rows, explanation=_explanation("c2"), language="ukr"
+            layer=AUTHOR, rows=rows, explanation=_explanation("c2"), language="ukr"
         )
 
         assert score == 66
@@ -96,46 +103,69 @@ class TestTheScore:
         rows = [_criterion("c1", MUST, MET), _criterion("c2", MAY, MET)]
 
         _, score = build_text_review(
-            rows=rows, explanation=_explanation(), language="ukr"
+            layer=AUTHOR, rows=rows, explanation=_explanation(), language="ukr"
         )
 
         assert score == 100
 
 
 class TestThePassIsTheCodes:
-    """Lock 2, and the builder's own rule: ``passed`` is counted, not read."""
+    """The builder's own rule: ``passed`` is counted, not read.
+
+    Counted by the pass rule of 2026-11-12 on the layer it is handed; the
+    rule's own locks, on either list: ``test_pass_rule.py``.
+    """
 
     def test_an_unmet_must_fails_whatever_the_explanation_says(self) -> None:
         rows = [_criterion("c1", MUST, NOT_MET), _criterion("c2", SHOULD, MET)]
 
         structure, score = build_text_review(
-            rows=rows, explanation=_explanation("c1", passed=True), language="ukr"
+            layer=AUTHOR,
+            rows=rows,
+            explanation=_explanation("c1", passed=True),
+            language="ukr",
         )
 
         assert structure.verdict == Verdict(
-            passed=False, why="Причина вердикту за курсом."
+            passed=False,
+            why="Причина вердикту за курсом.",
+            rule=PassRule(basis="author_musts_unmet", score=40, threshold=70),
         )
         assert score == 40
 
     def test_every_must_met_passes_whatever_the_explanation_says(self) -> None:
-        rows = [_criterion("c1", MUST, MET), _criterion("c2", SHOULD, NOT_MET)]
+        # (3 + 2) of 6 -> 83: every "must" met and above 70.
+        rows = [
+            _criterion("c1", MUST, MET),
+            _criterion("c2", SHOULD, MET),
+            _criterion("c3", MAY, NOT_MET),
+        ]
 
         structure, _ = build_text_review(
-            rows=rows, explanation=_explanation("c2", passed=False), language="ukr"
+            layer=AUTHOR,
+            rows=rows,
+            explanation=_explanation("c2", passed=False),
+            language="ukr",
         )
 
         assert structure.verdict is not None
         assert structure.verdict.passed is True
 
-    def test_a_list_without_a_must_is_passed(self) -> None:
+    def test_a_list_without_a_must_is_passed_by_its_score_alone(self) -> None:
         rows = [_criterion("c1", SHOULD, NOT_MET), _criterion("c2", MAY, NOT_MET)]
 
         structure, score = build_text_review(
-            rows=rows, explanation=_explanation("c1", "c2"), language="ukr"
+            layer=AUTHOR,
+            rows=rows,
+            explanation=_explanation("c1", "c2"),
+            language="ukr",
         )
 
         assert structure.verdict is not None
-        assert structure.verdict.passed is True
+        assert structure.verdict.passed is False
+        assert structure.verdict.rule == PassRule(
+            basis="no_author_musts_failed", score=0, threshold=80
+        )
         assert score == 0
 
 
@@ -151,6 +181,7 @@ class TestTheRemarks:
         ]
 
         structure, _ = build_text_review(
+            layer=AUTHOR,
             rows=rows,
             explanation=_explanation("c1", "c10", "c2", "c11", "c3"),
             language="ukr",
@@ -168,7 +199,7 @@ class TestTheRemarks:
         rows = [_criterion("c1", MUST, NOT_MET)]
 
         structure, _ = build_text_review(
-            rows=rows, explanation=_explanation("c1"), language="ukr"
+            layer=AUTHOR, rows=rows, explanation=_explanation("c1"), language="ukr"
         )
 
         assert structure.new_remarks == [
@@ -182,7 +213,10 @@ class TestTheRemarks:
 
         with pytest.raises(ValueError, match=r"\['c7'\]"):
             build_text_review(
-                rows=rows, explanation=_explanation("c1", "c7"), language="ukr"
+                layer=AUTHOR,
+                rows=rows,
+                explanation=_explanation("c1", "c7"),
+                language="ukr",
             )
 
     def test_a_remark_on_a_point_is_a_defect(self) -> None:
@@ -191,7 +225,10 @@ class TestTheRemarks:
 
         with pytest.raises(ValueError, match=r"\['c1\.p1'\]"):
             build_text_review(
-                rows=rows, explanation=_explanation("c1.p1"), language="ukr"
+                layer=AUTHOR,
+                rows=rows,
+                explanation=_explanation("c1.p1"),
+                language="ukr",
             )
 
 
@@ -200,7 +237,7 @@ class TestTheRestOfTheReview:
         rows = [_criterion("c1", MUST, MET)]
 
         structure, _ = build_text_review(
-            rows=rows, explanation=_explanation(), language="eng"
+            layer=AUTHOR, rows=rows, explanation=_explanation(), language="eng"
         )
 
         assert structure.language == "eng"
@@ -212,7 +249,10 @@ class TestTheRestOfTheReview:
         rows = [_criterion("c1", MUST, MET)]
 
         structure, _ = build_text_review(
-            rows=rows, explanation=_explanation(voice=voice), language="ukr"
+            layer=AUTHOR,
+            rows=rows,
+            explanation=_explanation(voice=voice),
+            language="ukr",
         )
 
         assert structure.mentor_voice is None
@@ -221,7 +261,7 @@ class TestTheRestOfTheReview:
         """Nothing in the builder writes text: the one assembler does."""
         rows = [_criterion("c1", MUST, NOT_MET)]
         structure, _ = build_text_review(
-            rows=rows, explanation=_explanation("c1"), language="ukr"
+            layer=AUTHOR, rows=rows, explanation=_explanation("c1"), language="ukr"
         )
 
         markdown = assemble_review(structure)
@@ -233,7 +273,10 @@ class TestTheRestOfTheReview:
     def test_rows_without_a_criterion_have_no_review(self) -> None:
         with pytest.raises(ValueError, match="without a criterion"):
             build_text_review(
-                rows=[_point("c1.p1", MET)], explanation=_explanation(), language="ukr"
+                layer=AUTHOR,
+                rows=[_point("c1.p1", MET)],
+                explanation=_explanation(),
+                language="ukr",
             )
 
     def test_the_refusal_code_is_a_short_key(self) -> None:
@@ -251,6 +294,7 @@ class TestTheCourseLinks:
         ]
 
         structure, _ = build_text_review(
+            layer=AUTHOR,
             rows=rows,
             explanation=_explanation("c1", "c2", passed=False),
             language="ukr",
@@ -261,6 +305,7 @@ class TestTheCourseLinks:
 
     def test_without_reading_no_remark_has_any(self) -> None:
         structure, _ = build_text_review(
+            layer=AUTHOR,
             rows=[_criterion("c1", MUST, NOT_MET)],
             explanation=_explanation("c1", passed=False),
             language="ukr",

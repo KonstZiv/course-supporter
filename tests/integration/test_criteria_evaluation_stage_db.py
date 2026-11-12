@@ -71,6 +71,7 @@ from course_supporter.homework.criteria_verdicts import (
     score_percent,
 )
 from course_supporter.homework.doors import DoorReading
+from course_supporter.homework.judged_list import judged_layer
 from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_config import (
     PathKey,
@@ -887,7 +888,7 @@ class TestAShortWholeLineIsAQuote:
         assert (point.retried, point.quote_not_found) == (False, False)
         assert rows["c1"].verdict == VerdictValue.MET
         stored = list(rows.values())
-        assert is_passed(stored) is True
+        assert is_passed(stored, layer=judged_layer(stored)) is True
         assert score_percent(stored) == 100
 
     async def test_the_venv_line_of_a_gitignore_is_met_without_a_repeat(
@@ -965,7 +966,7 @@ class TestAMetTakenBackAfterItsQuoteFell:
             True,
         )
         stored = list(rows.values())
-        assert is_passed(stored) is True
+        assert is_passed(stored, layer=judged_layer(stored)) is True
         # 3 (c1, unconfirmed, counted as met) + 2 (c2) of 5 -> 100.
         assert score_percent(stored) == 100
 
@@ -974,7 +975,10 @@ class TestAMetTakenBackAfterItsQuoteFell:
     ) -> None:
         rows = await self._settled(db_session, submission)
 
-        facts = explanation_facts(_GITIGNORE_CRITERIA, rows.values())
+        stored = list(rows.values())
+        facts = explanation_facts(
+            _GITIGNORE_CRITERIA, stored, layer=judged_layer(stored)
+        )
         shown = render_context(
             ExplanationInput(
                 task_title="Project setup",
@@ -1031,7 +1035,7 @@ class TestARealNotMetStays:
             False,
         )
         stored = list(rows.values())
-        assert is_passed(stored) is False
+        assert is_passed(stored, layer=judged_layer(stored)) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(stored) == 40
 
@@ -1069,7 +1073,7 @@ class TestARealNotMetStays:
             False,
         )
         stored = list(rows.values())
-        assert is_passed(stored) is False
+        assert is_passed(stored, layer=judged_layer(stored)) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(stored) == 40
 
@@ -1103,7 +1107,7 @@ class TestARealNotMetStays:
             False,
         )
         stored = list(rows.values())
-        assert is_passed(stored) is False
+        assert is_passed(stored, layer=judged_layer(stored)) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(stored) == 40
 
@@ -1179,7 +1183,7 @@ class TestAQuoteOfTheProjectsBase:
             if log["event"] == ("criteria_evaluation_quote_from_base")
         ] == ["c1"]
         stored = list(rows.values())
-        assert is_passed(stored) is False
+        assert is_passed(stored, layer=judged_layer(stored)) is False
         # c1 "must" (3) not met, c2 (2) not met: 0 of 5.
         assert score_percent(stored) == 0
 
@@ -1220,7 +1224,8 @@ class TestAQuoteOfTheProjectsBase:
             "def fib(n): pass",
         )
         assert (row.quote_from_base, row.quote_not_found) == (True, False)
-        assert is_passed(list(rows.values())) is False
+        stored = list(rows.values())
+        assert is_passed(stored, layer=judged_layer(stored)) is False
 
     async def test_a_criterion_carries_its_points_flag(
         self, db_session: AsyncSession, submission: HomeworkSubmission

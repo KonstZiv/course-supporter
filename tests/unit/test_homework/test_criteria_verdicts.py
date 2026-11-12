@@ -34,6 +34,7 @@ from course_supporter.homework.criteria_verdicts import (
     MAX_QUOTE_CHARS,
     MIN_QUOTE_CHARS,
     EvaluationAnswer,
+    PassDecision,
     QuotePlace,
     RepeatItem,
     RepeatReason,
@@ -42,6 +43,7 @@ from course_supporter.homework.criteria_verdicts import (
     is_passed,
     items_to_ask_again,
     judged_items,
+    pass_decision,
     read_answer,
     score_percent,
     settle_verdicts,
@@ -51,6 +53,8 @@ from course_supporter.storage.orm import SubmissionCriterionVerdict
 from course_supporter.storage.submission_verdict_repository import VerdictRecord
 
 MET = VerdictValue.MET
+AUTHOR = CriteriaLayer.AUTHOR
+"""The author's list: the branch of the pass rule where every "must" counts."""
 NOT_MET = VerdictValue.NOT_MET
 
 _BOM = chr(0xFEFF)
@@ -268,7 +272,7 @@ class TestScore:
             for record in _records(_CASE_A)
         ]
         assert score_percent(rows) == 63
-        assert is_passed(rows) is False
+        assert is_passed(rows, layer=AUTHOR) is False
 
     def test_no_criterion_has_no_score(self) -> None:
         point = VerdictRecord("c1.p1", VerdictItemKind.POINT, None, MET, MET)
@@ -282,30 +286,38 @@ class TestScore:
 
 
 class TestPassed:
-    """Lock 2: passed ⇔ every "must" criterion is met."""
+    """The pass on the author's list: every "must" AND 70 (2026-11-12).
 
-    def test_every_must_met_passes_whatever_the_score(self) -> None:
+    Before the rule of 2026-11-12 the pass was every "must" alone (lock 2).
+    The rule's own locks, on either list: ``test_pass_rule.py``.
+    """
+
+    def test_every_must_met_does_not_pass_below_the_threshold(self) -> None:
         records = _records(_CASE_B)
         assert score_percent(records) == 54
-        assert is_passed(records) is True
+        assert pass_decision(records, layer=AUTHOR) == PassDecision(
+            False, "author_musts_below_threshold", 54, 70
+        )
 
     def test_one_must_not_met_fails_with_everything_else_met(self) -> None:
         records = _records(_CASE_C)
         assert score_percent(records) == 72
-        assert is_passed(records) is False
+        assert is_passed(records, layer=AUTHOR) is False
 
     def test_a_must_with_one_point_missing_fails(self) -> None:
-        assert is_passed(_records(_CASE_A)) is False
+        assert is_passed(_records(_CASE_A), layer=AUTHOR) is False
 
     def test_everything_met_passes(self) -> None:
-        assert is_passed(_records(_ALL_MET)) is True
+        assert is_passed(_records(_ALL_MET), layer=AUTHOR) is True
 
-    def test_a_list_without_must_passes_with_nothing_met(self) -> None:
+    def test_a_list_without_must_is_passed_by_the_score_alone(self) -> None:
         criteria = _in_force(_criterion("c1", "should"), _criterion("c2", "may"))
         answer = _answer(_not_met("c1"), _not_met("c2"))
         records = settle_verdicts(criteria, answer, None, work=_WORK, earlier={})
         assert score_percent(records) == 0
-        assert is_passed(records) is True
+        assert pass_decision(records, layer=AUTHOR) == PassDecision(
+            False, "no_author_musts_failed", 0, 80
+        )
 
 
 class TestCriterionFromPoints:
@@ -1025,9 +1037,9 @@ class TestSameInputSameResult:
         work = SubmittedWork([WorkFile("fibonacci.py", _SOLUTION, True)])
         second = settle_verdicts(_LIST, _CASE_A, None, work=work, earlier=earlier)
         assert first == second
-        assert (score_percent(first), is_passed(first)) == (
+        assert (score_percent(first), is_passed(first, layer=AUTHOR)) == (
             score_percent(second),
-            is_passed(second),
+            is_passed(second, layer=AUTHOR),
         )
 
 
@@ -1159,7 +1171,7 @@ class TestAWholeLineIsEvidence:
             quote_lines=(3, 3),
         )
         assert settled["c1"].verdict is MET
-        assert is_passed(records) is True
+        assert is_passed(records, layer=AUTHOR) is True
         assert score_percent(records) == 100
 
 
@@ -1197,7 +1209,7 @@ class TestUnconfirmed:
             model_verdict=None,
             quote_not_found=True,
         )
-        assert is_passed(records) is True
+        assert is_passed(records, layer=AUTHOR) is True
         # 3 (c1, unconfirmed, counted as met) + 2 (c2) of 5 -> 100.
         assert score_percent(records) == 100
 
@@ -1218,7 +1230,7 @@ class TestUnconfirmed:
             retried=True,
             quote_not_found=True,
         )
-        assert is_passed(records) is True
+        assert is_passed(records, layer=AUTHOR) is True
         # 3 (c1, unconfirmed) + 2 (c3, met) of 5 -> 100.
         assert score_percent(records) == 100
 
@@ -1228,7 +1240,11 @@ class TestUnconfirmed:
         records = settle_verdicts(_ONE, first, repeat, work=_WORK, earlier={})
         # 3 (c1, unconfirmed) of 5 -> 60; were it not met, 0.
         assert score_percent(records) == 60
-        assert is_passed(records) is True
+        # The unconfirmed "must" does not fail the work; the score, below 70,
+        # does (the pass rule of 2026-11-12).
+        assert pass_decision(records, layer=AUTHOR).basis == (
+            "author_musts_below_threshold"
+        )
 
     def test_a_met_whose_second_quote_falls_too_is_unconfirmed(self) -> None:
         # The state the code already had (quote_not_found): now it passes.
@@ -1237,7 +1253,7 @@ class TestUnconfirmed:
             _ONE, first, _answer(_met("c1", _ABSENT)), work=_WORK, earlier={}
         )
         assert (records[0].verdict, records[0].quote_not_found) == (NOT_MET, True)
-        assert is_passed(records) is True
+        assert is_passed(records, layer=AUTHOR) is True
         assert score_percent(records) == 100
 
     def test_a_point_really_not_met_beside_an_unconfirmed_one_fails(self) -> None:
@@ -1251,7 +1267,7 @@ class TestUnconfirmed:
             NOT_MET,
             False,
         )
-        assert is_passed(records) is False
+        assert is_passed(records, layer=AUTHOR) is False
         assert score_percent(records) == 0
 
     def test_a_point_met_beside_an_unconfirmed_one_leaves_it_unconfirmed(
@@ -1263,7 +1279,7 @@ class TestUnconfirmed:
         records = settle_verdicts(criteria, first, repeat, work=_WORK, earlier={})
         c1 = records[0]
         assert (c1.item_id, c1.verdict, c1.quote_not_found) == ("c1", NOT_MET, True)
-        assert is_passed(records) is True
+        assert is_passed(records, layer=AUTHOR) is True
         assert score_percent(records) == 100
 
     def test_stored_rows_read_unconfirmed_as_the_records_do(self) -> None:
@@ -1281,9 +1297,10 @@ class TestUnconfirmed:
             )
             for record in records
         ]
-        # 3 (c1, unconfirmed) of 5 -> 60.
-        assert (score_percent(rows), is_passed(rows)) == (60, True)
-        assert (score_percent(records), is_passed(records)) == (60, True)
+        # 3 (c1, unconfirmed) of 5 -> 60: every "must" stands, the score not.
+        expected = PassDecision(False, "author_musts_below_threshold", 60, 70)
+        assert pass_decision(rows, layer=AUTHOR) == expected
+        assert pass_decision(records, layer=AUTHOR) == expected
 
     def test_the_safeguard_still_keeps_an_earlier_met(self) -> None:
         earlier = {"c1": _Earlier(quote="def fibonacci(n):")}
@@ -1318,7 +1335,7 @@ class TestARealNotMet:
             False,
         )
         assert c1.missing == "No base case."
-        assert is_passed(records) is False
+        assert is_passed(records, layer=AUTHOR) is False
         # 2 (c3) of 5 -> 40.
         assert score_percent(records) == 40
 
@@ -1332,7 +1349,7 @@ class TestARealNotMet:
             False,
             "No base case.",
         )
-        assert is_passed(records) is False
+        assert is_passed(records, layer=AUTHOR) is False
 
     def test_a_met_on_a_quote_the_work_lacks_taken_back_is_not_met(self) -> None:
         # Narrowed 2026-11-07: the model most likely erred the first time.
@@ -1351,7 +1368,7 @@ class TestARealNotMet:
             missing="No memoisation in the work.",
             retried=True,
         )
-        assert is_passed(records) is False
+        assert is_passed(records, layer=AUTHOR) is False
         # 2 (c3) of 5 -> 40.
         assert score_percent(records) == 40
 
@@ -1375,7 +1392,7 @@ class TestARealNotMet:
             missing="No base case.",
             retried=True,
         )
-        assert is_passed(records) is False
+        assert is_passed(records, layer=AUTHOR) is False
         # 2 (c3) of 5 -> 40.
         assert score_percent(records) == 40
 
@@ -1415,7 +1432,7 @@ class TestARealNotMet:
             False,
         )
         assert (c1.quote, c1.missing) == (None, "No base case.")
-        assert is_passed(records) is False
+        assert is_passed(records, layer=AUTHOR) is False
 
     def test_a_not_met_on_a_met_that_stood_is_not_a_take_back(self) -> None:
         # Only a quote's reason makes a "not met" unconfirmed.
@@ -1429,7 +1446,7 @@ class TestARealNotMet:
             NOT_MET,
             False,
         )
-        assert is_passed(records) is False
+        assert is_passed(records, layer=AUTHOR) is False
 
 
 def test_documentation_examples_run() -> None:

@@ -40,3 +40,8 @@ test.explanations_in_course_language: Förklaringar på kursspråket.
 position.audio: ljud, {time}
 link.later_in_course: Mer om detta senare i kursen
 review.unchanged: Arbetet har inte ändrats sedan föregående försök (försök {attempt}), så granskningen upprepas utan en ny kontroll.
+verdict.rule.author_musts_met: Ni har uppfyllt alla författarens obligatoriska kriterier och fått {score} av 100. För uppgifter med författarens obligatoriska kriterier är gränsen för godkänt {threshold}, så arbetet är godkänt.
+verdict.rule.author_musts_unmet: Författarens obligatoriska kriterier är inte uppfyllda, så arbetet är underkänt. Er poäng är {score} av 100.
+verdict.rule.author_musts_below_threshold: Ni har uppfyllt alla författarens obligatoriska kriterier men fått {score} av 100 — under gränsen {threshold} för uppgifter med författarens obligatoriska kriterier, så arbetet är underkänt.
+verdict.rule.no_author_musts_passed: Författaren har inte godkänt obligatoriska kriterier för den här uppgiften. För sådana uppgifter är gränsen för godkänt {threshold} av 100; er poäng är {score}, så arbetet är godkänt.
+verdict.rule.no_author_musts_failed: Författaren har inte godkänt obligatoriska kriterier för den här uppgiften. För sådana uppgifter är gränsen för godkänt {threshold} av 100; er poäng är {score}, så arbetet är underkänt.

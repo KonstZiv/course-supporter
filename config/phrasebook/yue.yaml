@@ -40,3 +40,8 @@ test.explanations_in_course_language: 解釋以課程語言提供。
 position.audio: 音訊，{time}
 link.later_in_course: 詳情見課程後段
 review.unchanged: 份作業同上一次嘗試比冇變（第 {attempt} 次嘗試），所以重複之前嘅審閱，冇再重新檢查。
+verdict.rule.author_musts_met: 你已經符合作者訂嘅所有必要準則，分數係 {score}（滿分 100）。有作者必要準則嘅作業，合格線係 {threshold}，所以份作業合格。
+verdict.rule.author_musts_unmet: 未符合作者訂嘅必要準則，所以份作業唔合格。你嘅分數係 {score}（滿分 100）。
+verdict.rule.author_musts_below_threshold: 你已經符合作者訂嘅所有必要準則，但分數係 {score}（滿分 100），低過有作者必要準則嘅作業嘅合格線 {threshold}，所以份作業唔合格。
+verdict.rule.no_author_musts_passed: 作者冇為呢份作業確認必要準則。呢類作業嘅合格線係 {threshold}（滿分 100）；你嘅分數係 {score}，所以份作業合格。
+verdict.rule.no_author_musts_failed: 作者冇為呢份作業確認必要準則。呢類作業嘅合格線係 {threshold}（滿分 100）；你嘅分數係 {score}，所以份作業唔合格。

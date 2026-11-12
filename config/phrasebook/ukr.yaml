@@ -18,8 +18,9 @@
 # 2026-09-17). Should the structure ever need a number inside a sentence, that
 # is a change of this format, not another key.
 #
-# ``{time}``, ``{number}``, ``{name}`` and ``{attempt}`` are filled by the
-# assembler; a translation carries them through unchanged.
+# ``{time}``, ``{number}``, ``{name}``, ``{attempt}``, ``{score}`` and
+# ``{threshold}`` are filled by the assembler; a translation carries them
+# through unchanged.
 
 # --- The verdict (structure section 1: passed or not, and why) ---
 verdict.passed: Зараховано
@@ -79,3 +80,16 @@ review.title: Рецензія
 # Opens the review, before the verdict. ``{attempt}`` is the number of the
 # attempt repeated — a name for it, like ``test.question``'s, not a count.
 review.unchanged: Робота не змінилась із попередньої спроби (спроба {attempt}), тому рецензію повторено без нової перевірки.
+
+# --- Why the verdict of a criteria list is what it is (2026-11-12) ---
+# Printed under the verdict, before its reason; one per branch of the pass
+# rule (``criteria_verdicts.pass_decision``). The wording is the product
+# owner's, ratified 2026-11-12. ``{score}`` and ``{threshold}`` are whole
+# percent, numbers inside a sentence — so, as the note at the top of this file
+# asks, no word in them agrees with the number: the score reads "{score} зі
+# 100", and a translation uses its own "out of 100" (second edit, 2026-11-12).
+verdict.rule.author_musts_met: Ви виконали всі обов'язкові критерії автора й отримали {score} зі 100. Для завдань з обов'язковими критеріями автора поріг заліку — {threshold}, тож роботу зараховано.
+verdict.rule.author_musts_unmet: Не виконано обов'язкові критерії автора, тому роботу не зараховано. Ваш бал — {score} зі 100.
+verdict.rule.author_musts_below_threshold: Ви виконали всі обов'язкові критерії автора, але отримали {score} зі 100 — нижче за поріг {threshold} для завдань з обов'язковими критеріями автора, тож роботу не зараховано.
+verdict.rule.no_author_musts_passed: Автор не затвердив обов'язкових критеріїв для цього завдання. Для таких завдань поріг заліку — {threshold} зі 100; ваш бал — {score}, тож роботу зараховано.
+verdict.rule.no_author_musts_failed: Автор не затвердив обов'язкових критеріїв для цього завдання. Для таких завдань поріг заліку — {threshold} зі 100; ваш бал — {score}, тож роботу не зараховано.

@@ -53,6 +53,7 @@ from course_supporter.funds_port import (
 from course_supporter.homework.attempt_dedup import repeat_unchanged_review
 from course_supporter.homework.attempt_ledger import record_attempt
 from course_supporter.homework.doors import DoorReading
+from course_supporter.homework.evaluator_version import evaluator_version
 from course_supporter.homework.path_checkpoint import (
     FREEZE_REASON_FOR_LADDER_STOP,
     FreezeReason,
@@ -328,7 +329,13 @@ async def _run_path(
         return
     try:
         # ── Attempt ledger (task 13, K2): once, from what the doors read ──
-        await record_attempt(session, submission_id, reading)
+        await record_attempt(
+            session,
+            submission_id,
+            reading,
+            served_by=ServedBy.NEW_PATH,
+            config=config,
+        )
         await session.commit()
         # ── The same work again (task 13, K3): its review, nothing paid ──
         # Before the estimate, the funds port and every stage: a repeated
@@ -341,6 +348,7 @@ async def _run_path(
             student=student,
             tenant=tenant,
             entered_as=entered_as,
+            config=config,
             log=log,
         ):
             return
@@ -469,6 +477,10 @@ async def _run_path(
                 review_markdown=built.markdown,
                 score=built.score,
             )
+            # ── Who wrote it (task 13): the evaluator's version, with the review ──
+            await _record_evaluator_version(
+                hw_repo, submission_id, choice, config, log=log
+            )
             await session.commit()
         await _finish(
             session,
@@ -495,6 +507,7 @@ async def _repeat_unchanged(
     student: Student | None,
     tenant: Tenant | None,
     entered_as: str,
+    config: PathConfig,
     log: Any,
 ) -> bool:
     """Give unchanged work its earlier review, and finish; ``False`` otherwise.
@@ -507,7 +520,7 @@ async def _repeat_unchanged(
     stage runs, the funds port is not asked, and the builder's follow-up does
     not run: it follows up a review it built, and this one it did not.
     """
-    repeated = await repeat_unchanged_review(session, submission.id)
+    repeated = await repeat_unchanged_review(session, submission.id, config=config)
     if repeated is None:
         return False
     if entered_as not in _RESULT_UNDER_WAY:
@@ -524,6 +537,31 @@ async def _repeat_unchanged(
     )
     log.info("path_repeated_unchanged_review", dedup_of=repeated)
     return True
+
+
+async def _record_evaluator_version(
+    hw_repo: HomeworkRepository,
+    submission_id: uuid.UUID,
+    choice: PathChoice,
+    config: PathConfig,
+    *,
+    log: Any,
+) -> None:
+    """Name in the receipt the evaluator that wrote the review; never fail it.
+
+    The version of the evaluator of the revision's type
+    (:func:`~course_supporter.homework.evaluator_version.evaluator_version`;
+    ``None`` for a type no model reviews), flushed with the review for the
+    caller to commit. A version that cannot be read (logged) is not written:
+    the review stands, and a receipt that names no evaluator is the source of
+    no copy.
+    """
+    try:
+        version = evaluator_version(choice.key.task_type, config)
+    except Exception:
+        log.warning("path_evaluator_version_failed", exc_info=True)
+        return
+    await hw_repo.store_evaluator_version(submission_id, evaluator_version=version)
 
 
 async def _student_and_tenant(

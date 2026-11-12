@@ -50,6 +50,7 @@ from course_supporter.homework.attempts import AttemptWork, attempt_snapshotter_
 from course_supporter.homework.criteria_form import criteria_to_document
 from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.homework.doors import DoorReading
+from course_supporter.homework.path_config import ServedBy
 from course_supporter.homework.path_runner import run_new_path_if_switched
 from course_supporter.homework.project_submission import _submission_snapshot_key
 from course_supporter.homework.test_doors import stored_answers
@@ -257,7 +258,13 @@ async def _record(
     work: str = "print('hello')\n",
 ) -> None:
     async with session_factory() as session:
-        await record_attempt(session, submission_id, DoorReading(text=work))
+        await record_attempt(
+            session,
+            submission_id,
+            DoorReading(text=work),
+            served_by=ServedBy.NEW_PATH,
+            config=_shipped(),
+        )
         await session.commit()
 
 
@@ -449,6 +456,9 @@ class TestLockBNumbering:
             "task_version": _VERSION_A,
             "task_version_changed": False,
             "fingerprint": two.fingerprint,
+            # The shipped file serves ``task`` on the new path, in test mode.
+            "path": "new_path",
+            "test_mode": True,
         }
 
     async def test_a_completed_review_counts_as_delivered_does(
@@ -743,6 +753,72 @@ class TestLockDFingerprintIsK1s:
         assert utf8.attempt_no == cp1251.attempt_no == 1
 
 
+async def _receipt_types(
+    session_factory: async_sessionmaker[AsyncSession], submission_id: uuid.UUID
+) -> tuple[str, str]:
+    """The JSON types of ``path`` and ``test_mode`` as Postgres stores them."""
+    async with session_factory() as session:
+        row = (
+            await session.execute(
+                text(
+                    "SELECT jsonb_typeof(attempt_receipt -> 'path'),"
+                    " jsonb_typeof(attempt_receipt -> 'test_mode')"
+                    " FROM homework_submissions WHERE id = :id"
+                ),
+                {"id": submission_id},
+            )
+        ).one()
+    return row[0], row[1]
+
+
+class TestLockGgPathAndTestModeInTheReceipt:
+    """ґ (evaluator version). Which road served the submission, and test mode.
+
+    The daily activity report reads ``path`` and ``test_mode`` from the
+    receipt: the ``served_by`` of the road, and a JSON boolean — never the
+    string ``"true"``. Today's Mentor: ``TestLockEProjectOnTodaysMentor``.
+    """
+
+    async def test_a_task_on_the_new_path_in_test_mode(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        submission_id = await _through_the_doors(
+            session_factory, task_world, _UKRAINIAN_WORK.encode("utf-8"), tmp_path
+        )
+
+        receipt = (await _row(session_factory, submission_id)).attempt_receipt
+        assert receipt is not None
+        assert receipt["path"] == "new_path"
+        assert receipt["test_mode"] is True
+        assert await _receipt_types(session_factory, submission_id) == (
+            "string",
+            "boolean",
+        )
+
+    async def test_a_test_on_the_new_path_is_charged(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        quiz_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        answers = stored_answers(uuid.uuid4(), {"1": ["а"]}).encode("utf-8")
+        submission_id = await _through_the_doors(
+            session_factory, quiz_world, answers, tmp_path
+        )
+
+        receipt = (await _row(session_factory, submission_id)).attempt_receipt
+        assert receipt is not None
+        assert receipt["path"] == "new_path"
+        assert receipt["test_mode"] is False
+        assert await _receipt_types(session_factory, submission_id) == (
+            "string",
+            "boolean",
+        )
+
+
 class TestLockETestAndProject:
     """е. A test (new path) and a project (today's Mentor) are numbered too."""
 
@@ -903,6 +979,17 @@ class TestLockEProjectOnTodaysMentor:
             assert one.status == two.status == "completed"
             assert (one.attempt_no, one.previous_submission_id) == (1, None)
             assert (two.attempt_no, two.previous_submission_id) == (2, one.id)
+            # ґ (evaluator version): served by today's Mentor, charged as usual,
+            # and no evaluator named — today's Mentor writes no version.
+            for reviewed in (one, two):
+                assert reviewed.attempt_receipt is not None
+                assert reviewed.attempt_receipt["path"] == "todays_mentor"
+                assert reviewed.attempt_receipt["test_mode"] is False
+                assert "evaluator_version" not in reviewed.attempt_receipt
+                assert await _receipt_types(session_factory, reviewed.id) == (
+                    "string",
+                    "boolean",
+                )
             # The project's fingerprint IS the snapshot the normalizer stored.
             assert one.fingerprint == one.snapshot_hash is not None
             assert two.fingerprint == two.snapshot_hash != one.snapshot_hash

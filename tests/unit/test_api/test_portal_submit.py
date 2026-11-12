@@ -209,17 +209,26 @@ class TestPortalSubmitSuccess:
         assert kwargs["course_node_id"] == root
         assert kwargs["tenant_id"] == STUB_TENANT_ID
 
-    async def test_duplicate_returns_existing(self, client: AsyncClient) -> None:
-        """An identical file returns the existing submission, duplicate=True."""
+    @pytest.mark.parametrize("task_type", ["task", "short_task"])
+    async def test_an_identical_file_for_a_text_task_is_a_new_submission(
+        self, client: AsyncClient, task_type: str
+    ) -> None:
+        """One rule of the same work (task 13): the new path's dedup judges it.
+
+        An identical file of a type the new path serves and deduplicates is
+        not turned away by its raw hash: the raw-hash check is not asked, a
+        new submission is created and dispatched.
+        """
         adoc = uuid.uuid4()
         root = uuid.uuid4()
         existing = _mock_submission(status="completed")
+        submission = _mock_submission()
 
         with (
             patch.object(
                 AuthoredDocumentRepository,
                 "get_by_id",
-                return_value=_mock_task_doc(course_root_id=root),
+                return_value=_mock_task_doc(course_root_id=root, task_type=task_type),
             ),
             patch.object(
                 CourseNodeRepository,
@@ -232,15 +241,70 @@ class TestPortalSubmitSuccess:
                 "get_by_authored_document_id",
                 return_value=_mock_summary("ready"),
             ),
-            patch.object(HomeworkRepository, "find_duplicate", return_value=existing),
+            patch.object(
+                HomeworkRepository, "find_duplicate", return_value=existing
+            ) as raw_hash_check,
+            patch.object(
+                HomeworkRepository, "create", return_value=submission
+            ) as mock_create,
+            patch.object(HomeworkRepository, "set_job_id", return_value=None),
+            patch(CREATE_JOB_FUNC, new_callable=AsyncMock, return_value=_mock_job()),
+            patch(DISPATCH_FUNC, new_callable=AsyncMock, return_value=None),
         ):
             resp = await client.post(_url(adoc), files=_files())
+
+        assert resp.status_code == 202
+        data = resp.json()
+        assert data["submission_id"] == str(submission.id)
+        assert data["status"] == "received"
+        assert data["duplicate"] is False
+        raw_hash_check.assert_not_awaited()
+        mock_create.assert_awaited_once()
+
+    async def test_an_identical_file_for_a_project_returns_the_existing(
+        self, client: AsyncClient
+    ) -> None:
+        """A project, on today's Mentor, keeps the raw-hash check: duplicate=True."""
+        adoc = uuid.uuid4()
+        root = uuid.uuid4()
+        existing = _mock_submission(status="completed")
+
+        with (
+            patch.object(
+                AuthoredDocumentRepository,
+                "get_by_id",
+                return_value=_mock_task_doc(course_root_id=root, task_type="project"),
+            ),
+            patch.object(
+                CourseNodeRepository,
+                "get_by_id",
+                return_value=_mock_root_node(STUB_TENANT_ID),
+            ),
+            patch.object(StudentEnrollmentRepository, "is_enrolled", return_value=True),
+            patch.object(
+                DocumentSummaryRepository,
+                "get_by_authored_document_id",
+                return_value=_mock_summary("ready"),
+            ),
+            patch.object(ProjectBaseRepository, "get_latest_ready", return_value=None),
+            patch.object(ProjectBaseRepository, "get_latest", return_value=None),
+            patch.object(
+                HomeworkRepository, "find_duplicate", return_value=existing
+            ) as raw_hash_check,
+            patch.object(HomeworkRepository, "create") as mock_create,
+        ):
+            resp = await client.post(
+                _url(adoc),
+                files={"file": ("proj.zip", io.BytesIO(b"PK"), "application/zip")},
+            )
 
         assert resp.status_code == 202
         data = resp.json()
         assert data["submission_id"] == str(existing.id)
         assert data["status"] == "completed"
         assert data["duplicate"] is True
+        raw_hash_check.assert_awaited_once()
+        mock_create.assert_not_awaited()
 
 
 class TestPortalSubmitGates:

@@ -258,8 +258,12 @@ class TestReview:
     ) -> None:
         """10 000 characters -> 2 857 tokens of work beside each prompt.
 
-        safety              mistral-small   5962 in, 65 out    0.000933300
-        attempt_classifier  mistral-small   5270 in, 120 out   0.000862500
+        Mistral rates: EU (api.eu.mistral.ai),
+        https://docs.mistral.ai/inference/regional-inference (1.1x list),
+        verified 2026-11-12 (0.000165 in / 0.00066 out per 1k).
+
+        safety              mistral-small   5962 in, 65 out    0.001026630
+        attempt_classifier  mistral-small   5270 in, 120 out   0.000948750
         criteria_evaluation qwen3.7-max    7727 in, 8548 out x 2  0.110141396
         review_explanation  qwen3.7-max   13256 in, 8192 out (cap) 0.062430992
         """
@@ -274,7 +278,7 @@ class TestReview:
             ("criteria_evaluation", "qwen3.7-max", 7727, 8548),
             ("review_explanation", "qwen3.7-max", 13256, 8192),
         ]
-        assert estimate.e_usd == Decimal("0.174368188")
+        assert estimate.e_usd == Decimal("0.174547768")
         assert not estimate.uncalibrated
         assert estimate.catalog_version == catalog.version
         assert estimate.inputs["path_key"] == "task/first"
@@ -378,8 +382,12 @@ class TestProcessing:
     ) -> None:
         """600 s: 1102 words, 1879 tokens of speech, 28 998 of words JSON.
 
+        Mistral rates: EU (api.eu.mistral.ai),
+        https://docs.mistral.ai/inference/regional-inference (1.1x list),
+        verified 2026-11-12 (0.000165 in / 0.00066 out per 1k).
+
         transcribe            scribe_v1        600 s                0.037
-        safety_check_authored mistral-small    3980 in, 8192 out    0.0055122
+        safety_check_authored mistral-small    3980 in, 8192 out    0.006063420
         video_pass_1_vision   qwen3.5-flash    6583 in, 8192 out x 19 0.048298209
         video_pass_2a_mapping deepseek-v4-pro 188529 in, 21000 out  0.16600914
         video_pass_2c_denoise gemini-3.1-flash-lite 3101/3500 x 0.5 0.003012625
@@ -398,7 +406,7 @@ class TestProcessing:
         assert by_step["video_pass_1_vision"].calls == 19
         assert by_step["video_pass_2a_mapping"].tokens_in == 188_529
         assert by_step["video_pass_2c_denoise"].calls == Decimal("0.5")
-        assert estimate.e_usd == Decimal("0.259832174")
+        assert estimate.e_usd == Decimal("0.260383394")
         assert estimate.kind is ActionKind.PROCESSING
 
     def test_peak_moves_only_deepseek(

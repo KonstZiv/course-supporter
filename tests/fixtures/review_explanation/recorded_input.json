@@ -1,0 +1,183 @@
+{
+  "format": "review_explanation_input/1",
+  "submission_id": null,
+  "provenance": {
+    "note": "synthetic: written for the measurement's tests; no student's work"
+  },
+  "input": {
+    "task_title": "Числа Фібоначчі",
+    "task_description": "Рекурсія і тести.",
+    "task_text": "Напишіть функцію fibonacci(n) і перевірте її тестами pytest.",
+    "facts": {
+      "passed": false,
+      "score": 44,
+      "criteria": [
+        {
+          "criterion": {
+            "id": "c1",
+            "text": "Функція fibonacci(n) повертає n-те число Фібоначчі.",
+            "evidence": "Є функція fibonacci з базовим випадком.",
+            "weight": "must",
+            "check_method": "model_verdict",
+            "soft_descent": false,
+            "concepts": [],
+            "mandatory_points": []
+          },
+          "verdict": "met",
+          "judged": {
+            "id": "c1",
+            "verdict": "met",
+            "quote": "def fibonacci(n):",
+            "place": {
+              "file": "solution.py",
+              "lines": [
+                1,
+                1
+              ]
+            },
+            "missing": null,
+            "quote_not_found": false,
+            "kept_from_earlier": false,
+            "quote_from_base": false
+          },
+          "points": []
+        },
+        {
+          "criterion": {
+            "id": "c2",
+            "text": "Розв'язок перевірено тестами.",
+            "evidence": "Тести pytest для базових і загальних випадків.",
+            "weight": "must",
+            "check_method": "mandatory_points",
+            "soft_descent": false,
+            "concepts": [],
+            "mandatory_points": [
+              {
+                "id": "c2.p1",
+                "text": "Є тест базових випадків n = 0 і n = 1."
+              },
+              {
+                "id": "c2.p2",
+                "text": "Є тест загального випадку."
+              }
+            ]
+          },
+          "verdict": "not_met",
+          "judged": null,
+          "points": [
+            {
+              "id": "c2.p1",
+              "verdict": "met",
+              "quote": "assert fibonacci(1) == 1",
+              "place": {
+                "file": "test_solution.py",
+                "lines": [
+                  4,
+                  4
+                ]
+              },
+              "missing": null,
+              "quote_not_found": false,
+              "kept_from_earlier": true,
+              "quote_from_base": false
+            },
+            {
+              "id": "c2.p2",
+              "verdict": "not_met",
+              "quote": null,
+              "place": null,
+              "missing": "Немає тесту для n більшого за 1.",
+              "quote_not_found": false,
+              "kept_from_earlier": false,
+              "quote_from_base": false
+            }
+          ]
+        },
+        {
+          "criterion": {
+            "id": "c3",
+            "text": "Рекурсія не повторює обчислень.",
+            "evidence": "Мемоізація або ітеративний розв'язок.",
+            "weight": "should",
+            "check_method": "model_verdict",
+            "soft_descent": false,
+            "concepts": [],
+            "mandatory_points": []
+          },
+          "verdict": "not_met",
+          "judged": {
+            "id": "c3",
+            "verdict": "not_met",
+            "quote": null,
+            "place": null,
+            "missing": "Функція двічі рекурсивно викликає себе без кешу.",
+            "quote_not_found": false,
+            "kept_from_earlier": false,
+            "quote_from_base": false
+          },
+          "points": []
+        },
+        {
+          "criterion": {
+            "id": "c4",
+            "text": "Функцію задокументовано.",
+            "evidence": "Докстрінг із прикладом.",
+            "weight": "may",
+            "check_method": "model_verdict",
+            "soft_descent": false,
+            "concepts": [],
+            "mandatory_points": []
+          },
+          "verdict": "not_met",
+          "judged": {
+            "id": "c4",
+            "verdict": "not_met",
+            "quote": null,
+            "place": null,
+            "missing": null,
+            "quote_not_found": true,
+            "kept_from_earlier": false,
+            "quote_from_base": false
+          },
+          "points": []
+        }
+      ]
+    },
+    "submission_text": "--- solution.py ---\ndef fibonacci(n):\n    if n < 2:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n--- test_solution.py ---\nfrom solution import fibonacci\n\n\ndef test_base():\n    assert fibonacci(1) == 1\n\n\n=== NOT OPENED (1) ===\ndata/sales.xls · forbidden_type · 855\n",
+    "language": "Ukrainian",
+    "course_links": {
+      "c2": [
+        {
+          "id": "c2.l1",
+          "material": "Тестування з pytest",
+          "position": {
+            "kind": "video",
+            "value": "03:41"
+          },
+          "excerpt": "Тест — це функція, що"
+        },
+        {
+          "id": "c2.l2",
+          "material": "Посібник",
+          "position": {
+            "kind": "paragraph",
+            "value": "7"
+          },
+          "excerpt": null
+        }
+      ],
+      "c3": [
+        {
+          "id": "c3.l1",
+          "material": "Рекурсія",
+          "position": {
+            "kind": "slide",
+            "value": "12"
+          },
+          "excerpt": "Кешування результатів"
+        }
+      ],
+      "c4": []
+    }
+  }
+}

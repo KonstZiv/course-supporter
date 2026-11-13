@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import tempfile
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
@@ -31,10 +32,12 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+import structlog
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+from course_supporter.agents import review_explainer
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
     VerdictItemKind,
@@ -47,21 +50,31 @@ from course_supporter.homework.course_links import (
     LinkCandidate,
 )
 from course_supporter.homework.criteria_form import Criterion, criteria_to_document
+from course_supporter.homework.explanation_input_rebuild import (
+    rebuild_input,
+    verify_against_register,
+)
+from course_supporter.homework.explanation_measure import input_of, record_of
 from course_supporter.homework.path_config import (
     PathKey,
     SubmissionState,
     load_path_config,
 )
+from course_supporter.homework.path_runner import _open_the_doors
 from course_supporter.homework.path_stages import (
     REVIEW_EXPLANATION,
     StageContext,
     StageOutcome,
     _execution,
 )
-from course_supporter.homework.review_explanation import explain_verdicts
+from course_supporter.homework.review_explanation import (
+    explain_verdicts,
+    explanation_input,
+)
 from course_supporter.homework.verdict_explanation import ExplanationAnswer
 from course_supporter.llm.error_categories import ErrorCategory, LadderExhaustedError
 from course_supporter.llm.ladder_config import LadderConfig, StageConfig
+from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.registry import load_registry
 from course_supporter.llm.schemas import LLMResponse
@@ -988,3 +1001,206 @@ class TestAPlaceBelowTheThreshold:
             "criterion_id": "c2",
             "ids": ["c2.l1", "c2.l2"],
         }
+
+
+# ── Prompt v3 (2026-11-13): what the stage sends, and its input rebuilt ──
+
+
+def _v3_router(
+    qwen: Any, session_factory: async_sessionmaker[AsyncSession] | None = None
+) -> StageRouter:
+    return StageRouter(
+        LadderConfig(),
+        {"dashscope": qwen, "deepseek": _provider()},
+        registry=load_registry(_REPO_ROOT / "config" / "external_services.yaml"),
+        session_factory=session_factory,
+        prompt_base_path=_REPO_ROOT,
+    )
+
+
+class TestTheStageSendsPromptV3:
+    """Lock c of prompt v3, through the real router: the system message is
+    v3's, the user message the one v2 renders from the same input."""
+
+    async def test_v3s_system_and_v2s_user_go_on_the_wire(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        source_id = await _authors_list(db_session, doc)
+        await _verdicts(
+            db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
+        )
+        await _found(db_session, submission)
+        qwen = _provider(_response(_answer()))
+
+        await _explain(db_session, _v3_router(qwen), submission)
+
+        (request,) = [call.args[0] for call in qwen.complete.await_args_list]
+        shown, _ = await explanation_input(
+            db_session, submission, submission_text=_WORK, language="ukr"
+        )
+        context = review_explainer.render_context(shown)
+        v2 = load_prompt("prompts/review_explanation/v2.md", base_path=_REPO_ROOT)
+        v3 = load_prompt("prompts/review_explanation/v3.md", base_path=_REPO_ROOT)
+        assert request.system_prompt == v3.render(**context).system
+        assert request.prompt == v2.render(**context).user
+        assert request.system_prompt != v2.render(**context).system
+
+
+_STORED = b"def fibonacci(n):\n    return n\n"
+
+
+class _Storage:
+    """The S3 client double: one stored file, under one key."""
+
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+
+    def extract_key(self, url: str) -> str:
+        return "homework/solution.py"
+
+    async def download_file(self, key: str, dest: Path | None = None) -> Path:
+        path = dest or Path(tempfile.mkdtemp()) / "download.py"
+        path.write_bytes(self.content)
+        return path
+
+
+@pytest.fixture()
+async def submission_job(
+    session_factory: async_sessionmaker[AsyncSession],
+    committed_seeds: dict[str, uuid.UUID],
+    submission: HomeworkSubmission,
+) -> AsyncGenerator[uuid.UUID]:
+    """A committed job whose subject is the submission, as the path's job is."""
+    async with session_factory() as session:
+        job = Job(
+            tenant_id=committed_seeds["tenant_id"],
+            course_node_id=committed_seeds["course_node_id"],
+            job_type="homework_processing",
+            subject_type="homework_submission",
+            subject_id=submission.id,
+        )
+        session.add(job)
+        await session.commit()
+        job_id = job.id
+
+    yield job_id
+
+    async with session_factory() as session:
+        await session.execute(
+            delete(ExternalServiceCall).where(ExternalServiceCall.job_id == job_id)
+        )
+        await session.execute(delete(Job).where(Job.id == job_id))
+        await session.commit()
+
+
+class TestTheInputIsRebuiltFromWhatTheStageLeft:
+    """The recorder of the live measurement (``scripts/record_explanation_input.py``):
+    the stage's input rebuilt from the rows, the stored file read again — and
+    the request rebuilt from it hashes to the register's row of the run.
+
+    The run's work is read by the path runner's own door, so a door the
+    rebuild copies wrongly is red here.
+    """
+
+    async def _run_the_stage(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        job_id: uuid.UUID,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> dict[str, Any]:
+        source_id = await _authors_list(db_session, doc)
+        await _verdicts(
+            db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
+        )
+        await _found(db_session, submission)
+        _, reading, language = await _open_the_doors(
+            db_session,
+            _Storage(_STORED),  # type: ignore[arg-type]
+            HomeworkRepository(db_session),
+            submission,
+            job_id=job_id,
+            log=structlog.get_logger(),
+        )
+        assert reading is not None
+        context = dataclasses.replace(
+            _context(
+                db_session,
+                _v3_router(_provider(_response(_answer())), session_factory),
+                submission,
+                language=language,
+                session_factory=session_factory,
+            ),
+            submission_text=reading.text,
+        )
+        with job_scope(job_id):
+            await explain_verdicts(context, execution=_execution(context))
+        shown, _ = await explanation_input(
+            db_session, submission, submission_text=reading.text, language=language
+        )
+        return review_explainer.render_context(shown)
+
+    async def test_the_rebuilt_request_is_the_one_the_register_holds(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        submission_job: uuid.UUID,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        sent = await self._run_the_stage(
+            db_session, session_factory, submission_job, submission, doc
+        )
+
+        rebuilt = await rebuild_input(
+            db_session,
+            _Storage(_STORED),  # type: ignore[arg-type]
+            submission.id,
+        )
+        stage = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
+        verification = await verify_against_register(
+            rebuilt,
+            stage=stage.stages[REVIEW_EXPLANATION],  # type: ignore[arg-type]
+            registry=load_registry(_REPO_ROOT / "config" / "external_services.yaml"),
+            prompt_base_path=_REPO_ROOT,
+        )
+
+        assert verification["matched"] is True
+        assert verification["prompts"]["prompts/review_explanation/v3.md"]["rows"] == 1
+        assert review_explainer.render_context(rebuilt.shown) == sent
+        assert rebuilt.stored_explanation is not None
+        assert rebuilt.task_type == "task"
+        # The record carries the input whole, and reads back to it.
+        assert input_of(record_of(rebuilt.shown)) == rebuilt.shown
+
+    async def test_a_file_changed_since_is_not_confirmed(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        submission_job: uuid.UUID,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        await self._run_the_stage(
+            db_session, session_factory, submission_job, submission, doc
+        )
+
+        rebuilt = await rebuild_input(
+            db_session,
+            _Storage(_STORED + b"# edited\n"),  # type: ignore[arg-type]
+            submission.id,
+        )
+        stage = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
+        verification = await verify_against_register(
+            rebuilt,
+            stage=stage.stages[REVIEW_EXPLANATION],  # type: ignore[arg-type]
+            registry=load_registry(_REPO_ROOT / "config" / "external_services.yaml"),
+            prompt_base_path=_REPO_ROOT,
+        )
+
+        assert verification["matched"] is False
+        assert verification["first_rung_rows"] == 1

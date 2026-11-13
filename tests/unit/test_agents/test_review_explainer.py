@@ -80,7 +80,7 @@ from course_supporter.models.review_structure import Position
 from course_supporter.storage.submission_verdict_repository import _row
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_PROMPT_REF = "prompts/review_explanation/v2.md"
+_PROMPT_REF = "prompts/review_explanation/v3.md"
 
 
 def _criterion(cid: str, weight: str, points: int = 0) -> Criterion:
@@ -529,7 +529,8 @@ class TestThePromptSaysJson:
 
 
 class TestThePromptRules:
-    """The rules of the session that opened K5 (2026-10-02), word for word."""
+    """The rules of the session that opened K5 (2026-10-02), word for word —
+    as the stage's prompt v3 words them since 2026-11-13."""
 
     # Task 10, K5: "No links" gives way to the rule on the places shown. Each
     # half of the old rule stands in the new one: nothing of the course is
@@ -563,26 +564,28 @@ class TestThePromptRules:
         "that this file could not be read, so this part could not be checked — "
         "never that the student did not do the work."
     )
+    # v3 (2026-11-13): `todo` is a direction, never the solution.
     _CONTRAST = (
         "`what` — how it is done in the work now, or that it is not there; "
-        "- `why` — what the problem is, and why it matters; - `todo` — how it "
-        "should be done, and why that solves the problem."
+        "- `why` — what the problem is, and why it matters; - `todo` — what to "
+        "do, as a direction: the idea, the construct, the place in the "
+        "student's own code to work on, and why that solves the problem."
     )
-    # Vision-side, 2026-10-02, before the commit: the student sees which
-    # remarks decide the pass, and never the weights' own names.
+    # v3 (2026-11-13), replacing the rule of 2026-10-02 that an unmet "must"
+    # decides the pass: since 2026-11-12 the pass is the builder's to print,
+    # with its rule; a remark says how much it matters for the work alone,
+    # never by the weights' own names.
     _WEIGHT = (
-        "Each remark makes clear, in plain words, how much it weighs: a "
-        "criterion of weight `must` that is not met decides the pass; one of "
-        "weight `should` or `may` makes the work better but does not decide the "
-        "pass. Say it in plain words, never by the names of the weights "
-        "(`must`, `should`, `may`)."
+        "A remark may say in plain words how much it matters for the quality of "
+        "the work — never by the names of the weights (`must`, `should`, `may`), "
+        "and never that it decides the pass."
     )
     _ONE_REMARK_EACH = (
         "exactly one remark for every criterion whose verdict is `not_met`, "
         "whatever its weight, and none for a criterion that is met."
     )
     _PRAISE_IN_WHY = (
-        "`why` — the voice of the course: why the work is passed or not, in "
+        "`why` — the voice of the course: your overall reading of the work in "
         "terms of what the author required. Start with the essence, then the "
         "specifics. Name what is done well, and where the student went beyond "
         "the assignment"

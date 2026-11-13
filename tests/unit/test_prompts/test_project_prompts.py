@@ -34,9 +34,11 @@ _PROMPTS = Path(__file__).resolve().parents[3] / "prompts"
 
 _EVALUATION = "criteria_evaluation_project/v1.md"
 _EXPLANATION = "review_explanation_project/v1.md"
+# Each twin is the text stage's prompt in force: the explanation's is v3 since
+# 2026-11-13 (v2 has the same variables and slots, so the twin moved with it).
 _TWINS = {
     _EVALUATION: "criteria_evaluation/v1.md",
-    _EXPLANATION: "review_explanation/v2.md",
+    _EXPLANATION: "review_explanation/v3.md",
 }
 
 # Every kind of file block the context's builder writes, and its own lines.

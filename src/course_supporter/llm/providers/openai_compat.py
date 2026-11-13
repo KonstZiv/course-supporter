@@ -167,8 +167,9 @@ class OpenAICompatProvider(LLMProvider):
         Called only for a request that carries a seed, which the router sets
         only where :meth:`seed_supported` allows it. The fields go into
         ``extra_body`` beside whatever :meth:`_extra_create_kwargs` puts there.
-        The base connector (OpenAI itself) declares no seed — its documentation
-        was not read for this — so a seed reaching it is refused, never dropped.
+        Every connector of this family that does not override it — OpenAI,
+        DeepSeek, deepseek_thinking — declares no seed (no documentation of one
+        was read for them), so a seed reaching it is refused, never dropped.
         """
         msg = f"{self.provider_name}: this connector sends no reproducibility seed"
         raise RequestConfigError(msg)

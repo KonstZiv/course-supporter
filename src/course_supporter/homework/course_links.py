@@ -7,8 +7,9 @@ Purpose:
     places of the course to point to — at most :data:`MAX_LINKS`, best first.
 
     The path's step that asks it is :func:`look_up_course_links` (the code
-    stage ``course_link_lookup``, K5): it keeps what was found for the
-    explanation stage, which shows it to the model under local identifiers
+    stage ``course_link_lookup``, K5): it keeps everything that was found, for
+    the explanation stage, which shows the model the places that reach
+    :data:`MIN_COURSE_LINK_SCORE` under local identifiers
     (:meth:`FoundCourseLinks.shown`). What the model chose becomes a link of
     the review when the review is built, checked once more before it is
     given (``homework/course_link_delivery.py``, K6); what was given is kept
@@ -121,6 +122,17 @@ logger = structlog.get_logger(__name__)
 
 MAX_LINKS: Final = 3
 """Places one criterion is linked to, at most."""
+
+# рішення власника продукту 2026-11-13: кандидата з балом збігу нижче порогу
+# моделі не показуємо (прод 12.11: 0,14 — хибне посилання)
+MIN_COURSE_LINK_SCORE: Final = 0.3
+"""The lowest confidence a place needs to be shown to the explanation model.
+
+The search keeps every place it finds (the row is for review); only what is
+shown — and so only what can be chosen and given — is cut at this value
+(:meth:`FoundCourseLinks.shown`, :func:`reaches_min_score`). A criterion left
+with no place is shown none, as one the course does not teach.
+"""
 
 EXCERPT_CHARS: Final = 300
 """Characters of a segment's text an excerpt keeps."""
@@ -278,6 +290,17 @@ def link_confidence(
         + TREE_WEIGHT * TREE_SCORES[relation]
         + ORDER_WEIGHT * order_closeness
     )
+
+
+def reaches_min_score(candidate: LinkCandidate) -> bool:
+    """Whether ``candidate`` is good enough to be shown (:data:`MIN_COURSE_LINK_SCORE`).
+
+    The confidence is a float sum of weighted terms, so a place that is
+    exactly at the threshold in arithmetic can come out a hair below it
+    (3/8 of the concepts, far, 3 of 8 in order: 0.29999999999999993); rounding
+    keeps such a place on the right side of the line.
+    """
+    return round(candidate.confidence, 9) >= MIN_COURSE_LINK_SCORE
 
 
 def tree_relation(
@@ -538,8 +561,10 @@ class FoundCourseLinks(BaseModel):
     """What the step found for one submission — the body of its kept row.
 
     Attributes:
-        criteria: Every failed criterion, in the list's order; empty when no
-            criterion failed.
+        criteria: Every failed criterion, in the list's order, with every place
+            found for it — below :data:`MIN_COURSE_LINK_SCORE` too, for
+            review; only :meth:`shown` cuts at it. Empty when no criterion
+            failed.
         settled: The links the review gives, by criterion — what the model
             chose, checked before delivery (K6) — as the review's first build
             settled them; ``None`` until then. A later build of the same
@@ -563,15 +588,22 @@ class FoundCourseLinks(BaseModel):
     def shown(self, item_id: str) -> tuple[tuple[str, LinkCandidate], ...]:
         """The places of ``item_id`` the model is shown, under their local ids.
 
-        The first :data:`MAX_LINKS` kept for it, best first, as
-        ``(c3.l1, place)``: the one definition of the identifiers, for the
-        stage that shows them and for the builder that resolves the answer.
+        The first :data:`MAX_LINKS` of those kept for it that reach
+        :data:`MIN_COURSE_LINK_SCORE`, best first, as ``(c3.l1, place)``: the
+        one definition of what is shown and of the identifiers, for the stage
+        that shows them and for the builder that resolves the answer — so what
+        the model was not shown can never be resolved to a place. A place
+        below the threshold stays in :meth:`candidates_of` and is not shown;
+        a criterion with none left is shown none.
         """
+        reaching = [
+            candidate
+            for candidate in self.candidates_of(item_id)
+            if reaches_min_score(candidate)
+        ]
         return tuple(
             (local_link_id(item_id, rank), candidate)
-            for rank, candidate in enumerate(
-                self.candidates_of(item_id)[:MAX_LINKS], start=1
-            )
+            for rank, candidate in enumerate(reaching[:MAX_LINKS], start=1)
         )
 
     def settled_of(self, item_id: str) -> tuple[LinkCandidate, ...]:

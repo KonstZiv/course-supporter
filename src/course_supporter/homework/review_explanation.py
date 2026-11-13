@@ -27,8 +27,9 @@ Steps:
        (:func:`~course_supporter.homework.judged_list.judged_layer`).
     3. The course links the search step kept (task 10, K5): for each
        criterion that is not met, up to three places under local
-       identifiers (:func:`links_to_show`). No row kept — a path that did not
-       search — shows none.
+       identifiers (:func:`links_to_show`) — only those that reach
+       ``MIN_COURSE_LINK_SCORE``: better "no fitting place" than a wrong
+       link. No row kept — a path that did not search — shows none.
     4. One request; the answer is checked against the facts on every rung, and
        one that disagrees is retried with the reason (``PRE-FLIGHT.md`` 9.7).
     5. An identifier the answer names that was not shown for that criterion
@@ -190,14 +191,17 @@ def links_to_show(
     """The places of the course the explanation is shown, by criterion id.
 
     For each criterion of ``unmet``, the first places the search kept for
-    it (``MAX_LINKS`` at most), best first, each under a local identifier:
-    the criterion's id, ``.l`` and its rank from 1 (``c3.l1``;
+    it that reach ``MIN_COURSE_LINK_SCORE`` (``MAX_LINKS`` at most), best
+    first, each under a local identifier: the criterion's id, ``.l`` and its
+    rank from 1 (``c3.l1``;
     :meth:`~course_supporter.homework.course_links.FoundCourseLinks.shown`).
     The same inputs give the same identifiers, so a later reader of the kept
     answer resolves them against the same kept places. A criterion without
-    places maps to an empty tuple; places kept for a criterion that is met
-    are not shown. A place whose anchor does not fit its material is shown
-    without a position (:func:`link_position`), and the stage goes on.
+    places — or with only places below the threshold, which the row keeps for
+    review but the model never sees — maps to an empty tuple; places kept for
+    a criterion that is met are not shown. A place whose anchor does not fit
+    its material is shown without a position (:func:`link_position`), and the
+    stage goes on.
     """
     return {
         criterion_id: tuple(

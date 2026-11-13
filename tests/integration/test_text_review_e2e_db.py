@@ -30,7 +30,10 @@ the builder's refusal when either part is missing; the shipped file, which
 since task 10 (K5) serves a text task on the new path in test mode (lock 8,
 rewritten); and a failed criterion whose topic the course teaches, linked in
 the review to the place that teaches it (task 10, K6, lock a — the course is
-the real one, its search the real finder).
+the real one, its search the real finder); and, since the owner's decision of
+2026-11-13, a failed criterion whose only places score below the threshold —
+production's two places of 0.14 — which the review does not link, beside one
+whose place scores 0.6, which it does (task 10, lock g).
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -62,6 +65,7 @@ from course_supporter.funds_port import (
     SubmissionOutcome,
     VersionWorkContext,
 )
+from course_supporter.homework.course_links import FoundCourseLinks
 from course_supporter.homework.criteria_form import Criterion, criteria_to_document
 from course_supporter.homework.criteria_list_service import (
     CriteriaInForce,
@@ -252,6 +256,8 @@ class _RouterDouble:
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self.calls: list[str] = []
+        # What each stage's last request was rendered from (its prompt variables).
+        self.rendered: dict[str, dict[str, Any]] = {}
         self.content: dict[str, str] = {
             SAFETY: _SAFETY,
             ATTEMPT_CLASSIFIER: _ATTEMPT,
@@ -278,6 +284,7 @@ class _RouterDouble:
         **render_context: Any,
     ) -> StageResult:
         self.calls.append(stage_name)
+        self.rendered[stage_name] = render_context
         rung = stage.ladder[0]
         await _persist(
             self._session_factory,
@@ -1304,6 +1311,243 @@ class TestAFailedCriterionIsLinkedToTheCourse:
             "- **Де почитати:** Рекурсія (абзац 3)"
             in (submission.review_markdown or "").splitlines()
         )
+        [payload] = _reviewed(webhook)
+        assert payload.structure == structure
+
+        # One of the two criteria not met is linked.
+        assert await _metrics(session_factory, submission_id) == [(0.5, None)]
+
+
+# ── A place below the score threshold is not linked (task 10, lock g) ───────
+
+_FINAL_PROJECT = "Фінальний проєкт курсу"
+_SUMMING_UP = "Підсумкове заняття"
+_RECURSION_IN_PRACTICE = "Рекурсія на практиці"
+
+# c2 has five concepts and the course teaches one of them in each of two
+# places far from the task: 0.7 · 1/5 = 0.14 each, as on production 2026-11-12.
+# c3 has seven concepts and one place teaches six of them: 0.7 · 6/7 = 0.6.
+_C2_CONCEPTS = ("archive", "structure", "naming", "folders", "manifest")
+_C3_CONCEPTS = (
+    "recursion",
+    "basecase",
+    "stack",
+    "frames",
+    "depth",
+    "returns",
+    "memoization",
+)
+_WEAK_CRITERIA = (
+    _CRITERIA[0],
+    _CRITERIA[1].model_copy(update={"concepts": _C2_CONCEPTS}),
+    _CRITERIA[2].model_copy(update={"concepts": _C3_CONCEPTS}),
+)
+
+# The answer production's model gave when it was shown both weak places: it
+# chose them (c2.l1, c2.l2), and the one place of c3 (c3.l1). Recorded, not
+# asked: this model is shown no place for c2, so the stage cuts those names.
+_WEAK_EXPLANATION = json.dumps(
+    {
+        "passed": False,
+        "why": _WHY,
+        "remarks": [
+            {**_remark("c3"), "links": ["c3.l1"]},
+            {**_remark("c2"), "links": ["c2.l1", "c2.l2"]},
+        ],
+        "mentor_voice": None,
+    },
+    ensure_ascii=False,
+)
+
+
+@pytest.fixture()
+async def weak_world(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: dict[str, Any],
+) -> dict[str, Any]:
+    """A course of its own under ``world``'s tenant: lesson 1 with the ``task``
+    and its ready model list; far from it, after it, a module whose final
+    project and summing-up each teach one concept of c2, and whose practice
+    material teaches six of c3's seven. ``world``'s student submits."""
+    async with session_factory() as session:
+        tenant = await session.get(Tenant, world["tenant_id"])
+        assert tenant is not None
+        root = await _seed_root(session, tenant)
+        lesson = await _seed_child(session, tenant, root, title="Лекція 1", order=0)
+        module = await _seed_child(session, tenant, root, title="Модуль 2", order=1)
+        project = await _seed_child(session, tenant, module, title="Проєкт", order=0)
+        segments = {}
+        for order, (title, main, content, paragraph) in enumerate(
+            (
+                (_FINAL_PROJECT, ["archive"], "Структура архіву проєкту.", 2),
+                (_SUMMING_UP, ["structure"], "Підсумок: як влаштовано курс.", 5),
+                (_RECURSION_IN_PRACTICE, list(_C3_CONCEPTS[:6]), _TAUGHT, 4),
+            )
+        ):
+            material = await _seed_material(session, project, root, order=order)
+            summary = await _seed_summary(session, material, root, title=title)
+            segments[title] = await _seed_segment(
+                session,
+                summary,
+                root,
+                main=main,
+                content=content,
+                start_paragraph=paragraph,
+                end_paragraph=paragraph + 1,
+            )
+        task = await _seed_material(
+            session, lesson, root, task_type="task", order=5, filename=None
+        )
+        lists = TaskCriteriaListRepository(session)
+        claimed = await lists.claim(
+            authored_document_id=task.id,
+            source_content_hash="h" * 64,
+            source_task_type="task",
+            form_version=2,
+        )
+        assert claimed is not None
+        assert await lists.mark_ready(
+            claimed.id,
+            claimed_at=claimed.claimed_at,
+            criteria=criteria_to_document(_WEAK_CRITERIA),
+            contradictions=[],
+            concepts_in_input=True,
+            dropped_concept_count=0,
+            input_fingerprint="f" * 64,
+        )
+        await session.commit()
+        return {
+            **world,
+            "node_id": root.id,
+            "lesson_id": lesson.id,
+            "doc_id": task.id,
+            "segment_ids": {title: seg.id for title, seg in segments.items()},
+            "in_force": CriteriaInForce(
+                criteria=_WEAK_CRITERIA,
+                layer=CriteriaLayer.MODEL,
+                source_id=claimed.id,
+            ),
+        }
+
+
+async def _fabricated_traces(
+    session_factory: async_sessionmaker[AsyncSession], submission_id: uuid.UUID
+) -> list[dict[str, Any]]:
+    """The ``course_link_fabricated`` rows of the submission's jobs, decoded."""
+    async with session_factory() as session:
+        job_ids = select(Job.id).where(Job.subject_id == submission_id)
+        rows = (
+            await session.execute(
+                select(ExternalServiceCall).where(
+                    ExternalServiceCall.job_id.in_(job_ids),
+                    ExternalServiceCall.action == "course_link_fabricated",
+                )
+            )
+        ).scalars()
+        return [json.loads(row.output_text or "") for row in rows]
+
+
+class TestAPlaceBelowTheScoreThresholdIsNotLinked:
+    """Lock g (task 10, the owner's decision of 2026-11-13)."""
+
+    async def test_two_places_of_0_14_give_no_where_to_read_and_one_of_0_6_does(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        weak_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """A ``task``, recorded answers, one unmet criterion with places of
+        0.14 and 0.14 (as on production 2026-11-12) and another with a place
+        of 0.6: the review links the second only."""
+        router = _RouterDouble(session_factory)
+        router.content[REVIEW_EXPLANATION] = _WEAK_EXPLANATION
+        webhook = _webhook()
+        submission_id, job_id = await _submit(session_factory, weak_world)
+        async with session_factory() as session:
+            # The submission is on the lesson, under the course's root.
+            await session.execute(
+                update(HomeworkSubmission)
+                .where(HomeworkSubmission.id == submission_id)
+                .values(node_id=weak_world["lesson_id"])
+            )
+            await session.commit()
+
+        await _run(
+            session_factory,
+            router,
+            _ListSource(weak_world["in_force"]),
+            webhook,
+            tmp_path,
+            submission_id=submission_id,
+            job_id=job_id,
+        )
+
+        submission = await _submission(session_factory, submission_id)
+        assert submission.status == "delivered"
+        segment_ids = weak_world["segment_ids"]
+
+        # The search kept everything it found — the weak places too.
+        async with session_factory() as session:
+            row = await SubmissionVerdictRepository(session).get_candidates(
+                tenant_id=weak_world["tenant_id"], submission_id=submission_id
+            )
+        assert row is not None
+        kept = FoundCourseLinks.model_validate(row.body)
+        assert [p.material_title for p in kept.candidates_of("c2")] == [
+            _FINAL_PROJECT,
+            _SUMMING_UP,
+        ]
+        assert [p.confidence for p in kept.candidates_of("c2")] == [
+            pytest.approx(0.14),
+            pytest.approx(0.14),
+        ]
+        assert [p.confidence for p in kept.candidates_of("c3")] == [pytest.approx(0.6)]
+
+        # The model was shown no place for c2 and the one place of c3.
+        assert router.rendered[REVIEW_EXPLANATION]["course_links"] == [
+            {"criterion": "c2", "links": []},
+            {
+                "criterion": "c3",
+                "links": [
+                    {
+                        "id": "c3.l1",
+                        "material": _RECURSION_IN_PRACTICE,
+                        "position": {"kind": "paragraph", "value": "4"},
+                        "excerpt": _TAUGHT,
+                    }
+                ],
+            },
+        ]
+        # It named c2's two places all the same (the recorded answer): cut.
+        assert await _fabricated_traces(session_factory, submission_id) == [
+            {"criterion_id": "c2", "ids": ["c2.l1", "c2.l2"]}
+        ]
+
+        # The review links c3 only.
+        structure = ReviewStructureV1.model_validate(submission.review_result)
+        c2, c3 = structure.new_remarks
+        assert c2.read == []
+        assert c3.read == [
+            Reference(
+                title=_RECURSION_IN_PRACTICE,
+                url=None,
+                position=Position(kind="paragraph", value="4"),
+                excerpt=_TAUGHT,
+                segment_id=str(segment_ids[_RECURSION_IN_PRACTICE]),
+                later_in_course=True,
+            )
+        ]
+        assert submission.review_markdown == assemble_review(structure)
+        markdown = submission.review_markdown or ""
+        assert [line for line in markdown.splitlines() if "Де почитати" in line] == [
+            next(
+                line
+                for line in markdown.splitlines()
+                if line.startswith("- **Де почитати:** " + _RECURSION_IN_PRACTICE)
+            )
+        ]
+        assert _FINAL_PROJECT not in markdown
+        assert _SUMMING_UP not in markdown
         [payload] = _reviewed(webhook)
         assert payload.structure == structure
 

@@ -147,7 +147,8 @@ quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 
 # правило заліку: обов'язкові критерії автора
 # і пороги 70 / 80 (2026-11-12)  # noqa: RUF003
-VERDICT_RULES_VERSION: Final[int] = 4
+# поріг збігу посилань на курс 0,3 (2026-11-13)
+VERDICT_RULES_VERSION: Final[int] = 5
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -157,7 +158,8 @@ search and the check of course links (``course_links``,
 ``course_link_delivery``), the builder (``text_result``, ``review_assembler``).
 2 — after the quote check was fixed on 2026-11-07; 3 — project chain K3: a
 quote of the base's code is not the student's; 4 — the pass rule of
-2026-11-12: the author's "must" criteria and the thresholds 70 / 80. It enters
+2026-11-12: the author's "must" criteria and the thresholds 70 / 80; 5 — the
+course-link score threshold of 2026-11-13 (``MIN_COURSE_LINK_SCORE``). It enters
 the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,

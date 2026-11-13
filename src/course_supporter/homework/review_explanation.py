@@ -15,6 +15,10 @@ Interface:
     returns the stage's outcome and writes the explanation in the body's
     session, so it is committed together with the checkpoint that marks the
     stage done (``impl-rules#12``; ``homework/path_runner.py``).
+    :func:`explanation_input` — steps 1-3 and the language: what the model is
+    shown, read without a write. The stage builds its request from it, and a
+    read-only tool rebuilds the same input for a measurement
+    (``homework/explanation_measure.py``).
 
 Steps:
     1. The submission's verdict rows; the list they were judged against, by
@@ -88,8 +92,11 @@ from course_supporter.storage.submission_verdict_repository import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from course_supporter.homework.path_stages import StageContext
     from course_supporter.llm.stage_router import StageExecution
+    from course_supporter.storage.orm import HomeworkSubmission
 
 logger = structlog.get_logger(__name__)
 
@@ -115,48 +122,20 @@ async def explain_verdicts(
     submission = context.submission
     log = logger.bind(submission_id=str(submission.id), stage=context.stage_name)
 
-    verdicts = SubmissionVerdictRepository(context.session)
-    rows = await verdicts.list_for_submission(
-        tenant_id=submission.tenant_id, submission_id=submission.id
+    shown, language = await explanation_input(
+        context.session,
+        submission,
+        submission_text=context.submission_text,
+        language=context.language,
     )
-    if not rows:
-        msg = (
-            "the explanation stage needs the verdicts of the evaluation stage, "
-            "and the submission has none"
-        )
-        raise ValueError(msg)
-    criteria = await read_judged_list(context.session, submission, rows)
-    facts = explanation_facts(criteria, rows, layer=judged_layer(rows))
-    kept_links = await verdicts.get_candidates(
-        tenant_id=submission.tenant_id, submission_id=submission.id
-    )
-    shown_links = links_to_show(
-        facts.unmet,
-        FoundCourseLinks.model_validate(kept_links.body)
-        if kept_links is not None
-        else FoundCourseLinks(criteria=()),
-    )
-
-    language = await _explanation_language(context)
-    title, description, text = await load_task_context(
-        context.session, submission.authored_document_id
-    )
+    facts = shown.facts
     explained = await ReviewExplainerAgent(context.router).explain(
-        ExplanationInput(
-            task_title=title,
-            task_description=description,
-            task_text=text,
-            facts=facts,
-            submission_text=context.submission_text,
-            language=display_name(language),
-            course_links=shown_links,
-        ),
-        execution=execution,
+        shown, execution=execution
     )
 
     answer, fabricated = drop_unshown_links(
         explained.answer,
-        {cid: {link.id for link in links} for cid, links in shown_links.items()},
+        {cid: {link.id for link in links} for cid, links in shown.course_links.items()},
     )
     for criterion_id, ids in fabricated.items():
         await record_course_link_trace(
@@ -165,7 +144,7 @@ async def explain_verdicts(
             criterion_id=criterion_id,
             ids=ids,
         )
-    await verdicts.store_explanation(
+    await SubmissionVerdictRepository(context.session).store_explanation(
         tenant_id=submission.tenant_id,
         submission_id=submission.id,
         language=language,
@@ -183,6 +162,73 @@ async def explain_verdicts(
         model=explained.model,
     )
     return StageOutcome.ok()
+
+
+async def explanation_input(
+    session: AsyncSession,
+    submission: HomeworkSubmission,
+    *,
+    submission_text: str,
+    language: str | None,
+) -> tuple[ExplanationInput, str]:
+    """What the model is shown about the submission, and its language code.
+
+    Steps 1-3 of the module and the language: the verdict rows, the list they
+    were judged against, the facts, the course links the search step kept,
+    the task's texts. It only reads — no write, no model call — so the same
+    input can be rebuilt outside the stage, from the rows a submission left.
+
+    Args:
+        session: Where the rows are read.
+        submission: The submission explained.
+        submission_text: The work exactly as the doors read it.
+        language: The path's resolution of the language, as an ISO 639-3
+            code; ``None`` takes the course root's.
+
+    Returns:
+        The input of :class:`ReviewExplainerAgent`, and the language of the
+        explanation as an ISO 639-3 code (the input names it by its name).
+
+    Raises:
+        ValueError: The submission has no verdict rows, rows the list they
+            name does not match, or no language at all (see the module).
+    """
+    verdicts = SubmissionVerdictRepository(session)
+    rows = await verdicts.list_for_submission(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
+    if not rows:
+        msg = (
+            "the explanation stage needs the verdicts of the evaluation stage, "
+            "and the submission has none"
+        )
+        raise ValueError(msg)
+    criteria = await read_judged_list(session, submission, rows)
+    facts = explanation_facts(criteria, rows, layer=judged_layer(rows))
+    kept_links = await verdicts.get_candidates(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
+    shown_links = links_to_show(
+        facts.unmet,
+        FoundCourseLinks.model_validate(kept_links.body)
+        if kept_links is not None
+        else FoundCourseLinks(criteria=()),
+    )
+
+    code = await _explanation_language(session, submission, language)
+    title, description, text = await load_task_context(
+        session, submission.authored_document_id
+    )
+    shown = ExplanationInput(
+        task_title=title,
+        task_description=description,
+        task_text=text,
+        facts=facts,
+        submission_text=submission_text,
+        language=display_name(code),
+        course_links=shown_links,
+    )
+    return shown, code
 
 
 def links_to_show(
@@ -221,22 +267,24 @@ def links_to_show(
     }
 
 
-async def _explanation_language(context: StageContext) -> str:
+async def _explanation_language(
+    session: AsyncSession, submission: HomeworkSubmission, explicit: str | None
+) -> str:
     """The language of the explanation as an ISO 639-3 code.
 
-    The path's resolution first (``context.language``); without it, the
-    course root's language, read only then.
+    The path's resolution first (``explicit``); without it, the course
+    root's language, read only then.
 
     Raises:
         ValueError: Neither gives a language — a root without one is refused
             by the database and by every write of it, so this is a defect.
     """
     root_language: str | None = None
-    if context.language is None:
-        root = await context.session.get(CourseNode, context.submission.course_node_id)
+    if explicit is None:
+        root = await session.get(CourseNode, submission.course_node_id)
         root_language = root.default_language if root is not None else None
     code = resolve_review_language(
-        explicit=context.language, preferred=None, course=root_language
+        explicit=explicit, preferred=None, course=root_language
     ).code
     if code is None:
         msg = "neither the student nor the course root gives a language"

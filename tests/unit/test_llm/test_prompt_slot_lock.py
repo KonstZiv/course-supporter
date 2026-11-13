@@ -274,7 +274,12 @@ class TestTheTemplatesOfBothRoads:
             assert _closing_tags(text, "previous_problems") == (1 if repeat else 0)
 
     @pytest.mark.parametrize(
-        "ref", ["review_explanation/v2.md", "review_explanation_project/v1.md"]
+        "ref",
+        [
+            "review_explanation/v2.md",
+            "review_explanation/v3.md",
+            "review_explanation_project/v1.md",
+        ],
     )
     def test_the_review_explanation_keeps_the_submission_in_its_slot(
         self, ref: str
@@ -331,7 +336,12 @@ class TestTheTemplatesOfBothRoads:
             assert _closing_tags(text, slot) == 1, slot
 
     @pytest.mark.parametrize(
-        "ref", ["review_explanation/v2.md", "review_explanation_project/v1.md"]
+        "ref",
+        [
+            "review_explanation/v2.md",
+            "review_explanation/v3.md",
+            "review_explanation_project/v1.md",
+        ],
     )
     def test_the_review_explanation_keeps_a_hostile_place_in_its_slot(
         self, ref: str

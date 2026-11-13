@@ -161,13 +161,36 @@ class TestCheckedInPaths:
         )
         assert "course_link_lookup" not in model_stages(config)
 
-    def test_the_explanation_reads_prompt_v2(self, config: PathConfig) -> None:
-        """Task 10, K5: v2 carries the course links; v1 stays as history."""
+    def test_the_explanation_reads_prompt_v3(self, config: PathConfig) -> None:
+        """2026-11-13: v3 drops the rule of the pass; v2 (task 10, K5: the
+        course links) and v1 stay as history."""
         stage = config.stages["review_explanation"]
         assert isinstance(stage, ModelStage)
-        assert stage.prompt_ref == "prompts/review_explanation/v2.md"
+        assert stage.prompt_ref == "prompts/review_explanation/v3.md"
         assert stage.ceilings.money_usd == 0.24
+        assert Path("prompts/review_explanation/v2.md").is_file()
         assert Path("prompts/review_explanation/v1.md").is_file()
+
+    def test_the_explanations_money_covers_its_dearest_attempts(
+        self, config: PathConfig, registry: ModelRegistryConfig
+    ) -> None:
+        """The arithmetic beside the stage, recounted for v3: the input v2's
+        ceiling was counted for, and v3's prompt over v2's."""
+        stage = config.stages["review_explanation"]
+        assert isinstance(stage, ModelStage)
+        tokens_in = _TEXT_EXPLANATION_TOKENS + _over(
+            "prompts/review_explanation/v3.md", "prompts/review_explanation/v2.md"
+        )
+        qwen = _price(registry, "qwen3.7-max", tokens_in, 8_192)
+        deepseek = _price(registry, "deepseek-flash", tokens_in, 8_192)
+        reasoning = _price(registry, "qwen3.7-max", 0, _QWEN_REASONING_TOKENS)
+        dearest = qwen + deepseek + reasoning
+
+        assert tokens_in == 77_399
+        assert dearest == pytest.approx(0.234302, abs=1e-6)
+        assert dearest <= stage.ceilings.money_usd < dearest + 0.01
+        # Both rungs stay reachable: the second fits in what the first leaves.
+        assert stage.ceilings.money_usd - qwen >= deepseek
 
     @pytest.mark.parametrize(
         ("task_type", "state", "estimate"),

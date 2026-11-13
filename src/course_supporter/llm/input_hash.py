@@ -18,9 +18,10 @@ Interface:
     the rendered system and user prompts; a SHA-256 digest per attachment
     (the bytes themselves are never serialised); the model; temperature;
     the output ceiling; the reasoning form; whether JSON was requested; the
-    response schema and how it is enforced (task 09a); and the provider
-    name. The provider is part of the input because two ladder providers
-    can send the same model name with different behaviour —
+    response schema and how it is enforced (task 09a); the reproducibility
+    seed, when one is sent (2026-11-13); and the provider name. The provider
+    is part of the input because two ladder providers can send the same model
+    name with different behaviour —
     ``deepseek`` and ``deepseek_thinking`` differ exactly in thinking off/on.
 
     The level is one attempt, not one stage call: a structural retry appends
@@ -84,6 +85,11 @@ def attempt_input_document(request: LLMRequest, *, provider: str) -> dict[str, o
     if request.response_schema is not None:
         document["response_schema"] = request.response_schema
         document["schema_mode"] = request.schema_mode
+    # 2026-11-13. The reproducibility seed changes what the model answers, so
+    # it is input. Written only when present, for the reason the schema is: a
+    # request without a seed hashes exactly as before the field existed.
+    if request.seed is not None:
+        document["seed"] = request.seed
     return document
 
 

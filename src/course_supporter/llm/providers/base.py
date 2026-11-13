@@ -57,15 +57,37 @@ class LLMProvider(abc.ABC):
         """Generate text completion."""
         ...
 
+    def seed_supported(self, request: LLMRequest) -> bool:
+        """Whether this connector can put a reproducibility seed on ``request``.
+
+        Asked by the router on the requests of a ``deterministic`` stage
+        (:mod:`course_supporter.llm.reproducibility`); the seed is set only
+        where this says ``True``. Default: no — a vendor counts as taking a
+        seed only when its own documentation says so, and the connector that
+        overrides this cites the page and the date it was read. The request is
+        passed because support can depend on it (DashScope documents the seed
+        for its text endpoint, not its multimodal one).
+        """
+        return False
+
     def check_request(self, request: LLMRequest) -> None:
         """Refuse a request this connector cannot send as configured.
 
         Called by the router after building the request and before the call.
-        Default: every request is sendable. A connector whose vendor rejects a
-        combination at the API (and would bill or fail late for it) overrides
-        and raises :class:`RequestConfigError`.
+        Default: a request is sendable unless it carries a seed this connector
+        cannot send (:meth:`seed_supported`) — a seed silently dropped would
+        read in the register as a reproducible call that was not one. A
+        connector whose vendor rejects another combination at the API (and
+        would bill or fail late for it) overrides, calls this one first, and
+        raises :class:`RequestConfigError`.
         """
-        return None
+        if request.seed is not None and not self.seed_supported(request):
+            msg = (
+                f"{self.provider_name}: this connector sends no reproducibility "
+                f"seed (stage '{request.action}'); the router sets one only "
+                "where seed_supported() allows it"
+            )
+            raise RequestConfigError(msg)
 
     def classify_error(self, exc: Exception) -> ErrorCategory:
         """Classify provider exception into a ladder fallback category.

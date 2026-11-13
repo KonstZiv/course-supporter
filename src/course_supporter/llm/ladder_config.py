@@ -88,6 +88,14 @@ class StageConfig(BaseModel):
             thousands of tokens, and the register is queried by cost and
             outcome, not by body. A stage turns it on when its output is the
             thing reproducibility has to compare (mentor-rebuild task 01).
+        deterministic: Ask the same question the same way every time
+            (2026-11-13): the router sets temperature 0 on each request
+            explicitly and sends a fixed seed to every rung whose connector
+            can send one (:mod:`course_supporter.llm.reproducibility`).
+            ``False`` (default) sends exactly what was sent before the flag
+            was read. The path stages carry it from
+            ``config/submission_paths.yaml``
+            (``homework/path_stages.py::router_stage_config``).
     """
 
     model_config = _FORBID
@@ -97,6 +105,7 @@ class StageConfig(BaseModel):
     ladder: list[LadderEntry] = Field(min_length=1)
     input_budget_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
     record_output: bool = False
+    deterministic: bool = False
 
 
 class LadderFile(BaseModel):

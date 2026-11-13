@@ -262,6 +262,24 @@ class DashScopeProvider(LLMProvider):
             return False
         return True
 
+    def seed_supported(self, request: LLMRequest) -> bool:
+        """The text endpoint takes ``seed``; the multimodal one is not read.
+
+        Read 2026-11-13 on www.alibabacloud.com/help/en/model-studio/
+        qwen-api-via-dashscope ("Last Updated: Nov 13, 2026"), the reference of
+        the text-generation endpoint ``AioGeneration`` calls: "seed integer
+        (Optional) A random number seed. This parameter is used to ensure
+        reproducible results with the same input and parameters. If you pass
+        the same seed value in a call and other parameters remain unchanged,
+        the model returns the same result as much as possible. Value range:
+        [0,2^31-1]. When you call over HTTP, place seed in the parameters
+        object." The SDK forwards an unknown keyword into ``parameters``
+        (``Generation._build_input_parameters``). A request with image bytes
+        goes to the multimodal endpoint, whose reference was not read for
+        this, so it gets no seed.
+        """
+        return not self._has_image_bytes(request)
+
     def classify_error(self, exc: Exception) -> ErrorCategory:
         """Map DashScope-surfaced failures to ladder categories.
 
@@ -504,6 +522,10 @@ class DashScopeProvider(LLMProvider):
         response_format = openai_response_format(request)
         if response_format is not None:
             kwargs["response_format"] = response_format
+        # 2026-11-13: the reproducibility seed, under DashScope's own name
+        # (``seed_supported``). No seed -> no kwarg, the wire stays as before.
+        if request.seed is not None:
+            kwargs["seed"] = request.seed
 
         with self._measure_latency() as timer:
             if has_images:

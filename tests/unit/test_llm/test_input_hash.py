@@ -55,6 +55,7 @@ class TestHashAttemptInput:
             ("deepseek_thinking", {"contents": [b"\x89PNG-one"]}),
             ("deepseek_thinking", {"contents": [b"\x89PNG-two", b"\x89PNG-one"]}),
             ("deepseek_thinking", {"response_schema": _SCHEMA_A}),
+            ("deepseek_thinking", {"seed": 20261113}),
         ],
         ids=[
             "provider",
@@ -68,6 +69,7 @@ class TestHashAttemptInput:
             "attachment-set",
             "attachment-order",
             "response-schema",
+            "seed",
         ],
     )
     def test_every_output_affecting_part_changes_the_hash(
@@ -77,6 +79,18 @@ class TestHashAttemptInput:
 
     def test_two_schemas_hash_apart(self) -> None:
         assert _hash(response_schema=_SCHEMA_A) != _hash(response_schema=_SCHEMA_B)
+
+    def test_two_seeds_hash_apart(self) -> None:
+        assert _hash(seed=1) != _hash(seed=2)
+
+    def test_no_seed_writes_no_key(self) -> None:
+        """A request without a seed hashes as before the field (2026-11-13)."""
+        plain = json.loads(canonical_attempt_input(LLMRequest(**_BASE), provider="p"))
+        seeded = json.loads(
+            canonical_attempt_input(LLMRequest(**_BASE, seed=7), provider="p")
+        )
+        assert "seed" not in plain
+        assert seeded == {**plain, "seed": 7}
 
     def test_schema_mode_is_part_of_the_input(self) -> None:
         strict = _hash(response_schema=_SCHEMA_A, schema_mode=SchemaMode.STRICT)

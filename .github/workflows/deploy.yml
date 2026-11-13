@@ -68,6 +68,16 @@ jobs:
               CONTAINERS_BEFORE="$CONTAINERS_BEFORE $svc=$id"
             done
 
+            echo "=== Tag current images as :previous ==="
+            # Tag current images as :previous before building so they are preserved
+            # for fast rollback and not pruned as dangling by cleanup.
+            # Rollback: for svc in app worker homework-worker; do docker tag course-supporter-$svc:previous course-supporter-$svc:latest; done && docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d
+            for svc in $BUILD_SERVICES; do
+              if docker image inspect "course-supporter-$svc:latest" >/dev/null 2>&1; then
+                docker tag "course-supporter-$svc:latest" "course-supporter-$svc:previous"
+              fi
+            done
+
             echo "=== Build ==="
             docker compose --env-file .env.prod -f docker-compose.prod.yaml build $BUILD_SERVICES
 
@@ -156,10 +166,6 @@ jobs:
               echo "Recreated:$RECREATED"
             fi
 
-            echo "=== Cleanup ==="
-            docker image prune -af --filter "until=24h"
-            docker builder prune -af --filter "until=24h"
-
             echo "=== Deploy complete: $GIT_SHA at $(date) ==="
 
       - name: Smoke test
@@ -177,3 +183,47 @@ jobs:
             ./scripts/smoke_test.sh \
                 https://api.pythoncourse.me \
                 ${{ secrets.SMOKE_TEST_API_KEY }}
+
+      - name: Prune old images and build cache
+        if: success()
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "=== Disk usage before cleanup ==="
+            docker system df || true
+
+            echo "=== Prune Docker images & builder cache ==="
+            if ! (
+              set -e
+              # 1. Prune dangling images scoped strictly to course-supporter
+              echo "Pruning dangling course-supporter images..."
+              docker image prune -f --filter "label=com.docker.compose.project=course-supporter"
+
+              # 2. Retain current (:latest) and one previous (:previous) image per service.
+              #    Remove any older images by ID.
+              BUILD_SERVICES="app worker homework-worker"
+              for svc in $BUILD_SERVICES; do
+                echo "Checking retention for $svc..."
+                OLD_IDS=$(docker images --filter "label=com.docker.compose.project=course-supporter" --filter "label=com.docker.compose.service=$svc" -q | tail -n +3 | sort -u || true)
+                if [ -n "$OLD_IDS" ]; then
+                  echo "Removing older image IDs for $svc: $OLD_IDS"
+                  for img_id in $OLD_IDS; do
+                    docker rmi "$img_id" || true
+                  done
+                else
+                  echo "No older images to remove for $svc (at most 2 images exist)"
+                fi
+              done
+
+              # 3. Prune builder cache older than 7 days (168h)
+              echo "Pruning build cache older than 168h..."
+              docker builder prune -f --filter "until=168h"
+            ); then
+              echo "::warning::Docker image cleanup encountered errors"
+            fi
+
+            echo "=== Disk usage after cleanup ==="
+            docker system df || true

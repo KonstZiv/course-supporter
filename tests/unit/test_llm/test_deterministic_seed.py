@@ -34,6 +34,7 @@ import pytest
 import structlog
 from structlog.testing import capture_logs
 
+from course_supporter.homework import criteria_verdicts
 from course_supporter.homework.path_config import load_path_config, model_stages
 from course_supporter.homework.path_stages import router_stage_config
 from course_supporter.llm.ladder_config import LadderConfig
@@ -348,3 +349,9 @@ class TestPathStagesCarryTheFlag:
             assert router_stage_config(stages[name]).deterministic is True
         for name in ("review_explanation", "project_review_explanation"):
             assert router_stage_config(stages[name]).deterministic is False
+
+
+def test_the_verdict_rules_were_raised_for_the_seed() -> None:
+    """The seed changes what the verdict stages answer: the version moved 5 -> 6,
+    so a review written before it is never given again as a copy."""
+    assert criteria_verdicts.VERDICT_RULES_VERSION >= 6

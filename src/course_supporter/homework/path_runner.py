@@ -39,7 +39,7 @@ Failure:
 from __future__ import annotations
 
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -94,7 +94,13 @@ if TYPE_CHECKING:
     from course_supporter.homework.path_config import PathConfig
     from course_supporter.homework.path_selection import PathChoice
     from course_supporter.llm.stage_router import StageRouter
-    from course_supporter.storage.orm import HomeworkSubmission, Student, Tenant
+    from course_supporter.security.schemas import ScreenFlag
+    from course_supporter.storage.orm import (
+        AuthoredDocument,
+        HomeworkSubmission,
+        Student,
+        Tenant,
+    )
     from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger(__name__)
@@ -575,6 +581,97 @@ async def _student_and_tenant(
     return student, tenant
 
 
+@dataclass(frozen=True, slots=True)
+class DoorLanguages:
+    """The languages the doors read one submission in.
+
+    Attributes:
+        task: The submission's task, or ``None`` when it is gone.
+        review: The code of the language the review is written in, if any.
+        verify: The languages Stage 1 verifies the work's text against: the
+            course's, then the review's, each once.
+    """
+
+    task: AuthoredDocument | None
+    review: str | None
+    verify: list[str]
+
+
+async def door_languages(
+    session: AsyncSession, submission: HomeworkSubmission
+) -> DoorLanguages:
+    """The languages of the doors (:func:`_open_the_doors`): reads, never writes.
+
+    Public so a reader of production — ``scripts/record_evaluation_input.py`` —
+    opens the doors with the code the body opens them with.
+    """
+    from course_supporter.language import resolve_review_language
+    from course_supporter.storage.authored_document_repository import (
+        AuthoredDocumentRepository,
+    )
+    from course_supporter.storage.student_repository import StudentRepository
+
+    student = await StudentRepository(session).get_by_id(submission.student_id)
+    task_doc = await AuthoredDocumentRepository(session).get_by_id(
+        submission.authored_document_id
+    )
+    review_language = resolve_review_language(
+        explicit=submission.response_language,
+        preferred=student.preferred_language if student else None,
+        course=task_doc.language if task_doc is not None else None,
+    )
+    course_language = task_doc.language if task_doc is not None else None
+    verify = [
+        code for code in dict.fromkeys([course_language, review_language.code]) if code
+    ]
+    return DoorLanguages(task=task_doc, review=review_language.code, verify=verify)
+
+
+def read_text_work(
+    *,
+    filename: str,
+    file_bytes: bytes,
+    languages: list[str],
+    note_flags: tuple[ScreenFlag, ...],
+) -> DoorReading:
+    """The doors of a file or an archive — every type but a test and a project.
+
+    Stage 1 and the assembly of the work, file by file (:func:`_open_the_doors`).
+    Pure: reads the bytes it is given and writes nothing. Public so a reader of
+    production — ``scripts/record_evaluation_input.py`` — reads a submission
+    with the code the body reads it with.
+
+    Raises:
+        SecurityRejectedError: The doors refuse the work; the body records the
+            refusal, a reader only reports it.
+    """
+    from course_supporter.homework.doors import (
+        assemble_submission_work,
+        extract_document_text,
+    )
+    from course_supporter.normalizer.classify import denylist_prefix
+    from course_supporter.security.stage1 import run_stage1
+
+    stage1_result = run_stage1(
+        filename=filename,
+        content=file_bytes,
+        context="homework",
+        languages=languages,
+        archive_skip_matcher=denylist_prefix,
+        document_extractor=extract_document_text,
+    )
+    text, not_opened, files = assemble_submission_work(
+        stage1_result, file_bytes=file_bytes, filename=filename
+    )
+    return DoorReading(
+        text=text,
+        not_opened=not_opened,
+        recovered_encoding=stage1_result.recovered_encoding,
+        flags=(*stage1_result.flags, *note_flags),
+        files=files,
+    )
+
+
 async def _open_the_doors(
     session: AsyncSession,
     s3: S3Client,
@@ -590,7 +687,9 @@ async def _open_the_doors(
     Stage 1, the text budget, the project normalizer — and the same two shapes
     of refusal. Deliberately NOT shared with today's body: sharing would mean
     editing it, and it is not to be touched while it serves production
-    (``DD-SP-AM`` records the same choice for the ladders).
+    (``DD-SP-AM`` records the same choice for the ladders). The read-only
+    parts — :func:`door_languages` and :func:`read_text_work` — are public, so
+    a reader of production opens the doors with the same code.
 
     What was read is kept whole (task 11, decision 9): the text, what was
     not opened, how a single file was read, and what the signal screen noticed
@@ -601,22 +700,13 @@ async def _open_the_doors(
     doors refused and already wrote why.
     """
     from course_supporter.homework.doors import (
-        assemble_submission_work,
-        extract_document_text,
         persist_door_refusal,
         screen_student_note,
     )
     from course_supporter.homework.project_submission import (
         process_project_submission,
     )
-    from course_supporter.language import resolve_review_language
-    from course_supporter.normalizer.classify import denylist_prefix
     from course_supporter.security.exceptions import SecurityRejectedError
-    from course_supporter.security.stage1 import run_stage1
-    from course_supporter.storage.authored_document_repository import (
-        AuthoredDocumentRepository,
-    )
-    from course_supporter.storage.student_repository import StudentRepository
 
     s3_key = s3.extract_key(submission.file_url)
     if s3_key is None:
@@ -624,26 +714,15 @@ async def _open_the_doors(
         raise ValueError(msg)
     file_path = await s3.download_file(s3_key)
 
-    student = await StudentRepository(session).get_by_id(submission.student_id)
-    task_doc = await AuthoredDocumentRepository(session).get_by_id(
-        submission.authored_document_id
-    )
-    review_language = resolve_review_language(
-        explicit=submission.response_language,
-        preferred=student.preferred_language if student else None,
-        course=task_doc.language if task_doc is not None else None,
-    )
-    course_language = task_doc.language if task_doc is not None else None
-    verify_languages = [
-        code for code in dict.fromkeys([course_language, review_language.code]) if code
-    ]
+    languages = await door_languages(session, submission)
+    task_doc = languages.task
 
     try:
         note_flags = screen_student_note(submission.student_note)
     except SecurityRejectedError as exc:
         await persist_door_refusal(session, hw_repo, submission.id, exc)
         log.warning("path_door_refused", category=exc.category.value)
-        return file_path, None, review_language.code
+        return file_path, None, languages.review
 
     file_bytes = file_path.read_bytes()
     if task_doc is not None and task_doc.task_type == AssignmentType.TEST.value:
@@ -654,7 +733,7 @@ async def _open_the_doors(
         return (
             file_path,
             DoorReading(text=file_bytes.decode("utf-8"), flags=note_flags),
-            review_language.code,
+            languages.review,
         )
 
     if task_doc is not None and task_doc.task_type == AssignmentType.PROJECT.value:
@@ -667,43 +746,29 @@ async def _open_the_doors(
             jid=job_id,
             file_bytes=file_bytes,
             raw_key=s3_key,
-            languages=verify_languages,
+            languages=languages.verify,
             base_corpus=True,
         )
         if project is None:
-            return file_path, None, review_language.code
+            return file_path, None, languages.review
         return (
             file_path,
             replace(project, flags=(*project.flags, *note_flags)),
-            review_language.code,
+            languages.review,
         )
 
     try:
-        stage1_result = run_stage1(
+        reading = read_text_work(
             filename=submission.original_filename or file_path.name,
-            content=file_bytes,
-            context="homework",
-            languages=verify_languages,
-            archive_skip_matcher=denylist_prefix,
-            document_extractor=extract_document_text,
-        )
-        text, not_opened, files = assemble_submission_work(
-            stage1_result,
             file_bytes=file_bytes,
-            filename=(submission.original_filename or file_path.name),
+            languages=languages.verify,
+            note_flags=note_flags,
         )
     except SecurityRejectedError as exc:
         await persist_door_refusal(session, hw_repo, submission.id, exc)
         log.warning("path_door_refused", category=exc.category.value)
-        return file_path, None, review_language.code
-    reading = DoorReading(
-        text=text,
-        not_opened=not_opened,
-        recovered_encoding=stage1_result.recovered_encoding,
-        flags=(*stage1_result.flags, *note_flags),
-        files=files,
-    )
-    return file_path, reading, review_language.code
+        return file_path, None, languages.review
+    return file_path, reading, languages.review
 
 
 async def _run_stage(

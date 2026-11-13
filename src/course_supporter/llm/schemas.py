@@ -57,6 +57,12 @@ class LLMRequest(BaseModel):
     # the answer, not its content.
     response_schema: dict[str, Any] | None = None
     schema_mode: SchemaMode | None = None
+    # The reproducibility seed (2026-11-13). Set by the router on the requests
+    # of a ``deterministic`` stage, and only for a connector that declares it
+    # can send one (``LLMProvider.seed_supported``); the connector puts it on
+    # the wire under its vendor's name. ``None`` (default) adds nothing to any
+    # wire, so a request without it is sent exactly as before the field.
+    seed: int | None = None
 
     @model_validator(mode="after")
     def _schema_needs_json(self) -> Self:

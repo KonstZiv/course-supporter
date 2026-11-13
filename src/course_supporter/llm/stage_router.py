@@ -37,6 +37,14 @@ behaviour is unchanged by any of it -- these are writes, not decisions:
   abandoned row carries no reason of its own -- the attempt row before it
   does -- so a failure is never counted twice.
 
+A ``deterministic`` stage (2026-11-13, :mod:`~course_supporter.llm.reproducibility`)
+sends temperature 0 explicitly and a fixed seed to every rung whose connector
+can send one; a stage without the flag sends exactly what it sent before. The
+register has no column for the seed and no JSON field for it, so each attempt
+of a deterministic stage logs ``stage_router_reproducibility`` instead -- with
+the attempt's ``input_hash``, which joins the line to its register row. The
+seed is part of that hash (``llm/input_hash.py``).
+
 Limitations carried forward to Phase 1+:
 
 * The legacy :class:`LLMRequest` shape collapses prompts to a
@@ -85,6 +93,10 @@ from course_supporter.llm.ladder_config import LadderConfig, LadderEntry, StageC
 from course_supporter.llm.pricing import PricedCall, TokenUsage, price_token_call
 from course_supporter.llm.prompt_loader_md import StagePrompt, load_prompt
 from course_supporter.llm.registry import Capability, ModelRegistryConfig
+from course_supporter.llm.reproducibility import (
+    DETERMINISTIC_TEMPERATURE,
+    REPRODUCIBILITY_SEED,
+)
 from course_supporter.llm.schemas import LLMRequest, LLMResponse, SchemaMode
 from course_supporter.llm.token_budget import (
     estimate_request_input_tokens,
@@ -137,6 +149,7 @@ class _StageRecord:
     prompt_ref: str
     prompt_hash: str
     record_output: bool
+    deterministic: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,6 +533,7 @@ class StageRouter:
             # rendered text is per-call input and lives in input_hash.
             prompt_hash=template.content_hash(),
             record_output=stage.record_output,
+            deterministic=stage.deterministic,
         )
         prompt = template.render(**render_context)
 
@@ -635,6 +649,8 @@ class StageRouter:
                 contents=contents,
                 expects_json=expects_json,
                 response_schema=response_schema,
+                deterministic=stage.deterministic,
+                provider=provider,
             )
             # Before the call, outside the attempt's ``except``: a request the
             # connector cannot send is a configuration fault, and the next
@@ -722,6 +738,8 @@ class StageRouter:
         contents: list[bytes] | None = None,
         expects_json: bool = False,
         response_schema: dict[str, Any] | None = None,
+        deterministic: bool = False,
+        provider: LLMProvider | None = None,
     ) -> LLMRequest:
         """Map StagePrompt + LadderEntry to the legacy LLMRequest.
 
@@ -734,6 +752,11 @@ class StageRouter:
         absent from the registry does ``None`` fall through to the
         provider-side default
         (e.g. ``DashScopeProvider.default_max_output_tokens``).
+
+        A ``deterministic`` stage (2026-11-13) gets temperature 0 set
+        explicitly and, when ``provider`` says it can send one
+        (:meth:`LLMProvider.seed_supported`), the fixed seed. Without the flag
+        the request is built exactly as before it existed.
         """
         # H — max_tokens registry fallback. Rung pin wins (status quo);
         # unpinned rung resolves the registry's per-model cap (closes the
@@ -757,7 +780,7 @@ class StageRouter:
                 schema_mode = SchemaMode.STRICT
             elif Capability.JSON_MODE in registry_model.capabilities:
                 schema_mode = SchemaMode.JSON
-        return LLMRequest(
+        request = LLMRequest(
             prompt=prompt.user or "",
             system_prompt=prompt.system,
             model=entry.model,
@@ -770,6 +793,15 @@ class StageRouter:
             response_schema=response_schema,
             schema_mode=schema_mode,
         )
+        if not deterministic:
+            return request
+        reproducible: dict[str, Any] = {"temperature": DETERMINISTIC_TEMPERATURE}
+        # Only where the connector can carry it: elsewhere a seed would be
+        # refused before the call (``LLMProvider.check_request``), and the
+        # rung is still worth asking at temperature 0.
+        if provider is not None and provider.seed_supported(request):
+            reproducible["seed"] = REPRODUCIBILITY_SEED
+        return request.model_copy(update=reproducible)
 
     async def _attempt_entry(
         self,
@@ -933,6 +965,20 @@ class StageRouter:
         validator: whatever it said would start a structural retry under the
         same ceiling. The row says why the answer was dropped instead.
         """
+        if record.deterministic:
+            # The register has no field for the seed (no migration in this
+            # change); the line carries the attempt's ``input_hash`` so it
+            # joins the register row written below.
+            logger.info(
+                "stage_router_reproducibility",
+                stage=record.stage_name,
+                provider=entry.provider,
+                model=entry.model,
+                seed_sent=request.seed is not None,
+                seed=request.seed,
+                temperature=request.temperature,
+                input_hash=hash_attempt_input(request, provider=entry.provider),
+            )
         started_at = _utc_now()
         start = time.perf_counter()
         response: LLMResponse | None = None

@@ -160,7 +160,7 @@ async def evaluate_criteria(
         task_text=text,
         criteria=listed.criteria,
         submission_text=context.submission_text,
-        language=await _course_language(context.session, submission),
+        language=await course_language(context.session, submission),
     )
     agent = CriteriaEvaluatorAgent(context.router)
 
@@ -252,13 +252,14 @@ def _on_the_rung(execution: StageExecution, evaluated: Evaluated) -> StageExecut
     raise RuntimeError(msg)
 
 
-async def _course_language(
+async def course_language(
     session: AsyncSession, submission: HomeworkSubmission
 ) -> str | None:
     """The course's language by name — for the sentences on what is missing.
 
     The language of the criteria list (``PRE-FLIGHT.md`` 9.9): the task's own,
-    else the course root's, which a task inherits when it has none.
+    else the course root's, which a task inherits when it has none. Public so
+    ``scripts/record_evaluation_input.py`` reads it as the stage does.
     """
     document = await session.get(AuthoredDocument, submission.authored_document_id)
     code = document.language if document is not None else None

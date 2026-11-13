@@ -232,15 +232,49 @@ def validate_stage_executors(stage_names: Collection[str]) -> None:
         )
 
 
+def router_stage_config(stage: ModelStage) -> StageConfig:
+    """A path stage as the router runs it: the same fields, one decision added.
+
+    ``ModelStage`` and ``StageConfig`` carry the same router-facing fields by
+    construction (mentor-rebuild task 03) and their rungs the same four, so this
+    is a translation and not a decision — except the stage's output ceiling on
+    unpinned rungs, which the router has no notion of. ``deterministic`` is
+    router-facing since 2026-11-13: until then it was dropped here, so no
+    request of a path stage was sent any differently for it.
+    """
+    return StageConfig(
+        prompt_ref=stage.prompt_ref,
+        requires=list(stage.requires),
+        ladder=[
+            LadderEntry(
+                provider=rung.provider,
+                model=rung.model,
+                reasoning=rung.reasoning,
+                # An unpinned rung takes the stage's output ceiling, not the
+                # model's: the router has no notion of a stage ceiling and
+                # would fall back to the registry cap (65536 for
+                # gemini-3.5-flash-lite), which then both goes on the wire
+                # and prices the attempt far past the money ceiling. Pinned
+                # here, the one number serves the request and the estimate.
+                max_output_tokens=(
+                    rung.max_output_tokens or stage.ceilings.output_tokens
+                ),
+            )
+            for rung in stage.ladder
+        ],
+        input_budget_ratio=stage.input_budget_ratio,
+        record_output=stage.record_output,
+        deterministic=stage.deterministic,
+    )
+
+
 def _execution(context: StageContext) -> StageExecution:
     """Map a path stage's description onto how the router should run it.
 
-    ``PathStage`` and ``StageConfig`` carry the same router-facing fields by
-    construction (mentor-rebuild task 03) and their rungs the same four, so this
-    is a translation and not a decision. The three limits that have no
-    counterpart on a ladder stage — no descent past a spent output ceiling, the
-    money ceiling, and the stage's output ceiling on unpinned rungs — are what
-    make it a path stage rather than a copy of one.
+    The stage itself through :func:`router_stage_config`. The three limits that
+    have no counterpart on a ladder stage — no descent past a spent output
+    ceiling, the money ceiling, and the stage's output ceiling on unpinned
+    rungs — are what make it a path stage rather than a copy of one.
 
     Raises:
         TypeError: The stage is a code stage — it has no ladder to run.
@@ -250,29 +284,7 @@ def _execution(context: StageContext) -> StageExecution:
         msg = f"stage {context.stage_name!r} is a code stage: no model runs it"
         raise TypeError(msg)
     return StageExecution(
-        stage=StageConfig(
-            prompt_ref=stage.prompt_ref,
-            requires=list(stage.requires),
-            ladder=[
-                LadderEntry(
-                    provider=rung.provider,
-                    model=rung.model,
-                    reasoning=rung.reasoning,
-                    # An unpinned rung takes the stage's output ceiling, not the
-                    # model's: the router has no notion of a stage ceiling and
-                    # would fall back to the registry cap (65536 for
-                    # gemini-3.5-flash-lite), which then both goes on the wire
-                    # and prices the attempt far past the money ceiling. Pinned
-                    # here, the one number serves the request and the estimate.
-                    max_output_tokens=(
-                        rung.max_output_tokens or stage.ceilings.output_tokens
-                    ),
-                )
-                for rung in stage.ladder
-            ],
-            input_budget_ratio=stage.input_budget_ratio,
-            record_output=stage.record_output,
-        ),
+        stage=router_stage_config(stage),
         stage_name=context.stage_name,
         stop_on_output_ceiling=True,
         money_ceiling_usd=stage.ceilings.money_usd,

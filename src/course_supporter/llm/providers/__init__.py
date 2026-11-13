@@ -16,6 +16,7 @@ from course_supporter.llm.providers.dashscope import DashScopeProvider
 from course_supporter.llm.providers.deepseek import DeepSeekProvider
 from course_supporter.llm.providers.deepseek_thinking import DeepSeekThinkingProvider
 from course_supporter.llm.providers.gemini import GeminiProvider
+from course_supporter.llm.providers.mistral import MistralProvider
 from course_supporter.llm.providers.openai_compat import OpenAICompatProvider
 
 PROVIDER_REGISTRY: dict[str, type[LLMProvider]] = {
@@ -24,7 +25,7 @@ PROVIDER_REGISTRY: dict[str, type[LLMProvider]] = {
     "openai": OpenAICompatProvider,
     "deepseek": DeepSeekProvider,
     "deepseek_thinking": DeepSeekThinkingProvider,
-    "mistral": OpenAICompatProvider,
+    "mistral": MistralProvider,
     "dashscope": DashScopeProvider,
 }
 
@@ -36,5 +37,6 @@ __all__ = [
     "DeepSeekThinkingProvider",
     "GeminiProvider",
     "LLMProvider",
+    "MistralProvider",
     "OpenAICompatProvider",
 ]

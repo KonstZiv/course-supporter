@@ -53,7 +53,7 @@ from course_supporter.criteria_kinds import (
     WeightCategory,
 )
 from course_supporter.homework.criteria_evaluation import (
-    _course_language,
+    course_language,
     evaluate_criteria,
 )
 from course_supporter.homework.criteria_form import Criterion
@@ -1278,7 +1278,7 @@ class TestATaskWithoutABase:
             task_text=text,
             criteria=_CRITERIA,
             submission_text=_WORK,
-            language=await _course_language(db_session, submission),
+            language=await course_language(db_session, submission),
         )
         expected = evaluation_render_context(
             shown, expected=["c1", "c2.p1", "c2.p2"], repeat=[]

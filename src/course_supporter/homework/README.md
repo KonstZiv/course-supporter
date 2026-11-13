@@ -182,7 +182,7 @@ mismatch` заборонений так само, як `→ reviewing`). А як
    | `input_budget_ratio` | частка вікна моделі під вхід, або `null` — «не оцінювати, щаблів не пропускати» |
    | `record_output` | чи писати вихід у реєстр викликів |
    | `ladder` | щаблі: `provider`, `model`, `reasoning`, `max_output_tokens` — кожен ключ обов'язковий, `null` є значенням |
-   | `deterministic` | чи детерміновані налаштування |
+   | `deterministic` | чи детерміновані налаштування: `true` — маршрутизатор ставить кожному запиту temperature 0 явно й фіксоване зерно відтворюваності тим постачальникам, чия документація його називає (DashScope `seed`, Mistral `random_seed`; `llm/reproducibility.py`); `false` — запит такий самий, як до того, як позначку почали читати |
    | `ceilings` | `tool_steps`, `money_usd`, `output_tokens` |
 
 2. **Додайте ім'я стадії** у потрібні шляхи розділу `task_types`.

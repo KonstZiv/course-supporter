@@ -161,6 +161,19 @@ class OpenAICompatProvider(LLMProvider):
         """
         return {}
 
+    def _seed_body_fields(self, seed: int) -> dict[str, Any]:
+        """The request-body fields that carry ``seed`` on this vendor's wire.
+
+        Called only for a request that carries a seed, which the router sets
+        only where :meth:`seed_supported` allows it. The fields go into
+        ``extra_body`` beside whatever :meth:`_extra_create_kwargs` puts there.
+        Every connector of this family that does not override it — OpenAI,
+        DeepSeek, deepseek_thinking — declares no seed (no documentation of one
+        was read for them), so a seed reaching it is refused, never dropped.
+        """
+        msg = f"{self.provider_name}: this connector sends no reproducibility seed"
+        raise RequestConfigError(msg)
+
     def check_request(self, request: LLMRequest) -> None:
         """JSON mode needs the word "json" in the messages (task 09a).
 
@@ -168,8 +181,10 @@ class OpenAICompatProvider(LLMProvider):
         with HTTP 400 unless a message mentions JSON; Mistral shares this
         connector and the rule. Caught here, before the call, it is a
         configuration error the stage's prompt has to fix -- not a refusal
-        that silently descends the ladder.
+        that silently descends the ladder. The base check (a seed this
+        connector cannot send) runs first.
         """
+        super().check_request(request)
         if request.schema_mode is SchemaMode.JSON and not mentions_json(request):
             msg = (
                 f"{self.provider_name}: JSON mode requires the word 'json' in "
@@ -244,6 +259,19 @@ class OpenAICompatProvider(LLMProvider):
         if response_format is not None:
             schema_kwargs["response_format"] = response_format
 
+        # 2026-11-13: a reproducibility seed rides in ``extra_body`` beside the
+        # vendor hook's own fields. Without a seed the hook's kwargs go out
+        # untouched -- the wire is exactly what it was before seeds.
+        vendor_kwargs = self._extra_create_kwargs()
+        if request.seed is not None:
+            vendor_kwargs = {
+                **vendor_kwargs,
+                "extra_body": {
+                    **vendor_kwargs.get("extra_body", {}),
+                    **self._seed_body_fields(request.seed),
+                },
+            }
+
         client = self._next_client()
         with self._measure_latency() as timer:
             response = await client.chat.completions.create(
@@ -252,7 +280,7 @@ class OpenAICompatProvider(LLMProvider):
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 **schema_kwargs,
-                **self._extra_create_kwargs(),
+                **vendor_kwargs,
             )
 
         choice = response.choices[0]

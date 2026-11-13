@@ -119,6 +119,9 @@ class StoredVerdict(Protocol):
     @property
     def safeguard_fired(self) -> bool: ...
 
+    @property
+    def quote_from_base(self) -> bool: ...
+
 
 @dataclass(frozen=True, slots=True)
 class JudgedItem:
@@ -142,6 +145,12 @@ class JudgedItem:
             would put words in the student's mouth.
         kept_from_earlier: For "met" — the resubmission safeguard kept the
             "met" of an earlier submission whose line is still in the work.
+        quote_from_base: For "not met" — the item fell for a quote of the
+            author's code: what it asks for was shown only in the project's
+            base, never in the student's files (project chain K3). Not the
+            same as "not done", nor as "not found": the explanation of a
+            project says so (chain K4). Never true outside a project, which
+            alone has a base.
     """
 
     id: str
@@ -151,6 +160,7 @@ class JudgedItem:
     missing: str | None = None
     quote_not_found: bool = False
     kept_from_earlier: bool = False
+    quote_from_base: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +279,7 @@ def _judged(row: StoredVerdict) -> JudgedItem:
             verdict=verdict,
             missing=row.missing,
             quote_not_found=row.quote_not_found,
+            quote_from_base=row.quote_from_base,
         )
     lines = (
         (row.quote_line_start, row.quote_line_end)

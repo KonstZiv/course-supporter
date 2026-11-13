@@ -27,6 +27,9 @@ Interface:
       :attr:`DoorReading.safety_text` is the one place the safety check's
       input is cut from the text: the student's files, without the lines the
       doors add for the models that review the work.
+      :attr:`DoorReading.student_files_text` is its twin for a project on the
+      new path (chain K4): the student's files alone, without the delta
+      context's trusted block and the author's files.
     * :func:`screen_student_note` — the comment through the one text screen,
       for its flags (task 11, decision 10).
     * :func:`persist_door_refusal` — the one shape a refusal at the doors is
@@ -118,6 +121,29 @@ class DoorReading:
         unopened there is no block, and the text comes back byte for byte.
         """
         return self.text.removesuffix(not_opened_block(self.not_opened))
+
+    @property
+    def student_files_text(self) -> str:
+        """What Stage 2 reads of a project on the new path: its student's files.
+
+        A project's :attr:`text` is the delta context the reviewing models
+        read (``homework/mentor_context.py``): it opens with the platform's
+        trusted block -- the base's tree, the summary of changes, the metrics
+        -- and carries the author's unchanged files that a changed one names,
+        beside the student's own. None of that is the student's, and on an
+        agents course the author's code may well hold the very phrases the
+        check looks for. So the check reads :attr:`files` alone -- the
+        student's new and changed files (project chain K1) -- each under the
+        frame an archive's member has, ``--- path ---``: no trusted block, no
+        neighbour, no block naming what was not opened (chain K4, as
+        :attr:`safety_text` for that block). Today's Mentor does not read it:
+        its door carries no files.
+        """
+        from course_supporter.homework.text_budget import ENTRY_FRAME
+
+        return "\n".join(
+            ENTRY_FRAME.format(name=file.name) + file.text for file in self.files
+        )
 
 
 def carry_door_reading(verdict: SafetyResult, reading: DoorReading) -> None:

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
 import yaml
 
 from course_supporter.config import get_settings
+from course_supporter.homework.evaluator_version import evaluator_version
 from course_supporter.homework.path_config import (
     CodeStage,
     ModelStage,
@@ -22,6 +24,7 @@ from course_supporter.homework.path_config import (
     validate_path_config,
 )
 from course_supporter.homework.path_stages import validate_stage_executors
+from course_supporter.homework.text_budget import path_context_budget_chars
 from course_supporter.llm.ladder_config import load_ladder_config
 from course_supporter.llm.registry import ModelRegistryConfig, load_registry
 from course_supporter.models.source import AssignmentType
@@ -230,3 +233,204 @@ class TestShortTaskPathsByConfigurationAlone:
         assert described == 12
         key = PathKey(AssignmentType.SHORT_TASK, SubmissionState.FIRST)
         assert path_ceiling_estimate(edited, key) == pytest.approx(0.10)
+
+
+# Project chain K4: each project stage, its text twin, its prompt, its money.
+_PROJECT_STAGES = {
+    "project_criteria_evaluation": (
+        "criteria_evaluation",
+        "prompts/criteria_evaluation_project/v1.md",
+        0.56,
+    ),
+    "project_review_explanation": (
+        "review_explanation",
+        "prompts/review_explanation_project/v1.md",
+        0.24,
+    ),
+}
+# What the twins' money ceilings were counted on (config/submission_paths.yaml):
+# the router's characters a token, the text stages' largest inputs in tokens,
+# and the reserve for qwen's reasoning on each of its requests.
+_CHARS_PER_TOKEN = 3.5
+_TEXT_EVALUATION_TOKENS = 56_021
+_TEXT_EXPLANATION_TOKENS = 77_017
+_QWEN_REASONING_TOKENS = 10_000
+_CRITERIA = 37
+_FLAG_IN_JSON = len(', "quote_from_base": true')
+
+
+def _price(
+    registry: ModelRegistryConfig, model: str, tokens_in: int, out: int
+) -> float:
+    cost = registry.models[model].cost_per_1k
+    assert cost is not None, model
+    return (tokens_in * cost.input + out * cost.output) / 1000
+
+
+def _over(prompt: str, twin: str) -> int:
+    """Tokens a project prompt adds to its twin's, at the router's estimate."""
+    extra = len(Path(prompt).read_text(encoding="utf-8")) - len(
+        Path(twin).read_text(encoding="utf-8")
+    )
+    return math.ceil(extra / _CHARS_PER_TOKEN)
+
+
+class TestTheProjectsOwnStages:
+    """Project chain K4: a project's evaluation and explanation, with their own
+    prompts and ceilings, defined and runnable — and on no path yet."""
+
+    @pytest.mark.parametrize("name", sorted(_PROJECT_STAGES))
+    def test_a_stage_is_its_text_twin_but_for_the_prompt_and_the_money(
+        self, config: PathConfig, name: str
+    ) -> None:
+        twin_name, prompt, money = _PROJECT_STAGES[name]
+        stage, twin = config.stages[name], config.stages[twin_name]
+        assert isinstance(stage, ModelStage)
+        assert isinstance(twin, ModelStage)
+
+        assert stage.prompt_ref == prompt
+        assert stage.ceilings.money_usd == money
+        own = {"prompt_ref": True, "ceilings": {"money_usd"}}
+        assert stage.model_dump(exclude=own) == twin.model_dump(exclude=own)
+
+    def test_no_path_of_any_type_lists_them(self, config: PathConfig) -> None:
+        """Lock e: the switch of ``project`` is a later change, with its own
+        live measurement; until then today's Mentor serves it."""
+        listed = {
+            name
+            for declared in config.task_types.values()
+            for stage_names in declared.paths.values()
+            for name in stage_names
+        }
+        assert listed.isdisjoint(_PROJECT_STAGES)
+        project = config.task_types[AssignmentType.PROJECT]
+        assert project.served_by is ServedBy.TODAYS_MENTOR
+
+    @pytest.mark.parametrize(
+        ("broken", "message"),
+        [
+            ({"prompt_ref": "prompts/criteria_evaluation_project/v9.md"}, "prompt"),
+            (
+                {
+                    "ladder": [
+                        {
+                            "provider": "dashscope",
+                            "model": "qwen-unknown",
+                            "reasoning": None,
+                            "max_output_tokens": 16384,
+                        }
+                    ]
+                },
+                "qwen-unknown",
+            ),
+            ({"requires": ["vision"]}, "lacks required capabilities"),
+        ],
+    )
+    def test_the_startup_check_reads_them_although_no_path_does(
+        self,
+        tmp_path: Path,
+        registry: ModelRegistryConfig,
+        broken: dict[str, object],
+        message: str,
+    ) -> None:
+        """Lock a: the boot refuses a broken project stage, path or no path —
+        its prompt, its ladder against the registry, its capabilities."""
+        raw = yaml.safe_load(_PATHS_FILE.read_text(encoding="utf-8"))
+        raw["stages"]["project_criteria_evaluation"].update(broken)
+        copy_path = tmp_path / "submission_paths.yaml"
+        copy_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="project_criteria_evaluation") as caught:
+            validate_path_config(load_path_config(copy_path), registry)
+        assert message in str(caught.value)
+
+    def test_a_stage_without_its_executor_stops_the_boot(
+        self, config: PathConfig
+    ) -> None:
+        stages = {**config.stages, "project_extra_stage": config.stages["safety"]}
+        with pytest.raises(ValueError, match="'project_extra_stage'"):
+            validate_stage_executors(stages)
+
+    def test_the_input_they_were_counted_on_is_the_projects_budget(
+        self, config: PathConfig, registry: ModelRegistryConfig
+    ) -> None:
+        """Both ceilings count the text stages' work of 131 072 characters: the
+        new path's budget for ``project`` — with the two stages on its path
+        or without them, the first rung of ``safety`` bounds it."""
+        today = path_context_budget_chars(AssignmentType.PROJECT, config, registry)
+        raw = config.model_dump(mode="json")
+        raw["task_types"]["project"]["paths"]["first"] += [
+            "project_criteria_evaluation",
+            "course_link_lookup",
+            "project_review_explanation",
+        ]
+        switched = path_context_budget_chars(
+            AssignmentType.PROJECT, PathConfig.model_validate(raw), registry
+        )
+
+        assert today == switched == 131_072
+
+    def test_the_evaluations_money_covers_its_dearest_attempts(
+        self, config: PathConfig, registry: ModelRegistryConfig
+    ) -> None:
+        """The arithmetic in the file, executed: the first request on each
+        rung, the repeat on qwen, qwen's reasoning on both its requests —
+        rounded up to the cent, and no more."""
+        stage = config.stages["project_criteria_evaluation"]
+        assert isinstance(stage, ModelStage)
+        tokens_in = _TEXT_EVALUATION_TOKENS + _over(
+            "prompts/criteria_evaluation_project/v1.md",
+            "prompts/criteria_evaluation/v1.md",
+        )
+        qwen = _price(registry, "qwen3.7-max", tokens_in, 16_384)
+        deepseek = _price(registry, "deepseek-v4-pro", tokens_in, 32_768)
+        reasoning = 2 * _price(registry, "qwen3.7-max", 0, _QWEN_REASONING_TOKENS)
+        dearest = 2 * qwen + deepseek + reasoning
+
+        assert tokens_in == 56_783
+        assert dearest == pytest.approx(0.550996, abs=1e-6)
+        assert dearest <= stage.ceilings.money_usd < dearest + 0.01
+
+    def test_the_explanations_money_covers_its_dearest_attempts(
+        self, config: PathConfig, registry: ModelRegistryConfig
+    ) -> None:
+        """As above: both rungs, qwen's reasoning, and the flag of the
+        author's code on every criterion of the 37 not met."""
+        stage = config.stages["project_review_explanation"]
+        assert isinstance(stage, ModelStage)
+        tokens_in = (
+            _TEXT_EXPLANATION_TOKENS
+            + _over(
+                "prompts/review_explanation_project/v1.md",
+                "prompts/review_explanation/v2.md",
+            )
+            + math.ceil(_CRITERIA * _FLAG_IN_JSON / _CHARS_PER_TOKEN)
+        )
+        qwen = _price(registry, "qwen3.7-max", tokens_in, 8_192)
+        deepseek = _price(registry, "deepseek-flash", tokens_in, 8_192)
+        reasoning = _price(registry, "qwen3.7-max", 0, _QWEN_REASONING_TOKENS)
+        dearest = qwen + deepseek + reasoning
+
+        assert tokens_in == 78_079
+        assert dearest == pytest.approx(0.235526, abs=1e-6)
+        assert dearest <= stage.ceilings.money_usd < dearest + 0.01
+        # Both rungs stay reachable: the second fits in what the first leaves.
+        assert stage.ceilings.money_usd - qwen >= deepseek
+
+    @pytest.mark.parametrize(
+        "task_type",
+        [AssignmentType.TASK, AssignmentType.SHORT_TASK, AssignmentType.TEST],
+    )
+    def test_they_leave_the_evaluator_version_of_every_type_where_it_was(
+        self, config: PathConfig, task_type: AssignmentType
+    ) -> None:
+        """A stage on no path is in no type's version: a review of unchanged
+        work is still given again (task 13), as before chain K4."""
+        raw = config.model_dump(mode="json")
+        for name in _PROJECT_STAGES:
+            del raw["stages"][name]
+        without = PathConfig.model_validate(raw)
+
+        assert evaluator_version(task_type, config) == evaluator_version(
+            task_type, without
+        )

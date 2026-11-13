@@ -7,14 +7,24 @@ rather than a second copy of them. Both are pinned here.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from tests._helpers.recorded_project import (
+    SECRET,
+    STATS,
+    STUDENTS_APP,
+    UTILS,
+    read_recorded_project,
+)
 
+from course_supporter.homework.criteria_verdicts import WorkFile
+from course_supporter.homework.doors import DoorReading, not_opened_block
 from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_config import (
     CodeStage,
@@ -28,6 +38,8 @@ from course_supporter.homework.path_stages import (
     ATTEMPT_CLASSIFIER,
     COURSE_LINK_LOOKUP,
     CRITERIA_EVALUATION,
+    PROJECT_CRITERIA_EVALUATION,
+    PROJECT_REVIEW_EXPLANATION,
     REVIEW_EXPLANATION,
     SAFETY,
     StageContext,
@@ -36,6 +48,8 @@ from course_supporter.homework.path_stages import (
     get_stage_executor,
     missing_stage_executors,
     register_stage_executor,
+    run_criteria_evaluation_stage,
+    run_review_explanation_stage,
     validate_stage_executors,
 )
 from course_supporter.llm.ladder_config import LadderConfig, LadderEntry, StageConfig
@@ -45,6 +59,8 @@ from course_supporter.llm.registry import ModelRegistryConfig, load_registry
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.llm.stage_router import StageExecution, StageRouter
 from course_supporter.models.source import AssignmentType
+from course_supporter.security.exceptions import ErrorCategory
+from course_supporter.security.schemas import NotOpenedEntry
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -132,8 +148,22 @@ class TestRegistry:
                 CRITERIA_EVALUATION,
                 COURSE_LINK_LOOKUP,
                 REVIEW_EXPLANATION,
+                PROJECT_CRITERIA_EVALUATION,
+                PROJECT_REVIEW_EXPLANATION,
             ]
         )
+
+    def test_a_projects_stages_run_the_text_stages_own_functions(self) -> None:
+        """Chain K4: the same executors under the project's names — another
+        description (prompt, ceilings), never a copy of the logic."""
+        assert get_stage_executor(PROJECT_CRITERIA_EVALUATION) is (
+            run_criteria_evaluation_stage
+        )
+        assert get_stage_executor(CRITERIA_EVALUATION) is run_criteria_evaluation_stage
+        assert get_stage_executor(PROJECT_REVIEW_EXPLANATION) is (
+            run_review_explanation_stage
+        )
+        assert get_stage_executor(REVIEW_EXPLANATION) is run_review_explanation_stage
 
     def test_every_stage_the_shipped_file_describes_has_an_executor(self) -> None:
         """Task 09b: both stages are described before any path uses them;
@@ -608,3 +638,121 @@ class TestStageOutputCeiling:
         await router.execute_for_stage("demo")
 
         assert provider.complete.await_args.args[0].max_tokens == 65536
+
+
+async def _what_safety_reads(
+    monkeypatch: pytest.MonkeyPatch, key: PathKey, door: DoorReading
+) -> str:
+    """The text the safety stage hands Stage 2 for ``door`` on ``key``'s path."""
+    seen: dict[str, str] = {}
+
+    async def _fake_check(text: str, **_kwargs: Any) -> Any:
+        seen["text"] = text
+        verdict = MagicMock()
+        verdict.is_safe = True
+        verdict.model_dump = lambda **_: {"source": "stage2"}
+        return verdict
+
+    monkeypatch.setattr(
+        "course_supporter.security.stage2.run_stage2_safety_check", _fake_check
+    )
+    monkeypatch.setattr(
+        "course_supporter.storage.homework_repository.HomeworkRepository",
+        lambda _session: AsyncMock(),
+    )
+    _no_course_nodes(monkeypatch)
+    context = replace(_context(), path_key=key, door=door, submission_text=door.text)
+
+    assert await get_stage_executor(SAFETY)(context) == StageOutcome.ok()
+    return seen["text"]
+
+
+# sha256 of the safety input today's Mentor hands Stage 2 for the recorded
+# project — the door's reading rebuilt as ``api/tasks.py`` rebuilds it, read
+# by ``safety_text`` — taken on main before chain K4 (b40dcf4).
+_TODAYS_PROJECT_SAFETY_SHA256 = (
+    "75b5289ec8bd899da95842473fb6246bdb7e27e7447611e9793572357f8462af"
+)
+
+
+class TestTheSafetyInput:
+    """Chain K4, lock g: on the new path the safety check of a project reads
+    the student's files alone; every other input is what it was."""
+
+    async def test_a_project_on_the_new_path_shows_only_the_students_files(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        reading = await read_recorded_project(monkeypatch)
+        key = PathKey(AssignmentType.PROJECT, SubmissionState.FIRST)
+
+        text = await _what_safety_reads(monkeypatch, key, reading)
+
+        assert (
+            text == "--- app.py ---\n" + STUDENTS_APP + "\n--- stats.py ---\n" + STATS
+        )
+        # No frame of the context, no trusted block, nothing of the author's,
+        # nothing named as not opened.
+        assert "@@MENTOR_CTX@@" not in text
+        assert "TRUSTED" not in text
+        assert "Change summary" not in text
+        assert UTILS not in text
+        assert "NOT OPENED" not in text
+        assert SECRET not in text
+        # ...while the reviewing stages still read all of it.
+        assert "@@MENTOR_CTX@@ TRUSTED" in reading.text
+        assert "type=NEIGHBOR path=utils.py" in reading.text
+
+    async def test_a_single_file_on_the_new_path_reads_as_before(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The branch is by the type: a text task's single file goes to the
+        check as it was read, without a frame put on it."""
+        body = "def solve(n):\n    return n\n"
+        door = DoorReading(text=body, files=(WorkFile("solution.py", body, True),))
+
+        text = await _what_safety_reads(monkeypatch, _KEY, door)
+
+        assert text.encode() == body.encode()
+
+    async def test_an_archive_on_the_new_path_reads_as_before(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An archive's text loses its block of what was not opened (#619)
+        and keeps every byte besides."""
+        entries = (
+            NotOpenedEntry(
+                arcname="data/sales.xls", reason=ErrorCategory.FORBIDDEN_TYPE, size=855
+            ),
+        )
+        body = "--- a.py ---\nx = 1\n\n--- b.py ---\ny = 2\n"
+        door = DoorReading(
+            text=body + not_opened_block(entries),
+            not_opened=entries,
+            files=(
+                WorkFile("a.py", "x = 1\n", True),
+                WorkFile("b.py", "y = 2\n", True),
+            ),
+        )
+
+        text = await _what_safety_reads(monkeypatch, _KEY, door)
+
+        assert text.encode() == body.encode()
+
+    async def test_todays_mentor_reads_a_project_byte_for_byte_as_before(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Today's Mentor rebuilds the door's reading without its files
+        (``api/tasks.py``) and hands Stage 2 ``safety_text``: the delta
+        context with its trusted block, as it always was."""
+        reading = await read_recorded_project(monkeypatch)
+        todays = DoorReading(
+            text=reading.text, not_opened=reading.not_opened, flags=reading.flags
+        )
+
+        sent = todays.safety_text
+
+        assert hashlib.sha256(sent.encode()).hexdigest() == (
+            _TODAYS_PROJECT_SAFETY_SHA256
+        )
+        assert sent.startswith("@@MENTOR_CTX@@ BEGIN\n@@MENTOR_CTX@@ TRUSTED")
+        assert todays.student_files_text == ""

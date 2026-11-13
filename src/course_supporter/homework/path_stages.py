@@ -42,6 +42,13 @@ Replacing one:
     hand anything to; its work lives in
     :mod:`course_supporter.homework.course_links`.
 
+    A project's evaluation and explanation (chain K4) are the same two
+    executors under their own names — ``project_criteria_evaluation`` and
+    ``project_review_explanation`` — so the stages take their own prompts and
+    ceilings from the configuration and no logic is copied: the door already
+    hands the evaluation a project's student files as the work, its base for
+    the rule on the author's quotes and its delta context as the text.
+
 Extending:
     A new stage is a definition in the configuration plus a function registered
     here. Nothing in the body changes, and the startup check refuses the
@@ -60,6 +67,7 @@ from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_config import ModelStage
 from course_supporter.llm.ladder_config import LadderEntry, StageConfig
 from course_supporter.llm.stage_router import StageExecution
+from course_supporter.models.source import AssignmentType
 
 if TYPE_CHECKING:
     from collections.abc import Collection
@@ -81,6 +89,8 @@ ATTEMPT_CLASSIFIER = "attempt_classifier"
 CRITERIA_EVALUATION = "criteria_evaluation"
 COURSE_LINK_LOOKUP = "course_link_lookup"
 REVIEW_EXPLANATION = "review_explanation"
+PROJECT_CRITERIA_EVALUATION = "project_criteria_evaluation"
+PROJECT_REVIEW_EXPLANATION = "project_review_explanation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,9 +113,14 @@ class StageContext:
     what the signal screen noticed -- is for the safety stage and the trace,
     never for a stage that reviews the work. The safety stage reads
     ``door.safety_text`` instead: the same files without the block naming what
-    was not opened, which is written for the reviewing stages. ``work`` is the
-    same text file by file, for a stage that has to find a quote in it (task
-    09b); empty where the doors read no files (a test, a project).
+    was not opened, which is written for the reviewing stages; for a project,
+    ``door.student_files_text`` -- its student's files alone (chain K4).
+    ``work`` is the work file by file, for a stage that has to find a quote in
+    it (task 09b): the files the text carries for a file or an archive; for a
+    project, the student's files new or changed against the author's base
+    (project chain K1), while ``door.base_files`` is the base itself, which a
+    quote is told apart from (chain K3) and ``submission_text`` the delta
+    context in its frames. Empty only for a test, whose door reads no files.
 
     ``arq`` is the queue, for the one thing an executor may do beyond its own
     verdict: put OTHER revisions back in it. The evaluation stage, having got
@@ -271,7 +286,8 @@ async def run_safety_stage(context: StageContext) -> StageOutcome:
     one additive argument, so the new path and today's Mentor cannot end up with
     two ideas of what is safe. It is shown what today's Mentor shows it (task
     11, decisions 9-10): the student's files without the block naming what was
-    not opened (``DoorReading.safety_text``), the course and the topic the work
+    not opened (``DoorReading.safety_text``; for a project, its student's
+    files alone -- :func:`_safety_input`), the course and the topic the work
     is for, the signal screen's flags and the student's comment; and the
     verdict carries what the doors read onto the trace. What is this module's
     is the reaction: an unsafe
@@ -283,7 +299,7 @@ async def run_safety_stage(context: StageContext) -> StageOutcome:
 
     door = context.door
     verdict = await run_stage2_safety_check(
-        door.safety_text if door is not None else context.submission_text,
+        _safety_input(context),
         router=context.router,
         course_context=await _course_context(context.session, context.submission),
         execution=_execution(context),
@@ -305,6 +321,27 @@ async def run_safety_stage(context: StageContext) -> StageOutcome:
         violations=[v.value for v in verdict.violations],
     )
     return StageOutcome.ends_path("rejected", "stage2_rejected")
+
+
+def _safety_input(context: StageContext) -> str:
+    """What the safety check reads: the student's own text, and none of ours.
+
+    The one branch on the type in the safety stage (chain K4). A project's
+    door reads a delta context for the reviewing stages, which opens with the
+    platform's trusted block and carries the author's files beside the
+    student's; the check reads the student's files alone
+    (:attr:`~course_supporter.homework.doors.DoorReading.student_files_text`).
+    Every other type's text is its files, and the check reads them without
+    the block naming what was not opened (``DoorReading.safety_text``, #619).
+    Today's Mentor never comes here: its own body hands Stage 2
+    ``safety_text``, as before.
+    """
+    door = context.door
+    if door is None:
+        return context.submission_text
+    if context.path_key.task_type is AssignmentType.PROJECT:
+        return door.student_files_text
+    return door.safety_text
 
 
 async def _course_context(
@@ -373,11 +410,14 @@ async def run_attempt_classifier_stage(context: StageContext) -> StageOutcome:
 
 
 async def run_criteria_evaluation_stage(context: StageContext) -> StageOutcome:
-    """Verdicts on the criteria of a text task, as a stage of the path (09b).
+    """Verdicts on the criteria of a task, as a stage of the path (09b).
 
     The work is ``criteria_evaluation.evaluate_criteria``; this function hands
     it the stage's description translated for the router, as the two executors
-    above hand theirs to today's functions.
+    above hand theirs to today's functions. Registered twice: as
+    ``criteria_evaluation`` for a text type and as
+    ``project_criteria_evaluation`` for a project (chain K4) — one function,
+    two descriptions, each with its own prompt.
     """
     from course_supporter.homework.criteria_evaluation import evaluate_criteria
 
@@ -399,10 +439,12 @@ async def run_course_link_lookup_stage(context: StageContext) -> StageOutcome:
 
 
 async def run_review_explanation_stage(context: StageContext) -> StageOutcome:
-    """The explanation of a text task's verdicts, as a stage of the path (09b).
+    """The explanation of a task's verdicts, as a stage of the path (09b).
 
     The work is ``review_explanation.explain_verdicts``; this function hands
-    it the stage's description translated for the router.
+    it the stage's description translated for the router. Registered twice,
+    as the evaluation is: ``review_explanation`` and
+    ``project_review_explanation`` (chain K4).
     """
     from course_supporter.homework.review_explanation import explain_verdicts
 
@@ -414,3 +456,7 @@ register_stage_executor(ATTEMPT_CLASSIFIER, run_attempt_classifier_stage)
 register_stage_executor(CRITERIA_EVALUATION, run_criteria_evaluation_stage)
 register_stage_executor(COURSE_LINK_LOOKUP, run_course_link_lookup_stage)
 register_stage_executor(REVIEW_EXPLANATION, run_review_explanation_stage)
+# A project's two (chain K4): the same functions, under the names its own
+# stage descriptions — prompts and ceilings — are written under.
+register_stage_executor(PROJECT_CRITERIA_EVALUATION, run_criteria_evaluation_stage)
+register_stage_executor(PROJECT_REVIEW_EXPLANATION, run_review_explanation_stage)

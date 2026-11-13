@@ -92,6 +92,7 @@ def _row(
     missing: str | None = None,
     quote_not_found: bool = False,
     safeguard_fired: bool = False,
+    quote_from_base: bool = False,
 ) -> SubmissionCriterionVerdict:
     """A stored row as the repository reads it back; no session needed."""
     kind = VerdictItemKind.POINT if "." in item_id else VerdictItemKind.CRITERION
@@ -108,6 +109,7 @@ def _row(
         missing=missing,
         quote_not_found=quote_not_found,
         safeguard_fired=safeguard_fired,
+        quote_from_base=quote_from_base,
     )
 
 

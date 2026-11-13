@@ -618,7 +618,7 @@ class TestAnExplanationAgainstTheFacts:
 # ── Course links: shown, chosen, and only the shown ones kept (task 10, K5) ──
 
 
-def _place(title: str, paragraph: int) -> LinkCandidate:
+def _place(title: str, paragraph: int, confidence: float = 0.9) -> LinkCandidate:
     return LinkCandidate(
         segment_id=uuid.uuid4(),
         authored_document_id=uuid.uuid4(),
@@ -627,7 +627,7 @@ def _place(title: str, paragraph: int) -> LinkCandidate:
         anchor=SegmentAnchor("paragraph", paragraph, paragraph + 1),
         excerpt=f"Початок {title}",
         later_in_course=False,
-        confidence=0.9,
+        confidence=confidence,
         matched_concepts=("testing",),
     )
 
@@ -844,3 +844,147 @@ class TestTheCourseLinks:
         ]
         skipped = [e for e in logs if e["event"] == "course_link_position_skipped"]
         assert [e["segment_id"] for e in skipped] == [str(misfit.segment_id)]
+
+
+# ── Places below the score threshold (task 10, decision of 2026-11-13) ──────
+
+
+async def _found_c2(
+    session: AsyncSession,
+    submission: HomeworkSubmission,
+    *places: LinkCandidate,
+) -> None:
+    """What the search step keeps for c2 alone — every place it found."""
+    await SubmissionVerdictRepository(session).store_candidates(
+        tenant_id=submission.tenant_id,
+        submission_id=submission.id,
+        body=FoundCourseLinks(
+            criteria=(CriterionLinks(item_id="c2", candidates=places),)
+        ).model_dump(mode="json"),
+    )
+
+
+async def _kept_confidences(
+    session: AsyncSession, submission: HomeworkSubmission
+) -> list[float]:
+    """The confidences of c2's places in the search's row, as it is kept."""
+    row = await SubmissionVerdictRepository(session).get_candidates(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
+    assert row is not None
+    kept = FoundCourseLinks.model_validate(row.body)
+    return [place.confidence for place in kept.candidates_of("c2")]
+
+
+class TestAPlaceBelowTheThreshold:
+    """The row keeps every place; the model is shown those from 0.3 up."""
+
+    async def test_a_weak_place_stays_in_the_row_and_is_not_shown(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        """Lock a through the stage: 0.30 is shown, 0.29 and 0.14 are not —
+        and the row they are kept in is not touched by the stage."""
+        source_id = await _authors_list(db_session, doc)
+        await _verdicts(
+            db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
+        )
+        await _found_c2(
+            db_session,
+            submission,
+            _place("Тести", 3, 0.30),
+            _place("pytest", 7, 0.29),
+            _place("Фінальний проєкт", 2, 0.14),
+        )
+        router = _Router(_answer(links=("c2.l1",)))
+
+        await _explain(db_session, router, submission)
+
+        assert router.requests[0]["render"]["course_links"] == [
+            {
+                "criterion": "c2",
+                "links": [
+                    {
+                        "id": "c2.l1",
+                        "material": "Тести",
+                        "position": {"kind": "paragraph", "value": "3"},
+                        "excerpt": "Початок Тести",
+                    }
+                ],
+            }
+        ]
+        kept = await _kept(db_session, submission)
+        assert kept is not None
+        assert [r["links"] for r in kept[1]["remarks"]] == [["c2.l1"]]
+        assert await _kept_confidences(db_session, submission) == [0.30, 0.29, 0.14]
+
+    async def test_a_criterion_with_only_weak_places_is_shown_none(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        """Lock b through the stage: production's two places of 0.14 give the
+        model an empty list for c2, as a criterion the course does not teach."""
+        source_id = await _authors_list(db_session, doc)
+        await _verdicts(
+            db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
+        )
+        await _found_c2(
+            db_session,
+            submission,
+            _place("Фінальний проєкт", 2, 0.14),
+            _place("Підсумкове заняття", 5, 0.14),
+        )
+        router = _Router(_answer(links=()))
+
+        await _explain(db_session, router, submission)
+
+        assert router.requests[0]["render"]["course_links"] == [
+            {"criterion": "c2", "links": []}
+        ]
+        kept = await _kept(db_session, submission)
+        assert kept is not None
+        assert [r["links"] for r in kept[1]["remarks"]] == [[]]
+        assert await _kept_confidences(db_session, submission) == [0.14, 0.14]
+
+    async def test_a_recorded_answer_that_names_the_weak_places_is_cut_and_traced(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        """Lock v through the stage: the answer production's model gave — both
+        places of 0.14 chosen — names what this model was not shown. Both are
+        cut, once, with a trace and no retry."""
+        source_id = await _authors_list(db_session, doc)
+        await _verdicts(
+            db_session, submission, layer=CriteriaLayer.AUTHOR, source_id=source_id
+        )
+        await _found_c2(
+            db_session,
+            submission,
+            _place("Фінальний проєкт", 2, 0.14),
+            _place("Підсумкове заняття", 5, 0.14),
+        )
+        router = _Router(_answer(links=("c2.l1", "c2.l2")))
+
+        with job_scope(register_job):
+            await _explain(
+                db_session, router, submission, session_factory=session_factory
+            )
+
+        assert len(router.requests) == 1
+        kept = await _kept(db_session, submission)
+        assert kept is not None
+        assert [r["links"] for r in kept[1]["remarks"]] == [[]]
+        (trace,) = await _traces(session_factory, register_job)
+        assert trace.action == CourseLinkTrace.FABRICATED.value
+        assert json.loads(trace.output_text or "") == {
+            "criterion_id": "c2",
+            "ids": ["c2.l1", "c2.l2"],
+        }

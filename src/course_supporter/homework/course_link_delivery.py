@@ -27,10 +27,11 @@ Steps of :func:`settle_course_links`:
     2. Each remark's choice, resolved: local identifier to the place shown
        under it
        (:meth:`~course_supporter.homework.course_links.FoundCourseLinks.shown`
-       — the same definition the stage showed them by). An identifier that
-       resolves to nothing is skipped with a warning: the explanation stage
-       cut every identifier it had not shown, so this is a defect, not a
-       choice.
+       — the same definition the stage showed them by, so a place below
+       ``MIN_COURSE_LINK_SCORE``, kept in the row but never shown, resolves to
+       nothing here). An identifier that resolves to nothing is skipped with
+       a warning: the explanation stage cut every identifier it had not shown,
+       so this is a defect, not a choice.
     3. One read: which of the chosen places are candidates now
        (:meth:`~course_supporter.storage.document_segment_repository.DocumentSegmentRepository.still_candidates`
        — the rule of the search itself, not a second one).
@@ -38,10 +39,11 @@ Steps of :func:`settle_course_links`:
        criterion alone, with its text and concepts as the list it was judged
        against states them (``build_course_link_finder``). The replacement
        (:func:`replacement_for`) is a place of the same material first, else
-       the most confident. Nothing — the link is left out, and a row in the
-       call register says so without a model call (``action =
-       course_link_stale``; the criterion and the local identifiers only,
-       nothing the student wrote).
+       the most confident; a place below ``MIN_COURSE_LINK_SCORE`` is no
+       replacement, as it would not have been shown. Nothing — the link is
+       left out, and a row in the call register says so without a model call
+       (``action = course_link_stale``; the criterion and the local
+       identifiers only, nothing the student wrote).
     5. A place whose material has no title — empty or blank — is not given:
        the review would print a link with nothing to call it by. The log
        names its fragment; the review is built without it.
@@ -79,6 +81,7 @@ from course_supporter.homework.course_links import (
     FoundCourseLinks,
     LinkCandidate,
     build_course_link_finder,
+    reaches_min_score,
     submission_scope,
 )
 from course_supporter.homework.judged_list import read_judged_list
@@ -171,8 +174,13 @@ async def settle_course_links(
         given, left_out = _given(
             places,
             live,
-            # A place that cannot be given is no replacement either.
-            [place for place in fresh.get(criterion_id, ()) if _titled(place)],
+            # A place that cannot be given is no replacement either; nor is
+            # one the model would not have been shown (the owner's threshold).
+            [
+                place
+                for place in fresh.get(criterion_id, ())
+                if _titled(place) and reaches_min_score(place)
+            ],
         )
         settled[criterion_id] = _only_titled(
             given, submission_id=submission.id, criterion_id=criterion_id

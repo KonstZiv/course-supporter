@@ -16,7 +16,11 @@ search for course links and the real finder:
 * lock e — a kept place whose anchor does not fit its material is given
   without a place, and the build goes on;
 * a place whose material has no title is not given — nor given as a
-  replacement — and the build goes on.
+  replacement — and the build goes on;
+* the score threshold (decision of 2026-11-13) — what the model was not shown
+  is never given, even when its answer names it (lock v), a criterion with
+  only weak places gives a review without "where to read" (lock b), and a
+  weak place is no replacement for a place that is gone.
 
 The course: ``lesson1`` holds material A (segments A1, A2), ``lesson2``
 material B (segment B1) and then the task; all three teach recursion. The
@@ -34,7 +38,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncGenerator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -744,5 +748,212 @@ class TestAMaterialWithoutATitle:
         await _gone(db_session, world.a2)
 
         built = await _build(db_session, session_factory, world, register_job)
+
+        assert _linked(built) == [[str(world.b1.id)], []]
+
+
+# ── The score threshold (task 10, decision of 2026-11-13) ───────────────────
+
+_WEAK = 0.14
+"""The score both of production's places of 2026-11-12 had."""
+
+
+async def _rescored(
+    session: AsyncSession, world: _World, scores: Mapping[uuid.UUID, float]
+) -> None:
+    """Rewrite the search's row as the search of a course that scores these
+    places so: the same places, the same order, the given segments rescored."""
+    row = await SubmissionVerdictRepository(session).get_candidates(
+        tenant_id=world.submission.tenant_id, submission_id=world.submission.id
+    )
+    assert row is not None
+    found = FoundCourseLinks.model_validate(row.body)
+    rescored = FoundCourseLinks(
+        criteria=tuple(
+            CriterionLinks(
+                item_id=criterion.item_id,
+                candidates=tuple(
+                    replace(
+                        place, confidence=scores.get(place.segment_id, place.confidence)
+                    )
+                    for place in criterion.candidates
+                ),
+            )
+            for criterion in found.criteria
+        )
+    )
+    await SubmissionVerdictRepository(session).store_candidates(
+        tenant_id=world.submission.tenant_id,
+        submission_id=world.submission.id,
+        body=rescored.model_dump(mode="json"),
+    )
+
+
+class _RescoringFinder:
+    """The real finder, with the given segments rescored in what it returns."""
+
+    def __init__(
+        self, session: AsyncSession, scores: Mapping[uuid.UUID, float]
+    ) -> None:
+        from course_supporter.homework.course_links import ConceptCourseLinkFinder
+
+        self._real = ConceptCourseLinkFinder(session)
+        self._scores = scores
+
+    async def find(
+        self, scope: SubmissionScope, failed: Sequence[FailedCriterion]
+    ) -> Mapping[str, tuple[LinkCandidate, ...]]:
+        found = await self._real.find(scope, failed)
+        return {
+            criterion_id: tuple(
+                replace(
+                    place,
+                    confidence=self._scores.get(place.segment_id, place.confidence),
+                )
+                for place in places
+            )
+            for criterion_id, places in found.items()
+        }
+
+
+class TestAWeakPlaceTheModelWasNotShown:
+    """Lock v: the check before delivery resolves against what was SHOWN, not
+    against what was kept — so a weak place the model names is never given,
+    though the stage that cuts such names (``drop_unshown_links``) is not in
+    the way here: the answer goes to the builder as written."""
+
+    async def test_it_is_not_given_and_the_strong_place_is(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        world: _World,
+    ) -> None:
+        """c1 is kept B1 (strong), A2 and A1 (0.14); the answer names all three."""
+        await _searched_and_explained(
+            db_session, world, {"c1": ["c1.l1", "c1.l2", "c1.l3"], "c2": []}
+        )
+        await _rescored(db_session, world, {world.a2.id: _WEAK, world.a1.id: _WEAK})
+        spy = _SpyFinder(db_session)
+
+        with patch(_FINDER, return_value=spy), capture_logs() as logs:
+            built = await _build(db_session, session_factory, world, register_job)
+
+        assert _linked(built) == [[str(world.b1.id)], []]
+        unresolved = [e for e in logs if e["event"] == "course_link_unresolved"]
+        assert [e["link_id"] for e in unresolved] == ["c1.l2", "c1.l3"]
+        # Nothing was gone, so nothing was searched again or left out.
+        assert spy.asked == []
+        assert await _register(session_factory, register_job) == []
+        # The row still holds all three, and the review what was shown.
+        row = await SubmissionVerdictRepository(db_session).get_candidates(
+            tenant_id=world.submission.tenant_id,
+            submission_id=world.submission.id,
+        )
+        assert row is not None
+        kept = FoundCourseLinks.model_validate(row.body)
+        assert [place.confidence for place in kept.candidates_of("c1")][1:] == [
+            _WEAK,
+            _WEAK,
+        ]
+        assert [p.segment_id for p in kept.settled_of("c1")] == [world.b1.id]
+
+    async def test_a_criterion_with_only_weak_places_gets_no_where_to_read(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        world: _World,
+    ) -> None:
+        """Lock b, the review's side: every place of c1 at 0.14 — the review
+        has no "where to read" for it."""
+        await _searched_and_explained(db_session, world, {"c1": ["c1.l1"], "c2": []})
+        await _rescored(
+            db_session,
+            world,
+            {world.b1.id: _WEAK, world.a2.id: _WEAK, world.a1.id: _WEAK},
+        )
+
+        built = await _build(db_session, session_factory, world, register_job)
+
+        assert _linked(built) == [[], []]
+        assert "Де почитати" not in built.markdown
+
+    async def test_the_strong_place_alone_does_give_where_to_read(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        world: _World,
+    ) -> None:
+        """The control of the test above: the same walk, nothing rescored."""
+        await _searched_and_explained(db_session, world, {"c1": ["c1.l1"], "c2": []})
+
+        built = await _build(db_session, session_factory, world, register_job)
+
+        assert _linked(built) == [[str(world.b1.id)], []]
+        assert "Де почитати" in built.markdown
+
+
+class TestAWeakPlaceIsNoReplacement:
+    """A place that is gone is replaced by what a new search finds — and that
+    is not shown to the model either, so a weak one is no replacement."""
+
+    async def test_a_replacement_at_the_threshold_is_given(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        world: _World,
+    ) -> None:
+        """A2 gone; A1, its material's, found again at 0.30: given."""
+        await _searched_and_explained(db_session, world, {"c1": ["c1.l2"], "c2": []})
+        await _gone(db_session, world.a2)
+        finder = _RescoringFinder(db_session, {world.a1.id: 0.30})
+
+        with patch(_FINDER, return_value=finder):
+            built = await _build(db_session, session_factory, world, register_job)
+
+        assert _linked(built) == [[str(world.a1.id)], []]
+
+    async def test_a_weak_replacement_is_not_given_and_the_link_is_left_out(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        world: _World,
+    ) -> None:
+        """A2 gone; A1 and B1 found again, both at 0.29: no replacement, so
+        the link is left out and traced as any link without one."""
+        await _searched_and_explained(db_session, world, {"c1": ["c1.l2"], "c2": []})
+        await _gone(db_session, world.a2)
+        finder = _RescoringFinder(db_session, {world.a1.id: 0.29, world.b1.id: 0.29})
+
+        with patch(_FINDER, return_value=finder):
+            built = await _build(db_session, session_factory, world, register_job)
+
+        assert _linked(built) == [[], []]
+        (trace,) = await _register(session_factory, register_job)
+        assert trace.action == CourseLinkTrace.STALE.value
+        assert json.loads(trace.output_text or "") == {
+            "criterion_id": "c1",
+            "ids": ["c1.l2"],
+        }
+
+    async def test_a_weak_place_of_the_same_material_does_not_outrank_a_strong_one(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        world: _World,
+    ) -> None:
+        """A2 gone; A1 — its material's — is weak now, B1 is not: B1. The
+        weak place is out of the pool before "the same material first"."""
+        await _searched_and_explained(db_session, world, {"c1": ["c1.l2"], "c2": []})
+        await _gone(db_session, world.a2)
+        finder = _RescoringFinder(db_session, {world.a1.id: _WEAK})
+
+        with patch(_FINDER, return_value=finder):
+            built = await _build(db_session, session_factory, world, register_job)
 
         assert _linked(built) == [[str(world.b1.id)], []]

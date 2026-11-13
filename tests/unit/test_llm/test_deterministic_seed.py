@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import structlog
 from structlog.testing import capture_logs
 
 from course_supporter.homework.path_config import load_path_config, model_stages
@@ -200,6 +201,21 @@ class TestNotDeterministicIsUnchanged:
         assert fingerprint(bodies) == _ON_MAIN[(provider, with_schema)]
 
 
+@pytest.fixture
+def _fresh_router_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A logger ``capture_logs`` can hear.
+
+    The router's module logger, once bound by another test
+    (``cache_logger_on_first_use``), keeps the processors of its day and slips
+    past ``capture_logs`` -- the precedent of ``test_one_startup.py``. Which
+    events the router writes does not change, only who hears them.
+    """
+    monkeypatch.setattr(
+        "course_supporter.llm.stage_router.logger", structlog.get_logger()
+    )
+
+
+@pytest.mark.usefixtures("_fresh_router_logger")
 class TestTheTrace:
     """(d) The register has no field for it: a log line, joined by input_hash."""
 

@@ -10,7 +10,8 @@ Usage (from the repository root)::
     # what would be sent, and whether the user messages are the same: no call
     uv run python scripts/measure_explanation_prompt.py RECORD.json --dry-run
 
-    # one paid call per prompt; the first rung's key comes from the environment
+    # one paid call per prompt; the first rung's key from the environment
+    # (dashscope: ALIBABA_API_KEY, and DASHSCOPE_BASE_URL as in production)
     uv run python scripts/measure_explanation_prompt.py RECORD.json --out DIR
 
 ``RECORD.json`` is written by ``scripts/record_explanation_input.py``. ``DIR``

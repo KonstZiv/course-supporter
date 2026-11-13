@@ -229,8 +229,15 @@ class TestTheTemplatesOfBothRoads:
         assert _closing_tags(text, "student_note") == 1
         assert "&lt;/student_note>" in text
 
-    def test_the_criteria_evaluation_keeps_the_submission_in_its_slot(self) -> None:
-        """Task 09b: the work, the list and the repeat each stay in their slot.
+    @pytest.mark.parametrize(
+        "ref",
+        ["criteria_evaluation/v1.md", "criteria_evaluation_project/v1.md"],
+    )
+    def test_the_criteria_evaluation_keeps_the_submission_in_its_slot(
+        self, ref: str
+    ) -> None:
+        """Task 09b: the work, the list and the repeat each stay in their slot;
+        the project's own prompt too (chain K4).
 
         The list and the repeat travel as JSON, whose ``<`` the filter already
         escapes; the work is plain text, which the loader's lock escapes.
@@ -258,8 +265,7 @@ class TestTheTemplatesOfBothRoads:
             [{"id": "c1", "problem": "p", "your_answer": {"quote": _HOSTILE}}],
         ):
             text = self._render(
-                "criteria_evaluation/v1.md",
-                **render_context(shown, expected=["c1"], repeat=repeat),
+                ref, **render_context(shown, expected=["c1"], repeat=repeat)
             )
             assert _closing_tags(text, "student_submission") == 1
             assert "&lt;/student_submission>" in text
@@ -267,8 +273,14 @@ class TestTheTemplatesOfBothRoads:
                 assert _closing_tags(text, slot) == 1, slot
             assert _closing_tags(text, "previous_problems") == (1 if repeat else 0)
 
-    def test_the_review_explanation_keeps_the_submission_in_its_slot(self) -> None:
-        """Task 09b, K5: the work, the result and the verdicts each stay in theirs.
+    @pytest.mark.parametrize(
+        "ref", ["review_explanation/v2.md", "review_explanation_project/v1.md"]
+    )
+    def test_the_review_explanation_keeps_the_submission_in_its_slot(
+        self, ref: str
+    ) -> None:
+        """Task 09b, K5: the work, the result and the verdicts each stay in theirs;
+        the project's own prompt too (chain K4).
 
         The verdicts carry the author's texts and quotes of the student's work,
         and travel as JSON, whose ``<`` the filter escapes; the work is plain
@@ -311,19 +323,22 @@ class TestTheTemplatesOfBothRoads:
             course_links={},
         )
 
-        text = self._render(
-            "review_explanation/v2.md", **review_explainer.render_context(shown)
-        )
+        text = self._render(ref, **review_explainer.render_context(shown))
 
         assert _closing_tags(text, "student_submission") == 1
         assert "&lt;/student_submission>" in text
         for slot in ("result", "verdicts", "course_links"):
             assert _closing_tags(text, slot) == 1, slot
 
-    def test_the_review_explanation_keeps_a_hostile_place_in_its_slot(self) -> None:
+    @pytest.mark.parametrize(
+        "ref", ["review_explanation/v2.md", "review_explanation_project/v1.md"]
+    )
+    def test_the_review_explanation_keeps_a_hostile_place_in_its_slot(
+        self, ref: str
+    ) -> None:
         """Task 10, K5 (lock v): the author's title, position and excerpt of a
         place stay inside ``<course_links>``, and the place goes by its local
-        identifier.
+        identifier; in the project's own prompt too (chain K4).
 
         A file path is a position the author wrote; so are a title and an
         excerpt. They travel as JSON, whose ``<`` the filter escapes, under the
@@ -376,9 +391,7 @@ class TestTheTemplatesOfBothRoads:
             course_links={"c3": links},
         )
 
-        text = self._render(
-            "review_explanation/v2.md", **review_explainer.render_context(shown)
-        )
+        text = self._render(ref, **review_explainer.render_context(shown))
 
         for slot in ("course_links", "student_submission", "verdicts", "result"):
             assert _closing_tags(text, slot) == 1, slot

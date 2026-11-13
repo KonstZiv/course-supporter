@@ -9,7 +9,9 @@ the answers mean belong to the evaluation stage
 :mod:`course_supporter.homework.criteria_verdicts`; this module renders the
 request, holds the answer's form, and returns what the model said.
 
-Two requests, one prompt (``prompts/criteria_evaluation/v1.md``):
+Two requests, one prompt — the one the stage names, rendered from the same
+variables: ``prompts/criteria_evaluation/v1.md`` for a text type,
+``prompts/criteria_evaluation_project/v1.md`` for a project (chain K4):
 
 * :meth:`CriteriaEvaluatorAgent.evaluate` asks about every item of the list —
   each criterion, or the mandatory points of one checked by points;
@@ -73,7 +75,10 @@ class EvaluationInput:
         task_text: Its text.
         criteria: The list in force.
         submission_text: The work exactly as the doors read it — files framed
-            by name, and the block of what was not opened.
+            by name, and the block of what was not opened. For a project, the
+            delta context in its frames (``homework/mentor_context.py``): the
+            platform's trusted block, the student's new and changed files,
+            the author's neighbouring files.
         language: The course's language by name (``"Ukrainian"``), for the
             sentences on what is missing (``PRE-FLIGHT.md`` 9.9); ``None``
             leaves the model to follow the task's own language.

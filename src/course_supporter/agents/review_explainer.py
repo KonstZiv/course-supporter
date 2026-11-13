@@ -6,8 +6,11 @@ no session, no repository, no knowledge of the path. What the facts are and
 what an answer must agree with belong to
 :mod:`course_supporter.homework.verdict_explanation`; the stage that reads the
 verdicts and keeps the answer is :mod:`course_supporter.homework.review_explanation`.
-This module renders the request (``prompts/review_explanation/v2.md``), holds
-the answer's form and returns what the model said.
+This module renders the request — with the prompt its stage names:
+``prompts/review_explanation/v2.md`` for a text type,
+``prompts/review_explanation_project/v1.md`` for a project (chain K4); the
+same variables fill both — holds the answer's form and returns what the model
+said.
 
 Since task 10 (K5) the request also shows, for each criterion that is not
 met, up to three places of the course the code found for it
@@ -232,6 +235,14 @@ def _verdict_for_prompt(item: JudgedItem) -> dict[str, Any]:
     the sentence on what is missing and whether a quote was not found. The
     quote that was not found is never shown (see
     :class:`~course_supporter.homework.verdict_explanation.JudgedItem`).
+
+    A "not met" that fell for a quote of the author's code also says so,
+    ``quote_from_base: true`` (project chain K4) — and only then. Only a
+    project has a base, so the field never appears in a text type's request,
+    which stays byte for byte what its calibrated prompt was measured on;
+    the project's prompt names the field and reads its absence as false.
+    This is the one place the two requests differ, and it is a fact of the
+    verdict, not a branch on the stage.
     """
     if item.verdict is VerdictValue.MET:
         place = item.place
@@ -248,8 +259,11 @@ def _verdict_for_prompt(item: JudgedItem) -> dict[str, Any]:
             ),
             "kept_from_earlier": item.kept_from_earlier,
         }
-    return {
+    shown: dict[str, Any] = {
         "verdict": item.verdict.value,
         "missing": item.missing,
         "quote_not_found": item.quote_not_found,
     }
+    if item.quote_from_base:
+        shown["quote_from_base"] = True
+    return shown

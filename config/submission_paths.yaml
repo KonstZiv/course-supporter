@@ -237,6 +237,104 @@ stages:
         reasoning: null
         max_output_tokens: 8192
 
+  # Verdicts on the criteria of a project (project chain K4): the executor of
+  # `criteria_evaluation` under its own name and with its own prompt, which
+  # tells the model the frames of a project's delta context — the platform's
+  # trusted block, the student's NEW / CHANGED files, the author's NEIGHBOR
+  # files — and that a quote of the author's code does not count. The work is
+  # the student's files and the base is the author's (chain K3), from the
+  # project's door. Ladder, flags, ratio and output ceiling as on
+  # `criteria_evaluation`. On no path yet: the switch of `project` is a later
+  # change, with its own live measurement.
+  project_criteria_evaluation:
+    deterministic: true
+    prompt_ref: "prompts/criteria_evaluation_project/v1.md"
+    requires: [json_mode]
+    input_budget_ratio: 0.5
+    record_output: false
+    ceilings:
+      tool_steps: 0
+      output_tokens: 32768
+      # не калібровано (project chain K4). The arithmetic of
+      # `criteria_evaluation`, at the project's largest realistic input. The
+      # project's door refuses a delta context over its budget before any
+      # call; on the new path that budget is
+      # homework/text_budget.py::path_context_budget_chars for `project`:
+      # 131 072 characters — the first rung of `safety` (mistral-small-latest,
+      # a window of 131 072 tokens, ratio 0.5, 2 characters a token) bounds
+      # it, with this stage on the path or without it — the same work budget
+      # the text stage counted. So the text stage's input, and the longer
+      # prompt, at the router's 3.5 characters a token:
+      #   the text stage's input: the work at 131 072 characters, a task of
+      #   ~20 000 characters, a list of 37 criteria, prompt v1     56 021
+      #   this prompt over v1: 7 110 - 4 446 = 2 664 characters       762
+      #   in all                                                    56 783
+      # at the registry rates (config/external_services.yaml, read 2026-11-13):
+      #   qwen3.7-max, 16 384 out:     56 783 x 0.00165/1k + 16 384 x 0.004951/1k = 0.174809
+      #   deepseek-v4-pro, 32 768 out: 56 783 x 0.00066/1k + 32 768 x 0.00198/1k  = 0.102357
+      #   the repeat on qwen3.7-max:                                                 0.174809
+      #   qwen's reasoning, 10 000 tokens on each of its two requests: 2 x 0.049510 = 0.099020
+      #   total 0.550996, rounded up.
+      # The reserve for qwen's reasoning and the off-peak price of DeepSeek as
+      # on `criteria_evaluation` (DD-SP-CM, DD-SP-BG). The measurement of this
+      # stage calibrates the number.
+      money_usd: 0.56
+    ladder:
+      - provider: dashscope
+        model: qwen3.7-max
+        reasoning: null
+        max_output_tokens: 16384
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
+        reasoning: null
+        max_output_tokens: 32768
+
+  # The verdicts of a project, explained to its student (project chain K4):
+  # the executor of `review_explanation` under its own name and with its own
+  # prompt — one form of address, no account of how the check works, no
+  # finished solution, nothing put into the mouth of the course, no rule of
+  # the pass (the review's builder prints it), and a criterion that fell for
+  # the author's code said in plain words. Ladder, flags, ratio and output
+  # ceiling as on `review_explanation`. On no path yet, as above.
+  project_review_explanation:
+    deterministic: false
+    prompt_ref: "prompts/review_explanation_project/v1.md"
+    requires: [json_mode]
+    input_budget_ratio: 0.5
+    record_output: false
+    ceilings:
+      tool_steps: 0
+      output_tokens: 8192
+      # не калібровано (project chain K4). The arithmetic of
+      # `review_explanation`, at the project's largest realistic input — the
+      # same work budget of 131 072 characters (see the stage above) — at the
+      # router's 3.5 characters a token:
+      #   the text stage's input: the work, prompt v2, the task,
+      #   a list of 37 criteria with their verdicts, the course
+      #   links of all 37 not met                                    77 017
+      #   this prompt over v2: 10 633 - 7 846 = 2 787 characters        797
+      #   `"quote_from_base": true` on all 37 not met: 37 x 25
+      #   = 925 characters of the verdicts' JSON                       265
+      #   in all                                                    78 079
+      # at the registry rates (config/external_services.yaml, read 2026-11-13):
+      #   qwen3.7-max, 8 192 out:    78 079 x 0.00165/1k + 8 192 x 0.004951/1k = 0.169389
+      #   deepseek-flash, 8 192 out: 78 079 x 0.00015/1k + 8 192 x 0.0006/1k   = 0.016627
+      #   qwen's reasoning, 10 000 tokens:                10 000 x 0.004951/1k = 0.049510
+      #   total 0.235526, rounded up.
+      # Both rungs stay reachable: after the first, 0.070611 is left for the
+      # second's 0.016627. The measurement of this stage calibrates the
+      # number; DeepSeek is priced off-peak (DD-SP-BG).
+      money_usd: 0.24
+    ladder:
+      - provider: dashscope
+        model: qwen3.7-max
+        reasoning: null
+        max_output_tokens: 8192
+      - provider: deepseek
+        model: deepseek-flash
+        reasoning: null
+        max_output_tokens: 8192
+
 task_types:
   # A test makes no model call on any path. On the new path since task 07:
   # answered with its answers and scored against the author's key

@@ -179,9 +179,14 @@ stages:
     # verdicts, the score, the pass — is the code's, and the text is checked
     # against it on every answer.
     deterministic: false
-    # v2 (task 10, K5): the slot of course links and the rule on naming them;
-    # v1 stays beside it as history.
-    prompt_ref: "prompts/review_explanation/v2.md"
+    # v3 (2026-11-13): no rule of the pass — the review's builder prints the
+    # pass and its rule since 12.11, and v2 still told the model that an unmet
+    # `must` decides it; one form of address, no account of how the check
+    # works, nothing put into the mouth of the course, never the solution.
+    # The same variables and slots as v2, so the user message is byte for byte
+    # v2's. v2 (task 10, K5: the course links) and v1 stay beside it as
+    # history.
+    prompt_ref: "prompts/review_explanation/v3.md"
     # The answer goes out with its schema (task 09a): strict on qwen3.7-max,
     # JSON mode on deepseek-flash.
     requires: [json_mode]
@@ -195,8 +200,9 @@ stages:
       # deepseek-flash runs without one.
       output_tokens: 8192
       # не калібровано (PRE-FLIGHT.md 9.7б, ratified 2026-10-01; recounted for
-      # prompt v2 in task 10, K5). The dearest attempts at the largest
-      # realistic input, at the router's 3.5 characters a token:
+      # prompt v2 in task 10, K5, and for prompt v3 on 2026-11-13). The
+      # dearest attempts at the largest realistic input, at the router's 3.5
+      # characters a token:
       #   the work at its budget of 131 072 characters             37 449
       #   prompt v1, task of ~20 000 characters, a list of 37
       #   criteria and their verdicts — the evaluation stage's
@@ -206,14 +212,15 @@ stages:
       #   a place an excerpt of 300 characters, a title of 120,
       #   its id and position, as the slot's JSON — 58 905
       #   characters, measured on that worst case                   16 830
-      #   in all                                                    77 017
-      # at the registry rates (config/external_services.yaml, read 2026-11-03):
-      #   qwen3.7-max, 8 192 out:    77 017 x 0.00165/1k + 8 192 x 0.004951/1k = 0.167637
-      #   deepseek-flash, 8 192 out: 77 017 x 0.00015/1k + 8 192 x 0.0006/1k   = 0.016468
+      #   prompt v3 over v2: 9 182 - 7 846 = 1 336 characters          382
+      #   in all                                                    77 399
+      # at the registry rates (config/external_services.yaml, read 2026-11-13):
+      #   qwen3.7-max, 8 192 out:    77 399 x 0.00165/1k + 8 192 x 0.004951/1k = 0.168267
+      #   deepseek-flash, 8 192 out: 77 399 x 0.00015/1k + 8 192 x 0.0006/1k   = 0.016525
       #   qwen's reasoning, 10 000 tokens:                10 000 x 0.004951/1k = 0.049510
-      #   total 0.233614, rounded up.
+      #   total 0.234302, rounded up — the same 0.24 as for v2.
       # Both rungs stay reachable (the router skips a rung by its estimate
-      # alone): after the first, 0.072363 is left for the second's 0.016468,
+      # alone): after the first, 0.071733 is left for the second's 0.016525,
       # and the whole reserve for qwen's reasoning stays in (DD-SP-CM). The
       # previous number, 0.18, was counted for 43 449 tokens without the task
       # and the list; the list's links scale with the list, so the 37-criteria

@@ -7,7 +7,7 @@ what an answer must agree with belong to
 :mod:`course_supporter.homework.verdict_explanation`; the stage that reads the
 verdicts and keeps the answer is :mod:`course_supporter.homework.review_explanation`.
 This module renders the request — with the prompt its stage names:
-``prompts/review_explanation/v2.md`` for a text type,
+``prompts/review_explanation/v3.md`` for a text type,
 ``prompts/review_explanation_project/v1.md`` for a project (chain K4); the
 same variables fill both — holds the answer's form and returns what the model
 said.

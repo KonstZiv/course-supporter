@@ -62,18 +62,18 @@ fi
 # --- 2. Auth ---
 echo ""
 echo "2. Authentication"
-CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/api/v1/courses")
-check "GET /courses without key → 401" 401 "$CODE"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/api/v1/nodes")
+check "GET /nodes without key → 401" 401 "$CODE"
 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" \
     -H "X-API-Key: cs_live_invalid_key_000000000000" \
-    "$BASE_URL/api/v1/courses")
-check "GET /courses with invalid key → 401" 401 "$CODE"
+    "$BASE_URL/api/v1/nodes")
+check "GET /nodes with invalid key → 401" 401 "$CODE"
 
 CODE=$(curl -s -o /dev/null -w "%{http_code}" \
     -H "X-API-Key: $API_KEY" \
-    "$BASE_URL/api/v1/courses")
-check "GET /courses with valid key → 200" 200 "$CODE"
+    "$BASE_URL/api/v1/nodes")
+check "GET /nodes with valid key → 200" 200 "$CODE"
 
 # --- 3. API Documentation ---
 echo ""
@@ -87,7 +87,7 @@ check "GET /openapi.json → 200" 200 "$CODE"
 # --- 4. Security Headers ---
 echo ""
 echo "4. Security Headers"
-HEADERS=$(curl -sI -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/courses")
+HEADERS=$(curl -sI -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/nodes")
 
 if echo "$HEADERS" | grep -qi "x-content-type-options: nosniff"; then
     echo "  ✅ X-Content-Type-Options: nosniff"
@@ -108,8 +108,8 @@ fi
 # --- 5. Response Format ---
 echo ""
 echo "5. Response Format"
-COURSES=$(curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/courses")
-if echo "$COURSES" | jq . > /dev/null 2>&1; then
+NODES=$(curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/nodes")
+if echo "$NODES" | jq . > /dev/null 2>&1; then
     echo "  ✅ Response is valid JSON"
     PASSED=$((PASSED + 1))
 else

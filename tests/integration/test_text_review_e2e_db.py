@@ -48,7 +48,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import delete, select, update
+from scripts import record_evaluation_input
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.routes._portal_shared import (
@@ -73,6 +74,7 @@ from course_supporter.homework.criteria_list_service import (
     UnavailableReason,
 )
 from course_supporter.homework.path_config import (
+    ModelStage,
     PathConfig,
     ServedBy,
     in_test_mode,
@@ -95,7 +97,9 @@ from course_supporter.homework.text_result import (
     REVIEW_PARTS_MISSING,
     TextResultBuilder,
 )
+from course_supporter.llm.input_hash import hash_attempt_input
 from course_supporter.llm.ladder_config import StageConfig
+from course_supporter.llm.registry import load_registry
 from course_supporter.llm.stage_router import StageResult
 from course_supporter.models.review_structure import (
     PassRule,
@@ -1553,3 +1557,91 @@ class TestAPlaceBelowTheScoreThresholdIsNotLinked:
 
         # One of the two criteria not met is linked.
         assert await _metrics(session_factory, submission_id) == [(0.5, None)]
+
+
+class TestTheRecorderReadsWhatTheStageRead:
+    """``scripts/record_evaluation_input.py`` on the submission the stage read.
+
+    The stage runs through the body, and the router double keeps the variables
+    it was handed; the recorder then reads the same submission from the
+    database — in a READ ONLY transaction, so a write would fail — and from
+    S3, and must hand over the same variables. Its hash check finds the
+    register row whose ``input_hash`` is the first rung's request.
+    """
+
+    async def test_the_same_variables_and_the_row_of_the_same_input(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        router = _RouterDouble(session_factory)
+        submission_id, job_id = await _submit(session_factory, world)
+        await _run(
+            session_factory,
+            router,
+            _ListSource(world["in_force"]),
+            _webhook(),
+            tmp_path,
+            submission_id=submission_id,
+            job_id=job_id,
+        )
+        assert router.count(CRITERIA_EVALUATION) == 1  # the first request only
+        # The world's task has no version: give it the one its stored list was
+        # composed for, so the list the stage was handed is the one in force.
+        async with session_factory() as session:
+            await session.execute(
+                update(AuthoredDocument)
+                .where(AuthoredDocument.id == world["doc_id"])
+                .values(content_hash="h" * 64)
+            )
+            await session.commit()
+        s3 = _ctx(session_factory, router, tmp_path)["s3_client"]
+
+        async with session_factory() as session:
+            await session.execute(text("SET TRANSACTION READ ONLY"))
+            recorded = await record_evaluation_input.record(session, s3, submission_id)
+
+        stage_read = json.loads(
+            json.dumps(router.rendered[CRITERIA_EVALUATION], ensure_ascii=False)
+        )
+        assert recorded.variables == stage_read
+
+        stage = _shipped().stages[CRITERIA_EVALUATION]
+        assert isinstance(stage, ModelStage)
+        registry = load_registry(_REPO_ROOT / "config" / "external_services.yaml")
+        provider, request = await record_evaluation_input.first_rung_request(
+            recorded.variables, stage, registry
+        )
+        same_input = hash_attempt_input(request, provider=provider)
+        async with session_factory() as session:
+            session.add(
+                ExternalServiceCall(
+                    job_id=job_id,
+                    action=CRITERIA_EVALUATION,
+                    strategy="default",
+                    provider=provider,
+                    model_id=request.model,
+                    success=True,
+                    outcome="success",
+                    input_hash=same_input,
+                )
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            await session.execute(text("SET TRANSACTION READ ONLY"))
+            rows = await record_evaluation_input.register_rows(
+                session, submission_id, provider=provider, model=request.model
+            )
+        check = record_evaluation_input.compare(
+            request,
+            provider=provider,
+            prompt_hash="p",
+            rows=rows,
+            recorded=recorded,
+        )
+
+        # The double's row (no hash) and the row of the same input.
+        assert [row.matched for row in check.rows] == [False, True]
+        assert check.matched is True

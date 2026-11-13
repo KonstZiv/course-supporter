@@ -18,7 +18,9 @@ Limits:
     A seed narrows the spread of answers; no vendor read on 2026-11-13 promises
     identical output (DashScope: "the model returns the same result as much as
     possible"). The spread that remains is what ``scripts/measure_determinism.py``
-    measures.
+    measures. The answer of the fallback rung ``deepseek_thinking`` is not
+    reproducible: in DeepSeek's thinking mode neither a seed nor temperature
+    acts.
 
 Changing:
     Any value in ``[0, 2**31 - 1]`` serves every connector that takes a seed

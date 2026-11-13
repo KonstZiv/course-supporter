@@ -22,10 +22,10 @@ check() {
 
     if [ "$actual_code" -eq "$expected_code" ]; then
         echo "  ✅ $name (HTTP $actual_code)"
-        ((PASSED++))
+        PASSED=$((PASSED + 1))
     else
         echo "  ❌ $name (expected $expected_code, got $actual_code)"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 }
 
@@ -45,18 +45,18 @@ S3_STATUS=$(jq -r '.checks.s3' "$HEALTH_FILE" 2>/dev/null || echo "unknown")
 
 if [ "$DB_STATUS" = "ok" ]; then
     echo "  ✅ DB connectivity: ok"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
     echo "  ❌ DB connectivity: $DB_STATUS"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 if [ "$S3_STATUS" = "ok" ]; then
     echo "  ✅ S3 connectivity: ok"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
     echo "  ❌ S3 connectivity: $S3_STATUS"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # --- 2. Auth ---
@@ -91,18 +91,18 @@ HEADERS=$(curl -sI -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/courses")
 
 if echo "$HEADERS" | grep -qi "x-content-type-options: nosniff"; then
     echo "  ✅ X-Content-Type-Options: nosniff"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
     echo "  ❌ X-Content-Type-Options header missing"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 if echo "$HEADERS" | grep -qi "x-frame-options:.*\(deny\|sameorigin\)"; then
     echo "  ✅ X-Frame-Options present"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
     echo "  ❌ X-Frame-Options header missing"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # --- 5. Response Format ---
@@ -111,10 +111,10 @@ echo "5. Response Format"
 COURSES=$(curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/courses")
 if echo "$COURSES" | jq . > /dev/null 2>&1; then
     echo "  ✅ Response is valid JSON"
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
     echo "  ❌ Response is not valid JSON"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # --- Summary ---

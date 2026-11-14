@@ -44,6 +44,17 @@ After delivery (task 10, K6):
     every criterion not met. The row is written once per submission: a run
     re-entered after delivery delivers again, and finds the row there.
 
+The place of a remark (project chain K5):
+    A remark points to where its problem stands in the student's files when
+    its verdict row keeps one — a project's "not met" whose line was found
+    (``homework/criteria_verdicts.py``). A criterion checked by mandatory
+    points points to the place of its first point, in the list's order, that
+    is not met and has one. ``Remark.position`` is ``file``; its value is the
+    path, then ``:12`` for one line or ``:12-14`` for several — the phrase of
+    the place stays the phrasebook's, ``position.file``. A text type's rows
+    keep no place, so its review is what it was. :func:`problem_positions`
+    is the rule; a project's builder takes it as it is.
+
 The order of the remarks:
     By their criterion's weight — "must" first, then "should", then "may" —
     and within one weight by the criterion's number, ``c2`` before ``c10``:
@@ -69,7 +80,7 @@ Replacing:
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Final
+from typing import Final, Protocol
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
@@ -101,6 +112,7 @@ from course_supporter.homework.verdict_explanation import (
 from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
 from course_supporter.models.review_structure import (
     PassRule,
+    Position,
     Reference,
     Remark,
     ReviewStructureV1,
@@ -119,9 +131,11 @@ from course_supporter.storage.submission_verdict_repository import (
 
 __all__ = [
     "REVIEW_PARTS_MISSING",
+    "ReviewedItem",
     "TextResultBuilder",
     "build_text_review",
     "link_authenticity",
+    "problem_positions",
 ]
 
 REVIEW_PARTS_MISSING: Final = "review_parts_missing"
@@ -132,9 +146,76 @@ A failure on our side, not the student's: nothing in the work caused it.
 """
 
 
+class ReviewedItem(ScoredItem, Protocol):
+    """What the review's builder reads of a verdict row: the score's fields,
+    and the place its quote was found.
+
+    A stored row (``storage.orm.SubmissionCriterionVerdict``) and a
+    :class:`~course_supporter.storage.submission_verdict_repository.VerdictRecord`
+    both have these.
+    """
+
+    @property
+    def quote_file(self) -> str | None: ...
+
+    @property
+    def quote_line_start(self) -> int | None: ...
+
+    @property
+    def quote_line_end(self) -> int | None: ...
+
+
+def problem_positions(rows: Iterable[ReviewedItem]) -> dict[str, Position]:
+    """By criterion id, where in the student's files its remark points (K5).
+
+    Read from the rows that are "not met" and keep a place: the row of a
+    criterion judged on its own, or the first point of a criterion checked
+    by points, in the rows' order — the list's, in which the evaluation
+    writes them and the repository reads them back. A "met"'s place is its
+    evidence, never a problem's, and is not read.
+
+    >>> from course_supporter.criteria_kinds import VerdictItemKind as Kind
+    >>> from course_supporter.storage.submission_verdict_repository import (
+    ...     VerdictRecord,
+    ... )
+    >>> rows = [
+    ...     VerdictRecord("c2", Kind.CRITERION, "should", "not_met", None),
+    ...     VerdictRecord("c2.p1", Kind.POINT, None, "not_met", "not_met"),
+    ...     VerdictRecord("c2.p2", Kind.POINT, None, "not_met", "not_met",
+    ...                   quote="x", quote_file="app.py", quote_lines=(12, 14)),
+    ... ]
+    >>> problem_positions(rows)["c2"].value
+    'app.py:12-14'
+    """
+    positions: dict[str, Position] = {}
+    for row in rows:
+        if row.verdict != VerdictValue.NOT_MET or row.quote_file is None:
+            continue
+        # ``c3`` for the criterion itself, ``c3.p2`` for one of its points.
+        criterion_id = row.item_id.partition(".")[0]
+        if criterion_id not in positions:
+            positions[criterion_id] = Position(kind="file", value=_place_of(row))
+    return positions
+
+
+def _place_of(row: ReviewedItem) -> str:
+    """``path``, ``path:12`` or ``path:12-14`` — the value of a file's position.
+
+    An ASCII hyphen and no words: the value goes into the phrase of the
+    review's language unchanged.
+    """
+    path = row.quote_file or ""
+    first, last = row.quote_line_start, row.quote_line_end
+    if first is None or last is None:
+        return path
+    if first == last:
+        return f"{path}:{first}"
+    return f"{path}:{first}-{last}"
+
+
 def build_text_review(
     *,
-    rows: Sequence[ScoredItem],
+    rows: Sequence[ReviewedItem],
     layer: CriteriaLayer,
     explanation: ExplanationAnswer,
     language: str,
@@ -157,6 +238,7 @@ def build_text_review(
             or the explanation remarks on a criterion the rows do not have.
     """
     decided = pass_decision(rows, layer=layer)
+    places = problem_positions(rows)
     voice = explanation.mentor_voice
     structure = ReviewStructureV1(
         schema_version=REVIEW_SCHEMA_VERSION,
@@ -176,6 +258,7 @@ def build_text_review(
                 why=remark.why,
                 todo=remark.todo,
                 read=list((reading or {}).get(remark.id, ())),
+                position=places.get(remark.id),
             )
             for remark in _by_weight(explanation.remarks, rows)
         ],

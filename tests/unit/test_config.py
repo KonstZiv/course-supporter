@@ -28,7 +28,7 @@ class TestSettings:
     ) -> None:
         """The revision of the terms on the site (operator, BIL-B part 2)."""
         monkeypatch.delenv("BILLING_TERMS_VERSION", raising=False)
-        assert Settings(_env_file=None).billing_terms_version == "2026-11-09"
+        assert Settings(_env_file=None).billing_terms_version == "2026-11-13"
 
     def test_database_url_assembly(self) -> None:
         """Database URL is correctly assembled from components."""

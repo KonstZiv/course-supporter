@@ -48,14 +48,26 @@ class TestShippedCatalog:
         assert all(REQUIRED_CURRENCY in p.prices_minor for p in catalog.packages)
 
     def test_its_placeholders_are_off_sale(self) -> None:
-        """Every size and price shipped is a placeholder («рішення оператора;
-        не публікувати»): nothing is on sale until the operator sets the real
-        values. The commit that sets them lifts this lock."""
+        """Placeholder packages («рішення оператора; не публікувати») stay off
+        sale until the operator sets the real values; the only active package
+        shipped is the sandbox test package for Creem."""
         catalog = load_catalog(SHIPPED)
-        assert catalog.active() == ()
+        assert tuple(p.id for p in catalog.active()) == ("sandbox-test-500",)
+        placeholders = [p for p in catalog.packages if p.id != "sandbox-test-500"]
+        assert all(not p.active for p in placeholders)
         text = SHIPPED.read_text(encoding="utf-8")
-        assert text.count("рішення оператора; не публікувати") >= 2 * len(
-            catalog.packages
+        assert text.count("рішення оператора; не публікувати") >= 2 * len(placeholders)
+
+    def test_sandbox_package_loads(self) -> None:
+        catalog = load_catalog(SHIPPED)
+        sandbox = catalog.package("sandbox-test-500")
+        assert sandbox is not None
+        assert sandbox.units == 500
+        assert sandbox.prices_minor == {"EUR": 500}
+        assert sandbox.active is True
+        assert (
+            catalog.provider_item("creem", "sandbox-test-500")
+            == "prod_2oJ3Yqnf53wOrikCrQGDtk"
         )
 
     def test_its_packages_have_exactly_the_locked_fields(self) -> None:

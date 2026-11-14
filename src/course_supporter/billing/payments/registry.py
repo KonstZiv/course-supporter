@@ -3,9 +3,11 @@
 Two lists:
 
 * the adapters there are (:func:`adapters`) — one per provider the code
-  can speak to. :class:`~.fake.FakeProvider` is one only in development and
+  can speak to: :class:`~.creem.CreemProvider` everywhere (it needs
+  ``CREEM_API_KEY`` and ``CREEM_WEBHOOK_SECRET`` once switched on, or the
+  startup stops); :class:`~.fake.FakeProvider` only in development and
   testing: its secret is in the code, so production and staging never have
-  it (a test locks it). A real provider's adapter joins this list.
+  it (a test locks it). Another provider's adapter joins this list.
 * the providers switched on — ``BILLING_PROVIDERS``, in order of preference,
   none by default. With none, payment is unavailable: a checkout answers 503
   and no webhook address answers at all (404).
@@ -22,6 +24,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Final
 
 from course_supporter.billing.journal import PROVIDER_NAME
+from course_supporter.billing.payments.creem import CREEM, CreemProvider
 from course_supporter.billing.payments.fake import FAKE, FakeProvider
 from course_supporter.billing.payments.invoice import INVOICE_PROVIDER
 from course_supporter.billing.payments.port import PaymentProvider
@@ -45,9 +48,27 @@ def _fake(_settings: Settings) -> PaymentProvider:
     return FakeProvider()
 
 
+def _creem(settings: Settings) -> PaymentProvider:
+    """Creem with its key and secret; without either, a broken setting."""
+    key, secret = settings.creem_api_key, settings.creem_webhook_secret
+    missing = [
+        name
+        for name, value in (("CREEM_API_KEY", key), ("CREEM_WEBHOOK_SECRET", secret))
+        if value is None or not value.get_secret_value().strip()
+    ]
+    if missing or key is None or secret is None:
+        msg = f"BILLING_PROVIDERS names {CREEM}, but {', '.join(missing)} is not set"
+        raise PaymentConfigError(msg)
+    return CreemProvider(
+        api_key=key.get_secret_value().strip(),
+        webhook_secret=secret.get_secret_value().strip(),
+        api_base=settings.creem_api_base,
+    )
+
+
 def adapters(environment: Environment) -> dict[str, Factory]:
     """Every adapter there is in ``environment``, by name."""
-    found: dict[str, Factory] = {}
+    found: dict[str, Factory] = {CREEM: _creem}
     if environment in FAKE_ENVIRONMENTS:
         found[FAKE] = _fake
     return found
@@ -90,7 +111,7 @@ def build_registry(settings: Settings) -> ProviderRegistry:
 
     Raises:
         PaymentConfigError: a name without an adapter in this environment,
-            or the same name twice.
+            the same name twice, or an adapter without its keys.
     """
     known = adapters(settings.environment)
     missing = [name for name in settings.billing_providers if name not in known]

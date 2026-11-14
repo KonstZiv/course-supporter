@@ -5,7 +5,7 @@ from datetime import time
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import (
     Field,
@@ -128,6 +128,17 @@ class Settings(BaseSettings):
     # {author_app_base_url}/billing (a student's to
     # {portal_base_url}/{tenant_id}/billing). Set AUTHOR_APP_BASE_URL in prod.
     author_app_base_url: str = "http://localhost:5173"
+    # Creem (billing.payments.creem), read when BILLING_PROVIDERS names "creem";
+    # without the key and the secret that name stops the startup. The key goes
+    # in the x-api-key header; the secret checks the creem-signature of a
+    # webhook. Never logged. The API's host: the test mode's by default — the
+    # live one only by its explicit value (the two modes' keys do not mix:
+    # https://docs.creem.io/api-reference/introduction).
+    creem_api_key: SecretStr | None = None
+    creem_webhook_secret: SecretStr | None = None
+    creem_api_base: Literal[
+        "https://test-api.creem.io/v1", "https://api.creem.io/v1"
+    ] = "https://test-api.creem.io/v1"
 
     # --- Periodic tasks (course_supporter.periodic) ---
     # ARQ cron jobs of WorkerSettings. Each task: a switch and a schedule of

@@ -9,6 +9,11 @@
 
 set -euo pipefail
 
+# --- Prerequisite check: fail fast if a required tool is missing ---
+for tool in curl python3; do
+    command -v "$tool" >/dev/null || { echo "❌ required tool missing: $tool"; exit 2; }
+done
+
 BASE_URL="${1:?Usage: smoke_test.sh <base_url> <api_key>}"
 API_KEY="${2:?Usage: smoke_test.sh <base_url> <api_key>}"
 
@@ -40,8 +45,22 @@ trap 'rm -f "$HEALTH_FILE"' EXIT
 CODE=$(curl -s -o "$HEALTH_FILE" -w "%{http_code}" "$BASE_URL/health")
 check "GET /health returns 200" 200 "$CODE"
 
-DB_STATUS=$(jq -r '.checks.db' "$HEALTH_FILE" 2>/dev/null || echo "unknown")
-S3_STATUS=$(jq -r '.checks.s3' "$HEALTH_FILE" 2>/dev/null || echo "unknown")
+HEALTH=$(cat "$HEALTH_FILE")
+
+# Validate that /health returned parseable JSON
+if ! printf '%s' "$HEALTH" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>&1; then
+    echo "  ❌ /health response is not valid JSON"
+    FAILED=$((FAILED + 1))
+    HEALTH=""
+fi
+
+if [ -n "$HEALTH" ]; then
+    DB_STATUS=$(printf '%s' "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checks"]["db"])')
+    S3_STATUS=$(printf '%s' "$HEALTH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["checks"]["s3"])')
+else
+    DB_STATUS="unknown (invalid JSON)"
+    S3_STATUS="unknown (invalid JSON)"
+fi
 
 if [ "$DB_STATUS" = "ok" ]; then
     echo "  ✅ DB connectivity: ok"
@@ -109,7 +128,7 @@ fi
 echo ""
 echo "5. Response Format"
 NODES=$(curl -s -H "X-API-Key: $API_KEY" "$BASE_URL/api/v1/nodes")
-if echo "$NODES" | jq . > /dev/null 2>&1; then
+if printf '%s' "$NODES" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>&1; then
     echo "  ✅ Response is valid JSON"
     PASSED=$((PASSED + 1))
 else

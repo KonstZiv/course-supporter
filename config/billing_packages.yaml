@@ -12,6 +12,12 @@
 # package is on sale (active: false), so the portal lists none.
 
 packages:
+  # SANDBOX ONLY (operator decision 2026-11-14): Creem test-mode product. Remove before switching Creem to live mode — a test product id does not exist in live mode.
+  - id: sandbox-test-500
+    units: 500
+    prices_minor:
+      EUR: 500
+    active: true
   - id: starter
     units: 1000   # рішення оператора; не публікувати
     prices_minor:
@@ -32,4 +38,5 @@ providers:
   # dashboard — of the test mode while CREEM_API_BASE is the test host (a test
   # product is unknown to the live API). Without an id the package cannot be
   # bought through Creem (503).
-  creem: {}
+  creem:
+    sandbox-test-500: prod_2oJ3Yqnf53wOrikCrQGDtk

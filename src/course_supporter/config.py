@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     # has no consent to this revision is asked to agree in the portal; raising
     # it asks everyone again. Set BILLING_TERMS_VERSION when the terms change.
     billing_terms_version: str = Field(
-        default="2026-11-09", pattern=r"^\d{4}-\d{2}-\d{2}$"
+        default="2026-11-13", pattern=r"^\d{4}-\d{2}-\d{2}$"
     )
     # Billing upkeep (BIL-B part 2), read by the periodic tasks below.
     # An active reserve older than this is released as hanging: it must exceed

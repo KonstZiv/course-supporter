@@ -63,7 +63,8 @@ class VerdictRecord:
         model_verdict: What the model said; ``None`` for a criterion derived
             from its points.
         quote: The evidence a "met" stands on, or the model's quote that was
-            not found.
+            not found; on a project's "not met", the line where its problem
+            stands, when the student's files have it (chain K5).
         quote_file: Where the quote was found; ``None`` when it was not.
         quote_lines: First and last line of the quote in ``quote_file``;
             ``None`` for a document, whose lines are an artefact of extraction.
@@ -99,6 +100,16 @@ class VerdictRecord:
     quote_not_found: bool = False
     quote_from_base: bool = False
     safeguard_submission_id: uuid.UUID | None = None
+
+    @property
+    def quote_line_start(self) -> int | None:
+        """The first line of :attr:`quote_lines`, as the stored row names it."""
+        return self.quote_lines[0] if self.quote_lines else None
+
+    @property
+    def quote_line_end(self) -> int | None:
+        """The last line of :attr:`quote_lines`, as the stored row names it."""
+        return self.quote_lines[1] if self.quote_lines else None
 
 
 class SubmissionVerdictRepository:
@@ -298,7 +309,6 @@ def _row(
     criteria_layer: CriteriaLayer,
     criteria_source_id: uuid.UUID,
 ) -> SubmissionCriterionVerdict:
-    first, last = record.quote_lines if record.quote_lines else (None, None)
     return SubmissionCriterionVerdict(
         tenant_id=tenant_id,
         submission_id=submission_id,
@@ -311,8 +321,8 @@ def _row(
         model_verdict=record.model_verdict.value if record.model_verdict else None,
         quote=record.quote,
         quote_file=record.quote_file,
-        quote_line_start=first,
-        quote_line_end=last,
+        quote_line_start=record.quote_line_start,
+        quote_line_end=record.quote_line_end,
         missing=record.missing,
         retried=record.retried,
         quote_not_found=record.quote_not_found,

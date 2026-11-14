@@ -31,13 +31,18 @@ refusal on the project branch (homework/project_submission.py). The assembly
 used to carry its own 512 KiB cap and drop overflowing units whole; step E
 made that unreachable -- the pre-call refusal fires at a smaller number for
 every alphabet -- so it was removed rather than left as a dead branch.
+
+The marks of the author's lines (project chain K5) are a second, separate
+pass over the assembled text, for the new path's evaluation of a project
+alone: :func:`mark_authors_lines`. The text built here -- what the doors hand
+on, what today's Mentor reads -- never carries them.
 """
 
 from __future__ import annotations
 
 import difflib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final, Literal
 
 from course_supporter.normalizer import Delta, Manifest, ManifestEntry
@@ -61,6 +66,17 @@ ReadText = Callable[[Side, ManifestEntry], str | None]
 _SENTINEL: Final[str] = "@@MENTOR_CTX@@"
 _SENTINEL_ESCAPED: Final[str] = "@@MENTOR_CTX_ESCAPED@@"
 _BODY_UNAVAILABLE: Final[str] = "(body unavailable -- binary or non-extractable)"
+
+# A changed file shown whole: its block's kind and the note on its header.
+_CHANGED_FULL: Final[str] = "CHANGED-FULL"
+_CHANGED_FULL_NOTE: Final[str] = "changed, whole new version"
+
+# The marks of a whole changed file's lines (project chain K5) -- the ones a
+# unified diff's lines begin with, so the model reads one convention in both.
+STUDENT_LINE: Final[str] = "+"
+"""A line the student added or changed."""
+AUTHOR_LINE: Final[str] = " "
+"""A line of the author's, as the base has it."""
 
 
 def build_mentor_context(
@@ -168,7 +184,7 @@ def _changed_block(
     """Render one CHANGED file: whole below the H-c threshold, else a diff."""
     if sub_entry.size <= H_C_WHOLE_MAX_BYTES:
         body = read_text("sub", sub_entry)
-        return _file_block("CHANGED-FULL", path, body, "changed, whole new version")
+        return _file_block(_CHANGED_FULL, path, body, _CHANGED_FULL_NOTE)
 
     base_entry = base_by.get(path)
     base_text = read_text("base", base_entry) if base_entry is not None else None
@@ -375,11 +391,17 @@ def _staleness_line(base_version: int | None, latest_version: int | None) -> str
 
 def _file_block(kind: str, path: str, body: str | None, note: str) -> str:
     """One self-describing untrusted file block; body escapes the sentinel."""
+    header = _file_header(kind, path, note)
+    content = _BODY_UNAVAILABLE if body is None else _escape(body)
+    return f"{header}\n{content}\n{_SENTINEL} END-FILE"
+
+
+def _file_header(kind: str, path: str, note: str) -> str:
+    """The delimiter line a file block opens with."""
     header = f"{_SENTINEL} FILE type={kind} path={_inline(path)}"
     if note:
         header += f" -- {note}"
-    content = _BODY_UNAVAILABLE if body is None else _escape(body)
-    return f"{header}\n{content}\n{_SENTINEL} END-FILE"
+    return header
 
 
 def _unified_diff(base_text: str, sub_text: str, path: str) -> str:
@@ -419,3 +441,116 @@ def _human_size(n: int) -> str:
     if n < 1024 * 1024:
         return f"{n / 1024:.1f} KB"
     return f"{n / (1024 * 1024):.1f} MB"
+
+
+# ── The marks of the author's lines (project chain K5) ─────────────────────
+
+
+def mark_authors_lines(
+    context: str,
+    *,
+    student: Mapping[str, str],
+    base: Mapping[str, str],
+    budget_chars: int | None,
+) -> str:
+    """The context with every line of a whole changed file marked, or as it is.
+
+    For the new path's evaluation of a project (chain K5, variant A of
+    decision 9). A ``CHANGED-FULL`` block shows the student's new version of
+    a file of the base whole; here each line of its body gets one mark by
+    the difference with the base's version of the same file:
+    :data:`STUDENT_LINE` for a line added or changed, :data:`AUTHOR_LINE` for
+    the author's line left as it was -- the convention of a ``CHANGED-DIFF``
+    block, found by the same matcher (:mod:`difflib`) on lines without their
+    line ending. Frame lines are never marked, and a body keeps its escaped
+    sentinel: no marked line starts with the sentinel either.
+
+    A block is marked only when its file has a text on both sides
+    (``student`` and ``base``, by path) and its body is that student text as
+    the builder escaped it; any other block stays as it is.
+
+    All or nothing: when the marked context is longer than ``budget_chars``
+    -- the input budget of the project's new path -- or no budget is known,
+    the context comes back byte for byte as it was given, without a single
+    mark. A mark costs a character a line, and the budget is never loosened
+    for it.
+
+    Args:
+        context: What :func:`build_mentor_context` assembled, with whatever
+            the door appended after it.
+        student: The student's files' texts, by path, as the doors read them
+            (``DoorReading.files``).
+        base: The base's files' texts, by path (``DoorReading.base_files``).
+        budget_chars: The most characters the marked context may have.
+
+    >>> ctx = _file_block(_CHANGED_FULL, "a.py", "x\\ny\\n", _CHANGED_FULL_NOTE)
+    >>> marked = mark_authors_lines(
+    ...     ctx, student={"a.py": "x\\ny\\n"}, base={"a.py": "x\\n"},
+    ...     budget_chars=10_000,
+    ... )
+    >>> marked.split("\\n")[1:]
+    [' x', '+y', '', '@@MENTOR_CTX@@ END-FILE']
+    >>> mark_authors_lines(
+    ...     ctx, student={"a.py": "x\\ny\\n"}, base={"a.py": "x\\n"},
+    ...     budget_chars=len(marked) - 1,
+    ... ) == ctx
+    True
+    """
+    if budget_chars is None:
+        return context
+    headers = {
+        _file_header(_CHANGED_FULL, path, _CHANGED_FULL_NOTE): path
+        for path in student.keys() & base.keys()
+    }
+    lines = context.split("\n")
+    out: list[str] = []
+    at = 0
+    while at < len(lines):
+        line = lines[at]
+        out.append(line)
+        at += 1
+        path = headers.get(line)
+        if path is None:
+            continue
+        # The body runs to the next frame: no line of an escaped body starts
+        # with the sentinel, so the first one that does is its END-FILE.
+        end = at
+        while end < len(lines) and not lines[end].startswith(_SENTINEL):
+            end += 1
+        out.extend(_marked_body(lines[at:end], student[path], base[path]))
+        at = end
+    marked = "\n".join(out)
+    return marked if len(marked) <= budget_chars else context
+
+
+def _marked_body(body: list[str], student_text: str, base_text: str) -> list[str]:
+    """The body's lines, each with its mark; as they are when not the file's."""
+    if "\n".join(body) != _escape(student_text):
+        return body
+    marks = _line_marks(_lines(base_text), _lines(student_text))
+    # The escape adds no line, so the body's lines are the file's, in order;
+    # after them only the empty piece a final newline leaves, unmarked.
+    return [mark + line for mark, line in zip(marks, body, strict=False)] + body[
+        len(marks) :
+    ]
+
+
+def _lines(text: str) -> list[str]:
+    """A text's lines: each piece ended by a newline, and an unended last one."""
+    pieces = text.split("\n")
+    if pieces[-1] == "":
+        pieces.pop()
+    return pieces
+
+
+def _line_marks(base: list[str], student: list[str]) -> list[str]:
+    """One mark for each student line: the author's when it matches the base's."""
+    matcher = difflib.SequenceMatcher(
+        None,
+        [line.removesuffix("\r") for line in base],
+        [line.removesuffix("\r") for line in student],
+    )
+    marks = [STUDENT_LINE] * len(student)
+    for block in matcher.get_matching_blocks():
+        marks[block.b : block.b + block.size] = [AUTHOR_LINE] * block.size
+    return marks

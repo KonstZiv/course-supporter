@@ -86,6 +86,20 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
   mandatory points carries the flag when one of its points does. The
   safeguard does not keep a quote of the base either. Without a base (every
   type but a project) nothing changes.
+* The place of a problem (project chain K5): a project's "not met" may carry,
+  in its unused ``quote``, the line of the student's file where its problem
+  stands. When the stage asks for it, the code looks for that line in the
+  student's files by the same search (:meth:`SubmittedWork.find`) and keeps
+  it, with its file and lines, beside the "not met" — the review shows the
+  student where to look. A line the student's files do not have — made up,
+  an unchanged neighbour's, one a difference shows removed, the base's alone
+  — gives no place and nothing is asked again; the verdict and its sentence
+  stand as they are. An author's line left in a file the student changed IS
+  in the student's file, and may be just where the problem is: it is a
+  place. Only an item whose last word is "not met" has one: an unconfirmed
+  "met" and an item fallen for the base's quote do not — their quote was
+  failed evidence, not a place. The text types' stage does not ask: their
+  "not met" keeps no quote, as before.
 
 Replacing:
     The stage depends on the functions above and on their value types; a new
@@ -94,7 +108,8 @@ Replacing:
     the matching of a quote is :meth:`SubmittedWork.find` alone, what lets a
     single verdict stand is ``_repeat_reason`` alone, which of the model's
     words an item is settled on is ``_word_to_settle`` alone, the safeguard's
-    condition is ``_kept_by_safeguard`` alone. A change of any of these rules raises
+    condition is ``_kept_by_safeguard`` alone, where a "not met"'s problem
+    stands is ``_problem_place`` alone. A change of any of these rules raises
     :data:`VERDICT_RULES_VERSION` — as does any other change of code that
     changes what a review says.
 """
@@ -184,7 +199,10 @@ class ItemVerdict(BaseModel):
     Attributes:
         id: The item as the list names it: ``c3`` or ``c3.p2``.
         verdict: Met or not met.
-        quote: For "met" — one line of the work, copied word for word.
+        quote: For "met" — one line of the work, copied word for word. For
+            a project's "not met" — the line of the student's file where its
+            problem stands, or ``None`` (chain K5); a text type's prompt asks
+            for ``None``.
         missing: For "not met" — one sentence on what is missing, in the
             language of the course.
     """
@@ -634,6 +652,7 @@ def settle_verdicts(
     *,
     work: SubmittedWork,
     earlier: Mapping[str, EarlierVerdict],
+    place_unmet: bool = False,
 ) -> tuple[VerdictRecord, ...]:
     """The verdict rows of a submission, from the model's answers.
 
@@ -653,8 +672,12 @@ def settle_verdicts(
        the project's base (:func:`_from_base`), ``quote_from_base``.
 
     The field a verdict does not use is ignored and not stored: the sentence
-    of a "met", the quote of a "not met". A "not met" without a sentence is
-    stored without one.
+    of a "met", the quote of a "not met" — unless ``place_unmet`` asks for
+    the place of its problem (project chain K5, :func:`_problem_place`): a
+    "not met" of step 3 that is neither unconfirmed nor fallen for the base's
+    quote then keeps its quote with its file and lines, when the line is in
+    the student's files, and none when it is not. A "not met" without a
+    sentence is stored without one.
 
     A criterion checked by mandatory points is then met when all of its
     points are, and unconfirmed when each is met or unconfirmed — after the
@@ -668,6 +691,9 @@ def settle_verdicts(
         work: The work the answers are about.
         earlier: The latest earlier verdict of each item, by item id
             (``SubmissionVerdictRepository.previous_verdicts``).
+        place_unmet: Keep where a "not met"'s problem stands — the project's
+            evaluation, whose prompt asks for that line; ``False`` for every
+            other stage, whose rows stay what they were.
 
     Returns:
         One record per criterion and per mandatory point, in the list's
@@ -696,6 +722,7 @@ def settle_verdicts(
             criteria=criteria,
             work=work,
             earlier=earlier,
+            place_unmet=place_unmet,
         )
 
     records: list[VerdictRecord] = []
@@ -818,6 +845,7 @@ def _judged(
     criteria: CriteriaInForce,
     work: SubmittedWork,
     earlier: Mapping[str, EarlierVerdict],
+    place_unmet: bool,
 ) -> VerdictRecord:
     """The record of one item the model judged — steps 1 to 3 of settling."""
     said_met = item.verdict is VerdictValue.MET
@@ -860,18 +888,43 @@ def _judged(
             quote_from_base=from_base,
             safeguard_submission_id=before.submission_id,
         )
+    # The place of the problem (K5): only for a last word "not met" — never
+    # for an unconfirmed "met" or an item fallen for the base's quote, whose
+    # quote was failed evidence, not a place.
+    place = (
+        _problem_place(item.quote, work)
+        if place_unmet and not said_met and not from_base
+        else None
+    )
     return VerdictRecord(
         item_id=item.id,
         item_kind=kind,
         weight=weight,
         verdict=VerdictValue.NOT_MET,
         model_verdict=item.verdict,
-        quote=quote,
+        quote=quote if place is None else _given(item.quote),
+        quote_file=None if place is None else place.file,
+        quote_lines=None if place is None else place.lines,
         missing=missing,
         retried=retried,
         quote_not_found=unconfirmed,
         quote_from_base=from_base,
     )
+
+
+def _problem_place(quote: str | None, work: SubmittedWork) -> QuotePlace | None:
+    """Where a "not met"'s problem stands in the student's files, or ``None``.
+
+    The model's line, looked for as a "met"'s quote is
+    (:meth:`SubmittedWork.find`) — in the student's files alone, never the
+    base: an author's line left in a file the student changed is in their
+    file, and the problem may be just that it was not changed (K5, decision
+    2). A line they do not have — made up, a neighbour's, one a difference
+    shows removed, the base's alone — is no place, and costs no repeat: the
+    verdict and its sentence stand without one.
+    """
+    text = _given(quote)
+    return None if text is None else work.find(text)
 
 
 def _kept_by_safeguard(

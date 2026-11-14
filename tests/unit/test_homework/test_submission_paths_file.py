@@ -410,8 +410,8 @@ class TestTheProjectsOwnStages:
         reasoning = 2 * _price(registry, "qwen3.7-max", 0, _QWEN_REASONING_TOKENS)
         dearest = 2 * qwen + deepseek + reasoning
 
-        assert tokens_in == 56_783
-        assert dearest == pytest.approx(0.550996, abs=1e-6)
+        assert tokens_in == 57_009
+        assert dearest == pytest.approx(0.551891, abs=1e-6)
         assert dearest <= stage.ceilings.money_usd < dearest + 0.01
 
     def test_the_explanations_money_covers_its_dearest_attempts(

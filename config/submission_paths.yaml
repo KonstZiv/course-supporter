@@ -248,11 +248,12 @@ stages:
   # `criteria_evaluation` under its own name and with its own prompt, which
   # tells the model the frames of a project's delta context — the platform's
   # trusted block, the student's NEW / CHANGED files, the author's NEIGHBOR
-  # files — and that a quote of the author's code does not count. The work is
-  # the student's files and the base is the author's (chain K3), from the
-  # project's door. Ladder, flags, ratio and output ceiling as on
-  # `criteria_evaluation`. On no path yet: the switch of `project` is a later
-  # change, with its own live measurement.
+  # files — that a quote of the author's code does not count, and that a
+  # "not met" names the line of the student's file where its problem stands
+  # (chain K5). The work is the student's files and the base is the author's
+  # (chain K3), from the project's door. Ladder, flags, ratio and output
+  # ceiling as on `criteria_evaluation`. On no path yet: the switch of
+  # `project` is a later change, with its own live measurement.
   project_criteria_evaluation:
     deterministic: true
     prompt_ref: "prompts/criteria_evaluation_project/v1.md"
@@ -274,14 +275,14 @@ stages:
       # prompt, at the router's 3.5 characters a token:
       #   the text stage's input: the work at 131 072 characters, a task of
       #   ~20 000 characters, a list of 37 criteria, prompt v1     56 021
-      #   this prompt over v1: 7 110 - 4 446 = 2 664 characters       762
-      #   in all                                                    56 783
+      #   this prompt over v1: 7 903 - 4 446 = 3 457 characters       988
+      #   in all                                                    57 009
       # at the registry rates (config/external_services.yaml, read 2026-11-13):
-      #   qwen3.7-max, 16 384 out:     56 783 x 0.00165/1k + 16 384 x 0.004951/1k = 0.174809
-      #   deepseek-v4-pro, 32 768 out: 56 783 x 0.00066/1k + 32 768 x 0.00198/1k  = 0.102357
-      #   the repeat on qwen3.7-max:                                                 0.174809
+      #   qwen3.7-max, 16 384 out:     57 009 x 0.00165/1k + 16 384 x 0.004951/1k = 0.175182
+      #   deepseek-v4-pro, 32 768 out: 57 009 x 0.00066/1k + 32 768 x 0.00198/1k  = 0.102507
+      #   the repeat on qwen3.7-max:                                                 0.175182
       #   qwen's reasoning, 10 000 tokens on each of its two requests: 2 x 0.049510 = 0.099020
-      #   total 0.550996, rounded up.
+      #   total 0.551891, rounded up.
       # The reserve for qwen's reasoning and the off-peak price of DeepSeek as
       # on `criteria_evaluation` (DD-SP-CM, DD-SP-BG). The measurement of this
       # stage calibrates the number.

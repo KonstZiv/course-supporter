@@ -30,7 +30,10 @@ Steps:
        more, alone, each with its reason, of the rung that answered
        (``PRE-FLIGHT.md`` 9.5 (a); widened 2026-10-02).
     4. The verdicts are settled — the resubmission safeguard reads the latest
-       earlier verdicts of the same list — and written.
+       earlier verdicts of the same list — and written. On a project's stage
+       a "not met" keeps the place of its problem in the student's files
+       when its line is there (chain K5); nothing is asked again for one
+       that is not.
 
 Failure:
     No list is not a failure (step 1). A ladder that gives no answer — on
@@ -73,7 +76,10 @@ from course_supporter.homework.criteria_verdicts import (
 )
 from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_continuation import resume_awaiting_criteria
-from course_supporter.homework.path_stages import StageOutcome
+from course_supporter.homework.path_stages import (
+    PROJECT_CRITERIA_EVALUATION,
+    StageOutcome,
+)
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.language import display_name
 from course_supporter.storage.orm import AuthoredDocument, CourseNode
@@ -186,7 +192,19 @@ async def evaluate_criteria(
         criteria_layer=listed.layer,
         criteria_source_id=listed.source_id,
     )
-    records = settle_verdicts(listed, first.answer, repeat, work=work, earlier=earlier)
+    records = settle_verdicts(
+        listed,
+        first.answer,
+        repeat,
+        work=work,
+        earlier=earlier,
+        # The one switch of project chain K5, by the stage's name: the
+        # project's prompt asks a "not met" for the line of the student's
+        # file where its problem stands, and its review shows that place.
+        # The text types' prompt is calibrated and asks for null: their rows
+        # and reviews stay byte for byte what they were.
+        place_unmet=context.stage_name == PROJECT_CRITERIA_EVALUATION,
+    )
     await verdicts.replace_for_submission(
         tenant_id=submission.tenant_id,
         submission_id=submission.id,

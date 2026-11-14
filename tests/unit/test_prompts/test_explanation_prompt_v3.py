@@ -320,7 +320,9 @@ class TestTheStageRendersV3:
 
 # ── Lock d: what v3 does not touch ──
 
-# sha256 of each file on main (f797553), before v3.
+# sha256 of each file on main (f797553), before v3 — but the project's
+# evaluation prompt, re-taken on purpose for project chain K5: a "not met"
+# names the line where its problem stands. v3 did not touch it either.
 _UNTOUCHED = {
     "prompts/review_explanation_project/v1.md": (
         "c7d933baa239583991e3404be08a1f306bd7cf84b47c5e799a5fc5ab8ea82c3c"
@@ -329,7 +331,7 @@ _UNTOUCHED = {
         "1067450153909de49254dfcd27d752b27d6753a142d04720149c845eb68d24a0"
     ),
     "prompts/criteria_evaluation_project/v1.md": (
-        "da47ebd9fbd005bdb1abc4100ec26307860d5a2f48b92c7e44f2253274d9227b"
+        "13b6fe458f8023645244d049f3f65c0f49054598e5f3997d823110a72965aecf"
     ),
 }
 

@@ -17,7 +17,10 @@ production, and the real verdict repository on a live database:
 * chain K5 — a "not met" on a line of the student's file keeps that place,
   and the review built from the rows points its remark to it; a line the
   student's files do not have keeps none and asks nothing again; the text
-  types' own stage, handed the very same answer, keeps no place.
+  types' own stage, handed the very same answer, keeps no place. The
+  project's request reads its whole changed file with the author's lines
+  marked — or, when the marked text would not fit the project's input
+  budget, without a single mark; the text stage's request never has them.
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -34,11 +37,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.criteria_kinds import CriteriaLayer, VerdictValue
+from course_supporter.homework import criteria_evaluation
 from course_supporter.homework.criteria_form import Criterion, criteria_to_document
 from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.homework.criteria_verdicts import RepeatItem, RepeatReason
 from course_supporter.homework.doors import DoorReading
 from course_supporter.homework.judged_list import judged_layer
+from course_supporter.homework.mentor_context import mark_authors_lines
 from course_supporter.homework.path_config import (
     PathKey,
     SubmissionState,
@@ -193,6 +198,24 @@ def _sent(provider: Any) -> list[LLMRequest]:
     return [call.args[0] for call in provider.complete.await_args_list]
 
 
+def _work_sent(request: LLMRequest) -> str:
+    """What a request carried in its ``<student_submission>`` slot."""
+    work = request.prompt.split("\n<student_submission>\n", 1)[1]
+    return work.split("\n</student_submission>\n", 1)[0]
+
+
+def _marked(reading: DoorReading) -> str:
+    """The door's context with the author's lines marked, under no tight budget."""
+    marked = mark_authors_lines(
+        reading.text,
+        student={file.name: file.text for file in reading.files},
+        base={file.name: file.text for file in reading.base_files},
+        budget_chars=10**9,
+    )
+    assert marked != reading.text
+    return marked
+
+
 @pytest.fixture()
 async def reading(monkeypatch: pytest.MonkeyPatch) -> DoorReading:
     return await read_recorded_project(monkeypatch)
@@ -338,8 +361,9 @@ class TestTheEvaluationOfAProject:
         assert "a quote of the author's code does not count" in " ".join(
             request.system_prompt.split()
         )
+        # Chain K5: the door's context, its whole changed file marked.
         work = request.prompt.split("\n<student_submission>\n", 1)[1]
-        assert work.startswith(reading.text + "\n</student_submission>\n")
+        assert work.startswith(_marked(reading) + "\n</student_submission>\n")
 
     async def test_a_quote_of_a_new_file_stands_without_a_repeat(
         self,
@@ -648,3 +672,83 @@ class TestThePlaceOfAProblem:
         assert (c1.verdict, c1.missing) == (VerdictValue.NOT_MET, _MISSING)
         assert (c1.quote, c1.quote_file, c1.quote_line_start) == (None, None, None)
         assert rows["c2.p1"].quote_file == "app.py"
+
+
+@pytest.mark.usefixtures("authors_list")
+class TestTheMarksOfTheAuthorsLines:
+    """Chain K5, variant A: marked when the whole marked input fits."""
+
+    async def test_the_project_reads_its_changed_file_marked(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        reading: DoorReading,
+    ) -> None:
+        qwen, rows = await _evaluate(
+            db_session,
+            submission,
+            reading,
+            _verdicts(
+                _met("c1", QUOTE_OF_NEW),
+                _met("c2.p1", QUOTE_OF_CHANGED),
+                _met("c2.p2", QUOTE_OF_CHANGED),
+            ),
+        )
+
+        [request] = _sent(qwen)
+        work = _work_sent(request)
+        # Lock є: the student's line and the author's, each with its mark.
+        assert "\n+    print(len(lines), mean_length(lines))\n" in work
+        assert "\n     lines = read_lines(path)\n" in work
+        assert len(work) <= 131_072
+        # Lock з: the "+" line, copied without its "+", stands where it is.
+        p1 = rows["c2.p1"]
+        assert (p1.verdict, p1.quote, p1.quote_file, p1.quote_line_start) == (
+            VerdictValue.MET,
+            QUOTE_OF_CHANGED,
+            "app.py",
+            8,
+        )
+
+    async def test_a_marked_input_over_the_budget_goes_without_a_mark(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        reading: DoorReading,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Lock є', through the stage: one character short of the marked
+        length — the door's context, byte for byte."""
+        monkeypatch.setattr(
+            criteria_evaluation,
+            "project_path_budget_chars",
+            lambda: len(_marked(reading)) - 1,
+        )
+        qwen, _ = await _evaluate(
+            db_session,
+            submission,
+            reading,
+            _verdicts(
+                _met("c1", QUOTE_OF_NEW),
+                _met("c2.p1", QUOTE_OF_CHANGED),
+                _met("c2.p2", QUOTE_OF_CHANGED),
+            ),
+        )
+
+        [request] = _sent(qwen)
+        assert _work_sent(request) == reading.text
+
+    async def test_the_text_stage_reads_no_mark(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        reading: DoorReading,
+    ) -> None:
+        """Lock g (the text types): the switch is the stage's name — the text
+        stage's input is the door's text as it was."""
+        qwen, _ = await _evaluate(
+            db_session, submission, reading, _PLACED, stage_name=CRITERIA_EVALUATION
+        )
+
+        [request] = _sent(qwen)
+        assert _work_sent(request) == reading.text

@@ -33,7 +33,9 @@ Steps:
        earlier verdicts of the same list — and written. On a project's stage
        a "not met" keeps the place of its problem in the student's files
        when its line is there (chain K5); nothing is asked again for one
-       that is not.
+       that is not. A project's request reads its whole changed files with
+       the author's lines marked, when the marked text fits the project's
+       input budget, and without a mark when it does not (chain K5).
 
 Failure:
     No list is not a failure (step 1). A ladder that gives no answer — on
@@ -74,6 +76,7 @@ from course_supporter.homework.criteria_verdicts import (
     items_to_ask_again,
     settle_verdicts,
 )
+from course_supporter.homework.mentor_context import mark_authors_lines
 from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_continuation import resume_awaiting_criteria
 from course_supporter.homework.path_stages import (
@@ -81,6 +84,7 @@ from course_supporter.homework.path_stages import (
     StageOutcome,
 )
 from course_supporter.homework.task_context import load_task_context
+from course_supporter.homework.text_budget import project_path_budget_chars
 from course_supporter.language import display_name
 from course_supporter.storage.orm import AuthoredDocument, CourseNode
 from course_supporter.storage.submission_verdict_repository import (
@@ -156,6 +160,12 @@ async def evaluate_criteria(
         raise ValueError(msg)
     base = context.door.base_files if context.door is not None else ()
     work = SubmittedWork(context.work, base=base)
+    # The one switch of project chain K5, by the stage's name. The project's
+    # prompt reads the marks of the author's lines in a whole changed file
+    # and asks a "not met" for the line where its problem stands, which its
+    # review shows. The text types' prompt is calibrated: their input, rows
+    # and reviews stay byte for byte what they were.
+    project = context.stage_name == PROJECT_CRITERIA_EVALUATION
 
     title, description, text = await load_task_context(
         context.session, submission.authored_document_id
@@ -165,7 +175,7 @@ async def evaluate_criteria(
         task_description=description,
         task_text=text,
         criteria=listed.criteria,
-        submission_text=context.submission_text,
+        submission_text=_marked(context) if project else context.submission_text,
         language=await course_language(context.session, submission),
     )
     agent = CriteriaEvaluatorAgent(context.router)
@@ -198,12 +208,7 @@ async def evaluate_criteria(
         repeat,
         work=work,
         earlier=earlier,
-        # The one switch of project chain K5, by the stage's name: the
-        # project's prompt asks a "not met" for the line of the student's
-        # file where its problem stands, and its review shows that place.
-        # The text types' prompt is calibrated and asks for null: their rows
-        # and reviews stay byte for byte what they were.
-        place_unmet=context.stage_name == PROJECT_CRITERIA_EVALUATION,
+        place_unmet=project,
     )
     await verdicts.replace_for_submission(
         tenant_id=submission.tenant_id,
@@ -214,6 +219,27 @@ async def evaluate_criteria(
     )
     _log_settled(log, records, first)
     return StageOutcome.ok()
+
+
+def _marked(context: StageContext) -> str:
+    """A project's delta context with the author's lines marked, when it fits.
+
+    The marks of chain K5
+    (:func:`~course_supporter.homework.mentor_context.mark_authors_lines`),
+    over the student's and the base's files the door read; all or nothing
+    against the project's new-path input budget
+    (:func:`~course_supporter.homework.text_budget.project_path_budget_chars`):
+    a context that would not fit marked goes as the door read it.
+    """
+    door = context.door
+    if door is None:
+        return context.submission_text
+    return mark_authors_lines(
+        context.submission_text,
+        student={file.name: file.text for file in door.files},
+        base={file.name: file.text for file in door.base_files},
+        budget_chars=project_path_budget_chars(),
+    )
 
 
 async def _continue_the_waiting(context: StageContext, *, log: Any) -> None:

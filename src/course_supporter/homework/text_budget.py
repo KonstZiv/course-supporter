@@ -270,6 +270,25 @@ def path_context_budget_chars(
     return min(budgets) if budgets else None
 
 
+@lru_cache(maxsize=1)
+def project_path_budget_chars() -> int | None:
+    """:func:`path_context_budget_chars` of ``project``, from the files in force.
+
+    The submission-path file as the process cached it (``get_path_config``)
+    and the registry in ``external_services_path``: the budget the marks of
+    the author's lines may not push the evaluation's input past (project
+    chain K5). Cached as the two budgets above are: the configuration is read
+    once per process.
+    """
+    from course_supporter.homework.path_config import get_path_config
+
+    return path_context_budget_chars(
+        AssignmentType.PROJECT,
+        get_path_config(),
+        load_registry(get_settings().external_services_path),
+    )
+
+
 def ensure_single_file_fits(text: str, *, filename: str, budget_chars: int) -> None:
     """Refuse a single submission whose text cannot be read whole.
 

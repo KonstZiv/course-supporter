@@ -17,14 +17,16 @@ its logic; the lock, the transaction and the log line are the runner's
                               batches of ``billing_purge_batch_size`` accounts,
                               one transaction each; an account row another
                               account still points at stays as a reference
-                              (``kept_as_reference`` in the INFO line). Nightly
-                              (UTC).
+                              (``kept_as_reference`` in the INFO line); then the
+                              providers' webhook events naming no live account,
+                              five years after they arrived (``provider_events``).
+                              Nightly (UTC).
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
@@ -110,10 +112,37 @@ async def _purge(run: TaskContext) -> TaskResult:
                 constraint=stuck.constraint,
                 dry_run=run.dry_run,
             )
+    events = await _purge_orphan_events(run, cutoff)
     return TaskResult(
-        rows,
-        {"accounts": accounts, "kept_as_reference": kept, "blocked": blocked},
+        rows + events,
+        {
+            "accounts": accounts,
+            "kept_as_reference": kept,
+            "blocked": blocked,
+            "provider_events": events,
+        },
     )
+
+
+async def _purge_orphan_events(run: TaskContext, cutoff: datetime) -> int:
+    """The providers' events without a live account, batch after batch."""
+    after: uuid.UUID | None = None
+    total = 0
+    while True:
+        try:
+            async with run.transaction() as session:
+                deleted, after = await retention.purge_orphan_events(
+                    session,
+                    cutoff=cutoff,
+                    after=after,
+                    limit=run.settings.billing_purge_batch_size,
+                )
+        except TaskBusyError:
+            break  # another run took over between two batches
+        if after is None:
+            return total
+        total += deleted
+    return total
 
 
 def _expire_enabled(s: Settings) -> bool:

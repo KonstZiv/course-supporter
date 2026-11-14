@@ -58,6 +58,17 @@ number again changes nothing; with other figures it is refused:
         --amount-minor 50000 --currency EUR --invoice INV-2026-0042 \
         --actor kostiantyn
 
+Disputes (BIL-PAY, operator 2026-11-12). A chargeback held the free units of
+the disputed purchase; a provider that does not report the outcome (Creem
+sends nothing when a dispute is won) leaves it here. Lost: the held units
+leave the batch. Won: they are free again (repaying a difference first). Units
+spent before the dispute are the platform's loss; no debt arises. Audited as
+dispute.lost / dispute.won; ending it again the same way changes nothing.
+--provider is needed only when two providers share the id:
+    dispute-lost --dispute disp_6vSsOdTANP5PhOzuDlUuXE --actor kostiantyn
+    dispute-won  --dispute disp_6vSsOdTANP5PhOzuDlUuXE [--provider creem] \
+        --actor kostiantyn
+
 Anonymization, AFTER the tenant or the student was deleted by hand (there is
 no account-deletion flow yet; when one appears it calls the same functions).
 It closes and anonymizes the owner's accounts and ends the active payment
@@ -387,6 +398,43 @@ async def credit_invoice(session: AsyncSession, args: argparse.Namespace) -> str
             batch.account_id, await ledger.balance(session, batch.account_id)
         )
     )
+
+
+async def _end_dispute(
+    session: AsyncSession, args: argparse.Namespace, *, lost: bool
+) -> str:
+    refund, changed = await admin.end_dispute(
+        session,
+        dispute_id=args.dispute,
+        provider=args.provider,
+        lost=lost,
+        actor=args.actor,
+    )
+    outcome = "lost: units gone" if lost else "won: units free again"
+    head = (
+        f"dispute {refund.provider_adjustment_id} ({refund.provider}) {outcome}  "
+        f"units={refund.units}  batch {refund.batch_id}"
+        if changed
+        else f"dispute {refund.provider_adjustment_id} ({refund.provider}) was "
+        f"already {'lost' if lost else 'won'}; nothing changed"
+    )
+    return (
+        head
+        + "\n"
+        + _balance_line(
+            refund.account_id, await ledger.balance(session, refund.account_id)
+        )
+    )
+
+
+async def dispute_lost(session: AsyncSession, args: argparse.Namespace) -> str:
+    """A dispute lost: the held units leave the batch."""
+    return await _end_dispute(session, args, lost=True)
+
+
+async def dispute_won(session: AsyncSession, args: argparse.Namespace) -> str:
+    """A dispute won: the held units are free again."""
+    return await _end_dispute(session, args, lost=False)
 
 
 def _anonymization_lines(done: accounts.Anonymization) -> str:
@@ -829,6 +877,8 @@ COMMANDS: dict[str, Handler] = {
     "anonymize-tenant": anonymize_tenant,
     "credit": credit,
     "credit-invoice": credit_invoice,
+    "dispute-lost": dispute_lost,
+    "dispute-won": dispute_won,
     "balance": balance,
     "statement": statement,
     "costs": costs_cmd,
@@ -907,6 +957,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--currency", required=True, help="ISO 4217 code, e.g. EUR")
     p.add_argument("--invoice", required=True, help="the invoice's number")
+
+    for name, help_ in (
+        ("dispute-lost", "a dispute lost: its held units leave the batch"),
+        ("dispute-won", "a dispute won: its held units are free again"),
+    ):
+        p = command(name, help_, changes=True)
+        p.add_argument("--dispute", required=True, help="the provider's dispute id")
+        p.add_argument("--provider", help="the provider (when two share the id)")
 
     p = command("balance", "show the balance of an account", changes=False)
     p.add_argument("--tenant", required=True, help="tenant id or name")

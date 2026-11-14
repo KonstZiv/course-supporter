@@ -4,9 +4,10 @@ Purpose:
     One contract for every merchant of record the platform sells through.
     An adapter speaks one provider's API — its checkout, its webhook
     signature, its refunds — and hands billing the same few values whatever
-    the provider; billing never reads a provider's own payload. Today there is
-    one adapter, :class:`~course_supporter.billing.payments.fake.FakeProvider`,
-    for tests and local development; a real provider is one new adapter
+    the provider; billing never reads a provider's own payload. The adapters:
+    :class:`~course_supporter.billing.payments.creem.CreemProvider` (Creem)
+    and :class:`~course_supporter.billing.payments.fake.FakeProvider`, for
+    tests and local development; another provider is one new adapter
     registered by name (:mod:`.registry`), not an edit here.
 
 The port (:class:`PaymentProvider`, a structural ``Protocol``):
@@ -25,7 +26,10 @@ The port (:class:`PaymentProvider`, a structural ``Protocol``):
       :class:`InvalidWebhookError`, and nothing is recorded.
     * :meth:`~PaymentProvider.request_refund` — a :class:`RefundRequest`
       (a purchase batch, the units, the amount the journal computes:
-      :func:`refund_request`) becomes the provider's adjustment id.
+      :func:`refund_request`) becomes the provider's adjustment id. A
+      provider without an API for it raises :class:`RefundUnavailableError`:
+      its refunds are made in its dashboard, and the journal follows them by
+      the webhook (:func:`~course_supporter.billing.refunds.refund_at_provider`).
 
 Normalized events:
     :class:`PurchaseCompleted`, :class:`RefundApproved`,
@@ -80,6 +84,11 @@ class InvalidWebhookError(PaymentProviderError):
 
 class CheckoutUnavailableError(PaymentProviderError):
     """The provider cannot sell this package (e.g. no price of its own for it)."""
+
+
+class RefundUnavailableError(PaymentProviderError):
+    """The provider has no API to refund through: refunds are made in its
+    dashboard, and its webhook tells the journal."""
 
 
 # ── Checkout ───────────────────────────────────────────────────────────
@@ -213,7 +222,13 @@ class PurchaseCompleted:
 
 @dataclass(frozen=True, kw_only=True)
 class RefundApproved:
-    """The provider refunded: the held units of the refund leave the batch."""
+    """The provider refunded: the held units of the refund leave the batch.
+
+    A refund the journal never held (made in the provider's dashboard) is
+    followed by its transaction and amount
+    (:func:`~course_supporter.billing.refunds.refund_at_provider`): an
+    adapter gives them whenever the provider's event has them.
+    """
 
     kind: ClassVar[EventKind] = EventKind.REFUND_APPROVED
     event_id: str
@@ -253,13 +268,17 @@ class RefundRejected:
 
 @dataclass(frozen=True, kw_only=True)
 class Chargeback:
-    """The payer disputed a payment with their bank. Recorded; the journal is
-    not touched — what to do is a person's decision."""
+    """The payer disputed a payment with their bank: the free units of the
+    purchase are held until the dispute ends
+    (:func:`~course_supporter.billing.refunds.dispute_hold`)."""
 
     kind: ClassVar[EventKind] = EventKind.CHARGEBACK
     event_id: str
     provider_type: str
     occurred_at: datetime | None
+    dispute_id: str
+    """The provider's id of the dispute: the key of the hold, and what the
+    administrator names when it ends."""
     account_id: uuid.UUID | None
     transaction_id: str
     amount_minor: int
@@ -267,6 +286,7 @@ class Chargeback:
 
     def __post_init__(self) -> None:
         _check_common(self.event_id, self.provider_type, self.occurred_at)
+        _check_id(self.dispute_id, "a dispute id")
         _check_id(self.transaction_id, "a transaction id")
         _check_money(self.amount_minor, self.currency)
 
@@ -328,6 +348,7 @@ class PaymentProvider(Protocol):
         """Ask the provider to refund; return its adjustment id.
 
         Raises:
+            RefundUnavailableError: the provider refunds in its dashboard only.
             PaymentProviderError: the provider's API failed or refused.
         """
         ...

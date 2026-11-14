@@ -10,9 +10,17 @@ Purpose:
 
 What goes, for one account:
     its movements, refunds, reservations, differences, batches, consents,
-    author settings, the payment rules it is the payer of, and the audit
-    entries about it, its batches or those rules — all or nothing (one
-    SAVEPOINT); then, in a SAVEPOINT of its own, the account row itself.
+    author settings, the payment rules it is the payer of, the webhook events
+    of payment providers that name it (``billing_provider_events.account_id``),
+    and the audit entries about it, its batches, its refunds or those rules —
+    all or nothing (one SAVEPOINT); then, in a SAVEPOINT of its own, the
+    account row itself.
+
+Webhook events that name no account (BIL-PAY):
+    A provider's event row without an account — a refund's, an event of no
+    interest, a purchase that named none — or naming an account there is no
+    longer (or never was) goes five years after it arrived (``received_at``):
+    :func:`purge_orphan_events`, in the same nightly task.
 
 What stays, and how long (operator 2026-11-06, option b):
     The foreign keys inside billing have no ON DELETE action. A row of
@@ -43,7 +51,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, and_, delete, or_, select
+from sqlalchemy import ColumnElement, and_, delete, exists, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,6 +66,7 @@ from course_supporter.storage.orm import (
     BillingDifference,
     BillingMovement,
     BillingPaymentRule,
+    BillingProviderEvent,
     BillingRefund,
     BillingReservation,
 )
@@ -157,6 +166,13 @@ async def _delete_own_rows(
             )
         ).scalars()
     )
+    refund_ids = list(
+        (
+            await session.execute(
+                select(BillingRefund.id).where(BillingRefund.account_id == account_id)
+            )
+        ).scalars()
+    )
     # Children before parents: movements point at batches, differences,
     # refunds, rules and accounts; refunds at batches.
     steps = (
@@ -168,6 +184,7 @@ async def _delete_own_rows(
         (BillingConsent, BillingConsent.account_id == account_id),
         (BillingAuthorSettings, BillingAuthorSettings.account_id == account_id),
         (BillingPaymentRule, BillingPaymentRule.payer_account_id == account_id),
+        (BillingProviderEvent, BillingProviderEvent.account_id == account_id),
         (
             BillingAuditEntry,
             or_(
@@ -182,6 +199,10 @@ async def _delete_own_rows(
                 and_(
                     BillingAuditEntry.entity == "payment_rule",
                     BillingAuditEntry.entity_id.in_(rule_ids),
+                ),
+                and_(
+                    BillingAuditEntry.entity == "refund",
+                    BillingAuditEntry.entity_id.in_(refund_ids),
                 ),
             ),
         ),
@@ -269,3 +290,42 @@ async def purge_accounts(
         )
     outcome.kept, outcome.blocked = kept, blocked
     return outcome
+
+
+def _orphan_event_due(cutoff: datetime) -> list[ColumnElement[bool]]:
+    has_account = exists().where(BillingAccount.id == BillingProviderEvent.account_id)
+    return [
+        BillingProviderEvent.received_at <= cutoff,
+        or_(BillingProviderEvent.account_id.is_(None), ~has_account),
+    ]
+
+
+async def purge_orphan_events(
+    session: AsyncSession,
+    *,
+    cutoff: datetime,
+    after: uuid.UUID | None,
+    limit: int,
+) -> tuple[int, uuid.UUID | None]:
+    """Delete up to ``limit`` due provider events without a live account.
+
+    Due: arrived at or before ``cutoff`` and naming no account, or one that
+    is gone. By id above ``after``; returns the rows deleted and the last id
+    seen (None when there were none), the cursor of the next call.
+    """
+    query = select(BillingProviderEvent.id).where(*_orphan_event_due(cutoff))
+    if after is not None:
+        query = query.where(BillingProviderEvent.id > after)
+    ids = list(
+        (
+            await session.execute(query.order_by(BillingProviderEvent.id).limit(limit))
+        ).scalars()
+    )
+    if not ids:
+        return 0, None
+    deleted = await session.execute(
+        delete(BillingProviderEvent)
+        .where(BillingProviderEvent.id.in_(ids))
+        .execution_options(synchronize_session=False)
+    )
+    return deleted.rowcount, ids[-1]  # type: ignore[attr-defined]

@@ -158,6 +158,8 @@ def test_billing_has_no_administrator_route() -> None:
         (CONSENT, "POST"),
         ("/api/v1/portal/billing/packages", "GET"),
         ("/api/v1/portal/billing/checkout", "POST"),
+        ("/api/v1/billing/terms", "GET"),  # the author's, the tenant's key
+        ("/api/v1/billing/consent", "POST"),  # the author's, the tenant's key
         ("/api/v1/billing/checkout", "POST"),  # the author's, the tenant's key
         ("/api/v1/billing/webhooks/{provider}", "POST"),  # the provider's signature
     }

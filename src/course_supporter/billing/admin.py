@@ -26,6 +26,13 @@ Author settings:
     Benefit (none | monthly_limit | unlimited) and credit. A change of the KIND
     of benefit stamps ``benefit_started_at``; a new limit within monthly_limit
     keeps it. Computing what a limit leaves is BIL-B / BIL-E.
+
+Disputes (BIL-PAY):
+    A provider that does not report how a dispute ended (Creem) leaves it to
+    the administrator: :func:`end_dispute` — lost, the held units leave the
+    batch; won, they are free again (:func:`.refunds.dispute_lost` /
+    :func:`.refunds.dispute_won`), audited as ``dispute.lost`` /
+    ``dispute.won``.
 """
 
 from __future__ import annotations
@@ -37,7 +44,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.billing import audit
+from course_supporter.billing import audit, refunds
 from course_supporter.billing.accounts import (
     find_active_account,
     get_or_create_author_account,
@@ -54,6 +61,8 @@ from course_supporter.billing.kinds import (
     ActionKind,
     AuditAction,
     Benefit,
+    RefundKind,
+    RefundState,
     RuleScope,
 )
 from course_supporter.billing.rules import end_rule
@@ -62,6 +71,7 @@ from course_supporter.storage.orm import (
     BillingAuthorSettings,
     BillingConsent,
     BillingPaymentRule,
+    BillingRefund,
     CourseNode,
     Student,
     Tenant,
@@ -491,3 +501,75 @@ async def end_payment_rule(
         raise BillingConflictError(f"rule {rule_id} is already ended")
     await end_rule(session, rule, actor=actor, now=now or datetime.now(UTC))
     return rule
+
+
+# ── Disputes (BIL-PAY) ─────────────────────────────────────────────────
+
+
+async def find_dispute(
+    session: AsyncSession, *, dispute_id: str, provider: str | None
+) -> BillingRefund:
+    """The hold of a dispute by its id, of one provider or of any.
+
+    Raises:
+        BillingNotFoundError: nothing was held for it (no such dispute, or
+            nothing was free when it opened).
+        BillingInvalidError: the id is several providers' — name one.
+    """
+    stmt = select(BillingRefund).where(
+        BillingRefund.kind == RefundKind.DISPUTE.value,
+        BillingRefund.provider_adjustment_id == dispute_id,
+    )
+    if provider is not None:
+        stmt = stmt.where(BillingRefund.provider == provider)
+    found = list((await session.execute(stmt)).scalars())
+    if not found:
+        raise BillingNotFoundError(
+            f"nothing was held for dispute {dispute_id}: no such dispute, or "
+            "its units were spent before it (the platform's loss)"
+        )
+    if len(found) > 1:
+        names = sorted(r.provider for r in found)
+        raise BillingInvalidError(
+            f"dispute {dispute_id} is known to {names}: name the provider"
+        )
+    return found[0]
+
+
+async def end_dispute(
+    session: AsyncSession,
+    *,
+    dispute_id: str,
+    provider: str | None,
+    lost: bool,
+    actor: str,
+    now: datetime | None = None,
+) -> tuple[BillingRefund, bool]:
+    """End a dispute: lost — the held units leave the batch; won — they are
+    free again. Audited; return the hold and whether it changed now.
+
+    Ending it again the same way changes nothing and writes nothing.
+
+    Raises:
+        BillingNotFoundError / BillingInvalidError: :func:`find_dispute`.
+        BillingConflictError: it already ended the other way.
+    """
+    actor = audit.require_actor(actor)
+    found = await find_dispute(session, dispute_id=dispute_id, provider=provider)
+    before = audit.refund_snapshot(found)
+    decide = refunds.dispute_lost if lost else refunds.dispute_won
+    refund = await decide(
+        session, provider=found.provider, dispute_id=dispute_id, now=now
+    )
+    if before["state"] != RefundState.HELD.value:
+        return refund, False
+    await audit.record(
+        session,
+        actor=actor,
+        action=AuditAction.DISPUTE_LOST if lost else AuditAction.DISPUTE_WON,
+        entity="refund",
+        entity_id=refund.id,
+        before=before,
+        after=audit.refund_snapshot(refund),
+    )
+    return refund, True

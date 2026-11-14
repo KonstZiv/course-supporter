@@ -15,6 +15,8 @@ Modules:
     :mod:`.catalog` — the packages on sale, ``config/billing_packages.yaml``.
     :mod:`.registry` — the adapters by name; the providers switched on
     (``BILLING_PROVIDERS``, none by default: payment is unavailable).
+    :mod:`.creem` — :class:`.creem.CreemProvider`, Creem's checkout, webhooks
+    and refunds (its dashboard's only).
     :mod:`.fake` — :class:`.fake.FakeProvider`, for tests and local
     development only; never registered in production.
     :mod:`.checkout` — a payer opens a checkout of a package (a student from

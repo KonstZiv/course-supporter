@@ -61,6 +61,7 @@ from course_supporter.storage.orm import (
     BillingDifference,
     BillingMovement,
     BillingPaymentRule,
+    BillingProviderEvent,
     BillingRefund,
     BillingReservation,
     Student,
@@ -879,3 +880,99 @@ class TestPurge:
             )
         )
         assert rule_audit == 0  # payment_rule.create and .end went with the rule
+
+
+# ── billing_purge: the providers' webhook events (BIL-PAY part 2) ─────
+
+
+class TestPurgeProviderEvents:
+    """Rows of ``billing_provider_events`` go with their account; those
+    naming no live account go five years after they arrived."""
+
+    async def _event(
+        self,
+        scene: Scene,
+        *,
+        account_id: uuid.UUID | None,
+        received_at: datetime,
+    ) -> uuid.UUID:
+        async def make(s: AsyncSession) -> uuid.UUID:
+            row = BillingProviderEvent(
+                provider="fake",
+                provider_event_id=f"evt_retention_{key()}",
+                event_type="unknown",
+                provider_event_type="x.y",
+                state="ignored",
+                body_sha256="0" * 64,
+                received_at=received_at,
+                processed_at=received_at,
+                account_id=account_id,
+            )
+            s.add(row)
+            await s.flush()
+            return row.id
+
+        return await scene.do(make)
+
+    async def _left(self, scene: Scene, ids: list[uuid.UUID]) -> set[uuid.UUID]:
+        async def read(s: AsyncSession) -> set[uuid.UUID]:
+            rows = await s.execute(
+                select(BillingProviderEvent.id).where(BillingProviderEvent.id.in_(ids))
+            )
+            return set(rows.scalars())
+
+        return await scene.do(read)
+
+    async def _forget(self, scene: Scene, ids: list[uuid.UUID]) -> None:
+        async def clean(s: AsyncSession) -> None:
+            await s.execute(
+                delete(BillingProviderEvent).where(BillingProviderEvent.id.in_(ids))
+            )
+
+        await scene.do(clean)
+
+    async def test_the_events_of_a_destroyed_account_go_with_it(
+        self, scene: Scene
+    ) -> None:
+        tenant = await scene.tenant()
+        student_id, account = await scene.student(tenant)
+        await scene.buy(account, 10, at=months_ago(scene, 12 * 6))
+        recent = await self._event(scene, account_id=account, received_at=scene.now)
+        await scene.delete_student_and_anonymize(
+            student_id, add_months(scene.now, -12 * 5 - 1)
+        )
+        try:
+            done = await run(scene, BILLING_PURGE)
+            assert await self._left(scene, [recent]) == set()
+            assert await scene.rows(account) == ALL_GONE
+            assert done.details["accounts"] >= 1
+        finally:
+            await self._forget(scene, [recent])
+
+    async def test_events_without_a_live_account_go_after_five_years(
+        self, scene: Scene
+    ) -> None:
+        tenant = await scene.tenant()
+        live = await scene.author(tenant)
+        old = add_months(scene.now, -12 * 5) - timedelta(days=1)
+        young = add_months(scene.now, -12 * 4)
+        gone = {
+            await self._event(scene, account_id=None, received_at=old),
+            await self._event(scene, account_id=uuid.uuid4(), received_at=old),
+        }
+        kept = {
+            await self._event(scene, account_id=None, received_at=young),
+            await self._event(scene, account_id=uuid.uuid4(), received_at=young),
+            await self._event(scene, account_id=live, received_at=old),
+        }
+        ids = list(gone | kept)
+        try:
+            dry = await run(scene, BILLING_PURGE, dry_run=True)
+            assert dry.details["provider_events"] >= 2
+            assert await self._left(scene, ids) == gone | kept
+
+            done = await run(scene, BILLING_PURGE, billing_purge_batch_size=1)
+            assert done.details["provider_events"] >= 2
+            assert await self._left(scene, ids) == kept
+        finally:
+            await self._forget(scene, ids)

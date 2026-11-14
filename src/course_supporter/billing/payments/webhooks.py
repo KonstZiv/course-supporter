@@ -24,10 +24,17 @@ One event, one transaction:
          waits for a person.
        * :class:`~.port.RefundApproved` / :class:`~.port.RefundRejected` —
          :func:`.refunds.refund_approve` / :func:`.refunds.refund_reject` of
-         the provider's adjustment.
-       * :class:`~.port.Chargeback` — RECORDED, with a WARNING
-         ``billing_chargeback``; the journal is not touched (what a chargeback
-         does to the units is not decided).
+         the provider's adjustment. An approval of an adjustment the journal
+         never held — a refund made in the provider's dashboard — that names
+         its transaction: :func:`.refunds.refund_at_provider` takes the units
+         the money stands for, no more than are free (the rest is the
+         platform's loss), with a WARNING ``billing_refund_at_provider``; no
+         purchase of that transaction: the event FAILS (500, sent again).
+       * :class:`~.port.Chargeback` — :func:`.refunds.dispute_hold`: the free
+         units of the purchase are held until the dispute ends
+         (``scripts/billing_admin.py dispute-lost`` / ``dispute-won``), with a
+         WARNING ``billing_chargeback``; PROCESSED (operator 2026-11-12). No
+         purchase of that transaction: the event FAILS.
        * :class:`~.port.Unknown` — IGNORED.
 
     4. The row is written with the outcome — the normalized fields, the
@@ -199,12 +206,7 @@ async def _act(
         case PurchaseCompleted():
             return await _credit(session, provider, event, catalog, now)
         case RefundApproved():
-            await refunds.refund_approve(
-                session,
-                provider=provider,
-                provider_adjustment_id=event.adjustment_id,
-                now=now,
-            )
+            await _approve(session, provider, event, now)
             return EventState.PROCESSED, None
         case RefundRejected():
             await refunds.refund_reject(
@@ -215,19 +217,76 @@ async def _act(
             )
             return EventState.PROCESSED, None
         case Chargeback():
+            held = await refunds.dispute_hold(
+                session,
+                provider=provider,
+                dispute_id=event.dispute_id,
+                transaction_id=event.transaction_id,
+                now=now,
+            )
             log.warning(
                 "billing_chargeback",
                 provider=provider,
                 event_id=event.event_id,
-                account_id=str(event.account_id) if event.account_id else None,
+                dispute_id=event.dispute_id,
+                account_id=str(held.account_id),
+                batch_id=str(held.batch_id),
                 transaction_id=event.transaction_id,
                 amount_minor=event.amount_minor,
                 currency=event.currency,
+                held_units=held.units,
+                repeated=held.repeated,
             )
-            return EventState.RECORDED, None
+            return EventState.PROCESSED, None
         case Unknown():
             return EventState.IGNORED, None
     assert_never(event)
+
+
+async def _approve(
+    session: AsyncSession, provider: str, event: RefundApproved, now: datetime
+) -> None:
+    """A held refund approved; else a refund made at the provider, followed."""
+    held = await refunds.find_refund(
+        session, provider=provider, provider_adjustment_id=event.adjustment_id
+    )
+    if (
+        held is not None
+        or event.transaction_id is None
+        or event.amount_minor is None
+        or event.currency is None
+    ):
+        await refunds.refund_approve(
+            session,
+            provider=provider,
+            provider_adjustment_id=event.adjustment_id,
+            now=now,
+        )
+        return
+    taken = await refunds.refund_at_provider(
+        session,
+        provider=provider,
+        provider_adjustment_id=event.adjustment_id,
+        transaction_id=event.transaction_id,
+        amount_minor=event.amount_minor,
+        currency=event.currency,
+        now=now,
+    )
+    log.warning(
+        "billing_refund_at_provider",
+        provider=provider,
+        event_id=event.event_id,
+        adjustment_id=event.adjustment_id,
+        account_id=str(taken.account_id),
+        batch_id=str(taken.batch_id),
+        transaction_id=event.transaction_id,
+        amount_minor=event.amount_minor,
+        currency=event.currency,
+        units_wanted=taken.wanted,
+        units_taken=taken.units,
+        units_lost=taken.lost,
+        repeated=taken.repeated,
+    )
 
 
 async def _credit(
@@ -337,6 +396,7 @@ def _fields(event: ProviderEvent) -> dict[str, Any]:
                 "amount_minor": event.amount_minor,
                 "currency": event.currency,
                 "provider_transaction_id": event.transaction_id,
+                "provider_adjustment_id": event.dispute_id,
             }
         case Unknown():
             pass

@@ -28,3 +28,8 @@ packages:
 # An empty section is allowed.
 providers:
   paddle: {}   # Paddle price ids (pri_...): the Paddle adapter's task
+  # Creem product ids (prod_...), one product per package, from the Creem
+  # dashboard — of the test mode while CREEM_API_BASE is the test host (a test
+  # product is unknown to the live API). Without an id the package cannot be
+  # bought through Creem (503).
+  creem: {}

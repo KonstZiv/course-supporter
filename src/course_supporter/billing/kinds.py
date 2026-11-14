@@ -26,6 +26,7 @@ __all__ = [
     "EventState",
     "MovementKind",
     "PayerSource",
+    "RefundKind",
     "RefundState",
     "ReservationState",
     "RuleScope",
@@ -73,6 +74,11 @@ class ConsentChannel(StrEnum):
     """Where the holder of an account agreed to the terms."""
 
     PORTAL = "portal"
+    """A student, in the portal (their portal session)."""
+
+    API = "api"
+    """An author, through the API with the tenant's key (the author's app
+    uses it); the server cannot tell the app from another client of the key."""
 
 
 class PayerSource(StrEnum):
@@ -104,6 +110,12 @@ class AuditAction(StrEnum):
     BATCH_ADMIN_CREDIT = "batch.admin_credit"
     BATCH_INVOICE_CREDIT = "batch.invoice_credit"
     """A contract invoice paid (B2B), credited by the administrator."""
+
+    DISPUTE_LOST = "dispute.lost"
+    """A dispute (chargeback) lost: its held units leave the batch."""
+
+    DISPUTE_WON = "dispute.won"
+    """A dispute (chargeback) won: its held units are free again."""
 
 
 # ── The journal of units (BIL-B) ──
@@ -193,8 +205,24 @@ class DifferenceState(StrEnum):
     ANNULLED = "annulled"
 
 
+class RefundKind(StrEnum):
+    """Why units of a purchase batch are held or gone back (``billing_refunds``)."""
+
+    REFUND = "refund"
+    """A refund: asked of the provider (held while it reviews), or made at the
+    provider (in its dashboard) and followed by the journal."""
+
+    DISPUTE = "dispute"
+    """A dispute (chargeback): the free units are held until it ends — lost,
+    they leave the batch; won, they are free again (operator 2026-11-12)."""
+
+
 class RefundState(StrEnum):
-    """Where a refund through the batch's provider stands."""
+    """Where a refund through the batch's provider — or a dispute — stands.
+
+    For a dispute: ``held`` while it lasts, ``approved`` when it was lost
+    (the units are gone), ``rejected`` when it was won (the units are back).
+    """
 
     HELD = "held"
     APPROVED = "approved"
@@ -217,7 +245,8 @@ class EventKind(StrEnum):
     """The provider refused the refund: the held units are free again."""
 
     CHARGEBACK = "chargeback"
-    """The payer disputed a payment with their bank: recorded, nothing done."""
+    """The payer disputed a payment with their bank: the free units of the
+    batch are held until the dispute ends."""
 
     UNKNOWN = "unknown"
     """Any other event of the provider: ignored."""
@@ -233,7 +262,8 @@ class EventState(StrEnum):
     """Not an event billing acts on."""
 
     RECORDED = "recorded"
-    """Kept for a person to decide (a chargeback); the journal is untouched."""
+    """Kept for a person to decide; the journal is untouched. Chargebacks
+    before BIL-PAY part 2 were recorded so; none is now (they are processed)."""
 
     FAILED = "failed"
     """Not handled (``error`` says why); handled again when it comes again."""

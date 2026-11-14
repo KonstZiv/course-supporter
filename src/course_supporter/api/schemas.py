@@ -2672,33 +2672,34 @@ class PortalMaterialTreeNode(BaseModel):
 
 
 class BillingTermsResponse(BaseModel):
-    """GET /portal/billing/terms: the billing terms in force and the student's
-    standing with them."""
+    """GET /portal/billing/terms, GET /billing/terms: the billing terms in force
+    and the holder's (the student's, the author's) standing with them."""
 
     terms_version: str = Field(
         description="Revision of the billing terms in force: the date it took "
         "effect, YYYY-MM-DD."
     )
     consent_required: bool = Field(
-        description="True when the student has not agreed to this revision yet."
+        description="True when the holder has not agreed to this revision yet."
     )
     consented_at: datetime | None = Field(
         default=None,
-        description="When the student agreed to this revision; null while not.",
+        description="When the holder agreed to this revision; null while not.",
     )
 
 
 class BillingConsentRequest(BaseModel):
-    """POST /portal/billing/consent: the student agrees to the terms shown."""
+    """POST /portal/billing/consent, POST /billing/consent: the student (the
+    author) agrees to the terms shown."""
 
     terms_version: str = Field(
         max_length=32,
-        description="The revision the student was shown; must be the one in "
+        description="The revision the holder was shown; must be the one in "
         "force (409 otherwise).",
     )
     text_sha256: str = Field(
         pattern=r"^[0-9a-f]{64}$",
-        description="SHA-256 (lowercase hex) of the terms text shown to the student.",
+        description="SHA-256 (lowercase hex) of the terms text shown to the holder.",
     )
 
 
@@ -2706,7 +2707,7 @@ class BillingConsentResponse(BaseModel):
     """The recorded consent (201 when new, 200 when it was given before)."""
 
     terms_version: str = Field(description="The revision agreed to.")
-    consented_at: datetime = Field(description="When the student agreed.")
+    consented_at: datetime = Field(description="When the holder agreed.")
 
 
 # ── Payments (BIL-PAY) ─────────────────────────────────────────────────

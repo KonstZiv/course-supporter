@@ -19,7 +19,7 @@ from course_supporter.billing.benefit import (
 from course_supporter.billing.errors import BillingInvalidError
 from course_supporter.billing.journal import add_months
 from course_supporter.billing.kinds import Benefit
-from course_supporter.billing.refunds import refund_amount
+from course_supporter.billing.refunds import refund_amount, units_for_amount
 from course_supporter.storage.orm import BillingBatch
 
 
@@ -135,3 +135,33 @@ class TestRefundAmount:
     def test_within_the_batch(self, units: int) -> None:
         with pytest.raises(BillingInvalidError, match="1 to 300"):
             refund_amount(_batch(), units)
+
+
+class TestUnitsForAmount:
+    """A refund made at the provider: the units its money stands for,
+    ``ceil(amount x units ÷ paid)`` (BIL-PAY part 2)."""
+
+    @pytest.mark.parametrize(
+        ("units", "paid", "amount", "expected"),
+        [
+            (1000, 1198, 599, 500),
+            (1000, 1198, 1198, 1000),
+            (1000, 1198, 1, 1),  # a cent back still stands for a unit
+            (300, 1000, 333, 100),  # 99.9 -> 100
+            (300, 1000, 0, 0),
+            (300, 1000, 5000, 300),  # never more than the batch
+            (300, 0, 10, 300),  # a batch paid nothing: all of it
+        ],
+    )
+    def test_proportional_rounded_up(
+        self, units: int, paid: int, amount: int, expected: int
+    ) -> None:
+        assert units_for_amount(_batch(units=units, amount=paid), amount) == expected
+
+    def test_an_admin_credit_is_never_refunded(self) -> None:
+        with pytest.raises(BillingInvalidError, match="never refunded"):
+            units_for_amount(_batch(source="admin_credit", amount=None), 10)
+
+    def test_a_negative_amount_is_refused(self) -> None:
+        with pytest.raises(BillingInvalidError, match="negative"):
+            units_for_amount(_batch(), -1)

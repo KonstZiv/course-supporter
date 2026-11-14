@@ -1,9 +1,11 @@
 """Consent to the billing terms in force (BIL-A).
 
 Purpose:
-    Before a student pays for anything, they agree to the billing terms. The
-    revision in force is ``settings.billing_terms_version`` (the date it took
-    effect). Consent is required when the account has no consent to THAT
+    Before a student or an author pays for anything, they agree to the billing
+    terms — once per revision, by the same mechanism (operator 2026-11-12): a
+    student in the portal, an author through the API with the tenant's key.
+    The revision in force is ``settings.billing_terms_version`` (the date it
+    took effect). Consent is required when the account has no consent to THAT
     revision — so raising the setting asks everyone again.
 
 Records:
@@ -26,11 +28,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.billing.accounts import (
     find_active_account,
+    get_or_create_author_account,
     get_or_create_student_account,
 )
 from course_supporter.billing.errors import BillingConflictError
 from course_supporter.billing.kinds import AccountKind, ConsentChannel
-from course_supporter.storage.orm import BillingConsent
+from course_supporter.storage.orm import BillingAccount, BillingConsent
 
 
 @dataclass(frozen=True)
@@ -62,20 +65,10 @@ async def consent_required(
     return await _consent(session, account_id, terms_version) is None
 
 
-async def student_terms_status(
-    session: AsyncSession,
-    *,
-    tenant_id: uuid.UUID,
-    student_id: uuid.UUID,
-    terms_version: str,
+async def _status(
+    session: AsyncSession, account: BillingAccount | None, terms_version: str
 ) -> TermsStatus:
-    """Where the student stands with the revision in force; creates nothing.
-
-    A student without an account yet has not agreed to anything.
-    """
-    account = await find_active_account(
-        session, kind=AccountKind.STUDENT, tenant_id=tenant_id, student_id=student_id
-    )
+    """An account without a row yet has not agreed to anything."""
     found = (
         await _consent(session, account.id, terms_version)
         if account is not None
@@ -86,6 +79,38 @@ async def student_terms_status(
         consent_required=found is None,
         consented_at=found.consented_at if found is not None else None,
     )
+
+
+async def student_terms_status(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    student_id: uuid.UUID,
+    terms_version: str,
+) -> TermsStatus:
+    """Where the student stands with the revision in force; creates nothing."""
+    account = await find_active_account(
+        session, kind=AccountKind.STUDENT, tenant_id=tenant_id, student_id=student_id
+    )
+    return await _status(session, account, terms_version)
+
+
+async def author_terms_status(
+    session: AsyncSession, *, tenant_id: uuid.UUID, terms_version: str
+) -> TermsStatus:
+    """Where the author (the tenant) stands with the revision in force;
+    creates nothing."""
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant_id
+    )
+    return await _status(session, account, terms_version)
+
+
+def _require_current(terms_version: str, current_version: str) -> None:
+    if terms_version != current_version:
+        raise BillingConflictError(
+            f"terms version {terms_version} is not the current {current_version}"
+        )
 
 
 async def record_student_consent(
@@ -106,13 +131,43 @@ async def record_student_consent(
         BillingConflictError: ``terms_version`` is not the revision in force
             (the holder was shown another text).
     """
-    if terms_version != current_version:
-        raise BillingConflictError(
-            f"terms version {terms_version} is not the current {current_version}"
-        )
+    _require_current(terms_version, current_version)
     account = await get_or_create_student_account(
         session, tenant_id=tenant_id, student_id=student_id
     )
+    return await _record(session, account, terms_version, text_sha256, channel)
+
+
+async def record_author_consent(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    terms_version: str,
+    current_version: str,
+    text_sha256: str,
+) -> tuple[BillingConsent, bool]:
+    """Record the author's consent (channel ``api``); return the record and
+    whether it is new.
+
+    Creates the tenant's author account on first need.
+
+    Raises:
+        BillingConflictError: ``terms_version`` is not the revision in force.
+    """
+    _require_current(terms_version, current_version)
+    account = await get_or_create_author_account(session, tenant_id=tenant_id)
+    return await _record(
+        session, account, terms_version, text_sha256, ConsentChannel.API
+    )
+
+
+async def _record(
+    session: AsyncSession,
+    account: BillingAccount,
+    terms_version: str,
+    text_sha256: str,
+    channel: ConsentChannel,
+) -> tuple[BillingConsent, bool]:
     inserted = await session.execute(
         insert(BillingConsent)
         .values(

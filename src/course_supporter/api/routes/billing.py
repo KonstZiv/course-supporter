@@ -10,11 +10,19 @@ Routes
   transaction of its own (``billing.payments.webhooks``): 200 when every
   event was handled or was a repeat, 500 when one failed — it is recorded,
   and the provider sends it again. No answer says more than its status.
+- ``GET /billing/terms`` — the revision of the billing terms in force and
+  whether the author (the tenant's key, scope ``prep``) still has to agree to
+  it. Creates nothing.
+- ``POST /billing/consent`` — the author agrees to the revision they were
+  shown, once per revision, as a student does in the portal (operator
+  2026-11-12): 201 with the new record, 200 with the earlier one, 409 when the
+  revision is not the one in force. Channel ``api``.
 - ``POST /billing/checkout`` — an author (the tenant's key, scope ``prep``)
   opens a checkout of a package for the tenant's author account, which pays
   for processing and, under a payment rule, for the reviews of the tenant's
   students. The same service as the portal's checkout; 503 when payment is
-  unavailable, 404 for a package not on sale or a provider not switched on.
+  unavailable, 409 while the author has not agreed to the terms in force, 404
+  for a package not on sale or a provider not switched on.
 
 There is no administrator route (operator decision of 2026-11-05): the
 administrator's door is ``scripts/billing_admin.py``.
@@ -40,11 +48,22 @@ from course_supporter.api.routes._billing_shared import (
     open_checkout,
     require_payment,
 )
-from course_supporter.api.schemas import BillingCheckoutRequest, BillingCheckoutResponse
+from course_supporter.api.schemas import (
+    BillingCheckoutRequest,
+    BillingCheckoutResponse,
+    BillingConsentRequest,
+    BillingConsentResponse,
+    BillingTermsResponse,
+)
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.billing.accounts import get_or_create_author_account
+from course_supporter.billing.consent import (
+    author_terms_status,
+    record_author_consent,
+)
+from course_supporter.billing.errors import BillingConflictError
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.port import InvalidWebhookError
 from course_supporter.billing.payments.registry import ProviderRegistry
@@ -125,7 +144,73 @@ async def receive_webhook(
     return Response(status_code=200)
 
 
-@router.post("/billing/checkout", responses=CHECKOUT_RESPONSES)
+@router.get("/billing/terms")
+async def get_author_billing_terms(
+    tenant: PrepDep, session: SessionDep
+) -> BillingTermsResponse:
+    """The billing terms in force and whether the author has agreed to them."""
+    status = await author_terms_status(
+        session,
+        tenant_id=tenant.tenant_id,
+        terms_version=get_settings().billing_terms_version,
+    )
+    return BillingTermsResponse(
+        terms_version=status.terms_version,
+        consent_required=status.consent_required,
+        consented_at=status.consented_at,
+    )
+
+
+@router.post(
+    "/billing/consent",
+    status_code=201,
+    responses={
+        200: {"description": "Already agreed to this revision; the earlier record."},
+        409: {"description": "Not the revision in force."},
+    },
+)
+async def post_author_billing_consent(
+    body: BillingConsentRequest,
+    tenant: PrepDep,
+    session: SessionDep,
+    response: Response,
+) -> BillingConsentResponse:
+    """Record the author's consent to the revision in force."""
+    current = get_settings().billing_terms_version
+    try:
+        record, created = await record_author_consent(
+            session,
+            tenant_id=tenant.tenant_id,
+            terms_version=body.terms_version,
+            current_version=current,
+            text_sha256=body.text_sha256,
+        )
+    except BillingConflictError as exc:
+        raise _status(
+            409, f"The billing terms changed: the current revision is {current}."
+        ) from exc
+    await session.commit()
+    if created:
+        logger.info(
+            "billing_consent_recorded",
+            tenant_id=str(tenant.tenant_id),
+            account_kind="author",
+            terms_version=record.terms_version,
+        )
+    else:
+        response.status_code = 200
+    return BillingConsentResponse(
+        terms_version=record.terms_version, consented_at=record.consented_at
+    )
+
+
+@router.post(
+    "/billing/checkout",
+    responses={
+        **CHECKOUT_RESPONSES,
+        409: {"description": "The author has not agreed to the terms in force."},
+    },
+)
 async def post_author_checkout(
     body: BillingCheckoutRequest,
     tenant: PrepDep,
@@ -135,6 +220,14 @@ async def post_author_checkout(
 ) -> BillingCheckoutResponse:
     """Open a checkout of a package; the units go to the tenant's author account."""
     require_payment(registry)
+    current = get_settings().billing_terms_version
+    terms = await author_terms_status(
+        session, tenant_id=tenant.tenant_id, terms_version=current
+    )
+    if terms.consent_required:
+        raise _status(
+            409, f"Agree to the billing terms first: the current revision is {current}."
+        )
     account = await get_or_create_author_account(session, tenant_id=tenant.tenant_id)
     await session.commit()  # no transaction stays open across the provider's call
     author_app = get_settings().author_app_base_url.rstrip("/")

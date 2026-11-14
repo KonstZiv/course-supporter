@@ -22,7 +22,8 @@ Its webhook body (JSON)::
 * ``refund.approved`` / ``refund.rejected`` — ``adjustment_id``, and
   optionally ``transaction_id``, ``amount_minor``, ``currency``;
 * ``chargeback.created`` — ``custom_data`` {``account_id``},
-  ``transaction_id``, ``amount_minor``, ``currency``;
+  ``transaction_id``, ``amount_minor``, ``currency``, and optionally
+  ``dispute_id`` (the event's id when absent);
 * any other ``event_type`` — :class:`~.port.Unknown`.
 """
 
@@ -88,6 +89,7 @@ class _Refund(BaseModel):
 
 class _Chargeback(BaseModel):
     custom_data: _CustomData = _CustomData()
+    dispute_id: str | None = None
     transaction_id: str
     amount_minor: int
     currency: str
@@ -259,6 +261,7 @@ class FakeProvider:
             disputed = _Chargeback.model_validate(envelope.data)
             return Chargeback(
                 **common,
+                dispute_id=disputed.dispute_id or envelope.event_id,
                 account_id=_account(disputed.custom_data.account_id),
                 transaction_id=disputed.transaction_id,
                 amount_minor=disputed.amount_minor,

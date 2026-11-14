@@ -4360,7 +4360,9 @@ class BillingConsent(Base):
             "text_sha256 ~ '^[0-9a-f]{64}$'",
             name="ck_billing_consents_text_sha256",
         ),
-        CheckConstraint("channel IN ('portal')", name="ck_billing_consents_channel"),
+        CheckConstraint(
+            "channel IN ('portal', 'api')", name="ck_billing_consents_channel"
+        ),
         UniqueConstraint(
             "account_id", "terms_version", name="uq_billing_consents_version"
         ),
@@ -4391,7 +4393,9 @@ class BillingConsent(Base):
         "client reports it.",
     )
     channel: Mapped[str] = mapped_column(
-        String(16), comment="Where the holder agreed: portal."
+        String(16),
+        comment="Where the holder agreed: portal (a student) | api (an author, "
+        "with the tenant's key).",
     )
 
 
@@ -4425,12 +4429,12 @@ class BillingAuditEntry(Base):
         String(64),
         comment="What was done, e.g. author_settings.update, payment_rule.create, "
         "payment_rule.end, account.anonymize, batch.admin_credit, "
-        "batch.invoice_credit.",
+        "batch.invoice_credit, dispute.lost, dispute.won.",
     )
     entity: Mapped[str] = mapped_column(
         String(32),
         comment="Kind of row changed: account | author_settings | payment_rule "
-        "| batch.",
+        "| batch | refund.",
     )
     entity_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, index=True, comment="Id of the row changed. No FK (several tables)."
@@ -4603,11 +4607,16 @@ class BillingBatch(Base):
 
 
 class BillingRefund(Base):
-    """A refund of unused units of one purchase batch, through its provider (BIL-B).
+    """Units of one purchase batch held or gone back: a refund or a dispute.
 
-    While the provider reviews it the units are held (not spendable);
-    approved, they leave the batch; rejected, they return to it. One row per
-    adjustment of a provider, so a repeated notice changes nothing.
+    A refund through the batch's provider (BIL-B): while the provider reviews
+    it the units are held (not spendable); approved, they leave the batch;
+    rejected, they return to it. A refund made at the provider (in its
+    dashboard) is written approved at once (BIL-PAY). A dispute (chargeback,
+    BIL-PAY): the batch's free units are held while it lasts; lost
+    (``approved``), they leave the batch; won (``rejected``), they return.
+    One row per adjustment (or dispute) of a provider, so a repeated notice
+    changes nothing.
     """
 
     __tablename__ = "billing_refunds"
@@ -4615,6 +4624,9 @@ class BillingRefund(Base):
         CheckConstraint(
             "state IN ('held', 'approved', 'rejected')",
             name="ck_billing_refunds_state",
+        ),
+        CheckConstraint(
+            "kind IN ('refund', 'dispute')", name="ck_billing_refunds_kind"
         ),
         CheckConstraint("units > 0", name="ck_billing_refunds_units_positive"),
         CheckConstraint(
@@ -4633,8 +4645,9 @@ class BillingRefund(Base):
             name="uq_billing_refunds_provider_adjustment",
         ),
         {
-            "comment": "Refund of unused units of a purchase batch (BIL-B): held "
-            "while the provider reviews it, then approved or rejected."
+            "comment": "Refund or dispute of unused units of a purchase batch "
+            "(BIL-B, BIL-PAY): held while the provider reviews it (or the dispute "
+            "lasts), then approved (units gone) or rejected (units back)."
         },
     )
 
@@ -4649,13 +4662,22 @@ class BillingRefund(Base):
         index=True,
         comment="The purchase batch the units are refunded from.",
     )
+    kind: Mapped[str] = mapped_column(
+        String(16),
+        default="refund",
+        server_default="refund",
+        comment="refund (asked of the provider, or made at the provider) | "
+        "dispute (a chargeback: units held until it ends).",
+    )
     units: Mapped[int] = mapped_column(
         Integer, comment="Units refunded: free units of the batch when held."
     )
     amount_minor: Mapped[int] = mapped_column(
         BigInteger,
-        comment="Money back: floor(amount_paid_minor * units / batch units), "
-        "in minor units of the batch's currency.",
+        comment="Money back, in minor units of the batch's currency: "
+        "floor(amount_paid_minor * units / batch units) for a refund asked of "
+        "the provider and for a dispute (the worth of the units held); the "
+        "provider's own figure for a refund made at the provider.",
     )
     currency: Mapped[str] = mapped_column(
         String(3), comment="The batch's currency (ISO 4217)."
@@ -4666,14 +4688,16 @@ class BillingRefund(Base):
     )
     provider_adjustment_id: Mapped[str] = mapped_column(
         String(64),
-        comment="The provider's adjustment (refund) id; unique per provider.",
+        comment="The provider's adjustment (refund) id, or its dispute id; "
+        "unique per provider.",
     )
     state: Mapped[str] = mapped_column(
         String(16),
         default="held",
         server_default="held",
-        comment="held (units blocked while the provider reviews) | approved "
-        "(units gone) | rejected (units back in the batch).",
+        comment="held (units blocked while the provider reviews, or while the "
+        "dispute lasts) | approved (units gone; a dispute lost) | rejected "
+        "(units back in the batch; a dispute won).",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -5060,8 +5084,9 @@ class BillingProviderEvent(Base):
     state: Mapped[str] = mapped_column(
         String(16),
         comment="processed (the journal acted) | ignored (not an event billing "
-        "acts on) | recorded (a chargeback: kept, no action) | failed (see "
-        "error; handled again when the provider repeats the event).",
+        "acts on) | recorded (kept, no action: chargebacks before BIL-PAY part "
+        "2) | failed (see error; handled again when the provider repeats the "
+        "event).",
     )
     error: Mapped[str | None] = mapped_column(
         Text,
@@ -5109,5 +5134,6 @@ class BillingProviderEvent(Base):
         comment="Purchase: the provider's id of the line within the transaction.",
     )
     provider_adjustment_id: Mapped[str | None] = mapped_column(
-        String(64), comment="Refund: the provider's adjustment id."
+        String(64),
+        comment="Refund: the provider's adjustment id; chargeback: its dispute id.",
     )

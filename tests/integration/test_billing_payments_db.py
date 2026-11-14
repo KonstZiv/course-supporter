@@ -77,6 +77,7 @@ TERMS_CONSENT = "/api/v1/portal/billing/consent"
 PACKAGES = "/api/v1/portal/billing/packages"
 CHECKOUT = "/api/v1/portal/billing/checkout"
 AUTHOR_CHECKOUT = "/api/v1/billing/checkout"
+AUTHOR_CONSENT = "/api/v1/billing/consent"
 SHA = "c" * 64
 
 STARTER = Package(
@@ -651,15 +652,17 @@ class TestOtherEvents:
             assert (await _send(client, signed)).status_code == 200
         assert (await self._refund(session_factory, adjustment)).state == "approved"
 
-    async def test_a_chargeback_is_recorded_and_the_journal_untouched(
+    async def test_a_chargeback_holds_the_free_units_of_the_batch(
         self, session_factory: async_sessionmaker[AsyncSession], world: World
     ) -> None:
+        """Operator 2026-11-12: the free units are held until the dispute
+        ends; the event is processed (it was recorded before)."""
         batch = await self._paid_batch(session_factory, world)
-        before = await self._kinds(session_factory, batch.account_id)
         signed = world.fake.webhook(
             "chargeback.created",
             {
                 "custom_data": {"account_id": str(batch.account_id)},
+                "dispute_id": f"dsp_{world.token}",
                 "transaction_id": batch.provider_transaction_id,
                 "amount_minor": 990,
                 "currency": "EUR",
@@ -668,15 +671,20 @@ class TestOtherEvents:
         )
         async with _client() as client:
             assert (await _send(client, signed)).status_code == 200
-        assert await self._kinds(session_factory, batch.account_id) == before
-        assert len(await _batches(session_factory, batch.account_id)) == 1
+        assert await self._kinds(session_factory, batch.account_id) == [
+            "credit",
+            "refund_hold",
+        ]
+        held = await self._refund(session_factory, f"dsp_{world.token}")
+        assert (held.kind, held.state, held.units) == ("dispute", "held", 1000)
         event = await _event(session_factory, world.event("chargeback"))
         assert event is not None
-        assert (event.event_type, event.state, event.account_id) == (
-            "chargeback",
-            "recorded",
-            batch.account_id,
-        )
+        assert (
+            event.event_type,
+            event.state,
+            event.account_id,
+            event.provider_adjustment_id,
+        ) == ("chargeback", "processed", batch.account_id, f"dsp_{world.token}")
 
     async def test_an_unknown_event_is_ignored(
         self, session_factory: async_sessionmaker[AsyncSession], world: World
@@ -836,6 +844,14 @@ class TestAuthorCheckout:
         self, session_factory: async_sessionmaker[AsyncSession], world: World
     ) -> None:
         async with _client() as client:
+            consent = await client.post(
+                AUTHOR_CONSENT,
+                json={
+                    "terms_version": get_settings().billing_terms_version,
+                    "text_sha256": SHA,
+                },
+            )
+            assert consent.status_code == 201, consent.text
             response = await client.post(
                 AUTHOR_CHECKOUT, json={"package_id": "starter"}
             )
@@ -1041,7 +1057,7 @@ def test_the_downgrade_is_refused_while_another_provider_has_a_purchase() -> Non
             command.downgrade(cfg, "bilb_unit_ledger")
         with engine.connect() as conn:
             current = conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert current == "bilpay_payment_port"
+        assert current == "bilpay_creem_disputes"  # the whole downgrade rolled back
     finally:
         _forget(account_id)
         engine.dispose()

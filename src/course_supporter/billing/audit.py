@@ -1,8 +1,9 @@
 """The audit log of administrative changes to billing data (BIL-A).
 
 Every change made through :mod:`.admin`, :mod:`.accounts`, an
-administrator's credit of units (:func:`.ledger.credit_admin`) or a contract
-invoice credited by the administrator (:mod:`.payments.invoice`) writes one
+administrator's credit of units (:func:`.ledger.credit_admin`), a contract
+invoice credited by the administrator (:mod:`.payments.invoice`) or the end
+of a dispute (:func:`.admin.end_dispute`) writes one
 entry in the same transaction as the change: who (the administrator's ``--actor``),
 when, what, which row, the row before and after. The table refuses UPDATE (a
 trigger), so an entry, once written, stays as written.
@@ -29,6 +30,7 @@ from course_supporter.storage.orm import (
     BillingAuthorSettings,
     BillingBatch,
     BillingPaymentRule,
+    BillingRefund,
 )
 
 
@@ -99,6 +101,22 @@ def batch_snapshot(batch: BillingBatch) -> dict[str, Any]:
             "provider_line_id": batch.provider_line_id,
         }
     return snapshot
+
+
+def refund_snapshot(refund: BillingRefund) -> dict[str, Any]:
+    """A refund or a dispute (BIL-B, BIL-PAY): its units, money and state."""
+    return {
+        "account_id": _id(refund.account_id),
+        "batch_id": _id(refund.batch_id),
+        "kind": refund.kind,
+        "units": refund.units,
+        "amount_minor": refund.amount_minor,
+        "currency": refund.currency,
+        "provider": refund.provider,
+        "provider_adjustment_id": refund.provider_adjustment_id,
+        "state": refund.state,
+        "decided_at": _instant(refund.decided_at),
+    }
 
 
 def require_actor(actor: str) -> str:

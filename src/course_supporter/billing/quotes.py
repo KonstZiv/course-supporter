@@ -16,9 +16,11 @@ Purpose:
       ``enough`` always (operator 2026-11-15).
     * :func:`author_quote` — an author's processing or task preparation from
       its expected cost.
-    * :class:`UnitsRefusedError` — the refusal a route raises; the API
-      answers 402 ``{"detail", "reason": "insufficient_units", "price_units",
-      "available_units", "missing_units"}``.
+    * :class:`UnitsRefusedError` — the refusal of an action for want of
+      units; a route answers it with 402 in the project's form of a refusal
+      with a code: ``{"detail": {"code": "insufficient_units", "details":
+      {"price_units", "available_units", "missing_units"}}}``
+      (:meth:`UnitsRefusedError.detail_body`).
 
     ``charging_enabled`` is the switch AND the path not in test mode; while it
     is false nothing is refused and ``enough`` is true.
@@ -86,14 +88,16 @@ class UnitsRefusedError(Exception):
         self.quote = quote
         self.detail = detail
 
-    def body(self) -> dict[str, Any]:
-        """The 402 body: the shape of every billing refusal, plus the numbers."""
+    def detail_body(self) -> dict[str, Any]:
+        """The ``detail`` of the 402: the code and the numbers (``{code, details}``,
+        as ``api/routes/_author_shared.py`` and ``criteria.py`` refuse)."""
         return {
-            "detail": self.detail,
-            "reason": INSUFFICIENT_UNITS,
-            "price_units": self.quote.price_units,
-            "available_units": self.quote.available_units,
-            "missing_units": self.quote.missing_units,
+            "code": INSUFFICIENT_UNITS,
+            "details": {
+                "price_units": self.quote.price_units,
+                "available_units": self.quote.available_units,
+                "missing_units": self.quote.missing_units,
+            },
         }
 
 

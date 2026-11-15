@@ -15,7 +15,8 @@ Routes
 Each answers with the price in units, what is available, whether it is
 enough and how much is missing, and whether charging is on
 (:mod:`course_supporter.billing.quotes`). The refusal of a submission for want
-of units is 402 with the reason ``insufficient_units``
+of units is 402 ``{"detail": {"code": "insufficient_units", "details":
+{price_units, available_units, missing_units}}}``
 (:func:`course_supporter.billing.quotes.require_enough`).
 """
 
@@ -187,7 +188,7 @@ async def estimate_portal_review(
         except SecurityRejectedError as exc:
             raise HTTPException(
                 status_code=422,
-                detail={"detail": str(exc), "reason": exc.category.value},
+                detail={"code": exc.category.value, "details": str(exc)},
             ) from exc
     quote = await review_quote(
         session,

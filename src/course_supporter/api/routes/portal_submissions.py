@@ -371,7 +371,8 @@ async def _require_units(
     *,
     file: UploadFile | None,
 ) -> None:
-    """Refuse (402 ``insufficient_units``) a review its student cannot pay for.
+    """Refuse a review its student cannot pay for: 402
+    ``{"detail": {"code": "insufficient_units", "details": {...}}}``.
 
     The price of the file as the doors read it — the same function as the
     estimate route (``billing.quotes.review_quote``); a file the doors refuse
@@ -379,7 +380,11 @@ async def _require_units(
     is above 0. A review the author pays for is never refused here.
     """
     from course_supporter.billing.charging import charging_enabled
-    from course_supporter.billing.quotes import require_enough, review_quote
+    from course_supporter.billing.quotes import (
+        UnitsRefusedError,
+        require_enough,
+        review_quote,
+    )
     from course_supporter.security.exceptions import SecurityRejectedError
 
     if not charging_enabled():
@@ -407,7 +412,10 @@ async def _require_units(
         student_id=student.student_id,
         reading=reading,
     )
-    require_enough(quote, "the review cannot be paid for")
+    try:
+        require_enough(quote, "the review cannot be paid for")
+    except UnitsRefusedError as exc:
+        raise HTTPException(status_code=402, detail=exc.detail_body()) from exc
 
 
 async def _answerable_task(

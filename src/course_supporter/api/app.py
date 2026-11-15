@@ -62,7 +62,6 @@ from course_supporter.api.routes.test_objects import router as test_objects_rout
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.auth.scopes import rate_limiter
 from course_supporter.billing.payments.registry import payment_registry
-from course_supporter.billing.quotes import UnitsRefusedError
 from course_supporter.config import Settings, settings
 from course_supporter.logging_config import configure_logging
 from course_supporter.storage.database import async_session, engine
@@ -271,16 +270,6 @@ async def health() -> JSONResponse:
             "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         },
     )
-
-
-@app.exception_handler(UnitsRefusedError)
-async def insufficient_units_handler(
-    request: Request,
-    exc: UnitsRefusedError,
-) -> JSONResponse:
-    """402 for an action its payer cannot cover (BIL-E, B3): the reason code
-    beside the text, so a screen picks its words and offers a purchase."""
-    return JSONResponse(status_code=402, content=exc.body())
 
 
 @app.exception_handler(Exception)

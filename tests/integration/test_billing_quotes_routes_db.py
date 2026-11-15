@@ -320,11 +320,12 @@ class TestRefusal:
             )
 
         assert response.status_code == 402, response.text
-        body = response.json()
-        assert body["reason"] == "insufficient_units"
-        assert isinstance(body["detail"], str)
-        assert body["available_units"] == 0
-        assert body["missing_units"] == body["price_units"] > 0
+        refusal = response.json()["detail"]
+        assert refusal["code"] == "insufficient_units"
+        numbers = refusal["details"]
+        assert set(numbers) == {"price_units", "available_units", "missing_units"}
+        assert numbers["available_units"] == 0
+        assert numbers["missing_units"] == numbers["price_units"] > 0
         async with session_factory() as session:
             stored = await session.scalar(
                 HomeworkSubmission.__table__.select()

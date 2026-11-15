@@ -22,6 +22,8 @@ Interface:
     :func:`estimate_review` — one submission on the new path.
     :func:`estimate_task_preparation` — criteria decomposition or key explanation.
     :func:`estimate_processing` — one processing job of a material.
+    :func:`estimate_node_summary_regeneration` — one regeneration job of the
+    summaries of a course node's subtree.
 """
 
 from __future__ import annotations
@@ -466,6 +468,114 @@ def estimate_processing(
         inputs={
             **(inputs or {}),
             "kind": kind,
+            "factors": factors.as_json(),
+            "at": at.isoformat(),
+        },
+        uncalibrated=_uncalibrated(settings, *s.flags),
+    )
+
+
+# ── Regeneration of node summaries ──
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class NodeSummaryFactors:
+    """What is known of one regeneration job before its first paid step.
+
+    ``bottomup_chars`` holds one number per node whose bottom-up pass will call
+    the model (its summary is stale): the characters the call reads beside the
+    prompt — own documents (in full within the budget, else as summaries) and
+    the children's summaries. ``topdown_nodes`` is the number of nodes whose
+    top-down pass will call the model; a top-down call reads a size the
+    settings give. ``nodes`` is the size of the scope, for the record.
+    """
+
+    bottomup_chars: Sequence[int]
+    topdown_nodes: int
+    nodes: int
+
+    def as_json(self) -> dict[str, Any]:
+        """The known factors, for the ``inputs`` column."""
+        return {
+            "nodes": self.nodes,
+            "bottomup_nodes": len(self.bottomup_chars),
+            "bottomup_chars": sum(self.bottomup_chars),
+            "topdown_nodes": self.topdown_nodes,
+        }
+
+
+NODE_SUMMARY_KIND = "node_summary_regeneration"
+"""The ``inputs.kind`` of a regeneration's estimate (the job type)."""
+
+
+def _merged(steps: Sequence[StepEstimate]) -> list[StepEstimate]:
+    """One step per model: the calls and the cost add up, tokens are averaged.
+
+    Nodes are priced one by one (each may fit another rung); the register
+    compares per step, so the breakdown carries one line per (step, model).
+    ``tokens_in`` is the mean per call, rounded up; the cost is the exact sum.
+    """
+    merged: dict[tuple[str, str], list[StepEstimate]] = {}
+    for step in steps:
+        merged.setdefault((step.step, step.model), []).append(step)
+    result: list[StepEstimate] = []
+    for group in merged.values():
+        first = group[0]
+        calls = sum((s.calls for s in group), Decimal(0))
+        tokens_in = sum(
+            (Decimal(s.tokens_in or 0) * s.calls for s in group), Decimal(0)
+        )
+        result.append(
+            StepEstimate(
+                step=first.step,
+                provider=first.provider,
+                model=first.model,
+                calls=calls,
+                tokens_in=_ceil(tokens_in / calls) if calls else first.tokens_in,
+                tokens_out=first.tokens_out,
+                billed_seconds=None,
+                price_in_per_1k_usd=first.price_in_per_1k_usd,
+                price_out_per_1k_usd=first.price_out_per_1k_usd,
+                price_per_minute_usd=None,
+                window=first.window,
+                cost_usd=sum((s.cost_usd for s in group), Decimal(0)),
+            )
+        )
+    return result
+
+
+def estimate_node_summary_regeneration(
+    *,
+    factors: NodeSummaryFactors,
+    ladders: Mapping[str, LadderStage],
+    settings: EstimateSettings,
+    catalog: Catalog,
+    at: datetime,
+    inputs: Mapping[str, Any] | None = None,
+) -> ActionEstimate:
+    """E of one regeneration job: a bottom-up call per stale node, a top-down
+    call per node whose enclosing context is rewritten.
+
+    Fallback rungs and the repeat of a cut answer are not in E (the module's
+    rule); the ``calls`` of each step in the settings is where a measured
+    repeat rate goes. A node whose summary is fresh costs nothing: the
+    orchestrator skips it before any call.
+    """
+    s = _Steps(settings, catalog, ladders, at)
+    s.flags.append(settings.processing.node_summary.calibrated)
+    for chars in factors.bottomup_chars:
+        s.llm("methodist_bottomup", tokens_for_chars(chars))
+    if factors.topdown_nodes:
+        topdown = _setting(settings.processing.steps, "methodist_topdown")
+        s.llm("methodist_topdown", 0, topdown.calls * factors.topdown_nodes)
+    steps = _merged(s.steps)
+    return ActionEstimate.of(
+        ActionKind.PROCESSING,
+        steps,
+        catalog_version=catalog.version,
+        inputs={
+            **(inputs or {}),
+            "kind": NODE_SUMMARY_KIND,
             "factors": factors.as_json(),
             "at": at.isoformat(),
         },

@@ -57,6 +57,7 @@ from course_supporter.storage.orm import (
     BillingAccount,
     BillingAuditEntry,
     BillingBatch,
+    BillingCheckout,
     BillingConsent,
     BillingDifference,
     BillingMovement,
@@ -220,6 +221,22 @@ async def world(
         await session.flush()
         student = Student(tenant_id=tenant.id, external_id="creem-student")
         session.add(student)
+        await session.flush()
+        # The providers here are in test mode: the accounts are marked for
+        # test purchases (billing.payments.checkout), as the administrator does.
+        session.add_all(
+            [
+                BillingAccount(
+                    kind="author", tenant_id=tenant.id, test_purchase_allowed=True
+                ),
+                BillingAccount(
+                    kind="student",
+                    tenant_id=tenant.id,
+                    student_id=student.id,
+                    test_purchase_allowed=True,
+                ),
+            ]
+        )
         await session.commit()
     made = World(
         tenant_id=tenant.id,
@@ -285,6 +302,7 @@ async def world(
             (BillingRefund, BillingRefund.account_id),
             (BillingReservation, BillingReservation.account_id),
             (BillingDifference, BillingDifference.account_id),
+            (BillingCheckout, BillingCheckout.account_id),
             (BillingBatch, BillingBatch.account_id),
             (BillingConsent, BillingConsent.account_id),
         ):
@@ -453,10 +471,22 @@ class TestFullPath:
         [sent] = world.sent
         assert str(sent.url) == "https://test-api.creem.io/v1/checkouts"
         assert json.loads(sent.content)["product_id"] == "prod_starter_test"
-        assert world.metadata() == {
+        metadata = world.metadata()
+        ref = metadata["checkout_ref"]
+        assert metadata == {
             "account_id": str(batch.account_id),
             "package_id": "starter",
+            "checkout_ref": ref,
         }
+        # The number is in the path of the return address, never a parameter.
+        success_url = json.loads(sent.content)["success_url"]
+        assert success_url.endswith(f"/billing/checkouts/{ref}")
+        assert "?" not in success_url
+        # The purchase answered its checkout: the batch is linked to it.
+        async with session_factory() as session:
+            checkout = await session.get(BillingCheckout, uuid.UUID(ref))
+        assert checkout is not None
+        assert (checkout.provider, checkout.batch_id) == (CREEM, batch.id)
         # The purchase: a batch of provider creem, keyed by the order.
         assert (
             batch.units,
@@ -718,7 +748,8 @@ class TestAuthorConsent:
             }
             refused = await client.post(AUTHOR_CHECKOUT, json={"package_id": "starter"})
             assert refused.status_code == 409
-            assert current in refused.json()["detail"]
+            assert refused.json()["detail"]["code"] == "terms_consent_required"
+            assert current in refused.json()["detail"]["details"]
             assert world.sent == []  # Creem was not asked
 
             agreed = await client.post(
@@ -768,10 +799,12 @@ class TestAuthorConsent:
                     AUTHOR_CHECKOUT, json={"package_id": "starter"}
                 )
                 assert refused.status_code == 409
+                assert refused.json()["detail"]["code"] == "terms_consent_required"
                 stale = await client.post(
                     AUTHOR_CONSENT, json={"terms_version": current, "text_sha256": SHA}
                 )
                 assert stale.status_code == 409
+                assert stale.json()["detail"]["code"] == "terms_changed"
                 fresh = await client.post(
                     AUTHOR_CONSENT,
                     json={"terms_version": "2099-01-01", "text_sha256": SHA},

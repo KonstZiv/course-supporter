@@ -9,8 +9,8 @@ Purpose:
     qualifies, and the condition is checked again under the row's lock.
 
 What goes, for one account:
-    its movements, refunds, reservations, differences, batches, consents,
-    author settings, the payment rules it is the payer of, the webhook events
+    its movements, refunds, reservations, differences, checkouts, batches,
+    consents, author settings, the payment rules it is the payer of, the webhook events
     of payment providers that name it (``billing_provider_events.account_id``),
     and the audit entries about it, its batches, its refunds or those rules —
     all or nothing (one SAVEPOINT); then, in a SAVEPOINT of its own, the
@@ -62,6 +62,7 @@ from course_supporter.storage.orm import (
     BillingAuditEntry,
     BillingAuthorSettings,
     BillingBatch,
+    BillingCheckout,
     BillingConsent,
     BillingDifference,
     BillingMovement,
@@ -174,12 +175,13 @@ async def _delete_own_rows(
         ).scalars()
     )
     # Children before parents: movements point at batches, differences,
-    # refunds, rules and accounts; refunds at batches.
+    # refunds, rules and accounts; refunds and checkouts at batches.
     steps = (
         (BillingMovement, BillingMovement.account_id == account_id),
         (BillingRefund, BillingRefund.account_id == account_id),
         (BillingReservation, BillingReservation.account_id == account_id),
         (BillingDifference, BillingDifference.account_id == account_id),
+        (BillingCheckout, BillingCheckout.account_id == account_id),
         (BillingBatch, BillingBatch.account_id == account_id),
         (BillingConsent, BillingConsent.account_id == account_id),
         (BillingAuthorSettings, BillingAuthorSettings.account_id == account_id),

@@ -140,8 +140,10 @@ class Settings(BaseSettings):
     # The packages on sale and each provider's id of them.
     billing_packages_path: Path = Path("config/billing_packages.yaml")
     # Base URL of the author SPA: an author's checkout returns to
-    # {author_app_base_url}/billing (a student's to
-    # {portal_base_url}/{tenant_id}/billing). Set AUTHOR_APP_BASE_URL in prod.
+    # {author_app_base_url}/billing/checkouts/{checkout_ref} (a student's to
+    # {portal_base_url}/{tenant_id}/billing/checkouts/{checkout_ref}); a
+    # cancelled one to .../billing?checkout=cancelled. Set AUTHOR_APP_BASE_URL
+    # in prod.
     author_app_base_url: str = "http://localhost:5173"
     # Creem (billing.payments.creem), read when BILLING_PROVIDERS names "creem";
     # without the key and the secret that name stops the startup. The key goes

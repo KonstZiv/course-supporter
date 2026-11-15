@@ -31,11 +31,19 @@ class ArqExplanationQueue:
     """Asks for a generation by creating its Job and dispatching it to ARQ."""
 
     def __init__(
-        self, *, redis: ArqRedis, session: AsyncSession, tenant_id: uuid.UUID
+        self,
+        *,
+        redis: ArqRedis,
+        session: AsyncSession,
+        tenant_id: uuid.UUID,
+        requested_by_submission: bool = False,
     ) -> None:
         self._redis = redis
         self._session = session
         self._tenant_id = tenant_id
+        # A student's submission asks after its review (BIL-E: the author's
+        # units never stop it); an author's route leaves it False.
+        self._requested_by_submission = requested_by_submission
 
     async def request(
         self, *, authored_document_id: uuid.UUID, reference_id: uuid.UUID
@@ -62,6 +70,7 @@ class ArqExplanationQueue:
                 tenant_id=self._tenant_id,
                 authored_document_id=authored_document_id,
                 reference_id=reference_id,
+                requested_by_submission=self._requested_by_submission,
             )
         except IntegrityError as exc:
             raise GenerationInProgressError(authored_document_id) from exc

@@ -434,7 +434,7 @@ async def _run(
             return_value=config,
         ),
         patch(
-            "course_supporter.homework.path_runner.AlwaysEnoughFundsPort",
+            "course_supporter.homework.path_runner.build_funds_port",
             return_value=port,
         ),
         patch(

@@ -11,8 +11,10 @@ Purpose:
     its callers (KD19; ``03-BINDING.md``, amendment 2 and its note). Billing,
     when it comes, is one new implementation, not an edit of the path.
 
-    Nothing calls the port yet: its live calls arrive with the new path's
-    skeleton (task 03).
+    Two implementations: :class:`AlwaysEnoughFundsPort` (charging off) and
+    the journal's :class:`~course_supporter.billing.funds.LedgerFundsPort`
+    (charging on, BIL-E); :func:`build_funds_port` picks one by
+    ``BILLING_CHARGING_ENABLED``.
 
 Input and output:
     Each operation takes a :class:`SubmissionContext` — tenant, student,
@@ -33,9 +35,9 @@ Input and output:
     * :meth:`FundsPort.check_and_reserve_for_version` — before the work's first
       paid call, with its ceiling estimate. Returns a :class:`FundsAnswer`.
     * :meth:`FundsPort.account_version_work_cost` — after the work finishes,
-      with what it actually spent. It is FINAL: an implementation releases the
-      unused part of any hold here, and there is no third operation, because
-      the work has one result rather than two.
+      with what it actually spent and how it ended. It is FINAL: an
+      implementation settles or releases any hold here, and there is no third
+      operation, because the work has one result rather than two.
 
     Amounts are dollars as ``float``, the type of ``cost_usd`` in the register.
     A refusal is a returned value, never an exception, and the caller receives
@@ -56,9 +58,11 @@ Replacing the implementation:
     ``check_and_reserve``, refusing with ``INSUFFICIENT_FUNDS`` when it falls
     short; debits, or only records, the stage price in ``account_stage_cost``;
     and returns the unused hold, or refunds a failed submission, in
-    ``release_remainder``. It finds the payer — the author's account at the
-    tenant — through ``tenant_id``, and ``submission_id`` is its key for acting
-    once per submission.
+    ``release_remainder``. It finds the payer through
+    :func:`~course_supporter.billing.payer.resolve_payer` — the student for
+    their own review, the author under a payment rule (BIL-E closes
+    DD-BIL-PORT, which looked the payer up through the tenant) — and
+    ``submission_id`` is its key for acting once per submission.
 
     A new field of the context reaches every implementation without changing
     an operation's signature. A new refusal reason is a new
@@ -71,6 +75,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -122,16 +127,20 @@ class SubmissionContext:
     swap them without a type error.
 
     Attributes:
-        tenant_id: The tenant; the payer is found through it.
+        tenant_id: The submission's tenant.
         student_id: The student who submitted.
         submission_id: The submission (``HomeworkSubmission.id``).
         path_key: The path the submission takes.
+        expected_usd: The expected cost E of the review, computed in memory
+            beside its shadow estimate (BIL-E); ``None`` — the ceiling stands
+            for it.
     """
 
     tenant_id: uuid.UUID
     student_id: uuid.UUID
     submission_id: uuid.UUID
     path_key: PathKey
+    expected_usd: Decimal | None = None
 
 
 class VersionWorkKind(StrEnum):
@@ -166,16 +175,25 @@ class VersionWorkContext:
     for the same pair is the same work, not another one.
 
     Attributes:
-        tenant_id: The tenant; the payer is found through it.
+        tenant_id: The task's tenant.
         authored_document_id: The task whose version the work is about.
         source_content_hash: That version — the task's content hash.
         work_kind: Which work-once-per-version this is.
+        reference_id: The version row the work writes; the key of its charge,
+            as of its shadow estimate (BIL-E).
+        requested_by_submission: True when a student's submission asked for
+            the work: it never waits for the author's units (operator
+            2026-11-15). False — the author asked.
+        expected_usd: The expected cost E; ``None`` — the ceiling stands for it.
     """
 
     tenant_id: uuid.UUID
     authored_document_id: uuid.UUID
     source_content_hash: str
     work_kind: VersionWorkKind
+    reference_id: uuid.UUID | None = None
+    requested_by_submission: bool = False
+    expected_usd: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -248,16 +266,20 @@ class FundsPort(Protocol):
         ...
 
     async def account_version_work_cost(
-        self, context: VersionWorkContext, actual_usd: float
+        self,
+        context: VersionWorkContext,
+        actual_usd: float,
+        outcome: SubmissionOutcome = SubmissionOutcome.COMPLETED,
     ) -> None:
-        """After the work finishes: its actual price, and the end of it.
+        """After the work finishes: its actual price, how it ended, the end of it.
 
         This operation is FINAL for the work, and an implementation that placed
-        a hold releases the unused part of it here. There is deliberately no
-        third operation: a work-once-per-version has one result, not two, so
-        there is no moment between "it cost this much" and "it is over" for a
-        caller to get wrong (ratified 2026-09-19). A work that failed reports
-        what it spent before failing — the same call, a smaller number.
+        a hold settles or releases it here. There is deliberately no third
+        operation: a work-once-per-version has one result, not two (ratified
+        2026-09-19). A work that failed reports what it spent before failing
+        with ``outcome=FAILED``: a failure is released whole and charged
+        nothing (KD19; operator 2026-11-15, S4) — the spend stays in the
+        register as the platform's.
         """
         ...
 
@@ -328,6 +350,25 @@ class AlwaysEnoughFundsPort:
         return answer
 
     async def account_version_work_cost(
-        self, context: VersionWorkContext, actual_usd: float
+        self,
+        context: VersionWorkContext,
+        actual_usd: float,
+        outcome: SubmissionOutcome = SubmissionOutcome.COMPLETED,
     ) -> None:
         """Nothing was held, so there is nothing to settle or release."""
+
+
+def build_funds_port(session_factory: async_sessionmaker[AsyncSession]) -> FundsPort:
+    """The port a job uses: the journal's while charging is on, else the first one.
+
+    ``BILLING_CHARGING_ENABLED`` off (the default) keeps
+    :class:`AlwaysEnoughFundsPort`: nothing reaches the journal and nothing is
+    refused for want of units (BIL-E, A6).
+    """
+    from course_supporter.billing.charging import charging_enabled
+
+    if charging_enabled():
+        from course_supporter.billing.funds import LedgerFundsPort
+
+        return LedgerFundsPort(session_factory)
+    return AlwaysEnoughFundsPort(session_factory)

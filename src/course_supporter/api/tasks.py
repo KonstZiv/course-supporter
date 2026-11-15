@@ -181,12 +181,24 @@ async def _ingest_on_terminal(
     ``active`` never blocks the serial worker. On success ``complete_processing``
     already ran in the body (before the seam's ``complete``); on ``obsolete`` the
     subject is already gone — neither needs a reaction here.
+
+    The processing's charge ends here on every outcome (BIL-E): ``complete``
+    settles the cost of the job's calls, anything else releases its reserve
+    (``billing.funds.job_ended``; nothing while charging is off).
     """
+    from course_supporter.billing.funds import job_ended
+
+    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
+    await job_ended(
+        session_factory,
+        job_id=uuid.UUID(job_id),
+        authored_document_id=uuid.UUID(material_id),
+        completed=outcome.status == "complete",
+    )
     if outcome.status != "failed":
         return
     from course_supporter.ingestion_callback import IngestionCallback
 
-    session_factory: async_sessionmaker[AsyncSession] = ctx["session_factory"]
     await IngestionCallback(session_factory).on_failure(
         job_id=uuid.UUID(job_id),
         material_id=uuid.UUID(material_id),

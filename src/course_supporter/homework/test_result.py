@@ -228,7 +228,10 @@ class TestResultBuilder:
                 published.language if published is not None else FALLBACK_LANGUAGE
             )
             queue = ArqExplanationQueue(
-                redis=context.redis, session=session, tenant_id=submission.tenant_id
+                redis=context.redis,
+                session=session,
+                tenant_id=submission.tenant_id,
+                requested_by_submission=True,
             )
             try:
                 await TestObjectService(session, queue).request_explanations(

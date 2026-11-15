@@ -40,15 +40,17 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from course_supporter.billing.estimates import review_e_usd
 from course_supporter.cost_estimate.hooks import shadow_review
 from course_supporter.funds_port import (
-    AlwaysEnoughFundsPort,
     SubmissionContext,
     SubmissionOutcome,
+    build_funds_port,
 )
 from course_supporter.homework.attempt_dedup import repeat_unchanged_review
 from course_supporter.homework.attempt_ledger import record_attempt
@@ -195,6 +197,7 @@ async def run_new_path_if_switched(
         submission = await hw_repo.get_by_id(submission_id)
         if submission is None:
             return False
+        tenant_id, student_id = submission.tenant_id, submission.student_id
         if submission.status in _LIFTED_BY_THE_RUN:
             # The run is what ends the wait, not the entry that queued it: a
             # dispatch that never reached the queue leaves the revision held,
@@ -228,9 +231,7 @@ async def run_new_path_if_switched(
         if choice is None:
             return False
 
-    port = (
-        funds_port if funds_port is not None else AlwaysEnoughFundsPort(session_factory)
-    )
+    port = funds_port if funds_port is not None else build_funds_port(session_factory)
     from arq import Retry
 
     async with session_factory() as session:
@@ -252,8 +253,35 @@ async def run_new_path_if_switched(
         except Exception as exc:
             await session.rollback()
             await _fail_the_submission(session_factory, submission_id, exc)
+            # The reserve goes back at once, not at the nightly release of
+            # hanging reserves (BIL-E): a failure is charged nothing.
+            await _release_after_failure(
+                port,
+                SubmissionContext(
+                    tenant_id=tenant_id,
+                    student_id=student_id,
+                    submission_id=submission_id,
+                    path_key=choice.key,
+                ),
+            )
             raise
     return True
+
+
+async def _release_after_failure(port: FundsPort, context: SubmissionContext) -> None:
+    """Tell the port the submission failed; whatever it raises is logged only.
+
+    The failure being reported is the one that matters: a port that cannot
+    release now leaves the reserve to ``billing_stale_reserves``.
+    """
+    try:
+        await port.release_remainder(context, SubmissionOutcome.FAILED)
+    except Exception:
+        logger.warning(
+            "path_failed_release_skipped",
+            submission_id=str(context.submission_id),
+            exc_info=True,
+        )
 
 
 def _choice_from(checkpoint: PathCheckpoint, config: PathConfig) -> PathChoice | None:
@@ -363,26 +391,34 @@ async def _run_path(
         # A code stage calls no model and costs nothing: the estimate prices
         # the model stages of the path alone.
         priced = model_stages(config)
+        stage_names = [name for name in choice.stages if name in priced]
         await shadow_review(
             session_factory=ctx["session_factory"],
             submission_id=submission.id,
             tenant_id=submission.tenant_id,
             job_id=job_id,
             path_key=str(choice.key),
-            stage_names=[name for name in choice.stages if name in priced],
+            stage_names=stage_names,
             path_stages=priced,
             submission_chars=len(submission_text),
         )
         # ── The first funds question, before anything is paid for ──
+        # E itself, computed in memory by the estimate's own function: a lost
+        # estimate row costs the calibration, never the price (BIL-E, S6).
+        ceiling = path_ceiling_estimate(config, choice.key)
         context = SubmissionContext(
             tenant_id=submission.tenant_id,
             student_id=submission.student_id,
             submission_id=submission.id,
             path_key=choice.key,
+            expected_usd=review_e_usd(
+                stage_names=stage_names,
+                path_stages=priced,
+                submission_chars=len(submission_text),
+                fallback_usd=Decimal(str(ceiling)),
+            ),
         )
-        answer = await port.check_and_reserve(
-            context, path_ceiling_estimate(config, choice.key)
-        )
+        answer = await port.check_and_reserve(context, ceiling)
         checkpoint = (
             resumed
             if resumed is not None

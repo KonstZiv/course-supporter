@@ -17,12 +17,30 @@ Routes
   shown, once per revision, as a student does in the portal (operator
   2026-11-12): 201 with the new record, 200 with the earlier one, 409 when the
   revision is not the one in force. Channel ``api``.
+- ``GET /billing/packages`` — the packages on sale and whether the author
+  may buy now (``purchase``), as the portal's (the same function). Creates no
+  account.
 - ``POST /billing/checkout`` — an author (the tenant's key, scope ``prep``)
   opens a checkout of a package for the tenant's author account, which pays
   for processing and, under a payment rule, for the reviews of the tenant's
   students. The same service as the portal's checkout; 503 when payment is
-  unavailable, 409 while the author has not agreed to the terms in force, 404
-  for a package not on sale or a provider not switched on.
+  unavailable, 409 while the author has not agreed to the terms in force, 403
+  while the provider is in test mode and the account is not marked for test
+  purchases, 404 for a package not on sale or a provider not switched on.
+  The answer carries the checkout's own number (``checkout_ref``), which is
+  also the last segment of the address the author comes back to:
+  ``{AUTHOR_APP_BASE_URL}/billing/checkouts/{checkout_ref}``.
+- ``GET /billing/checkouts/{checkout_ref}`` — the state of the author's
+  checkout (pending | credited | failed); another's or an unknown one is 404
+  ``checkout_not_found``.
+- ``GET /billing/balance`` — where the author's units stand: balance,
+  reserved, held, available, difference, the next expiry. Units only.
+- ``GET /billing/statement?limit=&cursor=&from=&to=`` — the author's
+  movements of units, the newest first, a page at a time (``invalid_cursor``
+  422 for a cursor this server did not give).
+
+Every refusal of a route but the webhook carries its reason code
+(``_billing_shared``).
 
 There is no administrator route (operator decision of 2026-11-05): the
 administrator's door is ``scripts/billing_admin.py``.
@@ -31,10 +49,11 @@ administrator's door is ``scripts/billing_admin.py``.
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 from typing import Annotated, Final
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,26 +63,42 @@ from course_supporter.api.deps import (
     get_session,
 )
 from course_supporter.api.routes._billing_shared import (
-    CHECKOUT_RESPONSES,
+    CHECKOUT_REFUSALS,
+    Refusal,
+    balance_of,
+    checkout_state_of,
+    consent_required,
     open_checkout,
+    packages_of,
     require_payment,
+    responses,
+    statement_of,
+    terms_changed,
 )
 from course_supporter.api.schemas import (
+    BillingBalanceResponse,
     BillingCheckoutRequest,
     BillingCheckoutResponse,
+    BillingCheckoutStateResponse,
     BillingConsentRequest,
     BillingConsentResponse,
+    BillingPackagesResponse,
+    BillingStatementResponse,
     BillingTermsResponse,
 )
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
-from course_supporter.billing.accounts import get_or_create_author_account
+from course_supporter.billing.accounts import (
+    find_active_account,
+    get_or_create_author_account,
+)
 from course_supporter.billing.consent import (
     author_terms_status,
     record_author_consent,
 )
 from course_supporter.billing.errors import BillingConflictError
+from course_supporter.billing.kinds import AccountKind
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.port import InvalidWebhookError
 from course_supporter.billing.payments.registry import ProviderRegistry
@@ -71,6 +106,7 @@ from course_supporter.billing.payments.webhooks import (
     EventHandlingError,
     handle_events,
 )
+from course_supporter.billing.statement import MAX_LIMIT
 from course_supporter.config import get_settings
 
 router = APIRouter(tags=["billing"])
@@ -166,7 +202,7 @@ async def get_author_billing_terms(
     status_code=201,
     responses={
         200: {"description": "Already agreed to this revision; the earlier record."},
-        409: {"description": "Not the revision in force."},
+        **responses(Refusal.TERMS_CHANGED),
     },
 )
 async def post_author_billing_consent(
@@ -186,9 +222,7 @@ async def post_author_billing_consent(
             text_sha256=body.text_sha256,
         )
     except BillingConflictError as exc:
-        raise _status(
-            409, f"The billing terms changed: the current revision is {current}."
-        ) from exc
+        raise terms_changed(current) from exc
     await session.commit()
     if created:
         logger.info(
@@ -204,13 +238,21 @@ async def post_author_billing_consent(
     )
 
 
-@router.post(
-    "/billing/checkout",
-    responses={
-        **CHECKOUT_RESPONSES,
-        409: {"description": "The author has not agreed to the terms in force."},
-    },
-)
+@router.get("/billing/packages")
+async def get_author_billing_packages(
+    tenant: PrepDep,
+    session: SessionDep,
+    registry: RegistryDep,
+    catalog: CatalogDep,
+) -> BillingPackagesResponse:
+    """The packages on sale, and whether the author may buy them now."""
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
+    )
+    return packages_of(catalog, registry, account)
+
+
+@router.post("/billing/checkout", responses=responses(*CHECKOUT_REFUSALS))
 async def post_author_checkout(
     body: BillingCheckoutRequest,
     tenant: PrepDep,
@@ -225,17 +267,70 @@ async def post_author_checkout(
         session, tenant_id=tenant.tenant_id, terms_version=current
     )
     if terms.consent_required:
-        raise _status(
-            409, f"Agree to the billing terms first: the current revision is {current}."
-        )
+        raise consent_required(current)
     account = await get_or_create_author_account(session, tenant_id=tenant.tenant_id)
     await session.commit()  # no transaction stays open across the provider's call
     author_app = get_settings().author_app_base_url.rstrip("/")
     return await open_checkout(
         body,
+        session=session,
         registry=registry,
         catalog=catalog,
-        account_id=account.id,
+        account=account,
         language=None,
         return_page=f"{author_app}/billing",
+    )
+
+
+@router.get(
+    "/billing/checkouts/{checkout_ref}",
+    responses=responses(Refusal.CHECKOUT_NOT_FOUND),
+)
+async def get_author_checkout(
+    checkout_ref: str, tenant: PrepDep, session: SessionDep
+) -> BillingCheckoutStateResponse:
+    """The state of the author's checkout by its number."""
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
+    )
+    return await checkout_state_of(session, account, checkout_ref)
+
+
+@router.get("/billing/balance")
+async def get_author_balance(
+    tenant: PrepDep, session: SessionDep
+) -> BillingBalanceResponse:
+    """Where the author's units stand."""
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
+    )
+    return await balance_of(session, account)
+
+
+@router.get("/billing/statement", responses=responses(Refusal.INVALID_CURSOR))
+async def get_author_statement(
+    tenant: PrepDep,
+    session: SessionDep,
+    limit: Annotated[
+        int, Query(ge=1, le=MAX_LIMIT, description="Lines on the page.")
+    ] = 50,
+    cursor: Annotated[
+        str | None,
+        Query(max_length=256, description="next_cursor of the page before."),
+    ] = None,
+    since: Annotated[
+        datetime | None,
+        Query(alias="from", description="From (inclusive); without a zone, UTC."),
+    ] = None,
+    until: Annotated[
+        datetime | None,
+        Query(alias="to", description="To (exclusive); without a zone, UTC."),
+    ] = None,
+) -> BillingStatementResponse:
+    """The author's movements of units, the newest first."""
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
+    )
+    return await statement_of(
+        session, account, limit=limit, cursor=cursor, since=since, until=until
     )

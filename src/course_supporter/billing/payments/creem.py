@@ -7,13 +7,24 @@ Read from Creem's documentation on 2026-11-14:
   host ``https://test-api.creem.io/v1`` and the live one
   ``https://api.creem.io/v1``, isolated, their keys not interchangeable; the
   key in the ``x-api-key`` header; amounts in cents (minor units),
-  currencies as upper-case ISO codes.
+  currencies as upper-case ISO codes. :attr:`CreemProvider.test_mode` is
+  False on the live host only: any other is the test environment, so a
+  mistaken address closes purchases rather than opens them.
 * Checkout: ``POST /v1/checkouts`` —
   https://docs.creem.io/api-reference/endpoint/create-checkout. Sent:
   ``product_id`` (the catalog's ``providers.creem`` id of the package),
   ``units`` 1, ``success_url``, ``metadata`` {``account_id``,
-  ``package_id``}; answered: ``id`` (``ch_…``) and ``checkout_url``. Creem
-  takes no cancel URL and no locale, so neither is sent; no personal data is.
+  ``package_id``, ``checkout_ref``}; answered: ``id`` (``ch_…``) and
+  ``checkout_url``. Creem takes no cancel URL and no locale, so neither is
+  sent; no personal data is.
+* Return: https://docs.creem.io/features/checkout/checkout-api — after the
+  payment Creem sends the payer to ``success_url`` with its own query
+  parameters (``checkout_id``, ``order_id``, ``customer_id``, ``product_id``,
+  ``signature``, …). Its documentation (read 2026-11-15) does not say how it
+  appends them to an address that already has a query, so the platform's
+  number of the checkout travels in the address's PATH
+  (``…/billing/checkouts/{checkout_ref}``), never as a parameter. The return
+  proves no payment: the screen asks the checkout's state.
   ``metadata`` comes back on the checkout of ``checkout.completed`` (and on the
   ``checkout`` of a refund's or a dispute's event).
 * Webhooks: https://docs.creem.io/code/webhooks — the ``creem-signature``
@@ -78,6 +89,7 @@ import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 import httpx
 import structlog
@@ -198,7 +210,7 @@ def _metadata(value: Mapping[str, Any] | None, key: str) -> str | None:
     return found if isinstance(found, str) and found else None
 
 
-def _account(value: str | None) -> uuid.UUID | None:
+def _uuid(value: str | None) -> uuid.UUID | None:
     try:
         return uuid.UUID(value) if value else None
     except ValueError:
@@ -239,6 +251,11 @@ class CreemProvider:
     def __repr__(self) -> str:
         return f"CreemProvider(api_base={self._api_base!r})"
 
+    @property
+    def test_mode(self) -> bool:
+        """False on Creem's live host only (module docstring)."""
+        return urlsplit(self._api_base).hostname != urlsplit(LIVE_API_BASE).hostname
+
     def sign(self, body: bytes) -> str:
         """The ``creem-signature`` of this body."""
         return hmac.new(self._secret, body, hashlib.sha256).hexdigest()
@@ -259,6 +276,7 @@ class CreemProvider:
             "metadata": {
                 "account_id": str(request.account_id),
                 "package_id": request.package.id,
+                "checkout_ref": str(request.checkout_ref),
             },
         }
         response = await self._post("/checkouts", payload)
@@ -376,7 +394,8 @@ class CreemProvider:
             raise InvalidWebhookError("a purchase without the amount paid")
         return PurchaseCompleted(
             **common,
-            account_id=_account(_metadata(paid.metadata, "account_id")),
+            account_id=_uuid(_metadata(paid.metadata, "account_id")),
+            checkout_ref=_uuid(_metadata(paid.metadata, "checkout_ref")),
             package_id=package_id,
             amount_paid_minor=paid.order.amount_paid,
             currency=paid.order.currency,
@@ -411,7 +430,7 @@ class CreemProvider:
         return Chargeback(
             **common,
             dispute_id=dispute.id,
-            account_id=_account(_metadata(metadata, "account_id")),
+            account_id=_uuid(_metadata(metadata, "account_id")),
             transaction_id=order,
             amount_minor=dispute.amount,
             currency=dispute.currency,

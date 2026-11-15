@@ -52,6 +52,8 @@ from course_supporter.config import Environment, Settings
 TEST_KEY = "creem_test_key_for_unit_tests_only"
 TEST_SECRET = "whsec_test_secret_for_unit_tests_only"
 ACCOUNT = uuid.UUID("0190a0a0-0000-7000-8000-000000000001")
+REF = uuid.UUID("5f0c2a5e-8d1b-4c3e-9a7f-2b6d4e8f1a3c")
+"""The platform's own number of the checkout."""
 STARTER = Package(id="starter", units=1000, prices_minor={"EUR": 990}, active=True)
 ORDER = "ord_4aDwWXjMLpes4Kj4XqNnUA"
 
@@ -107,7 +109,11 @@ CHECKOUT_COMPLETED: dict[str, Any] = {
         "custom_fields": [],
         "status": "completed",
         # The docs' sample carries {"custom_data": ...}; ours carries this.
-        "metadata": {"account_id": str(ACCOUNT), "package_id": "starter"},
+        "metadata": {
+            "account_id": str(ACCOUNT),
+            "package_id": "starter",
+            "checkout_ref": str(REF),
+        },
         "mode": "local",
     },
 }
@@ -243,10 +249,11 @@ def with_(payload: dict[str, Any], **changes: Any) -> dict[str, Any]:
 def checkout_request(provider_item: str | None = "prod_starter") -> CheckoutRequest:
     return CheckoutRequest(
         account_id=ACCOUNT,
+        checkout_ref=REF,
         package=STARTER,
         provider_item=provider_item,
         language="ukr",
-        success_url="https://campus.example/t/billing?checkout=success",
+        success_url=f"https://campus.example/t/billing/checkouts/{REF}",
         cancel_url="https://campus.example/t/billing?checkout=cancelled",
     )
 
@@ -306,6 +313,7 @@ class TestCheckoutCompleted:
             provider_type="checkout.completed",
             occurred_at=datetime(2024, 10, 12, 11, 58, 47, 412000, tzinfo=UTC),
             account_id=ACCOUNT,
+            checkout_ref=REF,
             package_id="starter",
             amount_paid_minor=1210,  # order.amount_paid: tax included
             currency="EUR",
@@ -317,6 +325,14 @@ class TestCheckoutCompleted:
         payload = with_(CHECKOUT_COMPLETED, metadata={"package_id": "starter"})
         [event] = creem().parse_webhook(*signed(payload))
         assert isinstance(event, PurchaseCompleted) and event.account_id is None
+        assert event.checkout_ref is None  # a checkout opened before the numbers
+
+    @pytest.mark.parametrize("ref", ["", "not-a-number", 7])
+    def test_a_checkout_number_that_is_not_one_names_none(self, ref: Any) -> None:
+        payload = with_(CHECKOUT_COMPLETED)
+        payload["object"]["metadata"] = {"package_id": "starter", "checkout_ref": ref}
+        [event] = creem().parse_webhook(*signed(payload))
+        assert isinstance(event, PurchaseCompleted) and event.checkout_ref is None
 
     @pytest.mark.parametrize(
         "metadata", [None, {}, {"account_id": str(ACCOUNT)}, {"package_id": 7}]
@@ -464,8 +480,12 @@ class TestCreateCheckout:
         assert json.loads(sent.content) == {
             "product_id": "prod_starter",
             "units": 1,
-            "success_url": "https://campus.example/t/billing?checkout=success",
-            "metadata": {"account_id": str(ACCOUNT), "package_id": "starter"},
+            "success_url": f"https://campus.example/t/billing/checkouts/{REF}",
+            "metadata": {
+                "account_id": str(ACCOUNT),
+                "package_id": "starter",
+                "checkout_ref": str(REF),
+            },
         }
 
     async def test_the_live_host_only_when_named(self) -> None:

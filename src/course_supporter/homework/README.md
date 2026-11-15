@@ -546,7 +546,7 @@ curl -X DELETE -H "X-API-Key: $PREP_KEY" \
 
 ```bash
 curl -X POST -H "X-API-Key: $PREP_KEY" \
-     https://api/api/v1/documents/$DOC_ID/reference/estimate
+     https://api.pythoncourse.me/api/v1/documents/$DOC_ID/reference/estimate
 ```
 
 Усі три відповідають однаковим тілом: `status` (`awaiting_key` / `generating` / `ready` /

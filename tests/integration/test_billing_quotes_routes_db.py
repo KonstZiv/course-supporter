@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.app import app
@@ -223,9 +224,31 @@ class TestReviewEstimate:
         assert (body["enough"], body["missing_units"]) == (True, 0)
         assert with_file.status_code == 200, with_file.text
         assert with_file.json()["basis"] == "file"
-        assert with_file.json()["price_units"] >= body["price_units"], (
-            "a file is priced on its own size, more than the prompts alone"
+        assert with_file.json()["price_units"] < body["price_units"], (
+            "a file of 1 280 characters is priced on its own size, below the "
+            "typical 10 600"
         )
+
+    async def test_typical_without_history_is_the_configured_size(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No earlier estimates of the task: ``typical_submission.chars``
+        (10 600, config/cost_estimate.yaml), not a work of no text."""
+        from course_supporter.cost_estimate.settings import get_estimate_settings
+
+        async with session_factory() as session:
+            chars = await quotes._typical_chars(session, world.task_id)
+        url = f"/api/v1/portal/tasks/{world.task_id}/estimate"
+        async with _client() as client:
+            configured = (await client.post(url)).json()["price_units"]
+            monkeypatch.setattr(quotes, "typical_submission_chars", lambda: 0)
+            empty = (await client.post(url)).json()["price_units"]
+
+        assert chars == get_estimate_settings().typical_submission.chars == 10_600
+        assert configured > empty, "a typical work is priced, not an empty one"
 
     async def test_short_says_what_is_missing(self, world: World) -> None:
         async with _client() as client:
@@ -478,10 +501,32 @@ class TestStudentOutlook:
         assert (one["reviews_left"], one["warning"]) == (1, "low")
         assert (none["reviews_left"], none["warning"]) == (0, "next_may_fail")
 
-    async def test_without_history_nothing_known_says_nothing(
+    async def test_without_history_the_typical_price_of_a_course_task(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        """No charges, no estimates: the price of the course's task at the
+        typical size of a student's work, as the estimate route shows it."""
+        await buy(session_factory, world.student, 5000)
+        async with _client() as client:
+            body = (await client.get("/api/v1/portal/billing/outlook")).json()
+            typical = (
+                await client.post(f"/api/v1/portal/tasks/{world.task_id}/estimate")
+            ).json()
+
+        assert typical["price_units"] > 0
+        assert body["reviews_left"] == 5000 // typical["price_units"]
+
+    async def test_a_course_without_a_task_says_nothing(
         self, session_factory: async_sessionmaker[AsyncSession], world: World
     ) -> None:
         await buy(session_factory, world.student, 500)
+        async with session_factory() as session:
+            await session.execute(
+                update(AuthoredDocument)
+                .where(AuthoredDocument.course_root_id == world.course_id)
+                .values(deleted_at=datetime.now(UTC))
+            )
+            await session.commit()
         async with _client() as client:
             body = (await client.get("/api/v1/portal/billing/outlook")).json()
         assert (body["reviews_left"], body["warning"]) == (None, None)

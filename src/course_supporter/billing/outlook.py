@@ -33,8 +33,10 @@ from sqlalchemy import func, select
 from course_supporter.billing import charging, ledger
 from course_supporter.billing.journal import available, positions
 from course_supporter.billing.kinds import AccountKind, ActionKind, MovementKind
+from course_supporter.models.source import AssignmentType
 from course_supporter.storage.orm import (
     ActionCostEstimate,
+    AuthoredDocument,
     BillingMovement,
     HomeworkSubmission,
     StudentEnrollment,
@@ -165,7 +167,48 @@ async def _typical_review_price(
         ).scalars()
         if p is not None
     ]
-    return float(statistics.median(prices)) if prices else None
+    if prices:
+        return float(statistics.median(prices))
+    return await _price_of_a_course_task(
+        session, tenant_id=tenant_id, student_id=student_id, courses=courses
+    )
+
+
+async def _price_of_a_course_task(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    student_id: uuid.UUID,
+    courses: list[uuid.UUID],
+) -> float | None:
+    """P of a review of the courses' first task at its typical size.
+
+    The price the estimate route shows without a file (basis ``typical``,
+    ``typical_submission.chars`` when the task has no history); ``None`` when
+    the courses have no task answered by a file.
+    """
+    from course_supporter.billing.quotes import review_quote
+
+    task = (
+        await session.execute(
+            select(AuthoredDocument)
+            .where(
+                AuthoredDocument.course_root_id.in_(courses),
+                AuthoredDocument.task_type.in_(
+                    [AssignmentType.TASK.value, AssignmentType.SHORT_TASK.value]
+                ),
+                AuthoredDocument.deleted_at.is_(None),
+            )
+            .order_by(AuthoredDocument.created_at, AuthoredDocument.id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if task is None:
+        return None
+    quote = await review_quote(
+        session, task=task, tenant_id=tenant_id, student_id=student_id
+    )
+    return float(quote.price_units) or None
 
 
 async def student_outlook(

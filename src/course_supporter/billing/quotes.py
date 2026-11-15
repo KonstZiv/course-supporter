@@ -9,11 +9,12 @@ Purpose:
     * :func:`review_quote` — a student's review of a task: from the file the
       student is about to send (basis ``file``: the doors read it as the path
       will, nothing is stored) or without one (basis ``typical``: the median
-      size of this task's earlier submissions, the prompts alone when there
-      are none). 0 for a test while the balance is above 0 and for the same
-      work again (the fingerprint of the file matches an earlier attempt that
-      was reviewed). An author paying under a rule: no numbers of the author,
-      ``enough`` always (operator 2026-11-15).
+      size of this task's earlier submissions; without them, the configured
+      typical size, ``typical_submission.chars`` of
+      ``config/cost_estimate.yaml``). 0 for a test while the balance is above
+      0 and for the same work again (the fingerprint of the file matches an
+      earlier attempt that was reviewed). An author paying under a rule: no
+      numbers of the author, ``enough`` always (operator 2026-11-15).
     * :func:`author_quote` — an author's processing or task preparation from
       its expected cost.
     * :class:`UnitsRefusedError` — the refusal of an action for want of
@@ -114,8 +115,16 @@ def require_enough(quote: Quote, what: str) -> None:
 # ── A student's review ────────────────────────────────────────────────
 
 
+def typical_submission_chars() -> int:
+    """The configured typical size of a student's work (``typical_submission``)."""
+    from course_supporter.cost_estimate.settings import get_estimate_settings
+
+    return get_estimate_settings().typical_submission.chars
+
+
 async def _typical_chars(session: AsyncSession, task_id: uuid.UUID) -> int:
-    """The median submission size of the task's latest review estimates; 0 if none."""
+    """The median submission size of the task's latest review estimates; without
+    any, the configured typical size (``typical_submission.chars``)."""
     sizes = (
         await session.execute(
             select(ActionCostEstimate.inputs["submission_chars"].astext.cast(Integer))
@@ -132,7 +141,7 @@ async def _typical_chars(session: AsyncSession, task_id: uuid.UUID) -> int:
         )
     ).scalars()
     known = [size for size in sizes if size is not None]
-    return int(statistics.median(known)) if known else 0
+    return int(statistics.median(known)) if known else typical_submission_chars()
 
 
 async def _same_work(
@@ -252,7 +261,7 @@ async def review_quote(
 
     ``reading`` — the doors' reading of the file about to be sent
     (:class:`~course_supporter.homework.doors.DoorReading`), or ``None`` for
-    the typical price.
+    the typical price (:func:`_typical_chars`).
     """
     config = config if config is not None else get_path_config()
     task_type = AssignmentType(task.task_type or "")

@@ -95,12 +95,25 @@ class ProcessingSettings(_Frozen):
     steps: dict[str, StepSettings]
 
 
+class TypicalSubmissionSettings(_Frozen):
+    """The size of a student's work, in characters, when nothing else says it.
+
+    Read by the price shown before a submission without its file (basis
+    ``typical``) and by the reminders of a student without history, when the
+    task has no earlier estimates to take a median of (BIL-E).
+    """
+
+    chars: int = Field(ge=0)
+    calibrated: bool = False
+
+
 class EstimateSettings(_Frozen):
     """Top-level shape of ``config/cost_estimate.yaml``."""
 
     margin: Decimal = Field(ge=0)
     units_per_usd: Decimal | None = Field(default=None, gt=0)
     guard_minutes: int = Field(ge=0, le=24 * 60)
+    typical_submission: TypicalSubmissionSettings
     review: dict[str, StepSettings]
     task_preparation: dict[str, StepSettings]
     processing: ProcessingSettings

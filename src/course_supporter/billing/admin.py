@@ -573,3 +573,81 @@ async def end_dispute(
         after=audit.refund_snapshot(refund),
     )
     return refund, True
+
+
+# ── A refund the user asked for: hold by order (BIL-E) ────────────────
+
+
+async def hold_refund_by_order(
+    session: AsyncSession,
+    *,
+    provider: str,
+    order_id: str,
+    units: int,
+    reason: str,
+    actor: str,
+    now: datetime | None = None,
+) -> tuple[BillingRefund, bool]:
+    """Hold units of the order's purchase before refunding it at the provider.
+
+    The administrator then refunds the money in the provider's dashboard; its
+    ``refund.created`` takes the held units (:func:`.refunds.refund_at_provider`).
+    Audited as ``refund.order_hold`` with the reason. The same hold asked again
+    changes nothing and writes nothing.
+
+    Raises:
+        BillingInvalidError: no actor, no reason; see :func:`.refunds.order_hold`.
+        BillingNotFoundError / BillingConflictError: :func:`.refunds.order_hold`.
+    """
+    actor = audit.require_actor(actor)
+    reason = reason.strip()
+    if not reason:
+        raise BillingInvalidError("a refund hold needs a reason")
+    refund, created = await refunds.order_hold(
+        session, provider=provider, order_id=order_id, units=units, now=now
+    )
+    if created:
+        await audit.record(
+            session,
+            actor=actor,
+            action=AuditAction.REFUND_ORDER_HOLD,
+            entity="refund",
+            entity_id=refund.id,
+            before=None,
+            after=audit.refund_snapshot(refund) | {"reason": reason},
+        )
+    return refund, created
+
+
+async def release_refund_by_order(
+    session: AsyncSession,
+    *,
+    provider: str,
+    order_id: str,
+    actor: str,
+    now: datetime | None = None,
+) -> BillingRefund:
+    """The refund did not happen: free the order's held units. Audited.
+
+    Raises:
+        BillingInvalidError: no actor.
+        BillingNotFoundError: nothing is held for the order.
+    """
+    actor = audit.require_actor(actor)
+    held = await refunds.order_release(
+        session, provider=provider, order_id=order_id, now=now
+    )
+    before = audit.refund_snapshot(held) | {
+        "state": RefundState.HELD.value,
+        "decided_at": None,
+    }
+    await audit.record(
+        session,
+        actor=actor,
+        action=AuditAction.REFUND_ORDER_RELEASE,
+        entity="refund",
+        entity_id=held.id,
+        before=before,
+        after=audit.refund_snapshot(held),
+    )
+    return held

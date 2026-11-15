@@ -31,6 +31,18 @@ A refund made at the provider (BIL-PAY):
     expired) is the platform's loss, no debt arises. The refund is written
     approved at once: a hold and its completion, one after the other.
 
+A hold by order (BIL-E, operator 2026-11-14/15):
+    A refund the user asks for is made in the provider's dashboard (Creem's
+    API has none). The administrator first holds the units of the purchase
+    (:func:`order_hold`) — keyed by the provider and the ORDER, since no
+    refund id exists yet — then refunds the money at the provider. The
+    provider's ``refund.created`` for that order (:func:`refund_at_provider`)
+    completes the hold: ``ceil(amount refunded x units of the batch ÷ amount
+    paid)`` units leave the batch, no more than were held; the rest of the
+    hold is free again. A hold whose refund did not happen is released
+    (:func:`order_release`). Without a hold the event takes the units as
+    before.
+
 A dispute (BIL-PAY, operator 2026-11-12):
     The payer's bank takes the money back while the dispute lasts. Every
     free unit of the batch is held — by the same mechanism as a refund, a
@@ -475,6 +487,17 @@ async def refund_at_provider(
         return Taken(
             batch.id, batch.account_id, wanted, existing.units, existing, repeated=True
         )
+    held = await _order_hold(session, provider, batch.provider_transaction_id)
+    if held is not None:
+        return await _complete_order_hold(
+            session,
+            held,
+            batch=batch,
+            wanted=wanted,
+            provider_adjustment_id=provider_adjustment_id,
+            amount_minor=amount_minor,
+            now=now,
+        )
     units = min(wanted, await _free_units(session, batch, now))
     if units == 0:
         return Taken(batch.id, batch.account_id, wanted, 0, None)
@@ -613,3 +636,179 @@ async def dispute_won(
     )
     await repay_differences(session, refund.account_id, now=now)
     return refund
+
+
+# ── A hold by order (BIL-E) ───────────────────────────────────────────
+
+
+async def _order_hold(
+    session: AsyncSession, provider: str, order_id: str | None, *, lock: bool = True
+) -> BillingRefund | None:
+    """The HELD hold of the provider's order, if there is one."""
+    if order_id is None:
+        return None
+    stmt = select(BillingRefund).where(
+        BillingRefund.provider == provider,
+        BillingRefund.provider_order_id == order_id,
+        BillingRefund.state == RefundState.HELD.value,
+    )
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def order_hold(
+    session: AsyncSession,
+    *,
+    provider: str,
+    order_id: str,
+    units: int,
+    now: datetime | None = None,
+) -> tuple[BillingRefund, bool]:
+    """Hold ``units`` free units of the order's purchase before its refund.
+
+    Returns the hold and whether it was made now: the same hold asked again
+    (same units) changes nothing.
+
+    Raises:
+        BillingNotFoundError: no purchase batch of the order.
+        BillingConflictError: several batches; more units than are free; the
+            order already held with other units.
+        BillingInvalidError: an administrator's credit; units out of range.
+    """
+    now = now or datetime.now(UTC)
+    provider = require_provider(provider)
+    batch = await _batch_of_transaction(session, provider, order_id)
+    await lock_account(session, batch.account_id)
+    existing = await _order_hold(session, provider, order_id)
+    if existing is not None:
+        if existing.units != units:
+            raise BillingConflictError(
+                f"{provider} order {order_id} is already held for "
+                f"{existing.units} units, not {units}"
+            )
+        return existing, False
+    amount = refund_amount(batch, units)
+    free = await _free_units(session, batch, now)
+    if units > free:
+        raise BillingConflictError(
+            f"batch {batch.id} of {provider} order {order_id} has {free} free "
+            "units; only free units of a valid batch are held"
+        )
+    assert batch.currency is not None  # a purchase has a currency (check constraint)
+    refund = BillingRefund(
+        account_id=batch.account_id,
+        batch_id=batch.id,
+        kind=RefundKind.REFUND.value,
+        units=units,
+        amount_minor=amount,
+        currency=batch.currency,
+        provider=provider,
+        provider_adjustment_id=None,
+        provider_order_id=order_id,
+        state=RefundState.HELD.value,
+        created_at=now,
+    )
+    session.add(refund)
+    await session.flush()
+    _take(session, refund=refund, now=now, complete=False)
+    await session.flush()
+    return refund, True
+
+
+async def order_release(
+    session: AsyncSession,
+    *,
+    provider: str,
+    order_id: str,
+    now: datetime | None = None,
+) -> BillingRefund:
+    """The refund did not happen: the order's held units are free again.
+
+    They repay a difference first, as any units that become free.
+
+    Raises:
+        BillingNotFoundError: nothing is held for the order.
+    """
+    now = now or datetime.now(UTC)
+    provider = require_provider(provider)
+    found = await _order_hold(session, provider, order_id, lock=False)
+    if found is None:
+        raise BillingNotFoundError(f"nothing is held for {provider} order {order_id}")
+    await lock_account(session, found.account_id)
+    held = await _order_hold(session, provider, order_id)
+    if held is None:
+        raise BillingNotFoundError(f"nothing is held for {provider} order {order_id}")
+    write(
+        session,
+        account_id=held.account_id,
+        kind=MovementKind.REFUND_REJECTED,
+        units=held.units,
+        now=now,
+        batch_id=held.batch_id,
+        refund_id=held.id,
+    )
+    await session.execute(
+        update(BillingRefund)
+        .where(BillingRefund.id == held.id)
+        .values(state=RefundState.REJECTED.value, decided_at=now)
+    )
+    await session.refresh(held)
+    await repay_differences(session, held.account_id, now=now)
+    return held
+
+
+async def _complete_order_hold(
+    session: AsyncSession,
+    held: BillingRefund,
+    *,
+    batch: BillingBatch,
+    wanted: int,
+    provider_adjustment_id: str,
+    amount_minor: int,
+    now: datetime,
+) -> Taken:
+    """The order's refund arrived: take what the money stands for, from the hold.
+
+    ``min(wanted, held)`` units leave the batch (``refund_completed``); the rest
+    of the hold is free again (``refund_rejected``) and repays a difference
+    first. The hold becomes the refund: approved, with the provider's
+    adjustment id — so a repeated event finds it and changes nothing.
+    """
+    taken = min(wanted, held.units)
+    rest = held.units - taken
+    if taken:
+        write(
+            session,
+            account_id=held.account_id,
+            kind=MovementKind.REFUND_COMPLETED,
+            units=taken,
+            now=now,
+            batch_id=held.batch_id,
+            refund_id=held.id,
+        )
+    if rest:
+        write(
+            session,
+            account_id=held.account_id,
+            kind=MovementKind.REFUND_REJECTED,
+            units=rest,
+            now=now,
+            batch_id=held.batch_id,
+            refund_id=held.id,
+        )
+    await session.execute(
+        update(BillingRefund)
+        .where(BillingRefund.id == held.id)
+        .values(
+            state=(RefundState.APPROVED.value if taken else RefundState.REJECTED.value),
+            decided_at=now,
+            units=taken or held.units,
+            amount_minor=amount_minor,
+            provider_adjustment_id=provider_adjustment_id,
+        )
+    )
+    await session.refresh(held)
+    if rest:
+        await repay_differences(session, held.account_id, now=now)
+    return Taken(batch.id, batch.account_id, wanted, taken, held if taken else None)

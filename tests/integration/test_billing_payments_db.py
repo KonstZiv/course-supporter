@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import (
     Connection,
@@ -1057,7 +1058,8 @@ def test_the_downgrade_is_refused_while_another_provider_has_a_purchase() -> Non
             command.downgrade(cfg, "bilb_unit_ledger")
         with engine.connect() as conn:
             current = conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert current == "bilpay_creem_disputes"  # the whole downgrade rolled back
+        # The whole downgrade rolled back: still at the head, whichever it is.
+        assert current == ScriptDirectory.from_config(cfg).get_current_head()
     finally:
         _forget(account_id)
         engine.dispose()

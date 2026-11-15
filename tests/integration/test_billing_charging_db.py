@@ -14,6 +14,7 @@ Requires ``docker compose up -d``; run with ``--run-db``.
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -61,6 +62,7 @@ from course_supporter.storage.orm import (
     Student,
     Tenant,
 )
+from tests._helpers.billing_cleanup import drop_billing_of_tenant
 from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = pytest.mark.requires_db
@@ -82,6 +84,19 @@ class World:
     processing_job_id: uuid.UUID
     student: uuid.UUID
     author: uuid.UUID
+
+
+_WORLDS: list[uuid.UUID] = []
+
+
+@pytest.fixture(autouse=True)
+async def _drop_billing(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[None]:
+    """Each test's billing rows go (the migration tests walk the schema down)."""
+    yield
+    while _WORLDS:
+        await drop_billing_of_tenant(session_factory, _WORLDS.pop())
 
 
 @pytest.fixture(autouse=True)
@@ -139,6 +154,7 @@ async def make_world(
             session, tenant_id=tenant.id
         )
         await session.commit()
+        _WORLDS.append(tenant.id)
         return World(
             tenant.id,
             course.id,

@@ -17,13 +17,13 @@
 
 # ── Operator parameters (ratified) ──
 margin: 0.20          # P = E x (1 + margin)
-# K, units per 1 USD of cost. Тимчасово (BIL-CAL, operator 2026-11-04):
-# derived from the target "a typical review ≈ 100 units" and the median of a
-# `task` review on the old path, $0.058 (READ-1 2026-11-04, step 10):
-# 0.058 x 1700 = 98.6 ≈ 100 — E x K, without the margin. By the model the
-# same E gives P = ceil(0.058 x 1.2 x 1700) = 119 and a reserve of
-# ceil(2 x 0.058 x 1700) = 198. To be revisited on live data of the new path.
-units_per_usd: 1700
+# K, units per 1 USD of cost (operator 2026-11-15, variant C of the
+# K-decision table): the median fact of a `task` review on the new path,
+# $0.109 over 17 reviews on production (read 2026-11-15) x 900 = 98.5 ≈ 100
+# units charged for a typical review, as the pricing page says. P (with the
+# margin) and the reserve follow from E; E is to be calibrated before
+# charging is switched on (DD-BIL-CAL).
+units_per_usd: 900
 guard_minutes: 15     # a peak that starts within this many minutes prices as peak
 
 # ── The typical size of a student's work (BIL-E) ──

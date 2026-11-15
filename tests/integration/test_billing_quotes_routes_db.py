@@ -1,6 +1,6 @@
 """BIL-E parts B and C over HTTP, on a live database: prices, 402, reminders.
 
-Numbers: K = 1 700, margin 0.20 (``config/cost_estimate.yaml``). Charging is
+Numbers: K = 900, margin 0.20 (``config/cost_estimate.yaml``). Charging is
 switched on and the path's test mode off for each test, unless a test says
 otherwise; every world is a fresh tenant.
 

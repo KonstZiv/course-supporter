@@ -1,9 +1,9 @@
 """BIL-E on a live database: every paid action reserves, is charged its fact, releases.
 
 The rules are in ``billing/charging.py``; the wiring in ``billing/funds.py``.
-Numbers: K = 1 700 units a dollar and a margin of 0.20
-(``config/cost_estimate.yaml``), E = $0.05 → P = ceil(0.05 x 1.2 x 1700) = 102,
-2E = 170 units; a call of $0.04 is F = 68 units.
+Numbers: K = 900 units a dollar and a margin of 0.20
+(``config/cost_estimate.yaml``), E = $0.05 → P = ceil(0.05 x 1.2 x 900) = 54,
+2E = 90 units; a call of $0.04 is F = 36 units.
 
 The port and the gates open sessions of their own and commit, so each test
 builds a world of its own (a fresh tenant) and ends every reserve it makes.
@@ -68,8 +68,8 @@ from tests._helpers.course_node_factory import make_root_course_node
 pytestmark = pytest.mark.requires_db
 
 E = Decimal("0.05")
-P = 102
-TWO_E = 170
+P = 54
+TWO_E = 90
 ACTOR = "test-admin"
 
 
@@ -338,10 +338,10 @@ class TestStudentReview:
         await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
 
         moved = await sums(session_factory, ActionKind.REVIEW, key_of(w))
-        assert moved[MovementKind.DEBIT.value] == 68
-        assert moved[MovementKind.RESERVE_RELEASE.value] == TWO_E - 68
+        assert moved[MovementKind.DEBIT.value] == 36
+        assert moved[MovementKind.RESERVE_RELEASE.value] == TWO_E - 36
         after = await balance(session_factory, w.student)
-        assert (after.balance, after.available, after.difference) == (432, 432, 0)
+        assert (after.balance, after.available, after.difference) == (464, 464, 0)
 
     async def test_the_ceiling_caps_the_reserve(
         self, session_factory: async_sessionmaker[AsyncSession]
@@ -350,10 +350,10 @@ class TestStudentReview:
         await buy(session_factory, w.student, 500)
         port = funds.LedgerFundsPort(session_factory)
 
-        await port.check_and_reserve(review(w), 0.07)  # 0.07 x 1700 = 119 < 170
+        await port.check_and_reserve(review(w), 0.07)  # 0.07 x 900 = 63 < 90
 
         (held,) = await reservations(session_factory, ActionKind.REVIEW, key_of(w))
-        assert held.units == 119
+        assert held.units == 63
         await port.release_remainder(review(w), SubmissionOutcome.FAILED)
 
     async def test_a_failure_releases_everything(
@@ -390,8 +390,8 @@ class TestStudentReview:
         )
         moved = await sums(session_factory, ActionKind.REVIEW, key_of(w))
         assert moved[MovementKind.RESERVE.value] == TWO_E
-        assert moved[MovementKind.DEBIT.value] == 68
-        assert (await balance(session_factory, w.student)).available == 432
+        assert moved[MovementKind.DEBIT.value] == 36
+        assert (await balance(session_factory, w.student)).available == 464
 
     async def test_the_fact_leaves_out_the_task_preparation(
         self, session_factory: async_sessionmaker[AsyncSession]
@@ -408,7 +408,7 @@ class TestStudentReview:
         await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
 
         moved = await sums(session_factory, ActionKind.REVIEW, key_of(w))
-        assert moved[MovementKind.DEBIT.value] == 68, "the author's call is not F"
+        assert moved[MovementKind.DEBIT.value] == 36, "the author's call is not F"
 
     async def test_short_of_the_price_is_refused_and_nothing_held(
         self, session_factory: async_sessionmaker[AsyncSession]
@@ -426,16 +426,16 @@ class TestStudentReview:
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         w = await make_world(session_factory)
-        await buy(session_factory, w.student, 120)  # enough for P, less than 2E
+        await buy(session_factory, w.student, 70)  # enough for P, less than 2E
         port = funds.LedgerFundsPort(session_factory)
         await port.check_and_reserve(review(w), 1.0)
-        await call(session_factory, w.homework_job_id, "0.10")  # F = 170
+        await call(session_factory, w.homework_job_id, "0.10")  # F = 90
 
         await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
 
         moved = await sums(session_factory, ActionKind.REVIEW, key_of(w))
-        assert moved[MovementKind.DEBIT.value] == 120, "min(F, R)"
-        assert moved[MovementKind.PLATFORM_COVERED.value] == 50, "F - R"
+        assert moved[MovementKind.DEBIT.value] == 70, "min(F, R)"
+        assert moved[MovementKind.PLATFORM_COVERED.value] == 20, "F - R"
         assert MovementKind.DIFFERENCE_ARISEN.value not in moved
         after = await balance(session_factory, w.student)
         assert (after.balance, after.difference) == (0, 0)
@@ -451,8 +451,8 @@ class TestStudentReview:
             ).scalar_one()
         assert note == {
             "kind": "cost_over_reserve",
-            "cost_units": 170,
-            "charged_units": 120,
+            "cost_units": 90,
+            "charged_units": 70,
         }
         assert platform == PayerSource.PLATFORM.value
 
@@ -564,7 +564,7 @@ class TestAuthorPaysForTheStudent:
         await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
 
         moved = await sums(session_factory, ActionKind.REVIEW, key_of(w))
-        assert moved == {MovementKind.PLATFORM_COVERED.value: 68}
+        assert moved == {MovementKind.PLATFORM_COVERED.value: 36}
         assert (await balance(session_factory, w.author)).difference == 0
         async with session_factory() as session:
             assert await funds.billing_note(session, w.submission_id) is None, (
@@ -584,8 +584,8 @@ class TestAuthorPaysForTheStudent:
         await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
 
         moved = await sums(session_factory, ActionKind.REVIEW, key_of(w))
-        assert moved == {MovementKind.DIFFERENCE_ARISEN.value: 68}
-        assert (await balance(session_factory, w.author)).difference == 68
+        assert moved == {MovementKind.DIFFERENCE_ARISEN.value: 36}
+        assert (await balance(session_factory, w.author)).difference == 36
 
     async def test_without_a_rule_the_student_pays(
         self, session_factory: async_sessionmaker[AsyncSession]
@@ -641,7 +641,7 @@ class TestKeyExplanations:
         assert answer.decision is FundsDecision.ALLOWED
         key = f"{w.task_id}:{work.reference_id}:key_explanation"
         assert await sums(session_factory, ActionKind.TASK_PREPARATION, key) == {
-            MovementKind.PLATFORM_COVERED.value: 34
+            MovementKind.PLATFORM_COVERED.value: 18
         }
 
     async def test_an_author_with_credit_goes_on_and_owes(
@@ -656,7 +656,7 @@ class TestKeyExplanations:
         await port.account_version_work_cost(work, 0.02)
 
         assert answer.decision is FundsDecision.ALLOWED
-        assert (await balance(session_factory, w.author)).difference == 34
+        assert (await balance(session_factory, w.author)).difference == 18
 
     async def test_a_failed_generation_is_released_and_charged_nothing(
         self, session_factory: async_sessionmaker[AsyncSession]
@@ -705,7 +705,7 @@ class TestCriteriaDecomposition:
         moved = await sums(
             session_factory, ActionKind.TASK_PREPARATION, charge.action_key
         )
-        assert moved == {MovementKind.PLATFORM_COVERED.value: 68}
+        assert moved == {MovementKind.PLATFORM_COVERED.value: 36}
 
 
 # ── Processing of a material ──────────────────────────────────────────
@@ -760,7 +760,7 @@ class TestProcessing:
         moved = await sums(
             session_factory, ActionKind.PROCESSING, str(w.processing_job_id)
         )
-        assert moved == {MovementKind.DIFFERENCE_ARISEN.value: 68}
+        assert moved == {MovementKind.DIFFERENCE_ARISEN.value: 36}
 
     async def test_reserve_then_fact_then_failure_releases(
         self, session_factory: async_sessionmaker[AsyncSession]
@@ -804,7 +804,7 @@ class TestProcessing:
             ).remaining_units
         assert left > 0
         await start_processing(session_factory, w)
-        usd = Decimal(left + 10) / Decimal(1700)  # F = what the limit has left + 10
+        usd = Decimal(left + 10) / Decimal(900)  # F = what the limit has left + 10
         await call(
             session_factory, w.processing_job_id, str(usd.quantize(Decimal("1e-9")))
         )
@@ -935,7 +935,7 @@ async def test_the_portal_detail_carries_the_billing_note(
     from course_supporter.storage.database import get_session
 
     w = await make_world(session_factory)
-    await buy(session_factory, w.student, 120)
+    await buy(session_factory, w.student, 70)
     port = funds.LedgerFundsPort(session_factory)
     await port.check_and_reserve(review(w), 1.0)
     await call(session_factory, w.homework_job_id, "0.10")
@@ -960,6 +960,6 @@ async def test_the_portal_detail_carries_the_billing_note(
     assert response.status_code == 200, response.text
     assert response.json()["billing_note"] == {
         "kind": "cost_over_reserve",
-        "cost_units": 170,
-        "charged_units": 120,
+        "cost_units": 90,
+        "charged_units": 70,
     }

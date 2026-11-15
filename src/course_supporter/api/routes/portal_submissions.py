@@ -377,8 +377,10 @@ async def _require_units(
 
     The price of the file as the doors read it — the same function as the
     estimate route (``billing.quotes.review_quote``); a file the doors refuse
-    is left to them (it is refused for free). A test: free while the balance
-    is above 0. A review the author pays for is never refused here.
+    is left to them (it is refused for free); a price that could not be
+    estimated is the ceiling N (BIL-E2, 4a). A test: free while the balance
+    is above 0. A review the author pays for is never refused here: it is
+    taken, and waits for the author's units if it must (5a, item 2).
     """
     from course_supporter.billing.charging import charging_enabled
     from course_supporter.billing.quotes import (
@@ -390,14 +392,17 @@ async def _require_units(
 
     if not charging_enabled():
         return
-    reading = None
-    if file is not None:
-        from course_supporter.api.routes.billing_estimates import read_for_quote
+    from course_supporter.api.routes.billing_estimates import (
+        FileForQuote,
+        file_for_quote,
+    )
 
+    sent = FileForQuote(None)
+    if file is not None:
         data = await file.read()
         await file.seek(0)
         try:
-            reading = await read_for_quote(
+            sent = await file_for_quote(
                 session,
                 task_doc,
                 student.student_id,
@@ -411,7 +416,8 @@ async def _require_units(
         task=task_doc,
         tenant_id=student.tenant_id,
         student_id=student.student_id,
-        reading=reading,
+        reading=sent.reading,
+        read_error=sent.error,
     )
     try:
         require_enough(quote, "the review cannot be paid for")
@@ -503,12 +509,18 @@ async def get_portal_task_base(
     return PortalBaseDownload(original_url=original_url)
 
 
-def _to_list_item(submission: HomeworkSubmission) -> PortalSubmissionListItem:
-    """Curated list item — no review_markdown, no internal trace."""
+def _to_list_item(
+    submission: HomeworkSubmission, *, held_for_author: bool = False
+) -> PortalSubmissionListItem:
+    """Curated list item — no review_markdown, no internal trace.
+
+    ``held_for_author`` — it waits for its author's units
+    (:func:`~course_supporter.billing.held.waiting_for_author`).
+    """
     return PortalSubmissionListItem(
         id=submission.id,
         status=submission.status,
-        presentation=curated_presentation(submission),
+        presentation=curated_presentation(submission, held_for_author=held_for_author),
         score=submission.score,
         verdict=curated_verdict(submission.review_result, score=submission.score),
         created_at=submission.created_at,
@@ -587,6 +599,7 @@ def _to_detail(
     delta: PortalDeltaReceipt | None = None,
     own_feedback: FeedbackTouch | None = None,
     billing_note: PortalBillingNote | None = None,
+    held_for_author: bool = False,
 ) -> PortalSubmissionDetail:
     """Curated detail — adds review_markdown and the structure; no trace.
 
@@ -599,7 +612,7 @@ def _to_detail(
     return PortalSubmissionDetail(
         id=submission.id,
         status=submission.status,
-        presentation=curated_presentation(submission),
+        presentation=curated_presentation(submission, held_for_author=held_for_author),
         score=submission.score,
         verdict=curated_verdict(submission.review_result, score=submission.score),
         structure=curated_structure(submission.review_result),
@@ -646,7 +659,10 @@ async def list_portal_submissions(
         student.student_id, authored_document_id
     )
     if rows:
-        return [_to_list_item(s) for s in rows]
+        from course_supporter.billing.held import waiting_for_author
+
+        held = await waiting_for_author(session, rows)
+        return [_to_list_item(s, held_for_author=s.id in held) for s in rows]
 
     # No own attempts → visibility requires enrollment in the task's course.
     task_doc = await AuthoredDocumentRepository(session).get_by_id(authored_document_id)
@@ -706,13 +722,16 @@ async def get_portal_submission(
         target_id=submission.id,
     )
     from course_supporter.billing.funds import billing_note
+    from course_supporter.billing.held import waiting_for_author
 
     note = await billing_note(session, submission.id)
+    held = await waiting_for_author(session, [submission])
     return _to_detail(
         submission,
         delta=delta,
         own_feedback=to_touch(own) if own is not None else None,
         billing_note=PortalBillingNote(**note) if note is not None else None,
+        held_for_author=submission.id in held,
     )
 
 

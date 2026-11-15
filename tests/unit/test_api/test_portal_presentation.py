@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from course_supporter.api.routes._portal_shared import (
+    AWAITING_AUTHOR_FUNDS_REASON_CODE,
     AWAITING_CRITERIA_REASON_CODE,
     AWAITING_FUNDS_REASON_CODE,
     FAILED_REASON_CODE,
@@ -104,6 +105,25 @@ class TestReasonCodes:
         assert (
             curated_presentation(_submission("awaiting_funds")).reason_code
             == AWAITING_FUNDS_REASON_CODE
+        )
+
+    def test_waiting_for_the_authors_units_gets_its_own_code(self) -> None:
+        """BIL-E2, 5a item 2: the author pays and has no units — the same state,
+        a code that says whose units the review waits for."""
+        presentation = curated_presentation(
+            _submission("awaiting_funds"), held_for_author=True
+        )
+
+        assert presentation.state == "awaiting_funds"
+        assert presentation.reason_code == AWAITING_AUTHOR_FUNDS_REASON_CODE
+        assert AWAITING_AUTHOR_FUNDS_REASON_CODE == "awaiting_author_funds"
+
+    def test_only_a_held_attempt_waits_for_the_author(self) -> None:
+        assert (
+            curated_presentation(
+                _submission("reviewing"), held_for_author=True
+            ).reason_code
+            is None
         )
 
     def test_awaiting_criteria_is_being_checked_with_its_own_code(self) -> None:

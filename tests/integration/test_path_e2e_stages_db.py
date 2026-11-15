@@ -35,6 +35,7 @@ from course_supporter.api.tasks import arq_process_homework
 from course_supporter.funds_port import (
     FUNDS_PORT_ACTION,
     FundsAnswer,
+    FundsPort,
     FundsRefusalReason,
     SubmissionContext,
     SubmissionOutcome,
@@ -399,7 +400,7 @@ def _answers(tmp_path: Path) -> Path:
 async def _run(
     session_factory: async_sessionmaker[AsyncSession],
     router: Any,
-    port: _PortDouble,
+    port: FundsPort,
     seed: dict[str, uuid.UUID],
     answers: Path,
     *,
@@ -1701,3 +1702,80 @@ class TestATypeSwitchedBackIsNotContinuedOnTheNewPath:
         assert router.calls == []
         submission = await _submission(session_factory, seed["submission_id"])
         assert submission.status == "received"
+
+
+class TestTheAuthorsUnitsHoldTheRevision:
+    """BIL-E2, 5a item 2: the author pays under a rule and has no units — the
+    journal's own port refuses, the run holds the revision before a single call,
+    the portal says it waits for the author; the author's top-up lets it go."""
+
+    async def test_held_for_the_author_then_payable_once_they_top_up(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from course_supporter.billing import admin, charging, funds, ledger
+        from course_supporter.billing.accounts import get_or_create_author_account
+        from course_supporter.billing.held import held_for_author, waiting_for_author
+        from course_supporter.billing.kinds import ActionKind, RuleScope
+        from course_supporter.billing.resume_funded import can_pay
+        from tests._helpers.billing_cleanup import drop_billing_of_tenant
+
+        monkeypatch.setattr(charging, "charging_enabled", lambda settings=None: True)
+        monkeypatch.setattr(funds, "in_test_mode", lambda *a, **k: False)
+        submission = await _submission(session_factory, seed["submission_id"])
+        async with session_factory() as session:
+            task = await session.get(AuthoredDocument, submission.authored_document_id)
+            assert task is not None
+            await admin.create_payment_rule(
+                session,
+                actor="test-admin",
+                tenant_id=seed["tenant_id"],
+                scope=RuleScope.COURSE,
+                action_kind=ActionKind.REVIEW,
+                course_node_id=task.course_root_id,
+            )
+            author = await get_or_create_author_account(
+                session, tenant_id=seed["tenant_id"]
+            )
+            await session.commit()
+        router = _RouterDouble(session_factory)
+        try:
+            await _run(
+                session_factory,
+                router,
+                funds.LedgerFundsPort(session_factory),
+                seed,
+                _answers(tmp_path),
+            )
+
+            held = await _submission(session_factory, seed["submission_id"])
+            async with session_factory() as session:
+                waiting = await waiting_for_author(session, [held])
+                counted = await held_for_author(
+                    session, tenant_id=seed["tenant_id"], account_id=author.id
+                )
+                short = await can_pay(session, held)
+                await ledger.credit_purchase(
+                    session,
+                    account_id=author.id,
+                    units=10_000,
+                    amount_paid_minor=500,
+                    currency="EUR",
+                    provider="fake",
+                )
+                await session.commit()
+            async with session_factory() as session:
+                funded = await can_pay(session, held)
+        finally:
+            await drop_billing_of_tenant(session_factory, seed["tenant_id"])
+
+        assert router.calls == [], "held before anything is paid for"
+        assert held.status == "awaiting_funds"
+        checkpoint = await _checkpoint(session_factory, seed["job_id"])
+        assert checkpoint.frozen_reason is FreezeReason.AWAITING_FUNDS
+        assert waiting == {seed["submission_id"]}
+        assert (counted.count, counted.missing_units > 0) == (1, True)
+        assert (short, funded) == (False, True)

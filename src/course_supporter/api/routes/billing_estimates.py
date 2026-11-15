@@ -18,11 +18,18 @@ enough and how much is missing, and whether charging is on
 of units is 402 ``{"detail": {"code": "insufficient_units", "details":
 {price_units, available_units, missing_units}}}``
 (:func:`course_supporter.billing.quotes.require_enough`).
+
+A student's review the author pays for under a rule carries no numbers
+(``price_units``, ``available_units``, ``missing_units`` null, ``enough``
+true). A review whose price could not be estimated answers 200 with
+``basis: "ceiling"`` and ``price_units`` = N, the most it can cost (BIL-E2,
+4a); only a file the doors refuse is 422.
 """
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, replace
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Path, UploadFile
@@ -70,23 +77,35 @@ class AuthorEstimateResponse(BaseModel):
     )
 
 
-class ReviewEstimateResponse(AuthorEstimateResponse):
+class ReviewEstimateResponse(BaseModel):
     """The price of a student's review; the author's numbers never shown."""
 
+    price_units: int | None = Field(
+        description="P: the price shown, in units; at basis ceiling, N — the "
+        "most the review can cost (the fact is charged). Null when the author "
+        "pays."
+    )
     available_units: int | None = Field(
         description="The student's available units; null when the author pays."
+    )
+    enough: bool = Field(
+        description="May the submission be sent now: available >= P (N at the "
+        "ceiling), or the author pays (always — whether the review starts is "
+        "decided when it runs), or charging is off."
     )
     missing_units: int | None = Field(
         description="P - available when not enough; null when the author pays."
     )
-    basis: Literal["typical", "file"] = Field(
-        description="typical: this task's usual size; file: the file sent."
+    charging_enabled: bool = Field(
+        description="Charging on AND the task's path not in its test mode."
+    )
+    basis: Literal["typical", "file", "ceiling"] = Field(
+        description="typical: this task's usual size; file: the file sent; "
+        "ceiling: the price could not be estimated — price_units is the most "
+        "the review can cost."
     )
     paid_by: Literal["self", "author"] = Field(
         description="self: the student; author: the author under a payment rule."
-    )
-    charging_enabled: bool = Field(
-        description="Charging on AND the task's path not in its test mode."
     )
 
 
@@ -151,6 +170,45 @@ async def read_for_quote(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class FileForQuote:
+    """A file about to be sent, as the price reads it."""
+
+    reading: Any | None
+    """The doors' reading (:func:`read_for_quote`); ``None`` — not read."""
+    error: str | None = None
+    """The class of the error that broke the reading: the price falls to the
+    ceiling (BIL-E2, 4a)."""
+
+
+async def file_for_quote(
+    session: AsyncSession,
+    task: AuthoredDocument,
+    student_id: uuid.UUID,
+    *,
+    filename: str,
+    data: bytes,
+) -> FileForQuote:
+    """:func:`read_for_quote`, any failure but the doors' own kept as an error.
+
+    Raises :class:`~course_supporter.security.exceptions.SecurityRejectedError`
+    when the doors refuse the file — the file's problem, not the price's. The
+    reads run in a savepoint, so a failed one leaves the session usable.
+    """
+    from course_supporter.security.exceptions import SecurityRejectedError
+
+    try:
+        async with session.begin_nested():
+            reading = await read_for_quote(
+                session, task, student_id, filename=filename, data=data
+            )
+    except SecurityRejectedError:
+        raise
+    except Exception as exc:
+        return FileForQuote(None, type(exc).__name__)
+    return FileForQuote(reading)
+
+
 @router.post(
     "/portal/tasks/{authored_document_id}/estimate",
     response_model=ReviewEstimateResponse,
@@ -174,11 +232,11 @@ async def estimate_portal_review(
     from course_supporter.security.exceptions import SecurityRejectedError
 
     task = await _answerable_task(session, student, authored_document_id)
-    reading = None
+    sent = FileForQuote(None)
     if file is not None:
         data = await file.read()
         try:
-            reading = await read_for_quote(
+            sent = await file_for_quote(
                 session,
                 task,
                 student.student_id,
@@ -195,18 +253,13 @@ async def estimate_portal_review(
         task=task,
         tenant_id=student.tenant_id,
         student_id=student.student_id,
-        reading=reading,
+        reading=sent.reading,
+        read_error=sent.error,
     )
-    if file is not None and reading is None:
-        quote = Quote(
-            quote.price_units,
-            quote.available_units,
-            quote.enough,
-            quote.missing_units,
-            quote.charging_enabled,
-            "file",
-            quote.paid_by,
-        )
+    if file is not None and quote.basis == "typical":
+        # A file the price does not read (a test's answers, a project): it was
+        # still sent, so the basis says so.
+        quote = replace(quote, basis="file")
     await session.commit()  # accounts are created lazily on the way
     return _review_response(quote)
 

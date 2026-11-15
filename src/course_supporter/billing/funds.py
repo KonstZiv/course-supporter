@@ -42,6 +42,7 @@ from sqlalchemy import select
 from course_supporter.billing import charging
 from course_supporter.billing.estimates import preparation_e_usd, processing_e_usd
 from course_supporter.billing.kinds import AccountKind, ActionKind, MovementKind
+from course_supporter.billing.quotes import NOTHING_PRICED_THRESHOLD, ceiling_threshold
 from course_supporter.cost_estimate.shadow import (
     preparation_key,
     processing_key,
@@ -112,11 +113,17 @@ class LedgerFundsPort:
     A review: on the path's test mode (``path_config.in_test_mode``) nothing is
     reserved or charged (operator 2026-11-03, item 4); a test (kind ``test``,
     no model) is free while its payer's balance is above 0; any other review
-    is gated by :func:`.charging.threshold_applies`, reserves
+    is gated by :func:`.charging.threshold_applies` — a review an author
+    without credit pays for under a rule too: short, it is held in
+    ``awaiting_funds`` like a student's (BIL-E2, 5a, item 2) — reserves
     ``min(2E, the path's ceiling, available)`` and is settled, at its end, with
-    the cost of its calls (:func:`.charging.review_fact_usd`). A failure
-    releases everything. The numbers of every answer are also kept on the
-    funds-port row of the call register, as by the first implementation.
+    the cost of its calls (:func:`.charging.review_fact_usd`). A review whose
+    estimate fell to the ceiling (``expected_usd`` is ``None``) needs the
+    task's typical price to start, else ``available > 0``
+    (:func:`.quotes.ceiling_threshold`), and reserves ``min(N, available)``,
+    N the ceiling in units. A failure releases everything.
+    The numbers of every answer are also kept on the funds-port row of the
+    call register, as by the first implementation.
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -149,7 +156,8 @@ class LedgerFundsPort:
         if in_test_mode(task_type):
             return FundsAnswer.allowed()
         ceiling = Decimal(str(ceiling_estimate_usd))
-        e_usd = context.expected_usd if context.expected_usd is not None else ceiling
+        at_ceiling = context.expected_usd is None
+        e_usd = ceiling if context.expected_usd is None else context.expected_usd
         async with self._session_factory() as session:
             task = await _task_of_submission(session, context.submission_id)
             payer = await charging.payer_of(
@@ -167,11 +175,28 @@ class LedgerFundsPort:
                     if allowed
                     else FundsAnswer.refused(FundsRefusalReason.INSUFFICIENT_FUNDS)
                 )
+            threshold = charging.price_of(e_usd)
+            if at_ceiling and charging.threshold_applies(
+                ActionKind.REVIEW, payer, own_action=False
+            ):
+                # The estimate fell to the ceiling: the start needs the task's
+                # typical price (else available > 0); the reserve below is
+                # min(N, available), the excess over it the platform's.
+                threshold = (
+                    await ceiling_threshold(
+                        session,
+                        task=task,
+                        tenant_id=context.tenant_id,
+                        student_id=context.student_id,
+                    )
+                    if task is not None
+                    else NOTHING_PRICED_THRESHOLD
+                )
             found = await charging.quote(
                 session,
                 action_kind=ActionKind.REVIEW,
                 payer=payer,
-                price_units=charging.price_of(e_usd),
+                price_units=threshold,
                 lock=True,
             )
             if not found.enough:
@@ -181,6 +206,7 @@ class LedgerFundsPort:
                     submission_id=str(context.submission_id),
                     price_units=found.price_units,
                     available_units=found.available_units,
+                    paid_by="author" if payer.for_someone_else else "self",
                 )
                 return FundsAnswer.refused(FundsRefusalReason.INSUFFICIENT_FUNDS)
             await charging.reserve_for(

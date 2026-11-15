@@ -2245,7 +2245,9 @@ class PortalPresentation(BaseModel):
     reason_code: str | None = Field(
         default=None,
         description="Service key the surface phrases; null when the state is "
-        "the whole answer.",
+        "the whole answer. With the state awaiting_funds: awaiting_funds (the "
+        "student's own units) or awaiting_author_funds (the author pays and "
+        "the review starts once the author tops up).",
     )
 
 
@@ -2866,6 +2868,70 @@ class BillingStatementResponse(BaseModel):
     items: list[BillingStatementItem]
     next_cursor: str | None = Field(
         description="Pass it as cursor for the next page; null on the last."
+    )
+
+
+class BillingSpendingPeriod(BaseModel):
+    """The period of a spending report: inclusive UTC dates."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_date: date = Field(alias="from", description="The first day, UTC.")
+    to_date: date = Field(alias="to", description="The last day, UTC (included).")
+
+
+class BillingSpendingUnits(BaseModel):
+    """Units charged and units borne by someone else, of some actions."""
+
+    billed_units: int = Field(
+        description="Charged to the author: debit + difference (a difference "
+        "is charged too, repaid later)."
+    )
+    covered_units: int = Field(
+        description="Borne by the author's benefit or by the platform: shown "
+        "apart, never charged."
+    )
+
+
+class BillingSpendingTask(BillingSpendingUnits):
+    """A homework task: the reviews of its students' work and its preparation."""
+
+    authored_document_id: uuid.UUID
+    title: str | None = Field(description="The task's title, else its file name.")
+    reviews: int = Field(description="How many reviews were charged or covered.")
+
+
+class BillingSpendingCourse(BillingSpendingUnits):
+    """A course: its actions by kind (of the billed units), and its tasks."""
+
+    course_node_id: uuid.UUID
+    title: str | None
+    reviews_units: int = Field(description="Billed for students' reviews.")
+    processing_units: int = Field(description="Billed for processing materials.")
+    preparation_units: int = Field(description="Billed for preparing tasks.")
+    tasks: list[BillingSpendingTask] = Field(
+        description="The course's homework tasks with reviews or preparations; "
+        "processing is the course's, not a task's."
+    )
+
+
+class BillingSpendingResponse(BaseModel):
+    """GET /billing/spending: what the author's actions cost them, in units.
+
+    Units only, never dollars. Purchases, refunds, expiry and reserves are not
+    spending. A student's review the author pays for under a payment rule is
+    under its task.
+    """
+
+    period: BillingSpendingPeriod
+    charging_enabled: bool = Field(
+        description="BILLING_CHARGING_ENABLED: while false nothing is charged "
+        "and every number is 0."
+    )
+    totals: BillingSpendingUnits
+    courses: list[BillingSpendingCourse]
+    unlinked: BillingSpendingUnits = Field(
+        description="Actions that lead to no course (a deleted row): kept, not lost."
     )
 
 

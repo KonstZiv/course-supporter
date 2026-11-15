@@ -300,7 +300,7 @@ async def _run(
             patch(f"{path_runner}.get_stage_executor", side_effect=run.executor)
         )
         stack.enter_context(
-            patch(f"{path_runner}.AlwaysEnoughFundsPort", return_value=run.port)
+            patch(f"{path_runner}.build_funds_port", return_value=run.port)
         )
         # The doors and the stages are under test, not the review: the spies
         # write no verdicts for the builder to read.

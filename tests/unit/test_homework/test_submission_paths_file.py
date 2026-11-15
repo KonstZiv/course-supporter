@@ -24,6 +24,7 @@ from course_supporter.homework.path_config import (
     validate_path_config,
 )
 from course_supporter.homework.path_stages import validate_stage_executors
+from course_supporter.homework.result_builders import validate_result_builders
 from course_supporter.homework.text_budget import path_context_budget_chars
 from course_supporter.llm.ladder_config import load_ladder_config
 from course_supporter.llm.registry import ModelRegistryConfig, load_registry
@@ -67,6 +68,8 @@ class TestCheckedInPaths:
             ).stages.keys(),
         )
         validate_stage_executors(config.stages)
+        # Project chain K6: every type the new path serves has a builder.
+        validate_result_builders(config)
 
     def test_no_stage_name_repeats_a_ladder_stage(self, config: PathConfig) -> None:
         """Shared names would make the register sum two stages' costs as one."""

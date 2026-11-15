@@ -418,6 +418,27 @@ def _unified_diff(base_text: str, sub_text: str, path: str) -> str:
     )
 
 
+def students_lines(base_text: str, sub_text: str) -> str:
+    """The lines the student added or changed in a file of the base, alone.
+
+    The ``+`` lines of the very unified diff a ``CHANGED-DIFF`` block shows
+    (:func:`_unified_diff`), each without its mark and ended by a newline:
+    no file header, no hunk header, no line of the author's -- neither the
+    context lines nor the removed ones. For the safety check of a project on
+    the new path (chain K6), which reads the student's code alone; nothing
+    here reaches the context the reviewing models read.
+
+    >>> students_lines("a\\nb\\nc\\n", "a\\nB\\nc\\nd\\n")
+    'B\\nd\\n'
+    >>> students_lines("a\\nb\\n", "a\\n")
+    ''
+    """
+    # The first two lines of a non-empty diff are its file headers (``---``,
+    # ``+++``); after them a line opening with ``+`` is the student's.
+    diff = _unified_diff(base_text, sub_text, "").split("\n")[2:]
+    return "".join(f"{line[1:]}\n" for line in diff if line.startswith("+"))
+
+
 def _escape(text: str) -> str:
     """Neutralise the structural sentinel in untrusted content, completely.
 

@@ -2,14 +2,14 @@
 
 The API (``api/app.py::lifespan``) and both ARQ workers (``WorkerSettings``,
 ``HomeworkWorkerSettings`` -- the three processes of prod) load the model
-registry and the stage ladders, run the six boot checks and build the
+registry and the stage ladders, run the seven boot checks and build the
 StageRouter through one function,
 :func:`course_supporter.boot.build_checked_stage_router`.
 These locks hold that from three sides:
 
 * the processes really call the shared function -- replace it with one that
   fails and none of the three can start;
-* every one of the six checks, failing, stops every process;
+* every one of the seven checks, failing, stops every process;
 * the startup log events keep their names and their order -- the post-deploy
   measurement reads them as "every check passed".
 """
@@ -106,11 +106,12 @@ def _no_io(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(S3Client, "close", _close)
 
 
-# The six boot checks, by the name the shared function calls them.
+# The seven boot checks, by the name the shared function calls them.
 BOOT_CHECKS = [
     "validate_ladders_against_registry",
     "validate_path_config",
     "validate_stage_executors",
+    "validate_result_builders",
     "validate_ladder_prompts",
     "validate_phrasebook",
     "validate_native_names",
@@ -145,7 +146,7 @@ class TestEveryProcessCallsTheSharedStartup:
 
 
 class TestEveryCheckStopsEveryProcess:
-    """Each of the six checks, failing, stops the API and both workers."""
+    """Each of the seven checks, failing, stops the API and both workers."""
 
     @pytest.mark.parametrize("start", PROCESSES, ids=PROCESS_IDS)
     @pytest.mark.parametrize("check", BOOT_CHECKS)

@@ -2,7 +2,10 @@
 
 Purpose:
     The result builder of ``task`` and ``short_task``
-    (``homework/result_builders.py``). The two stages before it have written
+    (``homework/result_builders.py``), and of ``project`` as it is (project
+    chain K6): a project's stages are the same two functions under their own
+    names, and write the same rows and the same explanation. The two stages
+    before it have written
     everything the review says: the evaluation stage a verdict on every
     criterion and point (``homework/criteria_evaluation.py``), the
     explanation stage the words around them (``homework/review_explanation.py``)
@@ -53,7 +56,8 @@ The place of a remark (project chain K5):
     path, then ``:12`` for one line or ``:12-14`` for several — the phrase of
     the place stays the phrasebook's, ``position.file``. A text type's rows
     keep no place, so its review is what it was. :func:`problem_positions`
-    is the rule; a project's builder takes it as it is.
+    is the rule; a project's builder -- this one, since chain K6 -- takes it
+    as it is.
 
 The order of the remarks:
     By their criterion's weight — "must" first, then "should", then "may" —

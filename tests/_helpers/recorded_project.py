@@ -99,7 +99,17 @@ SECRET = "sk-live-secret"
 
 
 async def read_recorded_project(monkeypatch: pytest.MonkeyPatch) -> DoorReading:
-    """What the new path's door reads of the recorded project.
+    """What the new path's door reads of the recorded project."""
+    return await read_project(monkeypatch, base=BASE, project=PROJECT)
+
+
+async def read_project(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    base: dict[str, bytes],
+    project: dict[str, bytes],
+) -> DoorReading:
+    """What the new path's door reads of ``project`` against ``base``.
 
     The door's module logger is swapped for a fresh one: bound here
     (``cache_logger_on_first_use``), it would keep the processors of this test
@@ -107,7 +117,7 @@ async def read_recorded_project(monkeypatch: pytest.MonkeyPatch) -> DoorReading:
     """
     monkeypatch.setattr(door_module, "logger", structlog.get_logger())
     monkeypatch.setattr(door_module, "project_context_budget_chars", lambda: 1_000_000)
-    snapshot = normalize_archive(_zip_bytes(BASE), archive_kind="zip")
+    snapshot = normalize_archive(_zip_bytes(base), archive_kind="zip")
     stored = _FakeBase(
         version=1, snapshot_key="base/k", manifest=manifest_to_jsonb(snapshot.manifest)
     )
@@ -123,7 +133,7 @@ async def read_recorded_project(monkeypatch: pytest.MonkeyPatch) -> DoorReading:
         ),
         sid=uuid.uuid4(),
         jid=uuid.uuid4(),
-        file_bytes=_zip_bytes(PROJECT),
+        file_bytes=_zip_bytes(project),
         raw_key="homework/t/s/proj.zip",
         languages=("ukr",),
         base_corpus=True,

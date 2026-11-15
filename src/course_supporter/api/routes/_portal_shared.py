@@ -21,6 +21,7 @@ from course_supporter.api.schemas import (
     PortalRejection,
     PortalVerdict,
 )
+from course_supporter.homework.project_submission import NO_CHANGES
 from course_supporter.homework.test_scoring import Correctness, correctness
 from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
@@ -135,8 +136,12 @@ def curated_verdict(
     )
 
 
-# The single normalizer category the read-path phrases (DD-6-Z, partial).
-_NORMALIZER_CODED: Final[str] = ErrorCategory.OVER_BUDGET.value
+# The normalizer categories the read-path phrases (DD-6-Z, partial): the
+# oversize refusal (step E) and the new path's refusal of a project without a
+# change of the student's (project chain K6).
+_NORMALIZER_CODED: Final[frozenset[str]] = frozenset(
+    {ErrorCategory.OVER_BUDGET.value, NO_CHANGES}
+)
 
 
 _PRESENTATION_STATE: Final[dict[str, str]] = {
@@ -284,9 +289,11 @@ def curated_rejection(
       false is the LLM safety refusal.
 
     * Normalizer — ``safety_result`` with ``source='normalizer'`` carries a
-      category only for the project branch's oversize refusal (step E); that
-      one is phrased, and its ``details`` is the character pair rather than a
-      filename.
+      category only for the project branch's oversize refusal (step E) and
+      for the new path's refusal of a project without a change of the
+      student's (``no_changes``, project chain K6); both are phrased. The
+      oversize refusal's ``details`` is the character pair rather than a
+      filename; ``no_changes`` has none.
 
     Anything else (the remaining normalizer rejections, ``DD-6-Z``) returns
     ``None`` and the interface falls back to its status phrase — the same
@@ -317,18 +324,19 @@ def curated_rejection(
             else ErrorCategory.STAGE2_REJECTED.value
         )
         return PortalRejection(code=code, details=submission.original_filename)
-    if source == "normalizer" and safety.get("category") == _NORMALIZER_CODED:
+    category = safety.get("category")
+    if source == "normalizer" and category in _NORMALIZER_CODED:
         # Partial close of DD-6-Z (step E): the project branch's oversize
-        # refusal is the one normalizer rejection that has both a category the
-        # dictionary already phrases and specifics worth showing, so it gets a
-        # code instead of the bare status phrase. Its ``details`` is the pair of
-        # numbers the refusal is about, not a filename -- the sentence that
-        # wraps them lives in the portal dictionary. The other normalizer
-        # reasons still return None: their text is library vocabulary and DD-6-D
-        # keeps it off the wire.
+        # refusal has both a category the dictionary already phrases and
+        # specifics worth showing, so it gets a code instead of the bare
+        # status phrase. Its ``details`` is the pair of numbers the refusal is
+        # about, not a filename -- the sentence that wraps them lives in the
+        # portal dictionary. ``no_changes`` (chain K6) is a code with no
+        # specifics. The other normalizer reasons still return None: their
+        # text is library vocabulary and DD-6-D keeps it off the wire.
         details = safety.get("details")
         return PortalRejection(
-            code=_NORMALIZER_CODED,
+            code=str(category),
             details=details if isinstance(details, str) else None,
         )
     return None

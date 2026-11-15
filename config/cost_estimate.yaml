@@ -26,6 +26,18 @@ margin: 0.20          # P = E x (1 + margin)
 units_per_usd: 1700
 guard_minutes: 15     # a peak that starts within this many minutes prices as peak
 
+# ── The typical size of a student's work (BIL-E) ──
+# The price shown before a submission without its file (basis "typical") and
+# the student's reminders without history use it when the task has no earlier
+# review estimates to take the median size of. No median is measured yet: the
+# start is an upper bound — the largest submission seen in the stage-2
+# calibration (READING-2026-11-07.md: 3 025 tokens of work beside the prompt in
+# the largest observed input of safety / attempt_classifier /
+# criteria_evaluation) at the router's 3.5 characters a token
+# (llm/token_budget.py): 3 025 x 3.5 = 10 587.5, rounded up to 10 600.
+# Replace with the median of `inputs.submission_chars` of review estimates.
+typical_submission: {chars: 10600, calibrated: false}
+
 # ── Review on the new path: stages of config/submission_paths.yaml ──
 # input = submission text + prompt_tokens; output = output_tokens per call;
 # calls = expected calls of the stage per submission.
@@ -52,6 +64,18 @@ review:
   # найгірший випадок — <course_links> для всіх незарахованих критеріїв ≈ 16 861 токен понад підказку (≈ 39 590 разом);
   # у спостережених даних такого випадку не було, калібрування його не покриває.
   review_explanation: {prompt_tokens: 10399, output_tokens: 8475, calls: 1, calibrated: true}
+
+  # Stages of the `project` path once it is switched to the new path
+  # (config/submission_paths.yaml: project_criteria_evaluation,
+  # project_review_explanation — "on no path yet"; today `project` is served by
+  # the Mentor with [safety, attempt_classifier], both priced above). No live
+  # measurement exists: each line is its twin's calibrated line plus the
+  # characters its own prompt adds over the twin's at 3.5 characters a token
+  # (2026-11-15). Replace with a measured median when the path is switched.
+  # prompts/criteria_evaluation_project/v1.md 8366 chars - prompts/criteria_evaluation/v1.md 4446 = 3920 chars = 1120 tokens: 4870 + 1120
+  project_criteria_evaluation: {prompt_tokens: 5990, output_tokens: 8548, calls: 2, calibrated: false}
+  # prompts/review_explanation_project/v1.md 10633 chars - prompts/review_explanation/v3.md 9182 = 1451 chars = 414 tokens: 10399 + 414
+  project_review_explanation: {prompt_tokens: 10813, output_tokens: 8475, calls: 1, calibrated: false}
 
 # ── Task preparation: input = the task document + prompt_tokens ──
 task_preparation:
@@ -91,6 +115,13 @@ processing:
     minutes_per_segment: 15
     noisy_share: 0.5
     calibrated: false
+  node_summary:
+    # Regeneration of node summaries (job node_summary_regeneration). A child
+    # that has no compressed_summary yet is read at the top of what the
+    # bottom-up prompt asks for: prompts/methodist_bottomup/v3.md, "1000-2000
+    # chars (NOT tokens)" -> 2000. A child that has one is read at its length.
+    child_summary_chars: 2000
+    calibrated: false
   code:
     # code_skeleton_extraction calls the model only for a file that is not
     # verbatim, not Python with a clean parse, not a known family — decided per
@@ -125,3 +156,21 @@ processing:
     code_skeleton_extraction:     {prompt_tokens: 610, output_tokens: 8192, calibrated: false}
     code_segment_description:     {prompt_tokens: 563, output_tokens: 4096, calibrated: false}
     code_summary:                 {prompt_tokens: 359, output_tokens: 8192, calibrated: false}
+    # Regeneration of node summaries (BIL: node_summary_regeneration). No
+    # measured run exists in this repository's data; both lines are upper
+    # bounds with their reasons. prompt measured: prompts/methodist_bottomup/v3.md
+    # 18 728 chars / 3.5 = 5 350 tokens; the material (own documents in full
+    # within the 200 000-char budget, the others as summaries, the children's
+    # summaries) is added per node by the estimate. output 32768 — the stage
+    # ceiling on both rungs (ladders_methodist.yaml): a real lesson node
+    # (~21k chars in) already filled 16384 on the first rung and the JSON was
+    # cut, so the typical answer is above 16k and the ceiling is the safe upper
+    # bound until a median is measured.
+    methodist_bottomup:           {prompt_tokens: 5350, output_tokens: 32768, calibrated: false}
+    # prompt measured: prompts/methodist_topdown/v2.md 6 390 chars / 3.5 = 1 825
+    # tokens, plus this node's own canonical state and six fields of the
+    # parent's: "~3-8k chars" (ladders_methodist.yaml, spike §3), upper end 8 000
+    # chars = 2 285 tokens -> 4 110. output 4734 = 3787 x 1.25: the largest of the
+    # three spike outputs, reasoning included (ladders_methodist.yaml:
+    # "1878 / 3787 / 1203 tokens"), by the margin the other lines use.
+    methodist_topdown:            {prompt_tokens: 4110, output_tokens: 4734, calibrated: false}

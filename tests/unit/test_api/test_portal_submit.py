@@ -119,7 +119,15 @@ def no_own_feedback() -> Iterator[None]:
     answer that read; the default here is "the student has not answered". The
     answer itself has its own tests (``test_portal_feedback.py``).
     """
-    with patch.object(FeedbackRepository, "get_for_target", return_value=None):
+    with (
+        patch.object(FeedbackRepository, "get_for_target", return_value=None),
+        # The billing note (BIL-E) is read from the journal; the mocked
+        # session cannot answer it: no note. Its own tests are on a database.
+        patch(
+            "course_supporter.billing.funds.billing_note",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
         yield
 
 
@@ -586,6 +594,7 @@ class TestPortalReadDetail:
             # This student's own answer about this review (task 05) — beside
             # the review, never instead of it, and never anyone else's.
             "own_feedback",
+            "billing_note",  # BIL-E: the cost over the reserve, or null
             "rejection",
             "not_opened",
             "recovered_encoding",

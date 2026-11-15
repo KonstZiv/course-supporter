@@ -448,8 +448,13 @@ async def enqueue_key_explanation(
     tenant_id: uuid.UUID,
     authored_document_id: uuid.UUID,
     reference_id: uuid.UUID,
+    requested_by_submission: bool = False,
 ) -> Job:
     """Create the Job for one reference version and enqueue its generation.
+
+    ``requested_by_submission`` — a student's submission asked (after its
+    review was delivered); carried to the work, whose charge then never waits
+    for the author's units (BIL-E).
 
     mentor-rebuild task 06. Helper-owns-commit (QQ5, as the siblings above):
     the durable Job row is committed BEFORE the ARQ dispatch, so a hot worker
@@ -483,7 +488,10 @@ async def enqueue_key_explanation(
         tenant_id=tenant_id,
         course_node_id=task_node_id,
         job_type=JobType.KEY_EXPLANATION,
-        input_params={"reference_id": str(reference_id)},
+        input_params={
+            "reference_id": str(reference_id),
+            "requested_by_submission": requested_by_submission,
+        },
         subject_type=JOB_SUBJECT_TYPE[JobType.KEY_EXPLANATION],
         subject_id=authored_document_id,
     )
@@ -496,6 +504,7 @@ async def enqueue_key_explanation(
         "arq_explain_key",
         str(job.id),
         str(reference_id),
+        requested_by_submission=requested_by_submission,
         _queue_name=default_queue_name,
     )
     if arq_job is not None:

@@ -2,8 +2,9 @@
 
 Every change made through :mod:`.admin`, :mod:`.accounts`, an
 administrator's credit of units (:func:`.ledger.credit_admin`), a contract
-invoice credited by the administrator (:mod:`.payments.invoice`) or the end
-of a dispute (:func:`.admin.end_dispute`) writes one
+invoice credited by the administrator (:mod:`.payments.invoice`), the end
+of a dispute (:func:`.admin.end_dispute`) or the mark of an account for test
+purchases (:func:`.admin.set_test_purchase`) writes one
 entry in the same transaction as the change: who (the administrator's ``--actor``),
 when, what, which row, the row before and after. The table refuses UPDATE (a
 trigger), so an entry, once written, stays as written.
@@ -49,6 +50,7 @@ def account_snapshot(account: BillingAccount) -> dict[str, Any]:
         "status": account.status,
         "closed_at": _instant(account.closed_at),
         "anonymized_at": _instant(account.anonymized_at),
+        "test_purchase_allowed": account.test_purchase_allowed,
     }
 
 
@@ -114,6 +116,7 @@ def refund_snapshot(refund: BillingRefund) -> dict[str, Any]:
         "currency": refund.currency,
         "provider": refund.provider,
         "provider_adjustment_id": refund.provider_adjustment_id,
+        "provider_order_id": refund.provider_order_id,
         "state": refund.state,
         "decided_at": _instant(refund.decided_at),
     }

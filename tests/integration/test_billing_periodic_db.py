@@ -57,6 +57,7 @@ from course_supporter.storage.orm import (
     BillingAuditEntry,
     BillingAuthorSettings,
     BillingBatch,
+    BillingCheckout,
     BillingConsent,
     BillingDifference,
     BillingMovement,
@@ -80,6 +81,7 @@ ACCOUNT_ROWS = (
     (BillingRefund, BillingRefund.account_id),
     (BillingReservation, BillingReservation.account_id),
     (BillingDifference, BillingDifference.account_id),
+    (BillingCheckout, BillingCheckout.account_id),
     (BillingBatch, BillingBatch.account_id),
     (BillingConsent, BillingConsent.account_id),
     (BillingAuthorSettings, BillingAuthorSettings.account_id),
@@ -90,6 +92,11 @@ ACCOUNT_ROWS = (
 
 def key() -> str:
     return str(uuid.uuid4())
+
+
+async def _add(session: AsyncSession, row: Any) -> None:
+    session.add(row)
+    await session.flush()
 
 
 # ── The scene: committed data, wiped after the test ────────────────────
@@ -568,6 +575,7 @@ ALL_GONE = {
     "billing_refunds": 0,
     "billing_reservations": 0,
     "billing_differences": 0,
+    "billing_checkouts": 0,
     "billing_batches": 0,
     "billing_consents": 0,
     "billing_author_settings": 0,
@@ -588,6 +596,20 @@ class TestPurge:
         at = add_months(scene.now, -12 * anonymized_years_ago - months)
         before = at - timedelta(days=30)
         batch = await scene.buy(account, 100, at=before)
+        await scene.do(  # the checkout the purchase answered
+            lambda s: _add(
+                s,
+                BillingCheckout(
+                    id=uuid.uuid4(),
+                    account_id=account,
+                    package_id="starter",
+                    provider="fake",
+                    provider_checkout_id=f"chk_{key()}",
+                    created_at=before,
+                    batch_id=batch,
+                ),
+            )
+        )
         await scene.settle(account, 20, at=before)  # a debit
         await scene.reserve(account, 10, at=before)  # a reservation
         await scene.do(
@@ -627,6 +649,7 @@ class TestPurge:
             "billing_refunds",
             "billing_reservations",
             "billing_differences",
+            "billing_checkouts",
             "billing_batches",
             "billing_consents",
         ):

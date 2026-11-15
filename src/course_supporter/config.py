@@ -113,6 +113,21 @@ class Settings(BaseSettings):
     billing_retention_years: int = Field(default=5, ge=1)
     # Accounts destroyed per transaction.
     billing_purge_batch_size: int = Field(default=50, ge=1)
+    # Charging (BIL-E): off — every action runs as before, nothing is written
+    # to the journal of units and nothing is refused for want of units. On —
+    # an action reserves at its start, is charged its fact at its end and is
+    # refused when its payer is short (billing.charging). Switched on in prod
+    # by the operator's decision, together with the purchase screens.
+    billing_charging_enabled: bool = False
+    # Reminders (BIL-E part C): a student is warned when fewer than this many
+    # reviews are left ("low"; "next_may_fail" below one).
+    billing_reminder_low_reviews: int = Field(default=2, ge=1)
+    # An author's pace is their charges over this many days, per day.
+    billing_reminder_pace_days: int = Field(default=7, ge=1)
+    # An author is warned when the units last fewer than this many days.
+    billing_reminder_author_days: int = Field(default=3, ge=1)
+    # Units of a batch that expires within this many days are announced.
+    billing_expiry_notice_days: int = Field(default=14, ge=1)
 
     # --- Payments (BIL-PAY) ---
     # The payment providers a checkout may use, by adapter name, as a JSON list
@@ -125,8 +140,10 @@ class Settings(BaseSettings):
     # The packages on sale and each provider's id of them.
     billing_packages_path: Path = Path("config/billing_packages.yaml")
     # Base URL of the author SPA: an author's checkout returns to
-    # {author_app_base_url}/billing (a student's to
-    # {portal_base_url}/{tenant_id}/billing). Set AUTHOR_APP_BASE_URL in prod.
+    # {author_app_base_url}/billing/checkouts/{checkout_ref} (a student's to
+    # {portal_base_url}/{tenant_id}/billing/checkouts/{checkout_ref}); a
+    # cancelled one to .../billing?checkout=cancelled. Set AUTHOR_APP_BASE_URL
+    # in prod.
     author_app_base_url: str = "http://localhost:5173"
     # Creem (billing.payments.creem), read when BILLING_PROVIDERS names "creem";
     # without the key and the secret that name stops the startup. The key goes
@@ -152,6 +169,10 @@ class Settings(BaseSettings):
     periodic_billing_stale_reserves_cron: str = "*/15 * * * *"
     periodic_billing_purge_enabled: bool = True
     periodic_billing_purge_cron: str = "30 3 * * *"
+    # Submissions held for funds continued once their payer can pay (BIL-E;
+    # runs only while billing_charging_enabled is on).
+    periodic_billing_resume_funded_enabled: bool = True
+    periodic_billing_resume_funded_cron: str = "*/5 * * * *"
 
     # --- PostgreSQL ---
     postgres_user: str = "course_supporter"
@@ -268,6 +289,7 @@ class Settings(BaseSettings):
         "periodic_billing_annul_cron",
         "periodic_billing_stale_reserves_cron",
         "periodic_billing_purge_cron",
+        "periodic_billing_resume_funded_cron",
     )
     @classmethod
     def _validate_cron(cls, v: str) -> str:

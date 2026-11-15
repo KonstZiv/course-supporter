@@ -199,6 +199,10 @@ async def startup(ctx: WorkerCtx) -> None:
     from course_supporter.cost_estimate.shadow import configure
 
     configure(session_factory)
+    # Charging (BIL-E): the processing gate reserves through the same factory.
+    from course_supporter.billing.funds import configure as configure_charging
+
+    configure_charging(session_factory)
     ctx["stage_router"] = stage_router
     ctx["s3_client"] = s3
 

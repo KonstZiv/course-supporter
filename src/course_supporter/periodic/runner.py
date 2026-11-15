@@ -30,7 +30,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy import func, select
@@ -65,6 +65,9 @@ class TaskContext:
     settings: Settings
     now: datetime
     dry_run: bool
+    redis: Any = None
+    """The worker's queue (ARQ's ``ctx["redis"]``) for a task that dispatches
+    jobs; ``None`` from the script, where such a task dispatches nothing."""
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[AsyncSession]:
@@ -132,6 +135,7 @@ async def run_task(
     settings: Settings | None = None,
     now: datetime | None = None,
     dry_run: bool = False,
+    redis: Any = None,
 ) -> TaskRun:
     """Run the task's body once and log one line (module docstring)."""
     if settings is None:
@@ -144,6 +148,7 @@ async def run_task(
         settings=settings,
         now=now or datetime.now(UTC),
         dry_run=dry_run,
+        redis=redis,
     )
     started = time.monotonic()
 

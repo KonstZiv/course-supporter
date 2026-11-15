@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from httpx import ASGITransport, AsyncClient, Response
 from sqlalchemy import (
     Connection,
@@ -62,6 +63,7 @@ from course_supporter.storage.orm import (
     BillingAccount,
     BillingAuditEntry,
     BillingBatch,
+    BillingCheckout,
     BillingConsent,
     BillingMovement,
     BillingProviderEvent,
@@ -117,6 +119,22 @@ async def world(
         await session.flush()
         student = Student(tenant_id=tenant.id, external_id="pay-student")
         session.add(student)
+        await session.flush()
+        # The providers here are in test mode: the accounts are marked for
+        # test purchases (billing.payments.checkout), as the administrator does.
+        session.add_all(
+            [
+                BillingAccount(
+                    kind="author", tenant_id=tenant.id, test_purchase_allowed=True
+                ),
+                BillingAccount(
+                    kind="student",
+                    tenant_id=tenant.id,
+                    student_id=student.id,
+                    test_purchase_allowed=True,
+                ),
+            ]
+        )
         await session.commit()
     made = World(
         tenant_id=tenant.id,
@@ -168,6 +186,7 @@ async def world(
         for model, column in (
             (BillingMovement, BillingMovement.account_id),
             (BillingRefund, BillingRefund.account_id),
+            (BillingCheckout, BillingCheckout.account_id),
             (BillingBatch, BillingBatch.account_id),
             (BillingConsent, BillingConsent.account_id),
         ):
@@ -750,7 +769,8 @@ class TestPortalCheckout:
                     "units": 1000,
                     "prices_minor": {"EUR": 990, "USD": 1090},
                 }
-            ]
+            ],
+            "purchase": {"open": True, "reason": None},  # the account is marked
         }
         assert "fake_price_starter" not in response.text
 
@@ -758,7 +778,9 @@ class TestPortalCheckout:
         async with _client() as client:
             response = await client.post(CHECKOUT, json={"package_id": "starter"})
         assert response.status_code == 409
-        assert get_settings().billing_terms_version in response.json()["detail"]
+        refused = response.json()["detail"]
+        assert refused["code"] == "terms_consent_required"
+        assert get_settings().billing_terms_version in refused["details"]
         assert world.fake.checkouts == {}
 
     async def test_without_providers_it_is_503(self, world: World) -> None:
@@ -768,7 +790,13 @@ class TestPortalCheckout:
             await _consent(client)
             still = await client.post(CHECKOUT, json={"package_id": "starter"})
         assert (refused.status_code, still.status_code) == (503, 503)
-        assert still.json() == {"detail": "Payment is unavailable."}
+        unavailable = {
+            "detail": {
+                "code": "payment_unavailable",
+                "details": "Payment is unavailable.",
+            }
+        }
+        assert refused.json() == still.json() == unavailable
 
     async def test_with_the_fake_it_is_the_link(
         self, session_factory: async_sessionmaker[AsyncSession], world: World
@@ -788,24 +816,28 @@ class TestPortalCheckout:
         assert request.provider_item == "fake_price_starter"
         assert request.language == "ukr"
         portal = get_settings().portal_base_url.rstrip("/")
+        ref = answer["checkout_ref"]
         assert request.success_url == (
-            f"{portal}/{world.tenant_id}/billing?checkout=success"
+            f"{portal}/{world.tenant_id}/billing/checkouts/{ref}"
         )
 
     @pytest.mark.parametrize(
-        "body",
+        ("body", "code"),
         [
-            {"package_id": "nope"},
-            {"package_id": "retired"},
-            {"package_id": "starter", "provider": "paddle"},
+            ({"package_id": "nope"}, "package_not_found"),
+            ({"package_id": "retired"}, "package_not_found"),
+            ({"package_id": "starter", "provider": "paddle"}, "provider_not_found"),
         ],
         ids=["unknown package", "package off sale", "provider not switched on"],
     )
-    async def test_nothing_on_sale_is_404(self, body: dict[str, str]) -> None:
+    async def test_nothing_on_sale_is_404(
+        self, body: dict[str, str], code: str
+    ) -> None:
         async with _client() as client:
             await _consent(client)
             response = await client.post(CHECKOUT, json=body)
         assert response.status_code == 404
+        assert response.json()["detail"]["code"] == code
 
     async def test_a_provider_that_does_not_answer_is_502(self, world: World) -> None:
         class Down(FakeProvider):
@@ -817,7 +849,12 @@ class TestPortalCheckout:
             await _consent(client)
             response = await client.post(CHECKOUT, json={"package_id": "starter"})
         assert response.status_code == 502
-        assert response.json() == {"detail": "The payment provider did not answer."}
+        assert response.json() == {
+            "detail": {
+                "code": "provider_unavailable",
+                "details": "The payment provider did not answer.",
+            }
+        }
 
     async def test_a_body_with_more_is_422(self) -> None:
         async with _client() as client:
@@ -866,7 +903,8 @@ class TestAuthorCheckout:
         assert request.account_id == author.id
         assert request.language is None
         base = get_settings().author_app_base_url.rstrip("/")
-        assert request.success_url == f"{base}/billing?checkout=success"
+        ref = request.checkout_ref
+        assert request.success_url == f"{base}/billing/checkouts/{ref}"
         [batch] = await _batches(session_factory, author.id)
         assert (batch.units, batch.provider) == (1000, FAKE)
 
@@ -891,6 +929,7 @@ class TestAuthorCheckout:
                 AUTHOR_CHECKOUT, json={"package_id": "starter"}
             )
         assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "payment_unavailable"
 
 
 # ── Schema: the events table, the migration ────────────────────────────
@@ -1057,7 +1096,8 @@ def test_the_downgrade_is_refused_while_another_provider_has_a_purchase() -> Non
             command.downgrade(cfg, "bilb_unit_ledger")
         with engine.connect() as conn:
             current = conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert current == "bilpay_creem_disputes"  # the whole downgrade rolled back
+        head = ScriptDirectory.from_config(cfg).get_current_head()
+        assert current == head  # the whole downgrade rolled back
     finally:
         _forget(account_id)
         engine.dispose()

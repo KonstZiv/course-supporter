@@ -65,6 +65,7 @@ class EstimateRow:
     e_usd: Decimal
     breakdown: Sequence[Mapping[str, Any]]
     created_at: datetime
+    job_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -80,11 +81,13 @@ class ReportRow:
     unknown_calls: int
     unknown_share: Decimal
     step_deviation: dict[str, Decimal]
+    job_type: str | None = None
 
     def as_csv(self) -> dict[str, str]:
         """The row as the CSV writes it."""
         return {
             "action_kind": self.action_kind,
+            "job_type": self.job_type or "",
             "action_key": self.action_key,
             "e_usd": str(self.e_usd),
             "fact_usd": str(self.fact_usd),
@@ -188,6 +191,7 @@ def compare(
     names = set(fact_by_step) | set(estimated_by_step)
     return ReportRow(
         action_kind=estimate.action_kind,
+        job_type=estimate.job_type,
         action_key=estimate.action_key,
         e_usd=estimate.e_usd,
         fact_usd=fact,

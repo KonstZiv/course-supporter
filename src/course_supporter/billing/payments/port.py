@@ -15,11 +15,21 @@ The port (:class:`PaymentProvider`, a structural ``Protocol``):
     * ``name`` — the adapter's name: in ``BILLING_PROVIDERS``, in the address
       of its webhook (``/api/v1/billing/webhooks/{name}``), and in the journal
       as the ``provider`` of a batch, a refund, an event.
+    * ``test_mode`` — True when the adapter talks to the provider's test
+      environment: a test card pays there, yet its purchase credits real
+      units. While the provider is in test mode only an account marked for
+      test purchases may buy (``billing_accounts.test_purchase_allowed``,
+      operator 2026-11-15) — :func:`~.checkout.purchase_closed`, for every
+      provider alike. Every adapter answers it; when in doubt, True: a
+      mistake then closes purchases instead of opening them. A purchase the
+      provider reports is credited whatever the mode — it was paid.
     * :meth:`~PaymentProvider.create_checkout` — a :class:`CheckoutRequest`
-      (the account, the package, the language, where to return) becomes a
-      :class:`Checkout` (the link to open, the provider's id of it). The
-      account id travels to the provider as custom data and comes back in the
-      webhook of the purchase: that is how a payment finds its account.
+      (the account, the package, the platform's own number of the checkout,
+      the language, where to return) becomes a :class:`Checkout` (the link to
+      open, the provider's id of it). The account id and the checkout's number
+      (``checkout_ref``) travel to the provider as custom data and come back
+      in the webhook of the purchase: that is how a payment finds its account,
+      and the checkout it answers (``billing_checkouts``).
     * :meth:`~PaymentProvider.parse_webhook` — the request's headers and raw
       body become the normalized events in it. The signature is checked first
       and is never optional: a body without a valid one raises
@@ -101,6 +111,9 @@ class CheckoutRequest:
     account_id: uuid.UUID
     """The account the units go to: sent as custom data, returned in the
     webhook of the purchase."""
+    checkout_ref: uuid.UUID
+    """The platform's own number of the checkout: sent as custom data,
+    returned in the webhook of the purchase; it is in ``success_url`` too."""
     package: Package
     provider_item: str | None
     """The provider's id of the package (its section of the catalog); None
@@ -205,6 +218,9 @@ class PurchaseCompleted:
     account_id: uuid.UUID | None
     """From the custom data of the checkout; None when the event names none
     (the event then fails and waits for a person)."""
+    checkout_ref: uuid.UUID | None = None
+    """From the custom data of the checkout: the platform's own number of it;
+    None when the event names none (a checkout opened before the numbers)."""
     package_id: str
     amount_paid_minor: int
     """What the payer paid, tax included."""
@@ -319,6 +335,12 @@ class PaymentProvider(Protocol):
     @property
     def name(self) -> str:
         """The adapter's name: lowercase, as the journal spells a provider."""
+        ...
+
+    @property
+    def test_mode(self) -> bool:
+        """True when the adapter talks to the provider's test environment
+        (module docstring)."""
         ...
 
     async def create_checkout(self, request: CheckoutRequest) -> Checkout:

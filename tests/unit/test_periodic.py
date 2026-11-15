@@ -129,11 +129,13 @@ DEFAULT_SCHEDULE = {
     "periodic:billing_annul": ({10}, None),
     "periodic:billing_stale_reserves": ({0, 15, 30, 45}, None),
     "periodic:billing_purge": ({30}, {3}),
+    # BIL-E: held-for-funds reviews continued once their payer can pay.
+    "periodic:billing_resume_funded": (set(range(0, 60, 5)), None),
 }
 
 
 class TestRegistration:
-    def test_the_default_worker_runs_the_four_billing_tasks(self) -> None:
+    def test_the_default_worker_runs_the_billing_tasks(self) -> None:
         jobs = {job.name: job for job in WorkerSettings.cron_jobs}
         assert {n: (j.minute, j.hour) for n, j in jobs.items()} == DEFAULT_SCHEDULE
         for name, job in jobs.items():
@@ -165,6 +167,7 @@ class TestRegistration:
             _settings(
                 periodic_billing_purge_enabled=False,
                 periodic_billing_stale_reserves_enabled=False,
+                periodic_billing_resume_funded_enabled=False,
             )
         )
         assert [j.name for j in jobs] == [

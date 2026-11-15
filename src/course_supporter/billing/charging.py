@@ -1,0 +1,468 @@
+"""Charging an action (BIL-E): price before, reserve at the start, fact at the end.
+
+Purpose:
+    The one place where an action meets the journal of units. The callers —
+    the funds port of the review path and of a task's key explanations
+    (:mod:`.funds`), the processing gate, the criteria decomposition, the
+    estimate routes — speak in dollars and keys; this module turns them into
+    units with the estimate's own rate (``config/cost_estimate.yaml``) and calls
+    the journal (:mod:`.ledger`). It adds no rule of the journal: a reserve,
+    a settle, a release are the ledger's.
+
+The rules (operator 2026-10-30, 2026-11-04, 2026-11-11, 2026-11-15):
+
+    * Before: the price P = ``ceil(E x (1 + margin) x K)`` (:func:`price_of`,
+      THE function of the threshold — the estimate routes and the start of an
+      action call the same one). An action may start only while its payer has
+      ``available >= P`` — where the threshold applies
+      (:func:`threshold_applies`): a student paying for their own review; an
+      author without credit paying for their own action. A review an author
+      pays for under a payment rule, and a task preparation a student's
+      submission started, never wait for the author's units; an author with
+      credit is never stopped.
+    * Start: a reserve of ``min(2E, the ceiling, available)`` units
+      (:func:`reserve_for`; the ledger caps it by what is available, so it
+      may be 0).
+    * End: the fact F — the cost of the action's calls in the register, in
+      units (:func:`fact_of`) — is settled (:func:`finish`). A payer without
+      credit (every student, an author without credit) is charged at most the
+      reserve; the excess is ``platform_covered``. An author with credit
+      keeps the ledger's difference. The author's benefit applies first,
+      inside the ledger.
+    * Failure: the reserve is released whole, nothing is charged
+      (:func:`fail`).
+
+    A test (a task of kind ``test``: checked against the key, no model) is
+    free while its payer's balance, reserved units included, is above 0
+    (:func:`test_allowed`); it reserves and charges nothing.
+
+Keys:
+    The estimate's: a review is its submission (all its jobs), a processing is
+    its job, a preparation is (task, version, kind) —
+    :mod:`course_supporter.cost_estimate.shadow`. A repeat with the same key
+    reserves nothing more and charges nothing twice (the ledger's idempotency).
+
+Transactions:
+    Every function flushes and never commits; the caller owns the session.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import ROUND_CEILING, Decimal
+from typing import TYPE_CHECKING
+
+import structlog
+from sqlalchemy import func, select
+
+from course_supporter.billing import ledger
+from course_supporter.billing.costs import PREPARATION_STAGES
+from course_supporter.billing.errors import BillingConflictError
+from course_supporter.billing.journal import lock_account
+from course_supporter.billing.kinds import (
+    AccountKind,
+    ActionKind,
+    PayerSource,
+    ReservationState,
+    RuleScope,
+)
+from course_supporter.billing.payer import PayerResolution, resolve_payer
+from course_supporter.cost_estimate.core import fact_units, price_units, reserve_units
+from course_supporter.cost_estimate.settings import get_estimate_settings
+from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
+from course_supporter.storage.orm import (
+    BillingAccount,
+    BillingAuthorSettings,
+    BillingPaymentRule,
+    BillingReservation,
+    ExternalServiceCall,
+    Job,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from course_supporter.config import Settings
+
+logger = structlog.get_logger(__name__)
+
+
+# ── The switch ─────────────────────────────────────────────────────────
+
+
+def charging_enabled(settings: Settings | None = None) -> bool:
+    """Is charging on (``BILLING_CHARGING_ENABLED``)? Off by default."""
+    if settings is None:
+        from course_supporter.config import get_settings
+
+        settings = get_settings()
+    return settings.billing_charging_enabled
+
+
+# ── Units ──────────────────────────────────────────────────────────────
+
+
+def units_per_usd() -> Decimal | None:
+    """K, the estimate's rate; ``None`` while it is not set."""
+    return get_estimate_settings().units_per_usd
+
+
+def price_of(e_usd: Decimal) -> int:
+    """P in units for an expected cost E — the threshold of every action.
+
+    0 while no rate is set (nothing can be priced, so nothing is refused).
+    """
+    settings = get_estimate_settings()
+    units = price_units(
+        e_usd, margin=settings.margin, units_per_usd=settings.units_per_usd
+    )
+    return units or 0
+
+
+def reserve_request(e_usd: Decimal, ceiling_usd: Decimal | None) -> int:
+    """What a start asks to hold: ``min(2E, the ceiling)`` in units.
+
+    The ledger holds that or the available units, whichever is less.
+    """
+    k = units_per_usd()
+    wanted = reserve_units(e_usd, units_per_usd=k) or 0
+    if ceiling_usd is None or k is None:
+        return wanted
+    ceiling = int((ceiling_usd * k).to_integral_value(rounding=ROUND_CEILING))
+    return min(wanted, ceiling)
+
+
+def fact_of(usd: Decimal) -> int:
+    """F in units for what an action's calls cost (same rate as E)."""
+    return fact_units(usd, units_per_usd=units_per_usd()) or 0
+
+
+# ── Who pays ───────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class Payer:
+    """The payer of one action and what its account allows."""
+
+    resolution: PayerResolution
+    kind: AccountKind
+    credit_allowed: bool
+
+    @property
+    def account_id(self) -> uuid.UUID:
+        """The paying account."""
+        return self.resolution.payer_account_id
+
+    @property
+    def for_someone_else(self) -> bool:
+        """An author paying for a student's review under a payment rule."""
+        return (
+            self.resolution.payer_account_id != self.resolution.beneficiary_account_id
+        )
+
+
+async def credit_allowed(session: AsyncSession, account: BillingAccount) -> bool:
+    """May the account run into a difference (an author with credit)?"""
+    if account.kind != AccountKind.AUTHOR.value:
+        return False
+    settings = await session.get(BillingAuthorSettings, account.id)
+    return settings is not None and settings.credit_allowed
+
+
+async def payer_of(
+    session: AsyncSession,
+    *,
+    action_kind: ActionKind,
+    tenant_id: uuid.UUID,
+    course_node_id: uuid.UUID | None,
+    student_id: uuid.UUID | None,
+) -> Payer:
+    """Who pays (:func:`.payer.resolve_payer`), with the account's kind and credit."""
+    resolution = await resolve_payer(
+        session,
+        action_kind=action_kind,
+        tenant_id=tenant_id,
+        course_node_id=course_node_id,
+        student_id=student_id,
+    )
+    account = await session.get(BillingAccount, resolution.payer_account_id)
+    assert account is not None  # resolve_payer returns existing accounts
+    return Payer(
+        resolution=resolution,
+        kind=AccountKind(account.kind),
+        credit_allowed=await credit_allowed(session, account),
+    )
+
+
+def threshold_applies(
+    action_kind: ActionKind, payer: Payer, *, own_action: bool
+) -> bool:
+    """Does ``available >= P`` gate this action (module docstring)?
+
+    A review: only when a student pays for it. Any other action: only when
+    the author asked for it (``own_action``) and has no credit.
+    """
+    if action_kind is ActionKind.REVIEW:
+        return payer.kind is AccountKind.STUDENT
+    return own_action and not payer.credit_allowed
+
+
+# ── The threshold ──────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class Quote:
+    """The price of an action and whether its payer can start it."""
+
+    price_units: int
+    available_units: int
+    enough: bool
+    missing_units: int
+    threshold: bool
+    payer: Payer
+
+
+async def quote(
+    session: AsyncSession,
+    *,
+    action_kind: ActionKind,
+    payer: Payer,
+    price_units: int,
+    own_action: bool = False,
+    lock: bool = False,
+) -> Quote:
+    """P against the payer's available units; ``enough`` where no threshold applies.
+
+    ``lock`` takes the account's lock first, so a start that follows in the
+    same transaction reserves from what was checked.
+    """
+    if lock:
+        await lock_account(session, payer.account_id)
+    available = (await ledger.balance(session, payer.account_id)).available
+    threshold = threshold_applies(action_kind, payer, own_action=own_action)
+    enough = not threshold or available >= price_units
+    return Quote(
+        price_units=price_units,
+        available_units=available,
+        enough=enough,
+        missing_units=max(0, price_units - available) if threshold else 0,
+        threshold=threshold,
+        payer=payer,
+    )
+
+
+async def test_allowed(session: AsyncSession, payer: Payer) -> bool:
+    """A test is free while its payer's balance (reserved included) is above 0.
+
+    An author paying under a rule is never waited for (operator 2026-11-15).
+    """
+    if payer.kind is AccountKind.AUTHOR:
+        return True
+    return (await ledger.balance(session, payer.account_id)).balance > 0
+
+
+# ── Start, end, failure ────────────────────────────────────────────────
+
+
+async def reserve_for(
+    session: AsyncSession,
+    *,
+    action_kind: ActionKind,
+    action_key: str,
+    payer: Payer,
+    e_usd: Decimal,
+    ceiling_usd: Decimal | None,
+    now: datetime | None = None,
+) -> BillingReservation:
+    """Hold ``min(2E, ceiling, available)`` units for the action's start."""
+    return await ledger.reserve(
+        session,
+        action_kind=action_kind,
+        action_key=action_key,
+        account_id=payer.account_id,
+        units=reserve_request(e_usd, ceiling_usd),
+        now=now,
+    )
+
+
+async def reservation_of(
+    session: AsyncSession, action_kind: ActionKind, action_key: str
+) -> BillingReservation | None:
+    """The action's reservation, if its start reserved."""
+    return (
+        await session.execute(
+            select(BillingReservation).where(
+                BillingReservation.action_kind == action_kind.value,
+                BillingReservation.action_key == action_key,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _payment_of(
+    session: AsyncSession,
+    reservation: BillingReservation,
+    resolution: PayerResolution,
+    *,
+    tenant_id: uuid.UUID,
+    action_kind: ActionKind,
+) -> tuple[PayerSource, uuid.UUID | None]:
+    """Why the reserving account pays: today's answer, or the rule it paid by.
+
+    A rule may end while the action runs; the account that reserved still
+    pays, under the latest rule that named it.
+    """
+    if resolution.payer_account_id == reservation.account_id:
+        return resolution.source, resolution.rule_id
+    if reservation.account_id == resolution.beneficiary_account_id:
+        return PayerSource.DEFAULT, None
+    rule = (
+        await session.execute(
+            select(BillingPaymentRule)
+            .where(
+                BillingPaymentRule.payer_account_id == reservation.account_id,
+                BillingPaymentRule.tenant_id == tenant_id,
+                BillingPaymentRule.action_kind == action_kind.value,
+            )
+            .order_by(BillingPaymentRule.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if rule is None:
+        return PayerSource.DEFAULT, None
+    source = (
+        PayerSource.STUDENT_RULE
+        if rule.scope == RuleScope.STUDENT.value
+        else PayerSource.COURSE_RULE
+    )
+    return source, rule.id
+
+
+async def finish(
+    session: AsyncSession,
+    *,
+    action_kind: ActionKind,
+    action_key: str,
+    fact_usd: Decimal,
+    tenant_id: uuid.UUID,
+    course_node_id: uuid.UUID | None,
+    student_id: uuid.UUID | None,
+    now: datetime | None = None,
+) -> ledger.Settlement | None:
+    """Settle the action's fact; ``None`` when there is nothing to settle.
+
+    Nothing is settled for an action whose start reserved nothing (charging
+    was off then, or it is free) and for one whose reserve was released
+    before its end — a hold outlived ``billing_stale_reserve_hours`` (operator
+    2026-11-15, S3: nothing is charged, a WARNING names the action). A
+    repeated end returns the first outcome; an end with another fact is
+    logged and changes nothing.
+    """
+    reservation = await reservation_of(session, action_kind, action_key)
+    log = logger.bind(action_kind=action_kind.value, action_key=action_key)
+    if reservation is None:
+        log.info("billing_finish_without_reserve")
+        return None
+    if reservation.state == ReservationState.RELEASED.value:
+        log.warning("billing_reserve_released_before_end", fact_usd=str(fact_usd))
+        return None
+    resolution = await resolve_payer(
+        session,
+        action_kind=action_kind,
+        tenant_id=tenant_id,
+        course_node_id=course_node_id,
+        student_id=student_id,
+    )
+    source, rule_id = await _payment_of(
+        session, reservation, resolution, tenant_id=tenant_id, action_kind=action_kind
+    )
+    account = await session.get(BillingAccount, reservation.account_id)
+    assert account is not None  # a reservation's account is never deleted
+    try:
+        settlement = await ledger.settle(
+            session,
+            action_kind=action_kind,
+            action_key=action_key,
+            fact_units=fact_of(fact_usd),
+            beneficiary_account_id=resolution.beneficiary_account_id,
+            payer_source=source,
+            rule_id=rule_id,
+            excess_to_platform=not await credit_allowed(session, account),
+            now=now or datetime.now(UTC),
+        )
+    except BillingConflictError as exc:
+        log.error("billing_finish_conflict", error=str(exc))
+        return None
+    log.info(
+        "billing_action_settled",
+        fact_units=settlement.fact_units,
+        charged_units=settlement.charged_units,
+        platform_units=settlement.platform_units,
+        benefit_units=settlement.benefit_units,
+        difference_units=settlement.difference_units,
+    )
+    return settlement
+
+
+async def fail(
+    session: AsyncSession,
+    *,
+    action_kind: ActionKind,
+    action_key: str,
+    now: datetime | None = None,
+) -> ledger.Release | None:
+    """The action failed: release its whole reserve, charge nothing.
+
+    ``None`` when it reserved nothing; a settled action is left as it is.
+    """
+    reservation = await reservation_of(session, action_kind, action_key)
+    if reservation is None:
+        return None
+    if reservation.state == ReservationState.SETTLED.value:
+        logger.warning(
+            "billing_fail_after_settle",
+            action_kind=action_kind.value,
+            action_key=action_key,
+        )
+        return None
+    return await ledger.release(
+        session, action_kind=action_kind, action_key=action_key, now=now
+    )
+
+
+# ── Facts from the register ────────────────────────────────────────────
+
+_PRICED_CALL = ExternalServiceCall.unit_type.is_not(None)
+"""A row of a call that was made and priced (the register's
+``ck_esc_priced_call``); the funds-port and metrics rows have none."""
+
+
+async def review_fact_usd(session: AsyncSession, submission_id: uuid.UUID) -> Decimal:
+    """What the review's calls cost: every job of the submission, without the
+    task's preparation run inside them (as the cost report, ``billing.costs``)."""
+    jobs = select(Job.id).where(
+        Job.subject_type == JOB_SUBJECT_TYPE[JobType.HOMEWORK_PROCESSING],
+        Job.subject_id == submission_id,
+    )
+    total = await session.scalar(
+        select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0)).where(
+            ExternalServiceCall.job_id.in_(jobs),
+            _PRICED_CALL,
+            ExternalServiceCall.action.not_in(PREPARATION_STAGES),
+        )
+    )
+    return Decimal(total or 0)
+
+
+async def job_fact_usd(
+    session: AsyncSession, job_id: uuid.UUID, *, action: str | None = None
+) -> Decimal:
+    """What one job's calls cost — all of them, or those of one ``action``."""
+    stmt = select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0)).where(
+        ExternalServiceCall.job_id == job_id, _PRICED_CALL
+    )
+    if action is not None:
+        stmt = stmt.where(ExternalServiceCall.action == action)
+    return Decimal(await session.scalar(stmt) or 0)

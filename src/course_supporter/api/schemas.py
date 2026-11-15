@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from course_supporter.billing.statement import StatementLineKind
 from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.feedback_kinds import FeedbackKind, FeedbackValue
 from course_supporter.homework.criteria_edit_service import (
@@ -2380,6 +2381,18 @@ class FeedbackTouch(BaseModel):
     updated_at: datetime
 
 
+class PortalBillingNote(BaseModel):
+    """Notification 6.3 (BIL-E): the review cost more than its reserve.
+
+    The student was charged ``charged_units`` (B, the reserve); the platform
+    took the rest of ``cost_units`` (F). The portal shows the words.
+    """
+
+    kind: Literal["cost_over_reserve"]
+    cost_units: int = Field(description="F: what the review cost, in units.")
+    charged_units: int = Field(description="B: what the student was charged.")
+
+
 class PortalSubmissionDetail(BaseModel):
     """One attempt — the full curated slice (Phase 6 T2 read-path detail).
 
@@ -2430,6 +2443,12 @@ class PortalSubmissionDetail(BaseModel):
     )
     rejection: PortalRejection | None = Field(
         default=None, description="Why the attempt was refused; null if it was not."
+    )
+    billing_note: PortalBillingNote | None = Field(
+        default=None,
+        description="BIL-E: the review cost more than the units held for it "
+        "and the platform took the rest; null otherwise, and always when the "
+        "author pays.",
     )
     not_opened: list[PortalNotOpened] = Field(
         default_factory=list,
@@ -2724,12 +2743,26 @@ class BillingPackageResponse(BaseModel):
     )
 
 
+class BillingPurchaseState(BaseModel):
+    """Whether the holder asking may buy now, through the default provider."""
+
+    open: bool = Field(description="True when a checkout would be opened.")
+    reason: Literal["payment_unavailable", "purchase_not_open"] | None = Field(
+        description="Why it is closed; null when open. payment_unavailable: no "
+        "payment provider is switched on; purchase_not_open: the provider is in "
+        "test mode and the holder's account is not marked for test purchases "
+        "(the screen says the purchase is not open yet)."
+    )
+
+
 class BillingPackagesResponse(BaseModel):
-    """GET /portal/billing/packages: the packages on sale."""
+    """GET /portal/billing/packages, GET /billing/packages: the packages on
+    sale, and whether the holder asking may buy them now."""
 
     packages: list[BillingPackageResponse] = Field(
         description="In the catalog's order; empty while nothing is on sale."
     )
+    purchase: BillingPurchaseState
 
 
 class BillingCheckoutRequest(BaseModel):
@@ -2754,3 +2787,102 @@ class BillingCheckoutResponse(BaseModel):
     provider: str = Field(description="The payment provider of the checkout.")
     checkout_id: str = Field(description="The provider's id of the checkout.")
     checkout_url: str = Field(description="Open it to pay.")
+    checkout_ref: uuid.UUID = Field(
+        description="The platform's own number of the checkout: the last "
+        "segment of the address the payer comes back to "
+        "({billing page}/checkouts/{checkout_ref}); ask its state by it."
+    )
+
+
+class BillingNextExpiry(BaseModel):
+    """The units that burn first, and the day they do."""
+
+    units: int = Field(description="Free units that burn on that day.")
+    expires_on: date = Field(description="The day they burn (UTC).")
+
+
+class BillingBalanceResponse(BaseModel):
+    """GET /billing/balance, GET /portal/billing/balance: where the holder's
+    units stand. Units only."""
+
+    balance: int = Field(
+        description="Units of valid batches (reserved and held ones included)."
+    )
+    reserved: int = Field(description="Units reserved for actions under way.")
+    held: int = Field(
+        description="Units held while a refund is reviewed or a dispute lasts."
+    )
+    available: int = Field(
+        description="balance - reserved - held: what a new action can use."
+    )
+    difference: int = Field(
+        description="Units owed (an author's actions that cost more than was "
+        "available); always 0 for a student."
+    )
+    next_expiry: BillingNextExpiry | None = Field(
+        description="The free units that burn first; null when none will."
+    )
+
+
+class BillingStatementAction(BaseModel):
+    """The action units moved for."""
+
+    kind: str = Field(description="review | processing | task_preparation.")
+    id: str = Field(description="The action's key.")
+
+
+class BillingStatementItem(BaseModel):
+    """One line of the statement."""
+
+    at: datetime = Field(description="When the units moved.")
+    kind: StatementLineKind = Field(
+        description="What happened: the key the screen translates."
+    )
+    affects_balance: bool = Field(
+        description="True when the line changes the balance: a credit, or "
+        "units taken out of a batch (a charge, an expiry, a refund, a dispute "
+        "lost, a difference repaid)."
+    )
+    units: int = Field(
+        description="affects_balance: signed by the change, + came in, - went "
+        "out. Otherwise a positive amount: held or freed (a refund's or a "
+        "dispute's hold and its release), covered (by a benefit, by the "
+        "platform), a difference arisen or annulled."
+    )
+    balance_after: int = Field(
+        description="The balance after the line; a line that does not affect "
+        "the balance leaves it as it was."
+    )
+    action: BillingStatementAction | None = Field(
+        description="The action the units moved for; null when none."
+    )
+
+
+class BillingStatementResponse(BaseModel):
+    """GET /billing/statement, GET /portal/billing/statement: the holder's
+    movements of units, the newest first. Reserving and releasing a reserve
+    are not lines (the current reserve is in the balance)."""
+
+    items: list[BillingStatementItem]
+    next_cursor: str | None = Field(
+        description="Pass it as cursor for the next page; null on the last."
+    )
+
+
+class BillingCheckoutStateResponse(BaseModel):
+    """GET /billing/checkouts/{checkout_ref}, GET /portal/billing/checkouts/
+    {checkout_ref}: where a checkout stands. Coming back from the provider
+    proves no payment; this does."""
+
+    state: Literal["pending", "credited", "failed"] = Field(
+        description="pending: no purchase yet (ask again; it stays pending if "
+        "the payer never paid); credited: the package's units arrived; failed: "
+        "the provider reported the payment failed (no provider reports it yet)."
+    )
+    package_id: str = Field(description="The package of the checkout.")
+    units: int | None = Field(
+        description="Credited: the units the purchase brought; null otherwise."
+    )
+    balance_after: int | None = Field(
+        description="Credited: the units available now; null otherwise."
+    )

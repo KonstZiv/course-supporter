@@ -21,6 +21,12 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from course_supporter import boot
 from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.billing import router as billing_router
+from course_supporter.api.routes.billing_estimates import (
+    router as billing_estimates_router,
+)
+from course_supporter.api.routes.billing_outlook import (
+    router as billing_outlook_router,
+)
 from course_supporter.api.routes.config import router as config_router
 from course_supporter.api.routes.cost import router as cost_router
 from course_supporter.api.routes.criteria import router as criteria_router
@@ -295,6 +301,8 @@ app.include_router(portal_auth_router, prefix="/api/v1")
 app.include_router(portal_config_router, prefix="/api/v1")
 app.include_router(portal_billing_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
+app.include_router(billing_estimates_router, prefix="/api/v1")
+app.include_router(billing_outlook_router, prefix="/api/v1")
 app.include_router(portal_submissions_router, prefix="/api/v1")
 app.include_router(portal_materials_router, prefix="/api/v1")
 app.include_router(portal_courses_router, prefix="/api/v1")

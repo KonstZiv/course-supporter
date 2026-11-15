@@ -620,7 +620,10 @@ class TestStructuredLogging:
         # + 2 DD-SP-D additions (student-path step V phase 0):
         # EXTERNAL_SOURCE_UNAVAILABLE + PIPELINE_FAILURE (failure-classifier
         # async classes; PIPELINE_FAILURE is the execution seam's default).
+        # + 1 BIL-E addition: INSUFFICIENT_UNITS (a processing job whose
+        # author cannot pay fails with it; not a security verdict).
         assert {c.value for c in ErrorCategory} == {
+            "insufficient_units",
             "size_limit",
             "forbidden_type",
             "magic_mismatch",

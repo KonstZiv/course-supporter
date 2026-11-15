@@ -165,6 +165,7 @@ class _RefusingPort:
 
     def __init__(self) -> None:
         self.accounted: list[float] = []
+        self.outcomes: list[SubmissionOutcome] = []
 
     async def check_and_reserve(
         self, context: SubmissionContext, ceiling_estimate_usd: float
@@ -187,9 +188,13 @@ class _RefusingPort:
         return FundsAnswer.refused(FundsRefusalReason.INSUFFICIENT_FUNDS)
 
     async def account_version_work_cost(
-        self, context: VersionWorkContext, actual_usd: float
+        self,
+        context: VersionWorkContext,
+        actual_usd: float,
+        outcome: SubmissionOutcome = SubmissionOutcome.COMPLETED,
     ) -> None:
         self.accounted.append(actual_usd)
+        self.outcomes.append(outcome)
 
 
 class _CountingPort(_RefusingPort):
@@ -509,6 +514,9 @@ class TestTheWorkThatFailsLate:
         assert not explanations
         assert port.accounted == [pytest.approx(_COST)], (
             "a failed generation that already paid is still accounted"
+        )
+        assert port.outcomes == [SubmissionOutcome.FAILED], (
+            "the port hears it failed: a failure is released, not charged (BIL-E)"
         )
         assert await _job_status(session_factory, seeded["job_id"]) == "failed"
 

@@ -33,7 +33,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from course_supporter.api.tasks import arq_process_homework
-from course_supporter.funds_port import FUNDS_PORT_ACTION
+from course_supporter.funds_port import (
+    FUNDS_PORT_ACTION,
+    FundsAnswer,
+    SubmissionOutcome,
+)
 from course_supporter.homework.path_checkpoint import PathCheckpoint
 from course_supporter.homework.path_config import (
     PathConfig,
@@ -495,6 +499,44 @@ class TestWhenTheResultCannotBeBuilt:
         assert job.status == "failed", "the seam failed the job on the re-raise"
         broken.after_delivery.assert_not_awaited()
 
+    async def test_the_reserve_is_released_at_once_not_at_night(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seed: dict[str, uuid.UUID],
+        tmp_path: Path,
+    ) -> None:
+        """BIL-E: the exception path tells the port the submission failed, so
+        its reserve goes back now rather than at ``billing_stale_reserves``."""
+        broken = MagicMock()
+        broken.build = AsyncMock(side_effect=RuntimeError("the builder broke"))
+        broken.after_delivery = AsyncMock()
+        port = MagicMock()
+        port.check_and_reserve = AsyncMock(return_value=FundsAnswer.allowed())
+        port.account_stage_cost = AsyncMock()
+        port.release_remainder = AsyncMock()
+
+        with (
+            _on_the_new_path(AsyncMock(return_value=True)),
+            patch(
+                "course_supporter.homework.path_runner.get_result_builder",
+                return_value=broken,
+            ),
+            patch(
+                "course_supporter.homework.path_runner.build_funds_port",
+                return_value=port,
+            ),
+        ):
+            await arq_process_homework(
+                _ctx(session_factory, _answers_file(tmp_path, seed["version_id"])),
+                str(seed["job_id"]),
+                str(seed["submission_id"]),
+            )
+
+        port.check_and_reserve.assert_awaited_once()
+        ((context, outcome), _) = port.release_remainder.await_args
+        assert outcome is SubmissionOutcome.FAILED
+        assert context.submission_id == seed["submission_id"]
+
 
 class TestTheVersionTheAnswersWereTakenFor:
     """Task 07b, decision 14: a submission is scored by the version it was taken for."""
@@ -582,7 +624,11 @@ class TestAfterDelivery:
         assert submission.review_result["test"]["explanations_in_course_language"]
         (english,) = await _versions(session_factory, seed["task_id"], language="eng")
         (asked,) = await _explanation_jobs(session_factory, seed["task_id"])
-        assert asked.input_params == {"reference_id": str(english.id)}
+        # A submission asked: the author's units never stop it (BIL-E).
+        assert asked.input_params == {
+            "reference_id": str(english.id),
+            "requested_by_submission": True,
+        }
         redis.enqueue_job.assert_awaited_once()
         # Asking is not paying: the submission's own job still has no call row,
         # only the funds port's decision, and that one without a price.
@@ -636,7 +682,11 @@ class TestAfterDelivery:
             taken_for.answers_digest,
         )
         (asked,) = await _explanation_jobs(session_factory, seed["task_id"])
-        assert asked.input_params == {"reference_id": str(english.id)}
+        # A submission asked: the author's units never stop it (BIL-E).
+        assert asked.input_params == {
+            "reference_id": str(english.id),
+            "requested_by_submission": True,
+        }
 
     async def test_another_job_in_the_way_leaves_the_delivered_review_alone(
         self,

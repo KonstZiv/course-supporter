@@ -50,6 +50,7 @@ from course_supporter.api.schemas import (
     FeedbackTouch,
     OptionalLanguageForm,
     PortalBaseDownload,
+    PortalBillingNote,
     PortalDeltaReceipt,
     PortalSubmissionDetail,
     PortalSubmissionListItem,
@@ -254,6 +255,11 @@ async def submit_portal_homework(
             base_snapshot_hash=base_snapshot_hash,
         )
 
+    # --- Units (BIL-E, B3): a student who pays for their own review and
+    # cannot cover its price is refused before anything is stored (402
+    # insufficient_units). Nothing is refused while charging is off. ---
+    await _require_units(session, task_doc, student, file=file)
+
     result = await create_and_dispatch_submission(
         session=session,
         s3=s3,
@@ -329,6 +335,8 @@ async def submit_portal_test(
     """
     task_doc = await _answerable_task(session, student, authored_document_id)
     published = await require_published(session, task_doc)
+    # A test is free while the student's balance is above 0 (BIL-E, B3).
+    await _require_units(session, task_doc, student, file=None)
     student_obj = await session.get(Student, student.student_id)
     if student_obj is None:
         raise HTTPException(status_code=401, detail="Session is no longer valid")
@@ -355,6 +363,60 @@ async def submit_portal_test(
         student_note=body.student_note,
     )
     return PortalSubmitResponse(submission_id=result.submission.id, status="received")
+
+
+async def _require_units(
+    session: AsyncSession,
+    task_doc: AuthoredDocument,
+    student: StudentContext,
+    *,
+    file: UploadFile | None,
+) -> None:
+    """Refuse a review its student cannot pay for: 402
+    ``{"detail": {"code": "insufficient_units", "details": {...}}}``.
+
+    The price of the file as the doors read it — the same function as the
+    estimate route (``billing.quotes.review_quote``); a file the doors refuse
+    is left to them (it is refused for free). A test: free while the balance
+    is above 0. A review the author pays for is never refused here.
+    """
+    from course_supporter.billing.charging import charging_enabled
+    from course_supporter.billing.quotes import (
+        UnitsRefusedError,
+        require_enough,
+        review_quote,
+    )
+    from course_supporter.security.exceptions import SecurityRejectedError
+
+    if not charging_enabled():
+        return
+    reading = None
+    if file is not None:
+        from course_supporter.api.routes.billing_estimates import read_for_quote
+
+        data = await file.read()
+        await file.seek(0)
+        try:
+            reading = await read_for_quote(
+                session,
+                task_doc,
+                student.student_id,
+                filename=file.filename or "work",
+                data=data,
+            )
+        except SecurityRejectedError:
+            return
+    quote = await review_quote(
+        session,
+        task=task_doc,
+        tenant_id=student.tenant_id,
+        student_id=student.student_id,
+        reading=reading,
+    )
+    try:
+        require_enough(quote, "the review cannot be paid for")
+    except UnitsRefusedError as exc:
+        raise HTTPException(status_code=402, detail=exc.detail_body()) from exc
 
 
 async def _answerable_task(
@@ -524,6 +586,7 @@ def _to_detail(
     *,
     delta: PortalDeltaReceipt | None = None,
     own_feedback: FeedbackTouch | None = None,
+    billing_note: PortalBillingNote | None = None,
 ) -> PortalSubmissionDetail:
     """Curated detail — adds review_markdown and the structure; no trace.
 
@@ -545,6 +608,7 @@ def _to_detail(
         original_filename=submission.original_filename,
         delta=delta,
         own_feedback=own_feedback,
+        billing_note=billing_note,
         rejection=curated_rejection(submission),
         not_opened=curated_not_opened(submission),
         recovered_encoding=curated_recovered_encoding(submission),
@@ -641,10 +705,14 @@ async def get_portal_submission(
         target_kind=FeedbackTargetKind.REVIEW,
         target_id=submission.id,
     )
+    from course_supporter.billing.funds import billing_note
+
+    note = await billing_note(session, submission.id)
     return _to_detail(
         submission,
         delta=delta,
         own_feedback=to_touch(own) if own is not None else None,
+        billing_note=PortalBillingNote(**note) if note is not None else None,
     )
 
 

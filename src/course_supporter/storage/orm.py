@@ -4189,6 +4189,15 @@ class BillingAccount(Base):
         comment="When the owner references were erased after the owner's "
         "deletion; the start of the retention period.",
     )
+    test_purchase_allowed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        comment="True: the account may buy while the payment provider serving "
+        "the purchase is in its test mode (the provider's review of the shop, "
+        "our own tests). Set and cleared by the administrator only "
+        "(scripts/billing_admin.py test-purchase), audited.",
+    )
 
 
 class BillingPaymentRule(Base):
@@ -4428,8 +4437,9 @@ class BillingAuditEntry(Base):
     action: Mapped[str] = mapped_column(
         String(64),
         comment="What was done, e.g. author_settings.update, payment_rule.create, "
-        "payment_rule.end, account.anonymize, batch.admin_credit, "
-        "batch.invoice_credit, dispute.lost, dispute.won.",
+        "payment_rule.end, account.anonymize, account.test_purchase, "
+        "batch.admin_credit, batch.invoice_credit, dispute.lost, dispute.won, "
+        "refund.order_hold, refund.order_release.",
     )
     entity: Mapped[str] = mapped_column(
         String(32),
@@ -4644,6 +4654,17 @@ class BillingRefund(Base):
             "provider_adjustment_id",
             name="uq_billing_refunds_provider_adjustment",
         ),
+        CheckConstraint(
+            "provider_adjustment_id IS NOT NULL OR provider_order_id IS NOT NULL",
+            name="ck_billing_refunds_key",
+        ),
+        Index(
+            "uq_billing_refunds_order_hold",
+            "provider",
+            "provider_order_id",
+            unique=True,
+            postgresql_where=text("state = 'held' AND provider_order_id IS NOT NULL"),
+        ),
         {
             "comment": "Refund or dispute of unused units of a purchase batch "
             "(BIL-B, BIL-PAY): held while the provider reviews it (or the dispute "
@@ -4686,10 +4707,20 @@ class BillingRefund(Base):
         String(32),
         comment="The payment provider the refund goes through: the batch's.",
     )
-    provider_adjustment_id: Mapped[str] = mapped_column(
+    provider_adjustment_id: Mapped[str | None] = mapped_column(
         String(64),
+        nullable=True,
         comment="The provider's adjustment (refund) id, or its dispute id; "
-        "unique per provider.",
+        "unique per provider. NULL for a hold by order (BIL-E) until the "
+        "provider's refund.created names the refund.",
+    )
+    provider_order_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="A hold by order (BIL-E): the provider's order (Creem: order.id, "
+        "the batch's provider_transaction_id) whose units the administrator "
+        "holds before refunding it in the provider's dashboard; one held per "
+        "order. NULL for any other refund or dispute.",
     )
     state: Mapped[str] = mapped_column(
         String(16),
@@ -5136,4 +5167,65 @@ class BillingProviderEvent(Base):
     provider_adjustment_id: Mapped[str | None] = mapped_column(
         String(64),
         comment="Refund: the provider's adjustment id; chargeback: its dispute id.",
+    )
+
+
+# ── BIL-PAY: checkouts, by the platform's own number ──
+
+
+class BillingCheckout(Base):
+    """A checkout a payer opened at a payment provider (BIL-PAY).
+
+    Written when the provider opens it (``billing.payments.checkout``), under
+    the platform's own number — ``id``, the ``checkout_ref`` that travels in
+    the address the payer comes back to and in the checkout's custom data,
+    whatever the provider. The purchase's webhook links the batch it credited
+    (``batch_id``); the screen asks the checkout's state by its number, since
+    coming back from the provider proves no payment. The one change a row ever
+    takes is that link, set once: a trigger refuses any other UPDATE.
+    """
+
+    __tablename__ = "billing_checkouts"
+    __table_args__ = (
+        CheckConstraint(
+            f"provider ~ {_PROVIDER_NAME}", name="ck_billing_checkouts_provider"
+        ),
+        UniqueConstraint("batch_id", name="uq_billing_checkouts_batch"),
+        {
+            "comment": "Checkouts opened at payment providers, by the platform's "
+            "own number (BIL-PAY): the account, the package, the provider and "
+            "its id of the checkout; the batch the purchase credited."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        primary_key=True,
+        comment="The checkout's own number (checkout_ref): in the return address "
+        "and in the provider's custom data of the checkout.",
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_accounts.id"),
+        index=True,
+        comment="The account the units go to.",
+    )
+    package_id: Mapped[str] = mapped_column(
+        String(64),
+        comment="The package bought (config/billing_packages.yaml).",
+    )
+    provider: Mapped[str] = mapped_column(
+        String(32), comment="The provider's adapter name (BILLING_PROVIDERS)."
+    )
+    provider_checkout_id: Mapped[str] = mapped_column(
+        String(64), comment="The provider's id of the checkout."
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the checkout was opened.",
+    )
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("billing_batches.id"),
+        comment="The batch the purchase credited; NULL until the provider "
+        "reports it paid. Set once, by the purchase's webhook.",
     )

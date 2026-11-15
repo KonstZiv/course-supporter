@@ -58,7 +58,7 @@ def job_name(task: PeriodicTask) -> str:
 
 def _coroutine(task: PeriodicTask) -> Any:
     async def run(ctx: dict[str, Any]) -> None:
-        await run_task(task, ctx["session_factory"])
+        await run_task(task, ctx["session_factory"], redis=ctx.get("redis"))
 
     run.__name__ = run.__qualname__ = f"periodic_{task.name}"
     return run

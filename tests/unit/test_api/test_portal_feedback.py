@@ -14,7 +14,7 @@ guarantee that a foreign submission is refused through both layers at once.
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -102,6 +102,16 @@ def mock_session() -> AsyncMock:
     session = AsyncMock()
     session.add = MagicMock()
     return session
+
+
+@pytest.fixture(autouse=True)
+def no_billing_note() -> Iterator[None]:
+    """The detail reads its billing note (BIL-E) from the journal, which the
+    mocked session cannot answer: no note. Its own tests are on a database."""
+    with patch(
+        "course_supporter.billing.funds.billing_note", new=AsyncMock(return_value=None)
+    ):
+        yield
 
 
 @pytest.fixture()

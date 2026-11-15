@@ -107,6 +107,10 @@ class AuditAction(StrEnum):
     PAYMENT_RULE_CREATE = "payment_rule.create"
     PAYMENT_RULE_END = "payment_rule.end"
     ACCOUNT_ANONYMIZE = "account.anonymize"
+    ACCOUNT_TEST_PURCHASE = "account.test_purchase"
+    """The account may (or may no longer) buy while the payment provider is
+    in its test mode (BIL-PAY, operator 2026-11-15)."""
+
     BATCH_ADMIN_CREDIT = "batch.admin_credit"
     BATCH_INVOICE_CREDIT = "batch.invoice_credit"
     """A contract invoice paid (B2B), credited by the administrator."""
@@ -116,6 +120,13 @@ class AuditAction(StrEnum):
 
     DISPUTE_WON = "dispute.won"
     """A dispute (chargeback) won: its held units are free again."""
+
+    REFUND_ORDER_HOLD = "refund.order_hold"
+    """Units of a purchase held by its order before a refund in the provider's
+    dashboard (BIL-E): the provider's refund.created then takes them."""
+
+    REFUND_ORDER_RELEASE = "refund.order_release"
+    """A hold by order released: the refund did not happen."""
 
 
 # ── The journal of units (BIL-B) ──
@@ -164,7 +175,9 @@ class MovementKind(StrEnum):
     """Units of an action the author's benefit covered; no batch."""
 
     PLATFORM_COVERED = "platform_covered"
-    """Units of a platform-initiated re-processing; no batch."""
+    """Units of an action the platform bore; no batch: a platform-initiated
+    re-processing, or the cost over the reserve of a payer without credit
+    (BIL-E: a student, an author without credit)."""
 
     REFUND_HOLD = "refund_hold"
     """Free units of a purchase batch blocked while the provider reviews a

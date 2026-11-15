@@ -253,7 +253,7 @@ async def _walk(
             return_value=config,
         ),
         patch(
-            "course_supporter.homework.path_runner.AlwaysEnoughFundsPort",
+            "course_supporter.homework.path_runner.build_funds_port",
             return_value=port or _PortDouble(),
         ),
         patch(
@@ -485,7 +485,7 @@ class TestLockAEndToEnd:
                 return_value=_shipped(),
             ),
             patch(
-                "course_supporter.homework.path_runner.AlwaysEnoughFundsPort",
+                "course_supporter.homework.path_runner.build_funds_port",
                 return_value=port,
             ),
             patch("course_supporter.homework.webhook.deliver_webhook", new=webhook),
@@ -592,7 +592,7 @@ class TestLockBFundsPort:
                 return_value=_shipped(),
             ),
             patch(
-                "course_supporter.homework.path_runner.AlwaysEnoughFundsPort",
+                "course_supporter.homework.path_runner.build_funds_port",
                 return_value=port,
             ),
             patch(

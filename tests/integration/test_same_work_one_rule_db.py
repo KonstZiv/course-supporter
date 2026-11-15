@@ -222,7 +222,7 @@ async def _review(
             return_value=_shipped(),
         ),
         patch(
-            "course_supporter.homework.path_runner.AlwaysEnoughFundsPort",
+            "course_supporter.homework.path_runner.build_funds_port",
             return_value=_PortDouble(),
         ),
         patch(

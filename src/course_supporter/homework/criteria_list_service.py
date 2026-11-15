@@ -74,6 +74,12 @@ import structlog
 from sqlalchemy import func, select
 
 from course_supporter.agents.criteria_decomposer import CriteriaDecomposerAgent
+from course_supporter.billing.charging import job_fact_usd
+from course_supporter.billing.funds import (
+    PreparationCharge,
+    preparation_ended,
+    preparation_started,
+)
 from course_supporter.cost_estimate.hooks import shadow_task_preparation
 from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.criteria_list_state import CriteriaListState
@@ -87,6 +93,7 @@ from course_supporter.homework.criteria_form import (
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.language import display_name
 from course_supporter.llm.error_categories import LadderExhaustedError, LadderStop
+from course_supporter.service_logging import get_current_job_id
 from course_supporter.storage.node_summary_final_repository import (
     NodeSummaryFinalRepository,
 )
@@ -588,6 +595,7 @@ class CriteriaListService:
         root_concepts = _main_concepts(snapshot.root_final)
         stop = asyncio.Event()
         heartbeat = asyncio.create_task(self._heartbeat(claim, stop))
+        charge: PreparationCharge | None = None
         try:
             try:
                 async with self._session_factory() as session:
@@ -602,16 +610,26 @@ class CriteriaListService:
                     prompt_hash=self._composer.prompt_hash(),
                 )
                 if self._shadow_estimate:
+                    task_chars = sum(
+                        len(part or "")
+                        for part in (title, description, text, node_description)
+                    )
                     # Never raises; its own transaction (cost_estimate/shadow.py).
                     await shadow_task_preparation(
                         kind="criteria_decomposition",
                         authored_document_id=document.id,
                         version=snapshot.content_hash,
-                        task_chars=sum(
-                            len(part or "")
-                            for part in (title, description, text, node_description)
-                        ),
+                        task_chars=task_chars,
                         session_factory=self._session_factory,
+                    )
+                    # The author's charge (BIL-E): a submission started it, so
+                    # it never waits for the author's units. Never raises.
+                    charge = await preparation_started(
+                        self._session_factory,
+                        document=document,
+                        kind="criteria_decomposition",
+                        version=snapshot.content_hash,
+                        task_chars=task_chars,
                     )
                 composition = await self._composer.compose(
                     task_title=title,
@@ -636,6 +654,7 @@ class CriteriaListService:
                 await heartbeat
         except LadderExhaustedError as exc:
             await self._fail(claim, f"{exc.stop.value}: {exc}")
+            await preparation_ended(self._session_factory, charge, fact_usd=None)
             return self._unavailable(document.id, UnavailableReason.COMPOSITION_FAILED)
         except Exception as exc:
             # A defect rather than a model's failure. Recording it keeps the
@@ -643,7 +662,9 @@ class CriteriaListService:
             # the defect visible. A cancelled job is neither: its claim is left
             # to fall silent and be taken over.
             await self._fail(claim, f"error: {type(exc).__name__}")
+            await preparation_ended(self._session_factory, charge, fact_usd=None)
             raise
+        await self._charge_composition(charge)
 
         async with self._session_factory() as session:
             stored = await TaskCriteriaListRepository(session).mark_ready(
@@ -678,6 +699,16 @@ class CriteriaListService:
             layer=CriteriaLayer.MODEL,
             source_id=list_id,
         )
+
+    async def _charge_composition(self, charge: PreparationCharge | None) -> None:
+        """Settle the composition's fact: this job's calls of the stage (BIL-E)."""
+        job_id = get_current_job_id()
+        if charge is None or job_id is None:
+            await preparation_ended(self._session_factory, charge, fact_usd=None)
+            return
+        async with self._session_factory() as session:
+            fact = await job_fact_usd(session, job_id, action="criteria_decomposition")
+        await preparation_ended(self._session_factory, charge, fact_usd=fact)
 
     async def _fail(self, claim: _Claim, reason: str) -> None:
         async with self._session_factory() as session:

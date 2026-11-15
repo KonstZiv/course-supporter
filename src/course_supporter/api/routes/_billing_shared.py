@@ -112,6 +112,9 @@ class Refusal(StrEnum):
     INVALID_CURSOR = "invalid_cursor"
     """A statement cursor this server did not give (422)."""
 
+    INVALID_PERIOD = "invalid_period"
+    """A period whose start is after its end (422)."""
+
 
 STATUS: Final[dict[Refusal, int]] = {
     Refusal.PAYMENT_UNAVAILABLE: 503,
@@ -123,6 +126,7 @@ STATUS: Final[dict[Refusal, int]] = {
     Refusal.PROVIDER_UNAVAILABLE: 502,
     Refusal.CHECKOUT_NOT_FOUND: 404,
     Refusal.INVALID_CURSOR: 422,
+    Refusal.INVALID_PERIOD: 422,
 }
 """The status of each code (module docstring)."""
 

@@ -14,7 +14,16 @@ Purpose:
       ``config/cost_estimate.yaml``). 0 for a test while the balance is above
       0 and for the same work again (the fingerprint of the file matches an
       earlier attempt that was reviewed). An author paying under a rule: no
-      numbers of the author, ``enough`` always (operator 2026-11-15).
+      numbers at all, ``enough`` always — the submission is taken; whether
+      its review starts is decided by its run (operator 2026-11-15, 5a, item 1).
+    * :func:`review_price` — P of a review whoever pays it, the number behind
+      :func:`review_quote` and the continuation of held reviews. When
+      anything on the way fails — the choice of the path, the reading of the
+      file (a refusal of the doors is not a failure: the route answers it with
+      422), the typical size, the estimate, the rate K — the price is the
+      ceiling N (basis ``ceiling``, :func:`.charging.ceiling_units`): "no more
+      than N", and the fact is charged (BIL-E2, 4a). One WARNING
+      ``billing_quote_ceiling`` names the reason, never the work.
     * :func:`author_quote` — an author's processing or task preparation from
       its expected cost.
     * :class:`UnitsRefusedError` — the refusal of an action for want of
@@ -40,10 +49,12 @@ from sqlalchemy import Integer, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.billing import charging, ledger
-from course_supporter.billing.estimates import review_e_usd
-from course_supporter.billing.kinds import AccountKind, ActionKind
+from course_supporter.billing.estimates import CEILING_WARNING, review_e_usd
+from course_supporter.billing.kinds import ActionKind
 from course_supporter.homework.path_config import (
     PathConfig,
+    PathKey,
+    ServedBy,
     get_path_config,
     in_test_mode,
     model_stages,
@@ -64,15 +75,18 @@ INSUFFICIENT_UNITS: Final = "insufficient_units"
 TYPICAL_HISTORY: Final = 20
 """How many of a task's latest review estimates make its typical size."""
 
-Basis = Literal["typical", "file"]
+Basis = Literal["typical", "file", "ceiling"]
 PaidBy = Literal["self", "author"]
 
 
 @dataclass(frozen=True, slots=True)
 class Quote:
-    """The answer of an estimate route (and of a gate)."""
+    """The answer of an estimate route (and of a gate).
 
-    price_units: int
+    ``price_units`` is ``None`` only for a review the author pays for.
+    """
+
+    price_units: int | None
     available_units: int | None
     enough: bool
     missing_units: int | None
@@ -157,7 +171,8 @@ async def _same_work(
 
     The attempt dedup's own rule — fingerprint, task version, criteria list in
     force, evaluator version — read for a work not yet stored. Any error reads
-    as "no": the price is then the usual one.
+    as "no": the price is then the usual one. Its reads run in a savepoint, so
+    a failed one leaves the session usable.
     """
     from course_supporter.homework.attempt_dedup import _JUDGED_AGAINST_A_LIST
     from course_supporter.homework.attempt_ledger import task_version_of
@@ -180,72 +195,150 @@ async def _same_work(
         evaluator = evaluator_version(AssignmentType(task_type), config)
         if fingerprint is None or version is None or evaluator is None:
             return False
-        criteria_list: tuple[str, uuid.UUID] | None = None
-        if task_type in _JUDGED_AGAINST_A_LIST:
-            in_force = await load_in_force(session, task.id)
-            if in_force is None:
-                return False
-            criteria_list = (in_force.layer, in_force.source_id)
-        source = await HomeworkRepository(session).latest_unchanged_attempt(
-            tenant_id=tenant_id,
-            student_id=student_id,
-            authored_document_id=task.id,
-            excluding=uuid.uuid4(),
-            fingerprint=fingerprint,
-            task_version=version,
-            criteria_list=criteria_list,
-            evaluator_version=evaluator,
-        )
+        async with session.begin_nested():
+            criteria_list: tuple[str, uuid.UUID] | None = None
+            if task_type in _JUDGED_AGAINST_A_LIST:
+                in_force = await load_in_force(session, task.id)
+                if in_force is None:
+                    return False
+                criteria_list = (in_force.layer, in_force.source_id)
+            source = await HomeworkRepository(session).latest_unchanged_attempt(
+                tenant_id=tenant_id,
+                student_id=student_id,
+                authored_document_id=task.id,
+                excluding=uuid.uuid4(),
+                fingerprint=fingerprint,
+                task_version=version,
+                criteria_list=criteria_list,
+                evaluator_version=evaluator,
+            )
     except Exception:
         logger.warning("billing_quote_same_work_failed", exc_info=True)
         return False
     return source is not None and source.attempt_no is not None
 
 
-async def _review_price(
+@dataclass(frozen=True, slots=True)
+class ReviewPrice:
+    """P of a review, whoever pays it, and what it was priced from."""
+
+    units: int
+    basis: Basis
+
+
+def _widest_ceiling(config: PathConfig, task_type: AssignmentType) -> Decimal:
+    """The largest money ceiling among the paths of ``task_type``.
+
+    The ceiling of a review whose path could not be chosen; 0 for a type the
+    new path does not serve (today's Mentor charges nothing, S2).
+    """
+    declared = config.task_types.get(task_type)
+    if declared is None or declared.served_by is not ServedBy.NEW_PATH:
+        return Decimal(0)
+    return max(
+        (
+            Decimal(str(path_ceiling_estimate(config, PathKey(task_type, state))))
+            for state in declared.paths
+        ),
+        default=Decimal(0),
+    )
+
+
+def _at_ceiling(
+    ceiling_usd: Decimal, *, task: AuthoredDocument, reason: str, error: str | None
+) -> ReviewPrice:
+    """The price N of a review whose estimate failed, with its one WARNING."""
+    logger.warning(
+        CEILING_WARNING,
+        reason=reason,
+        error=error,
+        task_id=str(task.id),
+        task_type=task.task_type,
+        ceiling_usd=str(ceiling_usd),
+    )
+    return ReviewPrice(charging.ceiling_units(ceiling_usd), "ceiling")
+
+
+async def review_price(
     session: AsyncSession,
     *,
     task: AuthoredDocument,
     student_id: uuid.UUID,
     tenant_id: uuid.UUID,
-    reading: Any | None,
-    config: PathConfig,
-) -> int:
-    """P of a review that is not a test (0 when it would cost nothing)."""
+    reading: Any | None = None,
+    read_error: str | None = None,
+    config: PathConfig | None = None,
+) -> ReviewPrice:
+    """P of a review of ``task`` (not a test), whoever pays it (module docstring).
+
+    ``reading`` — the doors' reading of the file about to be sent, ``None``
+    for the typical size; ``read_error`` — the class of the error that broke
+    the reading of the file sent: the price is the ceiling. 0 for a type
+    today's Mentor serves (S2) and for the same work again.
+    """
     from course_supporter.homework.path_selection import choose_path
 
+    config = config if config is not None else get_path_config()
     task_type = AssignmentType(task.task_type or "")
-    choice = await choose_path(
-        session,
-        task_type=task_type,
-        student_id=student_id,
-        authored_document_id=task.id,
-        config=config,
-    )
+    try:
+        async with session.begin_nested():
+            choice = await choose_path(
+                session,
+                task_type=task_type,
+                student_id=student_id,
+                authored_document_id=task.id,
+                config=config,
+            )
+    except Exception as exc:
+        return _at_ceiling(
+            _widest_ceiling(config, task_type),
+            task=task,
+            reason="path_choice_failed",
+            error=type(exc).__name__,
+        )
     if choice is None:
-        return 0  # today's Mentor: not charged (operator 2026-11-15, S2)
-    if reading is not None and await _same_work(
-        session,
-        task=task,
-        student_id=student_id,
-        tenant_id=tenant_id,
-        reading=reading,
-        config=config,
-    ):
-        return 0
+        return ReviewPrice(0, "file" if reading is not None else "typical")
+    ceiling = Decimal(str(path_ceiling_estimate(config, choice.key)))
+    if read_error is not None:
+        return _at_ceiling(
+            ceiling, task=task, reason="file_read_failed", error=read_error
+        )
+    if charging.units_per_usd() is None:
+        return _at_ceiling(ceiling, task=task, reason="rate_not_set", error=None)
+    basis: Basis
+    if reading is not None:
+        if await _same_work(
+            session,
+            task=task,
+            student_id=student_id,
+            tenant_id=tenant_id,
+            reading=reading,
+            config=config,
+        ):
+            return ReviewPrice(0, "file")
+        chars, basis = len(reading.text), "file"
+    else:
+        try:
+            async with session.begin_nested():
+                chars = await _typical_chars(session, task.id)
+        except Exception as exc:
+            return _at_ceiling(
+                ceiling,
+                task=task,
+                reason="typical_size_failed",
+                error=type(exc).__name__,
+            )
+        basis = "typical"
     priced = model_stages(config)
-    chars = (
-        len(reading.text)
-        if reading is not None
-        else await _typical_chars(session, task.id)
-    )
     e_usd = review_e_usd(
         stage_names=[name for name in choice.stages if name in priced],
         path_stages=priced,
         submission_chars=chars,
-        fallback_usd=Decimal(str(path_ceiling_estimate(config, choice.key))),
+        fallback_usd=ceiling,
     )
-    return charging.price_of(e_usd)
+    if e_usd is None:  # review_e_usd has warned
+        return ReviewPrice(charging.ceiling_units(ceiling), "ceiling")
+    return ReviewPrice(charging.price_of(e_usd), basis)
 
 
 async def review_quote(
@@ -255,13 +348,17 @@ async def review_quote(
     tenant_id: uuid.UUID,
     student_id: uuid.UUID,
     reading: Any | None = None,
+    read_error: str | None = None,
     config: PathConfig | None = None,
 ) -> Quote:
     """What the student's review of ``task`` costs, and whether it may start.
 
     ``reading`` — the doors' reading of the file about to be sent
     (:class:`~course_supporter.homework.doors.DoorReading`), or ``None`` for
-    the typical price (:func:`_typical_chars`).
+    the typical price (:func:`_typical_chars`); ``read_error`` — reading the
+    file sent failed (:func:`review_price`). The threshold is
+    ``available >= P`` — the run's own (:func:`.charging.threshold_applies`),
+    P being N at the ceiling.
     """
     config = config if config is not None else get_path_config()
     task_type = AssignmentType(task.task_type or "")
@@ -273,32 +370,31 @@ async def review_quote(
         course_node_id=task.course_root_id,
         student_id=student_id,
     )
-    by_author = payer.kind is AccountKind.AUTHOR
-    basis: Basis = "file" if reading is not None else "typical"
-    paid_by: PaidBy = "author" if by_author else "self"
+    sent = reading is not None or read_error is not None
+    basis: Basis = "file" if sent else "typical"
+    if payer.for_someone_else:
+        return Quote(None, None, True, None, enabled, basis, "author")
+    available = (await ledger.balance(session, payer.account_id)).available
     if task_type is AssignmentType.TEST:
-        price, enough_now = 0, await charging.test_allowed(session, payer)
+        price = 0
+        enough = await charging.test_allowed(session, payer)
+        missing = 0 if enough else 1
     else:
-        price = await _review_price(
+        found = await review_price(
             session,
             task=task,
             student_id=student_id,
             tenant_id=tenant_id,
             reading=reading,
+            read_error=read_error,
             config=config,
         )
-        enough_now = True
-    if by_author:
-        return Quote(price, None, True, None, enabled, basis, paid_by)
-    available = (await ledger.balance(session, payer.account_id)).available
-    if task_type is AssignmentType.TEST:
-        missing = 0 if enough_now else 1
-    else:
+        price, basis = found.units, found.basis
         missing = max(0, price - available)
-        enough_now = missing == 0
+        enough = missing == 0
     if not enabled:
-        return Quote(price, available, True, 0, enabled, basis, paid_by)
-    return Quote(price, available, enough_now, missing, enabled, basis, paid_by)
+        return Quote(price, available, True, 0, enabled, basis, "self")
+    return Quote(price, available, enough, missing, enabled, basis, "self")
 
 
 # ── An author's own action ────────────────────────────────────────────

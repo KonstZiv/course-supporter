@@ -2,7 +2,8 @@
 
 Purpose:
     A review whose payer could not cover its price when its run started is
-    held in ``awaiting_funds`` (the portal shows the code ``awaiting_funds``);
+    held in ``awaiting_funds`` (the portal shows the code ``awaiting_funds``,
+    or ``awaiting_author_funds`` when the author pays — :mod:`.held`);
     nothing about it is lost — its file, its checkpoint and its place stay.
     Once the payer has the units, :func:`resume_funded` gives it a new job
     through ``path_continuation.resume_after_top_up`` — the seam the path
@@ -10,11 +11,14 @@ Purpose:
     that was not enough holds it again, from ``received``.
 
 When the payer can pay:
+    The payer is the review's payer today (:func:`.held.payer_of_held`) — the
+    student, or the author under a payment rule (BIL-E2, 5a, item 2: a review the
+    author pays for waits for the author's units like a student's for theirs).
     Its available units cover the review's price P — the one its run was
     refused with, from the review's estimate row (``action_cost_estimates``,
     key: the submission); without a row, the typical price of the task
-    (:func:`.quotes.review_quote`). A test needs a balance above 0. A review
-    an author pays for under a rule is never held, so it is continued at once.
+    (:func:`.held.price_of_held`). A test needs a balance above 0. An author
+    with credit is never waited for: their reviews are continued at once.
 
 Idempotent: a submission with a job in flight is skipped
 (``start_continuation_job``), and a continued one leaves ``awaiting_funds``
@@ -31,10 +35,9 @@ import structlog
 from sqlalchemy import select
 
 from course_supporter.billing import charging, ledger
-from course_supporter.billing.kinds import AccountKind, ActionKind
+from course_supporter.billing.held import payer_of_held, price_of_held
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.orm import (
-    ActionCostEstimate,
     AuthoredDocument,
     HomeworkStatus,
     HomeworkSubmission,
@@ -57,47 +60,20 @@ class Resumed:
     resumed: list[uuid.UUID]
 
 
-async def _price(
-    session: AsyncSession, submission: HomeworkSubmission, task: AuthoredDocument
-) -> int:
-    """P the review was refused with (its estimate row), else the typical P."""
-    from course_supporter.billing.quotes import review_quote
-
-    p_units = await session.scalar(
-        select(ActionCostEstimate.p_units).where(
-            ActionCostEstimate.action_kind == ActionKind.REVIEW.value,
-            ActionCostEstimate.action_key == str(submission.id),
-        )
-    )
-    if p_units is not None:
-        return int(p_units)
-    quote = await review_quote(
-        session,
-        task=task,
-        tenant_id=submission.tenant_id,
-        student_id=submission.student_id,
-    )
-    return quote.price_units
-
-
 async def can_pay(session: AsyncSession, submission: HomeworkSubmission) -> bool:
     """Can the review's payer cover it now (module docstring)?"""
     task = await session.get(AuthoredDocument, submission.authored_document_id)
     if task is None:
         return False
-    payer = await charging.payer_of(
-        session,
-        action_kind=ActionKind.REVIEW,
-        tenant_id=submission.tenant_id,
-        course_node_id=task.course_root_id,
-        student_id=submission.student_id,
-    )
-    if payer.kind is AccountKind.AUTHOR:
+    payer = await payer_of_held(session, submission, task)
+    if payer is None:
+        return False
+    if payer.credit_allowed:
         return True
     if task.task_type == AssignmentType.TEST.value:
         return await charging.test_allowed(session, payer)
     available = (await ledger.balance(session, payer.account_id)).available
-    return available >= await _price(session, submission, task)
+    return available >= await price_of_held(session, submission, task)
 
 
 async def resume_funded(session: AsyncSession, arq: Any, *, dry_run: bool) -> Resumed:

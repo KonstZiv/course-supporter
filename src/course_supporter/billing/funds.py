@@ -112,11 +112,15 @@ class LedgerFundsPort:
     A review: on the path's test mode (``path_config.in_test_mode``) nothing is
     reserved or charged (operator 2026-11-03, item 4); a test (kind ``test``,
     no model) is free while its payer's balance is above 0; any other review
-    is gated by :func:`.charging.threshold_applies`, reserves
+    is gated by :func:`.charging.threshold_applies` — a review an author
+    without credit pays for under a rule too: short, it is held in
+    ``awaiting_funds`` like a student's (BIL-E2, 5a, item 2) — reserves
     ``min(2E, the path's ceiling, available)`` and is settled, at its end, with
-    the cost of its calls (:func:`.charging.review_fact_usd`). A failure
-    releases everything. The numbers of every answer are also kept on the
-    funds-port row of the call register, as by the first implementation.
+    the cost of its calls (:func:`.charging.review_fact_usd`). A review whose
+    estimate fell to the ceiling (``expected_usd`` is ``None``) is priced at
+    the ceiling N, no margin, and reserves N. A failure releases everything.
+    The numbers of every answer are also kept on the funds-port row of the
+    call register, as by the first implementation.
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -149,7 +153,12 @@ class LedgerFundsPort:
         if in_test_mode(task_type):
             return FundsAnswer.allowed()
         ceiling = Decimal(str(ceiling_estimate_usd))
-        e_usd = context.expected_usd if context.expected_usd is not None else ceiling
+        if context.expected_usd is None:
+            # The estimate fell to the ceiling (BIL-E2, 4a): the price is N, the
+            # most the reserve can hold — no margin over it.
+            e_usd, price = ceiling, charging.ceiling_units(ceiling)
+        else:
+            e_usd, price = context.expected_usd, charging.price_of(context.expected_usd)
         async with self._session_factory() as session:
             task = await _task_of_submission(session, context.submission_id)
             payer = await charging.payer_of(
@@ -171,7 +180,7 @@ class LedgerFundsPort:
                 session,
                 action_kind=ActionKind.REVIEW,
                 payer=payer,
-                price_units=charging.price_of(e_usd),
+                price_units=price,
                 lock=True,
             )
             if not found.enough:
@@ -181,6 +190,7 @@ class LedgerFundsPort:
                     submission_id=str(context.submission_id),
                     price_units=found.price_units,
                     available_units=found.available_units,
+                    paid_by="author" if payer.for_someone_else else "self",
                 )
                 return FundsAnswer.refused(FundsRefusalReason.INSUFFICIENT_FUNDS)
             await charging.reserve_for(

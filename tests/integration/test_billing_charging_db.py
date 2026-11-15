@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.billing import admin, benefit, charging, funds, ledger
@@ -42,6 +42,7 @@ from course_supporter.cost_estimate.actions import MaterialFactors
 from course_supporter.cost_kinds import CostKind
 from course_supporter.funds_port import (
     AlwaysEnoughFundsPort,
+    FundsRefusalReason,
     SubmissionContext,
     SubmissionOutcome,
     VersionWorkContext,
@@ -53,6 +54,7 @@ from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.models.source import AssignmentType
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.storage.orm import (
+    ActionCostEstimate,
     AuthoredDocument,
     BillingMovement,
     BillingReservation,
@@ -71,6 +73,16 @@ E = Decimal("0.05")
 P = 102
 TWO_E = 170
 ACTOR = "test-admin"
+ESTIMATE_ROW: dict[str, Any] = {
+    "e_usd": E,
+    "reserve_units": TWO_E,
+    "margin": Decimal("0.2"),
+    "units_per_usd": Decimal(1700),
+    "breakdown": [],
+    "inputs": {},
+    "uncalibrated": True,
+}
+"""The rest of an estimate row whose P a test sets."""
 
 
 @dataclass(frozen=True)
@@ -525,6 +537,69 @@ class TestTests:
         assert (await balance(session_factory, w.student)).available == 1
 
 
+class TestTestsUnderTheAuthorsRule:
+    async def test_with_a_balance_of_zero_it_waits_with_credit_it_goes(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """As for a student: free while the author's balance is above 0."""
+        w = await make_world(session_factory, task_type="test")
+        await course_rule(session_factory, w)
+        port = funds.LedgerFundsPort(session_factory)
+        context = review(w, AssignmentType.TEST)
+
+        empty = await port.check_and_reserve(context, 1.0)
+        await set_credit(session_factory, w, credit_allowed=True)
+        credit = await port.check_and_reserve(context, 1.0)
+
+        assert empty.decision is FundsDecision.REFUSED
+        assert credit.decision is FundsDecision.ALLOWED
+        assert await movements_of_tenant(session_factory, w) == 0
+
+    async def test_with_a_balance_it_is_free(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        w = await make_world(session_factory, task_type="test")
+        await course_rule(session_factory, w)
+        await buy(session_factory, w.author, 1)
+
+        answer = await funds.LedgerFundsPort(session_factory).check_and_reserve(
+            review(w, AssignmentType.TEST), 1.0
+        )
+
+        assert answer.decision is FundsDecision.ALLOWED
+        assert (await balance(session_factory, w.author)).available == 1
+
+
+class TestTheCeiling:
+    """BIL-E2, 4a: an estimate fallen to the ceiling (``expected_usd`` None) —
+    the threshold and the reserve are N = ceil(ceiling x K), no margin."""
+
+    async def test_the_threshold_and_the_reserve_are_n(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        w = await make_world(session_factory)
+        n = 170  # a ceiling of $0.10: ceil(0.10 x 1700)
+        context = replace(review(w), expected_usd=None)
+        port = funds.LedgerFundsPort(session_factory)
+        await buy(session_factory, w.student, n - 1)
+
+        short = await port.check_and_reserve(context, 0.10)
+        await buy(session_factory, w.student, 1)
+        enough = await port.check_and_reserve(context, 0.10)
+
+        assert short.decision is FundsDecision.REFUSED, "N - 1 is short of N"
+        assert enough.decision is FundsDecision.ALLOWED, (
+            "N, not P = ceil(0.10 x 1.2 x 1700) = 204"
+        )
+        (held,) = await reservations(session_factory, ActionKind.REVIEW, key_of(w))
+        assert held.units == n
+        await port.release_remainder(context, SubmissionOutcome.FAILED)
+
+    def test_n_is_the_cap_of_every_reserve(self) -> None:
+        assert charging.ceiling_units(Decimal("0.10")) == 170
+        assert charging.reserve_request(Decimal(1), Decimal("0.10")) == 170
+
+
 class TestPathTestMode:
     async def test_nothing_is_reserved_or_charged(
         self,
@@ -547,7 +622,10 @@ class TestPathTestMode:
 
 
 class TestAuthorPaysForTheStudent:
-    async def test_no_units_never_stop_the_review_and_the_platform_covers(
+    """BIL-E2, 5a item 2: the platform does not work on credit — a review the
+    author pays for waits for the author's units, as a student's for theirs."""
+
+    async def test_an_author_without_units_holds_the_review_and_holds_nothing(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         w = await make_world(session_factory)
@@ -556,16 +634,51 @@ class TestAuthorPaysForTheStudent:
 
         answer = await port.check_and_reserve(review(w), 1.0)
 
+        assert answer.decision is FundsDecision.REFUSED
+        assert answer.refusal_reason is FundsRefusalReason.INSUFFICIENT_FUNDS
+        assert await reservations(session_factory, ActionKind.REVIEW, key_of(w)) == []
+        assert await movements_of_tenant(session_factory, w) == 0
+
+    async def test_short_of_the_price_holds_it_too(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        w = await make_world(session_factory)
+        await course_rule(session_factory, w)
+        await buy(session_factory, w.author, P - 1)
+
+        answer = await funds.LedgerFundsPort(session_factory).check_and_reserve(
+            review(w), 1.0
+        )
+
+        assert answer.decision is FundsDecision.REFUSED
+
+    async def test_with_units_the_author_pays_and_the_platform_covers_the_excess(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Started, a review goes to its end: what it costs over the author's
+        reserve is the platform's, never a debt (excess_to_platform)."""
+        w = await make_world(session_factory)
+        await course_rule(session_factory, w)
+        await buy(session_factory, w.author, P)
+        port = funds.LedgerFundsPort(session_factory)
+
+        answer = await port.check_and_reserve(review(w), 1.0)
+
         assert answer.decision is FundsDecision.ALLOWED
         (held,) = await reservations(session_factory, ActionKind.REVIEW, key_of(w))
-        assert (held.account_id, held.units) == (w.author, 0)
+        assert (held.account_id, held.units) == (w.author, P)
 
-        await call(session_factory, w.homework_job_id, "0.04")
+        await call(session_factory, w.homework_job_id, "0.10")  # F = 170
         await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
 
         moved = await sums(session_factory, ActionKind.REVIEW, key_of(w))
-        assert moved == {MovementKind.PLATFORM_COVERED.value: 68}
+        assert moved == {
+            MovementKind.RESERVE.value: P,
+            MovementKind.DEBIT.value: P,
+            MovementKind.PLATFORM_COVERED.value: 170 - P,
+        }
         assert (await balance(session_factory, w.author)).difference == 0
+        assert (await balance(session_factory, w.student)).available == 0
         async with session_factory() as session:
             assert await funds.billing_note(session, w.submission_id) is None, (
                 "what the author pays is not the student's to read"
@@ -921,6 +1034,206 @@ class TestHeldForFunds:
         assert w.submission_id not in again.resumed, "a job is in flight already"
         assert jobs == 1
         assert status == "awaiting_funds", "the run of the new job lifts the hold"
+
+
+class TestHeldForTheAuthor:
+    async def _hold(
+        self, session_factory: async_sessionmaker[AsyncSession], w: World
+    ) -> None:
+        async with session_factory() as session:
+            await session.execute(
+                update(HomeworkSubmission)
+                .where(HomeworkSubmission.id == w.submission_id)
+                .values(status="awaiting_funds")
+            )
+            await session.execute(
+                update(Job).where(Job.id == w.homework_job_id).values(status="complete")
+            )
+            await session.commit()
+
+    async def test_held_then_continued_once_the_author_tops_up(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from course_supporter.billing.held import waiting_for_author
+        from course_supporter.billing.resume_funded import can_pay, resume_funded
+
+        w = await make_world(session_factory)
+        await course_rule(session_factory, w)
+        await buy(session_factory, w.student, 10_000)  # the student's are not used
+        await self._hold(session_factory, w)
+        arq = AsyncMock()
+        arq.enqueue_job = AsyncMock(return_value=MagicMock(job_id="arq:hw:resume"))
+
+        async with session_factory() as session:
+            submission = await session.get(HomeworkSubmission, w.submission_id)
+            assert submission is not None
+            waiting = await waiting_for_author(session, [submission])
+            short = await resume_funded(session, arq, dry_run=False)
+        await buy(session_factory, w.author, 10_000)
+        async with session_factory() as session:
+            submission = await session.get(HomeworkSubmission, w.submission_id)
+            assert submission is not None
+            payable = await can_pay(session, submission)
+            funded = await resume_funded(session, arq, dry_run=False)
+
+        assert waiting == {w.submission_id}
+        assert w.submission_id not in short.resumed
+        assert payable is True
+        assert w.submission_id in funded.resumed
+
+    async def test_an_author_with_credit_is_continued_at_once(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from course_supporter.billing.resume_funded import can_pay
+
+        w = await make_world(session_factory)
+        await course_rule(session_factory, w)
+        await set_credit(session_factory, w, credit_allowed=True)
+        await self._hold(session_factory, w)
+        port = funds.LedgerFundsPort(session_factory)
+
+        answer = await port.check_and_reserve(review(w), 1.0)
+        async with session_factory() as session:
+            submission = await session.get(HomeworkSubmission, w.submission_id)
+            assert submission is not None
+            payable = await can_pay(session, submission)
+
+        assert answer.decision is FundsDecision.ALLOWED, "credit: the review goes"
+        assert payable is True
+        await port.release_remainder(review(w), SubmissionOutcome.FAILED)
+
+    async def test_a_student_held_for_their_own_units_is_not_the_authors(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from course_supporter.billing.held import held_for_author, waiting_for_author
+
+        w = await make_world(session_factory)
+        await self._hold(session_factory, w)
+        async with session_factory() as session:
+            submission = await session.get(HomeworkSubmission, w.submission_id)
+            assert submission is not None
+            waiting = await waiting_for_author(session, [submission])
+            held = await held_for_author(
+                session, tenant_id=w.tenant_id, account_id=w.author
+            )
+
+        assert waiting == frozenset()
+        assert held.count == 0
+
+    async def test_the_authors_count_their_missing_units_and_no_one_elses(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        from course_supporter.billing.held import held_for_author
+
+        w = await make_world(session_factory)
+        other = await make_world(session_factory)
+        for world in (w, other):
+            await course_rule(session_factory, world)
+            await self._hold(session_factory, world)
+        await buy(session_factory, w.author, 10)
+        async with session_factory() as session:
+            for world, p_units in ((w, 150), (other, 999)):
+                session.add(
+                    ActionCostEstimate(
+                        action_kind=ActionKind.REVIEW.value,
+                        action_key=str(world.submission_id),
+                        tenant_id=world.tenant_id,
+                        submission_id=world.submission_id,
+                        p_units=p_units,
+                        **ESTIMATE_ROW,
+                    )
+                )
+            await session.commit()
+        async with session_factory() as session:
+            held = await held_for_author(
+                session, tenant_id=w.tenant_id, account_id=w.author
+            )
+            created = await session.scalar(
+                select(HomeworkSubmission.created_at).where(
+                    HomeworkSubmission.id == w.submission_id
+                )
+            )
+            await session.execute(
+                delete(ActionCostEstimate).where(
+                    ActionCostEstimate.action_key.in_(
+                        [str(w.submission_id), str(other.submission_id)]
+                    )
+                )
+            )
+            await session.commit()
+
+        assert (held.count, held.missing_units) == (1, 150 - 10)
+        assert held.oldest_at == created
+
+
+async def test_off_nothing_is_held_for_the_author(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Charging off (production today): the author's empty account holds nothing."""
+    monkeypatch.setattr(charging, "charging_enabled", lambda settings=None: False)
+    w = await make_world(session_factory)
+    await course_rule(session_factory, w)
+
+    answer = await build_funds_port(session_factory).check_and_reserve(review(w), 1.0)
+
+    assert answer.decision is FundsDecision.ALLOWED
+    assert await movements_of_tenant(session_factory, w) == 0
+
+
+async def test_the_portal_says_whose_units_a_held_review_waits_for(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """BIL-E2, 5a item 2: ``awaiting_author_funds`` on the detail and the list;
+    ``awaiting_funds`` when the student pays."""
+    from httpx import ASGITransport, AsyncClient
+
+    from course_supporter.api.app import app
+    from course_supporter.api.deps import get_current_student
+    from course_supporter.auth.context import StudentContext
+    from course_supporter.storage.database import get_session
+
+    w = await make_world(session_factory)
+    async with session_factory() as session:
+        await session.execute(
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == w.submission_id)
+            .values(status="awaiting_funds")
+        )
+        await session.commit()
+
+    async def _session() -> Any:
+        async with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[get_current_student] = lambda: StudentContext(
+        student_id=w.student_id, tenant_id=w.tenant_id, login="s", display_name=None
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            own = await client.get(f"/api/v1/portal/submissions/{w.submission_id}")
+            await course_rule(session_factory, w)
+            detail = await client.get(f"/api/v1/portal/submissions/{w.submission_id}")
+            listed = await client.get(f"/api/v1/portal/tasks/{w.task_id}/submissions")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert own.status_code == 200, own.text
+    assert own.json()["presentation"] == {
+        "state": "awaiting_funds",
+        "reason_code": "awaiting_funds",
+    }
+    assert detail.json()["presentation"] == {
+        "state": "awaiting_funds",
+        "reason_code": "awaiting_author_funds",
+    }
+    assert listed.status_code == 200, listed.text
+    assert listed.json()[0]["presentation"]["reason_code"] == "awaiting_author_funds"
 
 
 async def test_the_portal_detail_carries_the_billing_note(

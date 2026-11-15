@@ -6,9 +6,11 @@ same pure estimate functions (:mod:`course_supporter.cost_estimate.actions`)
 with the same catalog, ladders and settings, and return E — so a lost row
 costs only the calibration, never the price (operator 2026-11-15, S6).
 
-When the computation itself fails, a review falls back to its path's money
-ceiling with a WARNING; a processing or a preparation returns ``None`` and is
-not charged (no estimate, no charge — operator 2026-11-15, S2).
+When the computation itself fails, a review says so — ``None``: its path's
+money ceiling stands for E (BIL-E2, 4a), with one WARNING
+``billing_quote_ceiling`` naming the reason; a processing or a preparation
+returns ``None`` and is not charged (no estimate, no charge — operator
+2026-11-15, S2).
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Final
 
 import structlog
 
@@ -36,6 +39,10 @@ def _now(at: datetime | None) -> datetime:
     return at or datetime.now(UTC)
 
 
+CEILING_WARNING: Final = "billing_quote_ceiling"
+"""The one WARNING of a review priced at its ceiling; ``reason`` says why."""
+
+
 def review_e_usd(
     *,
     stage_names: Sequence[str],
@@ -43,8 +50,14 @@ def review_e_usd(
     submission_chars: int,
     fallback_usd: Decimal,
     at: datetime | None = None,
-) -> Decimal:
-    """E of one review; the path's money ceiling if the estimate cannot be made."""
+) -> Decimal | None:
+    """E of one review; ``None`` — it cannot be made, the ceiling stands for it.
+
+    ``None`` is the mark "fell to the ceiling" (BIL-E2, 4a): the funds port
+    reads it as ``SubmissionContext.expected_usd`` does — ``fallback_usd``, the
+    path's money ceiling, is the price, the threshold and the reserve. The
+    WARNING names the reason (the error's class), never the student's work.
+    """
     try:
         return estimate_review(
             stage_names=stage_names,
@@ -54,14 +67,14 @@ def review_e_usd(
             submission_chars=submission_chars,
             at=_now(at),
         ).e_usd
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "billing_estimate_failed_ceiling_used",
-            action_kind="review",
+            CEILING_WARNING,
+            reason="estimate_failed",
+            error=type(exc).__name__,
             ceiling_usd=str(fallback_usd),
-            exc_info=True,
         )
-        return fallback_usd
+        return None
 
 
 def preparation_e_usd(

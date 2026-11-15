@@ -9,10 +9,12 @@ Requires ``docker compose up -d``; run with ``--run-db``.
 
 from __future__ import annotations
 
+import math
 import uuid
 from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,6 +23,7 @@ from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from course_supporter.api.app import app
 from course_supporter.api.deps import (
@@ -30,13 +33,21 @@ from course_supporter.api.deps import (
     get_s3_client,
 )
 from course_supporter.auth.context import StudentContext, TenantContext
-from course_supporter.billing import admin, charging, ledger, quotes
+from course_supporter.billing import admin, charging, estimates, ledger, quotes
 from course_supporter.billing.accounts import (
     get_or_create_author_account,
     get_or_create_student_account,
 )
 from course_supporter.billing.journal import add_months
 from course_supporter.billing.kinds import ActionKind, PayerSource, RuleScope
+from course_supporter.cost_estimate.settings import get_estimate_settings
+from course_supporter.homework.path_config import (
+    PathKey,
+    SubmissionState,
+    get_path_config,
+    path_ceiling_estimate,
+)
+from course_supporter.models.source import AssignmentType
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -270,9 +281,38 @@ class TestReviewEstimate:
             ).json()
 
         assert body["paid_by"] == "author"
+        assert body["price_units"] is None, "no numbers when the author pays"
         assert body["available_units"] is None
         assert body["missing_units"] is None
-        assert body["enough"] is True, "the author's units never stop a review"
+        assert body["enough"] is True, (
+            "the submission is always taken; whether its review starts is the "
+            "run's to decide (BIL-E2, part A item 6)"
+        )
+
+    async def test_the_author_pays_no_numbers_with_a_file_or_for_a_test(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        await course_rule(session_factory, world)
+        async with _client() as client:
+            with_file = (
+                await client.post(
+                    f"/api/v1/portal/tasks/{world.task_id}/estimate",
+                    files={"file": ("work.py", WORK, "text/x-python")},
+                )
+            ).json()
+            a_test = (
+                await client.post(f"/api/v1/portal/tasks/{world.test_id}/estimate")
+            ).json()
+
+        for body in (with_file, a_test):
+            assert (
+                body["price_units"],
+                body["available_units"],
+                body["missing_units"],
+                body["enough"],
+                body["paid_by"],
+            ) == (None, None, None, True, "author")
+        assert with_file["basis"] == "file"
 
     async def test_the_same_work_costs_nothing(
         self, world: World, monkeypatch: pytest.MonkeyPatch
@@ -326,6 +366,169 @@ class TestReviewEstimate:
             assert body["charging_enabled"] is False
             assert body["enough"] is True
             assert body["price_units"] > 0, "the price is still shown"
+
+
+# ── BIL-E2, 4a: the price could not be estimated — the ceiling ────────
+
+
+def _n_of(state_paths: list[SubmissionState] | None = None) -> int:
+    """N from the settings: the ceiling of a ``task`` path, in units, no margin.
+
+    One path — its own ceiling; several — the widest of them.
+    """
+    config = get_path_config()
+    states = state_paths or [SubmissionState.FIRST]
+    ceiling = max(
+        Decimal(str(path_ceiling_estimate(config, PathKey(AssignmentType.TASK, s))))
+        for s in states
+    )
+    k = get_estimate_settings().units_per_usd
+    assert k is not None
+    return math.ceil(ceiling * k)
+
+
+def _boom(*_: Any, **__: Any) -> Any:
+    raise RuntimeError("estimate broke")
+
+
+async def _aboom(*_: Any, **__: Any) -> Any:
+    raise RuntimeError("estimate broke")
+
+
+@pytest.mark.usefixtures("signed_in")
+class TestTheCeiling:
+    async def _estimate(self, world: World, *, with_file: bool = False) -> Any:
+        async with _client() as client:
+            return await client.post(
+                f"/api/v1/portal/tasks/{world.task_id}/estimate",
+                files={"file": ("work.py", WORK, "text/x-python")}
+                if with_file
+                else None,
+            )
+
+    async def test_the_estimate_fails(
+        self, world: World, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(estimates, "estimate_review", _boom)
+        with capture_logs() as logs:
+            response = await self._estimate(world)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert (body["basis"], body["price_units"]) == ("ceiling", _n_of())
+        ceiling = [e for e in logs if e["event"] == "billing_quote_ceiling"]
+        assert [e["reason"] for e in ceiling] == ["estimate_failed"], (
+            "one warning, with its reason"
+        )
+        assert "def add" not in str(ceiling), "never the work's text"
+
+    async def test_the_choice_of_the_path_fails(
+        self, world: World, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import course_supporter.homework.path_selection as selection
+
+        monkeypatch.setattr(selection, "choose_path", _aboom)
+        with capture_logs() as logs:
+            response = await self._estimate(world, with_file=True)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["basis"] == "ceiling"
+        assert body["price_units"] == _n_of(list(SubmissionState)), (
+            "no path chosen: the widest of the type's paths"
+        )
+        assert [e["reason"] for e in logs if e["event"] == "billing_quote_ceiling"] == [
+            "path_choice_failed"
+        ]
+
+    async def test_reading_the_file_fails(
+        self, world: World, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.api.routes import billing_estimates
+
+        monkeypatch.setattr(billing_estimates, "read_for_quote", _aboom)
+        response = await self._estimate(world, with_file=True)
+
+        assert response.status_code == 200, response.text
+        assert (response.json()["basis"], response.json()["price_units"]) == (
+            "ceiling",
+            _n_of(),
+        )
+
+    async def test_the_typical_size_fails(
+        self, world: World, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(quotes, "_typical_chars", _aboom)
+        response = await self._estimate(world)
+
+        assert (response.json()["basis"], response.json()["price_units"]) == (
+            "ceiling",
+            _n_of(),
+        )
+
+    async def test_no_rate_is_set(
+        self, world: World, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without K nothing can be priced — and nothing is charged (F is 0 too):
+        "no more than 0" is true."""
+        monkeypatch.setattr(charging, "units_per_usd", lambda: None)
+        response = await self._estimate(world)
+
+        assert response.status_code == 200, response.text
+        assert (response.json()["basis"], response.json()["price_units"]) == (
+            "ceiling",
+            0,
+        )
+
+    async def test_the_doors_refusal_stays_422(
+        self, world: World, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.api.routes import billing_estimates
+        from course_supporter.security.exceptions import (
+            ErrorCategory,
+            SecurityRejectedError,
+        )
+
+        async def refused(*_: Any, **__: Any) -> Any:
+            raise SecurityRejectedError(ErrorCategory.FORBIDDEN_TYPE, "x")
+
+        monkeypatch.setattr(billing_estimates, "read_for_quote", refused)
+        response = await self._estimate(world, with_file=True)
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "forbidden_type"
+
+    async def test_the_threshold_is_n(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(estimates, "estimate_review", _boom)
+        n = _n_of()
+        await buy(session_factory, world.student, n - 1)
+        short = (await self._estimate(world)).json()
+        await buy(session_factory, world.student, 1)
+        enough = (await self._estimate(world)).json()
+
+        assert (short["enough"], short["missing_units"]) == (False, 1)
+        assert (enough["enough"], enough["missing_units"]) == (True, 0)
+
+    async def test_the_author_pays_no_numbers_even_at_the_ceiling(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(estimates, "estimate_review", _boom)
+        await course_rule(session_factory, world)
+        body = (await self._estimate(world)).json()
+
+        assert (body["price_units"], body["enough"], body["paid_by"]) == (
+            None,
+            True,
+            "author",
+        )
 
 
 # ── B3: the refusal ───────────────────────────────────────────────────
@@ -585,9 +788,45 @@ class TestAuthorOutlook:
             await charged_reviews(session_factory, world.author, world.student, [700])
             low = (await client.get("/api/v1/billing/outlook")).json()
 
-        assert idle == {"days_left": None, "warning": None, "expiring_soon": None}
+        assert idle == {
+            "days_left": None,
+            "warning": None,
+            "expiring_soon": None,
+            "held_reviews": {"count": 0, "oldest_at": None, "missing_units": 0},
+        }
         assert (ok["days_left"], ok["warning"]) == (43, None)  # 860 / (140/7)
         assert (low["days_left"], low["warning"]) == (1, "runs_out_soon")  # 160/120
+
+
+@pytest.mark.usefixtures("signed_in")
+async def test_the_authors_outlook_shows_the_reviews_held_for_their_units(
+    session_factory: async_sessionmaker[AsyncSession], world: World
+) -> None:
+    """BIL-E2, 5a item 2: the author's panel warns of students' reviews waiting
+    for the author's units; held for the student's own units — not counted."""
+    async with session_factory() as session:
+        held = HomeworkSubmission(
+            tenant_id=world.tenant_id,
+            student_id=world.student_id,
+            course_node_id=world.course_id,
+            node_id=world.course_id,
+            authored_document_id=world.task_id,
+            file_url="s3://bucket/work.py",
+            file_type="text/plain",
+            original_filename="work.py",
+            status="awaiting_funds",
+        )
+        session.add(held)
+        await session.commit()
+    async with _client() as client:
+        own = (await client.get("/api/v1/billing/outlook")).json()["held_reviews"]
+        await course_rule(session_factory, world)
+        authors = (await client.get("/api/v1/billing/outlook")).json()["held_reviews"]
+
+    assert own == {"count": 0, "oldest_at": None, "missing_units": 0}
+    assert authors["count"] == 1
+    assert authors["oldest_at"] is not None
+    assert authors["missing_units"] > 0, "the author has no units"
 
 
 def test_the_new_billing_routes() -> None:

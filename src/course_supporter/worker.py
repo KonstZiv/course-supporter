@@ -180,7 +180,7 @@ async def startup(ctx: WorkerCtx) -> None:
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    # Registry, ladders, the six boot checks and the StageRouter: the same
+    # Registry, ladders, the seven boot checks and the StageRouter: the same
     # function the API lifespan runs (``boot``), so every worker-side consumer
     # (e.g. ``arq_process_homework``) reads the ladders the API reads.
     stage_router = boot.build_checked_stage_router(s, session_factory=session_factory)

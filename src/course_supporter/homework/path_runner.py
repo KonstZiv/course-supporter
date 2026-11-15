@@ -696,6 +696,11 @@ async def _open_the_doors(
     in the files, their names and the student's comment -- the same reading
     today's Mentor carries to Stage 2 and the trace.
 
+    One refusal is the new path's own (project chain K6): a project with no
+    new or changed text file against its base -- nothing of the student's to
+    review -- is refused here, before the first paid step, with the code
+    ``no_changes``. Today's Mentor does not refuse it.
+
     Returns ``(temp file, reading, language)``; a ``None`` reading means the
     doors refused and already wrote why.
     """
@@ -704,6 +709,8 @@ async def _open_the_doors(
         screen_student_note,
     )
     from course_supporter.homework.project_submission import (
+        NO_CHANGES,
+        persist_no_changes,
         process_project_submission,
     )
     from course_supporter.security.exceptions import SecurityRejectedError
@@ -750,6 +757,17 @@ async def _open_the_doors(
             base_corpus=True,
         )
         if project is None:
+            return file_path, None, languages.review
+        if not project.files:
+            # Project chain K6: no new or changed text file against the base —
+            # nothing of the student's to review. Refused HERE, the first place
+            # the student's files are known on this path and the last before
+            # anything is paid for: before the attempt ledger, the funds port's
+            # reserve and the first model stage (safety). Stored as the door's
+            # oversize refusal is, so it is no attempt either. Here and not in
+            # the project door itself: that door is today's Mentor's too.
+            await persist_no_changes(session, hw_repo, submission.id)
+            log.warning("path_door_refused", category=NO_CHANGES)
             return file_path, None, languages.review
         return (
             file_path,

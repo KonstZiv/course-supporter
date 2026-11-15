@@ -1,4 +1,4 @@
-"""The six boot checks live in one place, and no process runs its own.
+"""The seven boot checks live in one place, and no process runs its own.
 
 ``boot.build_checked_stage_router`` loads the registry and the ladders, runs the
 checks and builds the StageRouter for every process -- the API's
@@ -35,7 +35,8 @@ from fastapi import FastAPI
 
 from course_supporter import boot, language
 from course_supporter.config import get_settings
-from course_supporter.homework import path_config
+from course_supporter.homework import path_config, result_builders
+from course_supporter.models.source import AssignmentType
 
 # ``import course_supporter.api.app`` binds the package's ``app`` attribute --
 # the FastAPI instance -- not the module. import_module returns the module.
@@ -50,6 +51,7 @@ EXPECTED_CHECKS = frozenset(
         "validate_ladders_against_registry",
         "validate_path_config",
         "validate_stage_executors",
+        "validate_result_builders",
         "validate_ladder_prompts",
         "validate_phrasebook",
         "validate_native_names",
@@ -239,5 +241,34 @@ class TestLifespanActuallyRuns:
 
         try:
             self._boot_fails(monkeypatch, re.escape("Task type 'test' is in test mode"))
+        finally:
+            path_config.get_path_config(real)
+
+    def test_a_type_on_the_new_path_without_a_builder_stops_the_boot(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Project chain K6, lock b: ``project`` served by the new path while
+        the builders' table has no line for it refuses the start, by name."""
+        real = get_settings().submission_paths_config_path
+        raw = yaml.safe_load(real.read_text(encoding="utf-8"))
+        raw["task_types"]["project"]["served_by"] = "new_path"
+        broken = tmp_path / "submission_paths.yaml"
+        broken.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+        monkeypatch.setattr(get_settings(), "submission_paths_config_path", broken)
+        monkeypatch.setattr(path_config, "_config", None)
+        shipped = result_builders.get_result_builder
+        monkeypatch.setattr(
+            result_builders,
+            "get_result_builder",
+            lambda task_type: (
+                None if task_type is AssignmentType.PROJECT else shipped(task_type)
+            ),
+        )
+
+        try:
+            self._boot_fails(
+                monkeypatch,
+                re.escape("served by the new path without a result builder: 'project'"),
+            )
         finally:
             path_config.get_path_config(real)

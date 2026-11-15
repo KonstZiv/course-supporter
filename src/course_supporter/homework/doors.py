@@ -29,7 +29,8 @@ Interface:
       doors add for the models that review the work.
       :attr:`DoorReading.student_files_text` is its twin for a project on the
       new path (chain K4): the student's files alone, without the delta
-      context's trusted block and the author's files.
+      context's trusted block and the author's files -- a large changed file
+      by the lines the student added or changed (chain K6).
     * :func:`screen_student_note` — the comment through the one text screen,
       for its flags (task 11, decision 10).
     * :func:`persist_door_refusal` — the one shape a refusal at the doors is
@@ -97,6 +98,12 @@ class DoorReading:
             file of the work. Read only for the new path and only after the
             size check; empty for today's Mentor, a project without a base
             and every other type.
+        shown_as_diff: The paths of a project's changed files the delta
+            context shows as a unified diff rather than whole -- larger on
+            the student's side than
+            :data:`~course_supporter.homework.mentor_context.H_C_WHOLE_MAX_BYTES`,
+            the context's own threshold (project chain K6). Read by
+            :attr:`student_files_text` alone; empty for every other type.
     """
 
     text: str
@@ -105,6 +112,7 @@ class DoorReading:
     flags: tuple[ScreenFlag, ...] = ()
     files: tuple[WorkFile, ...] = ()
     base_files: tuple[WorkFile, ...] = ()
+    shown_as_diff: frozenset[str] = frozenset()
 
     @property
     def safety_text(self) -> str:
@@ -138,11 +146,29 @@ class DoorReading:
         neighbour, no block naming what was not opened (chain K4, as
         :attr:`safety_text` for that block). Today's Mentor does not read it:
         its door carries no files.
+
+        A changed file the context shows as a diff (:attr:`shown_as_diff`)
+        comes under its frame with the lines the student added or changed
+        alone -- the ``+`` lines of its diff with the base's version, without
+        the diff's frames and without a line of the author's
+        (:func:`~course_supporter.homework.mentor_context.students_lines`;
+        chain K6): the check reads the student's code and nothing else, and a
+        large file kept whole could not fit its input. With no text of the
+        base's version (:attr:`base_files`) the file comes whole. A new file
+        and a changed file under the threshold come whole, byte for byte.
         """
+        from course_supporter.homework.mentor_context import students_lines
         from course_supporter.homework.text_budget import ENTRY_FRAME
 
+        base = {file.name: file.text for file in self.base_files}
+
+        def body(file: WorkFile) -> str:
+            if file.name in self.shown_as_diff and file.name in base:
+                return students_lines(base[file.name], file.text)
+            return file.text
+
         return "\n".join(
-            ENTRY_FRAME.format(name=file.name) + file.text for file in self.files
+            ENTRY_FRAME.format(name=file.name) + body(file) for file in self.files
         )
 
 

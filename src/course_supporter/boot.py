@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from course_supporter.homework.path_config import get_path_config, validate_path_config
 from course_supporter.homework.path_stages import validate_stage_executors
+from course_supporter.homework.result_builders import validate_result_builders
 from course_supporter.language import get_language_registry, validate_native_names
 from course_supporter.llm.factory import create_stage_router
 from course_supporter.llm.ladder_config import (
@@ -39,7 +40,7 @@ def build_checked_stage_router(
     *,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> StageRouter:
-    """Load registry + ladders, run the six boot checks, build the router.
+    """Load registry + ladders, run the seven boot checks, build the router.
 
     Any check that fails raises, and the raise stops the calling process
     before it serves a request or takes a job. ``session_factory`` is the
@@ -67,6 +68,10 @@ def build_checked_stage_router(
     # A described stage nobody can run is the same kind of hole as a missing
     # field, and stops the boot for the same reason (mentor-rebuild task 03).
     validate_stage_executors(path_config.stages)
+    # Its twin for the end of a path (project chain K6): a type served by the
+    # new path without a result builder would finish "reviewed" with no
+    # review written. Refused here, before any submission is routed.
+    validate_result_builders(path_config)
     # Task 04's three checks, in the same place and for the same reason as the
     # two above: a hole in configuration stops the boot instead of surfacing in
     # a student's review. Every ladder prompt is read here (``DD-SP-AP``, half

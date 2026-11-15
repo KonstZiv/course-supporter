@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         environment=str(settings.environment),
         log_level=settings.log_level,
     )
-    # Registry, ladders, the six boot checks and the StageRouter: the same
+    # Registry, ladders, the seven boot checks and the StageRouter: the same
     # function every worker runs at its startup (``boot``).
     app.state.stage_router = boot.build_checked_stage_router(
         settings, session_factory=async_session

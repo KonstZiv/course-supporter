@@ -26,7 +26,9 @@ worker hit, 1A). Deterministic, zero LLM. It:
    the base, as the screen read them (project chain K1) -- and, when the
    caller asks for it, the text of every file of the base, read as the
    student's files are, so a quote of the author's code can be told apart
-   from the student's (chain K3). Today's Mentor reads neither: the text, the
+   from the student's (chain K3); and names the changed files the context
+   shows as a diff, which the new path's safety check reads by the student's
+   lines alone (chain K6). Today's Mentor reads none of it: the text, the
    safety text and its review are what they were.
 
 The context is the H2-budgeted trusted/untrusted delta assembly: a
@@ -53,6 +55,7 @@ from course_supporter.homework.doors import (
     persist_door_refusal,
 )
 from course_supporter.homework.mentor_context import (
+    H_C_WHOLE_MAX_BYTES,
     ReadText,
     Side,
     build_mentor_context,
@@ -309,6 +312,7 @@ async def process_project_submission(
         flags=screen.flags,
         files=files,
         base_files=base_files,
+        shown_as_diff=_shown_as_diff(delta, snapshot.manifest),
     )
 
 
@@ -334,6 +338,24 @@ def _student_work(
         if text is not None:
             files.append(WorkFile(path, text, entry.cls is not EntryClass.DOCUMENT))
     return tuple(files)
+
+
+def _shown_as_diff(delta: Delta, sub_manifest: Manifest) -> frozenset[str]:
+    """The changed files the delta context shows as a diff (chain K6).
+
+    The rule the context is built by (``mentor_context._changed_block``): a
+    changed file larger than :data:`H_C_WHOLE_MAX_BYTES` on the submission's
+    side, by its manifest's size, is a diff; at or under it, whole. On the
+    same number, so the safety check reads by the student's lines exactly
+    the files the reviewing models read as a diff
+    (:attr:`DoorReading.student_files_text`).
+    """
+    sub_by = {entry.path: entry for entry in sub_manifest.included}
+    return frozenset(
+        path
+        for path in delta.changed
+        if path in sub_by and sub_by[path].size > H_C_WHOLE_MAX_BYTES
+    )
 
 
 def _read_base_corpus(
@@ -469,6 +491,40 @@ def _name_flags(path: str) -> tuple[ScreenFlag, ...]:
     return screen_text(path, name=path, mode=_MODE, where="name").flags
 
 
+NO_CHANGES: Final = "no_changes"
+"""The category of a project refused for holding no change of the student's.
+
+Project chain K6: on the new path a project whose reading has no new or
+changed text file against the author's base (:attr:`DoorReading.files` empty
+-- the student changed nothing, only deleted files, or changed binary files
+alone) is refused before anything is paid for. Stored where the oversize
+refusal is (:func:`persist_no_changes`), and read back by the portal as its
+reason code (``api/routes/_portal_shared.py::curated_rejection``).
+"""
+
+
+async def persist_no_changes(
+    session: AsyncSession, hw_repo: HomeworkRepository, sid: uuid.UUID
+) -> None:
+    """Refuse a project without a change of the student's, as an oversize one.
+
+    The same record as the oversize refusal (:func:`_persist_rejection`):
+    ``rejected``, the reason in ``error_message``, and in ``safety_result``
+    the source ``normalizer`` with the category :data:`NO_CHANGES` -- the code
+    the portal phrases. No ``details``: there are no specifics to show.
+    Called by the new path's door alone
+    (``homework/path_runner.py::_open_the_doors``); today's Mentor never
+    refuses a project for it.
+    """
+    await _persist_rejection(
+        session,
+        hw_repo,
+        sid,
+        f"{NO_CHANGES}: no new or changed text file against the base",
+        category=NO_CHANGES,
+    )
+
+
 def _grouped(n: int) -> str:
     """Thousands-separated number for the curated ``details`` string.
 
@@ -497,7 +553,8 @@ async def _persist_rejection(
     the interface falls back to the bare status phrase (DD-6-Z). The structural
     rejections above still pass neither -- their reasons carry library
     vocabulary and have no phrase in the portal dictionary yet, so the debt is
-    closed only for the one category that does.
+    closed only for the categories that do: the oversize refusal and the new
+    path's refusal of a project without a change (:data:`NO_CHANGES`).
     """
     safety: dict[str, Any] = {"source": "normalizer", "reason": reason}
     if category is not None:

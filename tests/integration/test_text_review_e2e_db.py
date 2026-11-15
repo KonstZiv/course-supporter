@@ -360,7 +360,10 @@ class _PortDouble:
         raise AssertionError("the submission path must not use the version operations")
 
     async def account_version_work_cost(
-        self, context: VersionWorkContext, actual_usd: float
+        self,
+        context: VersionWorkContext,
+        actual_usd: float,
+        outcome: SubmissionOutcome = SubmissionOutcome.COMPLETED,
     ) -> None:
         raise AssertionError("the submission path must not use the version operations")
 
@@ -562,7 +565,7 @@ async def _run(
             return_value=config,
         ),
         patch(
-            "course_supporter.homework.path_runner.AlwaysEnoughFundsPort",
+            "course_supporter.homework.path_runner.build_funds_port",
             return_value=port or _PortDouble(),
         ),
         patch(

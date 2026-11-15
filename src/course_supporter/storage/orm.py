@@ -4438,7 +4438,8 @@ class BillingAuditEntry(Base):
         String(64),
         comment="What was done, e.g. author_settings.update, payment_rule.create, "
         "payment_rule.end, account.anonymize, account.test_purchase, "
-        "batch.admin_credit, batch.invoice_credit, dispute.lost, dispute.won.",
+        "batch.admin_credit, batch.invoice_credit, dispute.lost, dispute.won, "
+        "refund.order_hold, refund.order_release.",
     )
     entity: Mapped[str] = mapped_column(
         String(32),
@@ -4653,6 +4654,17 @@ class BillingRefund(Base):
             "provider_adjustment_id",
             name="uq_billing_refunds_provider_adjustment",
         ),
+        CheckConstraint(
+            "provider_adjustment_id IS NOT NULL OR provider_order_id IS NOT NULL",
+            name="ck_billing_refunds_key",
+        ),
+        Index(
+            "uq_billing_refunds_order_hold",
+            "provider",
+            "provider_order_id",
+            unique=True,
+            postgresql_where=text("state = 'held' AND provider_order_id IS NOT NULL"),
+        ),
         {
             "comment": "Refund or dispute of unused units of a purchase batch "
             "(BIL-B, BIL-PAY): held while the provider reviews it (or the dispute "
@@ -4695,10 +4707,20 @@ class BillingRefund(Base):
         String(32),
         comment="The payment provider the refund goes through: the batch's.",
     )
-    provider_adjustment_id: Mapped[str] = mapped_column(
+    provider_adjustment_id: Mapped[str | None] = mapped_column(
         String(64),
+        nullable=True,
         comment="The provider's adjustment (refund) id, or its dispute id; "
-        "unique per provider.",
+        "unique per provider. NULL for a hold by order (BIL-E) until the "
+        "provider's refund.created names the refund.",
+    )
+    provider_order_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="A hold by order (BIL-E): the provider's order (Creem: order.id, "
+        "the batch's provider_transaction_id) whose units the administrator "
+        "holds before refunding it in the provider's dashboard; one held per "
+        "order. NULL for any other refund or dispute.",
     )
     state: Mapped[str] = mapped_column(
         String(16),

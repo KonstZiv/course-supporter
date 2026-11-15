@@ -81,6 +81,19 @@ dispute.lost / dispute.won; ending it again the same way changes nothing.
     dispute-won  --dispute disp_6vSsOdTANP5PhOzuDlUuXE [--provider creem] \
         --actor kostiantyn
 
+Refunds a user asked for (BIL-E, operator 2026-11-14/15). Creem's API makes
+no refunds: they are made in its dashboard. First hold the units of the
+purchase by its ORDER (Creem's order id, ord_…) — only free units of a valid
+batch — then refund the money at Creem; its refund.created takes
+ceil(amount refunded x units of the batch ÷ amount paid) units, no more than
+held, and frees the rest of the hold. Without the hold the same event takes
+the units by itself — the hold keeps them from being spent in between.
+Audited as refund.order_hold / refund.order_release:
+    refund-hold    --order ord_6vSsOdTANP5PhOzuDlUuXE --units 250 \
+        [--provider creem] --reason "the user asked, ticket 42" --actor kostiantyn
+    refund-release --order ord_6vSsOdTANP5PhOzuDlUuXE [--provider creem] \
+        --actor kostiantyn      # the refund did not happen
+
 Anonymization, AFTER the tenant or the student was deleted by hand (there is
 no account-deletion flow yet; when one appears it calls the same functions).
 It closes and anonymizes the owner's accounts and ends the active payment
@@ -140,7 +153,7 @@ from course_supporter.billing.errors import (
     BillingInvalidError,
     BillingNotFoundError,
 )
-from course_supporter.billing.kinds import ActionKind, Benefit, RuleScope
+from course_supporter.billing.kinds import ActionKind, Benefit, MovementKind, RuleScope
 from course_supporter.billing.payments import invoice
 from course_supporter.billing.periodic import BILLING_TASKS
 from course_supporter.config import get_settings
@@ -240,10 +253,32 @@ def _balance_line(account_id: uuid.UUID, view: ledger.Balance) -> str:
     )
 
 
+MOVEMENT_WORDS: dict[MovementKind, str] = {
+    MovementKind.CREDIT: "units arrived (a purchase or a credit)",
+    MovementKind.RESERVE: "held for an action at its start",
+    MovementKind.RESERVE_RELEASE: "free again: the rest of a reserve",
+    MovementKind.DEBIT: "charged for an action",
+    MovementKind.DIFFERENCE_ARISEN: "owed: the action cost more than was there",
+    MovementKind.DIFFERENCE_REPAID: "repaid what was owed",
+    MovementKind.BATCH_EXPIRED: "burned: the batch expired",
+    MovementKind.DIFFERENCE_ANNULLED: "owed no more: the difference annulled",
+    MovementKind.BENEFIT_COVERED: "covered by the author's benefit",
+    MovementKind.PLATFORM_COVERED: (
+        "covered by the platform: the cost over the reserve, or a re-processing"
+    ),
+    MovementKind.REFUND_HOLD: "held for a refund or a dispute",
+    MovementKind.REFUND_COMPLETED: "refunded: gone from the batch",
+    MovementKind.REFUND_REJECTED: "free again: the refund or hold did not happen",
+}
+"""What each kind of movement means, for a person reading a statement (BIL-E)."""
+
+
 def _movement_line(m: BillingMovement) -> str:
     action = f"{m.action_kind}:{m.action_key}" if m.action_kind else "-"
+    words = MOVEMENT_WORDS.get(MovementKind(m.kind), m.kind)
     return (
         f"{m.created_at:%Y-%m-%d %H:%M:%S}  {m.kind:<19} {m.units:>7}  "
+        f"({words})  "
         f"batch={m.batch_id or '-'}  action={action}  "
         f"for={m.beneficiary_account_id or '-'}  source={m.payer_source or '-'}  "
         f"rule={m.rule_id or '-'}  actor={m.actor or '-'}"
@@ -448,6 +483,46 @@ async def _end_dispute(
     return (
         head
         + "\n"
+        + _balance_line(
+            refund.account_id, await ledger.balance(session, refund.account_id)
+        )
+    )
+
+
+async def refund_hold(session: AsyncSession, args: argparse.Namespace) -> str:
+    """Hold units of an order's purchase before refunding it at the provider."""
+    refund, created = await admin.hold_refund_by_order(
+        session,
+        provider=args.provider,
+        order_id=args.order,
+        units=args.units,
+        reason=args.reason,
+        actor=args.actor,
+    )
+    head = (
+        f"held {refund.units} units of {refund.provider} order {args.order}  "
+        f"batch {refund.batch_id}  (refund {refund.amount_minor} "
+        f"{refund.currency} minor units at the provider now)"
+        if created
+        else f"{refund.provider} order {args.order} was already held for "
+        f"{refund.units} units; nothing changed"
+    )
+    return (
+        head
+        + "\n"
+        + _balance_line(
+            refund.account_id, await ledger.balance(session, refund.account_id)
+        )
+    )
+
+
+async def refund_release(session: AsyncSession, args: argparse.Namespace) -> str:
+    """The refund did not happen: the order's held units are free again."""
+    refund = await admin.release_refund_by_order(
+        session, provider=args.provider, order_id=args.order, actor=args.actor
+    )
+    return (
+        f"released {refund.units} units of {refund.provider} order {args.order}\n"
         + _balance_line(
             refund.account_id, await ledger.balance(session, refund.account_id)
         )
@@ -904,6 +979,8 @@ COMMANDS: dict[str, Handler] = {
     "anonymize-tenant": anonymize_tenant,
     "credit": credit,
     "credit-invoice": credit_invoice,
+    "refund-hold": refund_hold,
+    "refund-release": refund_release,
     "test-purchase": mark_test_purchase,
     "dispute-lost": dispute_lost,
     "dispute-won": dispute_won,
@@ -998,6 +1075,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--currency", required=True, help="ISO 4217 code, e.g. EUR")
     p.add_argument("--invoice", required=True, help="the invoice's number")
+
+    p = command("refund-hold", "hold an order's units before its refund", changes=True)
+    p.add_argument("--order", required=True, help="the provider's order id")
+    p.add_argument("--units", required=True, type=int)
+    p.add_argument("--provider", default="creem", help="the provider (creem)")
+    p.add_argument("--reason", required=True, help="why the user is refunded")
+
+    p = command("refund-release", "the refund did not happen", changes=True)
+    p.add_argument("--order", required=True, help="the provider's order id")
+    p.add_argument("--provider", default="creem", help="the provider (creem)")
 
     for name, help_ in (
         ("dispute-lost", "a dispute lost: its held units leave the batch"),

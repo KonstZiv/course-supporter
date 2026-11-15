@@ -130,6 +130,11 @@ class ErrorCategory(StrEnum):
     # and never read, stored in a snapshot or shown to a model (task 11,
     # decision 6).
     MAY_CONTAIN_SECRETS = "may_contain_secrets"
+    # Not a security verdict: the payer of an author's own action (material
+    # processing) cannot cover its price and has no credit (BIL-E). The job
+    # fails with it before its first paid step; the material stays and is
+    # processed again (``POST /documents/{id}/retry``) after a purchase.
+    INSUFFICIENT_UNITS = "insufficient_units"
 
 
 class SecurityRejectedError(Exception):

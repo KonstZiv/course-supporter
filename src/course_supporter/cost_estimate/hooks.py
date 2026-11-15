@@ -7,7 +7,8 @@ bound by its rule: it never raises, and it writes in its own transaction.
 * :func:`shadow_review` — the new review path, once the submission is taken
   onto it and before its first stage (``homework/path_runner.py``).
 * :func:`shadow_processing` — a material processor, once the material's cost
-  drivers are known and before its first paid step (``ingestion/*``).
+  drivers are known and before its first paid step (``ingestion/*``); the
+  processing's charge starts right after it (BIL-E, ``billing.funds``).
 * :func:`shadow_task_preparation` — before ``criteria_decomposition`` run for
   the new path, and before ``key_explanation``.
 * :func:`shadow_node_summary_regeneration` — a ``node_summary_regeneration``
@@ -122,6 +123,36 @@ async def shadow_processing(
         action_key=processing_key(job_id),
         tenant_id=get_current_tenant_id(),
         job_id=job_id,
+        authored_document_id=_document_id(source),
+    )
+    await _charge_processing(kind, factors, job_id, source)
+
+
+async def _charge_processing(
+    kind: str,
+    factors: Callable[[], MaterialFactors],
+    job_id: uuid.UUID,
+    source: object,
+) -> None:
+    """The processing's threshold and reserve (BIL-E), after its estimate.
+
+    The estimate above never raises; this may: an author without credit who
+    cannot cover the price fails the job here, before its first paid step
+    (:class:`~course_supporter.billing.funds.InsufficientUnitsError`). A
+    no-op while charging is off. Factors that cannot be read reserve nothing.
+    """
+    from course_supporter.billing.funds import processing_started
+
+    try:
+        known = factors()
+    except Exception:
+        logger.warning("billing_processing_factors_failed", kind=kind, exc_info=True)
+        return
+    await processing_started(
+        kind=kind,
+        factors=known,
+        job_id=job_id,
+        tenant_id=get_current_tenant_id(),
         authored_document_id=_document_id(source),
     )
 

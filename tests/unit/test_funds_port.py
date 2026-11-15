@@ -81,7 +81,10 @@ class _RefusingFundsPort:
         return self.answer
 
     async def account_version_work_cost(
-        self, context: VersionWorkContext, actual_usd: float
+        self,
+        context: VersionWorkContext,
+        actual_usd: float,
+        outcome: SubmissionOutcome = SubmissionOutcome.COMPLETED,
     ) -> None:
         self.heard_versions.append(("account_version_work_cost", context, actual_usd))
 
@@ -142,11 +145,13 @@ class TestVersionWorkContext:
     """Task 06 decision 1: work that is not a submission carries its own context."""
 
     def test_it_says_nothing_about_a_submission(self) -> None:
-        """The four fields are all there is — no student, no submission, no path.
+        """These fields are all there is — no student, no submission, no path.
 
         Asserted over the dataclass's fields rather than by reading the class:
         a field added later to "just carry" a submission id would make this
-        test red, which is the point.
+        test red, which is the point. BIL-E added three, none of them a
+        submission's identity: the version row (the key of the charge), WHO
+        asked (a submission or the author — a flag, not an id) and E.
         """
         fields = {f.name for f in dataclasses.fields(VersionWorkContext)}
 
@@ -155,6 +160,9 @@ class TestVersionWorkContext:
             "authored_document_id",
             "source_content_hash",
             "work_kind",
+            "reference_id",
+            "requested_by_submission",
+            "expected_usd",
         }
 
     def test_it_is_frozen(self) -> None:

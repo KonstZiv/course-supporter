@@ -54,13 +54,15 @@ from course_supporter.agents.key_explainer import (
     STAGE_NAME,
     KeyExplainerAgent,
 )
+from course_supporter.billing.estimates import preparation_e_usd
 from course_supporter.call_outcome import FundsDecision
 from course_supporter.cost_estimate.hooks import shadow_task_preparation
 from course_supporter.funds_port import (
-    AlwaysEnoughFundsPort,
     FundsPort,
+    SubmissionOutcome,
     VersionWorkContext,
     VersionWorkKind,
+    build_funds_port,
 )
 from course_supporter.homework.reference_key import AnswerKey, answers_digest
 from course_supporter.homework.reference_service import ReadOnlyQueue
@@ -90,6 +92,7 @@ async def arq_explain_key(
     ctx: dict[str, Any],
     job_id: str,  # UUID as string (ARQ JSON serialization)
     reference_id: str,  # UUID as string
+    requested_by_submission: bool = False,
 ) -> dict[str, Any]:
     """Write the explanations of one reference version, or fail it with a reason.
 
@@ -98,12 +101,17 @@ async def arq_explain_key(
     version's own state — ``pending → ready | failed(reason)`` — because that
     is what the author reads, and it outlives the job row.
 
+    ``requested_by_submission`` — a student's submission asked for the work
+    (after its review was delivered): the author's units never stop it
+    (BIL-E). False — the author asked, and the threshold of the author's own
+    action applies.
+
     Returns the dict the seam persists to ``Job.result_data``.
     """
     log = logger.bind(job_id=job_id, reference_id=reference_id)
     session_factory = ctx["session_factory"]
     stage_router = ctx["stage_router"]
-    port: FundsPort = ctx.get("funds_port") or AlwaysEnoughFundsPort(session_factory)
+    port: FundsPort = ctx.get("funds_port") or build_funds_port(session_factory)
 
     async with session_factory() as session:
         repo = TaskReferenceRepository(session)
@@ -124,11 +132,24 @@ async def arq_explain_key(
             log.info("key_explanation.superseded", version=version.version)
             return {"state": "failed", "reason": _KEY_MOVED, "calls": 0}
 
+        # The text is read before the money question now: E is priced on it
+        # (BIL-E). Reading it calls no model and costs nothing.
+        task_text = (
+            key.written_text
+            if key.written_text is not None
+            else await _task_text(session, document.id)
+        )
+        task_chars = len(task_text) + len(json.dumps(key.answers, default=str))
         context = VersionWorkContext(
             tenant_id=await _tenant_of(session, document),
             authored_document_id=document.id,
             source_content_hash=version.source_content_hash,
             work_kind=VersionWorkKind.KEY_EXPLANATION,
+            reference_id=version.id,
+            requested_by_submission=requested_by_submission,
+            expected_usd=preparation_e_usd(
+                kind="key_explanation", task_chars=task_chars
+            ),
         )
 
         # (3) Money before models.
@@ -143,17 +164,12 @@ async def arq_explain_key(
             return {"state": "failed", "reason": reason, "calls": 0}
 
         # (4) The only paid step.
-        task_text = (
-            key.written_text
-            if key.written_text is not None
-            else await _task_text(session, document.id)
-        )
         # Shadow price estimate (BIL-D): never raises, its own transaction.
         await shadow_task_preparation(
             kind="key_explanation",
             authored_document_id=document.id,
             version=str(version.id),
-            task_chars=len(task_text) + len(json.dumps(key.answers, default=str)),
+            task_chars=task_chars,
             tenant_id=context.tenant_id,
             session_factory=session_factory,
         )
@@ -178,9 +194,12 @@ async def arq_explain_key(
             )
             await repo.mark_failed(version.id, reason)
             await session.commit()
-            # (5) A failed generation is not a free one.
+            # (5) What a failed generation spent is reported, and it is
+            # charged nothing: a failure releases its reserve (KD19, BIL-E S4).
             await port.account_version_work_cost(
-                context, await _spent_on(session, uuid.UUID(job_id))
+                context,
+                await _spent_on(session, uuid.UUID(job_id)),
+                SubmissionOutcome.FAILED,
             )
             log.warning(
                 "key_explanation.failed",

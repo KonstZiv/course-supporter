@@ -1,4 +1,4 @@
-"""The four periodic tasks of billing (BIL-B part 2), for the scheduler.
+"""The periodic tasks of billing (BIL-B part 2, BIL-E), for the scheduler.
 
 Each body calls the billing function that does the work and adds nothing to
 its logic; the lock, the transaction and the log line are the runner's
@@ -21,6 +21,14 @@ its logic; the lock, the transaction and the log line are the runner's
                               providers' webhook events naming no live account,
                               five years after they arrived (``provider_events``).
                               Nightly (UTC).
+    billing_resume_funded   — :mod:`.resume_funded` (BIL-E): reviews held in
+                              ``awaiting_funds`` whose payer can pay now get a
+                              new job. Every 5 minutes: a purchase lands within
+                              seconds and the student waits for the review, so
+                              the wait after it stays short, while a run is one
+                              indexed read of the held reviews. Only while
+                              charging is on; dispatches nothing from the
+                              script (no queue there).
 """
 
 from __future__ import annotations
@@ -78,6 +86,17 @@ async def _stale_reserves(run: TaskContext) -> TaskResult:
             dry_run=run.dry_run,
         )
     return TaskResult(len(released), {"units": sum(d.released_units for d in released)})
+
+
+async def _resume_funded(run: TaskContext) -> TaskResult:
+    from course_supporter.billing.charging import charging_enabled
+    from course_supporter.billing.resume_funded import resume_funded
+
+    if not charging_enabled(run.settings) or run.redis is None:
+        return TaskResult(0, {"skipped": 1})
+    async with run.session_factory() as session:
+        done = await resume_funded(session, run.redis, dry_run=run.dry_run)
+    return TaskResult(len(done.resumed), {"looked_at": done.looked_at})
 
 
 async def _purge(run: TaskContext) -> TaskResult:
@@ -198,6 +217,23 @@ BILLING_STALE_RESERVES = PeriodicTask(
     cron=_stale_cron,
     summary="release active reserves older than the threshold",
 )
+
+
+def _resume_enabled(s: Settings) -> bool:
+    return s.periodic_billing_resume_funded_enabled
+
+
+def _resume_cron(s: Settings) -> str:
+    return s.periodic_billing_resume_funded_cron
+
+
+BILLING_RESUME_FUNDED = PeriodicTask(
+    name="billing_resume_funded",
+    body=_resume_funded,
+    enabled=_resume_enabled,
+    cron=_resume_cron,
+    summary="continue reviews held for funds once their payer can pay",
+)
 BILLING_PURGE = PeriodicTask(
     name="billing_purge",
     body=_purge,
@@ -211,4 +247,5 @@ BILLING_TASKS: tuple[PeriodicTask, ...] = (
     BILLING_ANNUL,
     BILLING_STALE_RESERVES,
     BILLING_PURGE,
+    BILLING_RESUME_FUNDED,
 )

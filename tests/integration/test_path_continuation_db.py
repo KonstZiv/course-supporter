@@ -255,13 +255,13 @@ class TestTopUp:
             )
             arq.enqueue_job.assert_not_awaited()
 
-    def test_nothing_in_the_codebase_calls_it_yet(self) -> None:
-        """By design: the seam exists before the thing that will raise the event.
+    def test_only_billing_calls_it(self) -> None:
+        """The seam existed before the thing that raises the event; BIL-E is it.
 
-        A billing adapter is out of this sprint (``SPRINT.md`` section 1), so
-        the top-up entry has no production caller — and saying so in a test is
-        how the day it gains one becomes a deliberate change rather than a
-        detail nobody noticed.
+        Its one production caller is the periodic continuation of held reviews
+        (``billing/resume_funded.py``, A5) — saying so in a test keeps the day
+        it gains another a deliberate change rather than a detail nobody
+        noticed.
         """
         import course_supporter
 
@@ -274,7 +274,7 @@ class TestTopUp:
             if "resume_after_top_up" in line
         ]
 
-        assert callers == []
+        assert {c.split(":")[0] for c in callers} == {"billing/resume_funded.py"}
 
 
 class TestSweepFrozenRevisions:

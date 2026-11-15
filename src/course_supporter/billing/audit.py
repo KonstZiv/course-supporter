@@ -116,6 +116,7 @@ def refund_snapshot(refund: BillingRefund) -> dict[str, Any]:
         "currency": refund.currency,
         "provider": refund.provider,
         "provider_adjustment_id": refund.provider_adjustment_id,
+        "provider_order_id": refund.provider_order_id,
         "state": refund.state,
         "decided_at": _instant(refund.decided_at),
     }

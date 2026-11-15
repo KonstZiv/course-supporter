@@ -144,7 +144,8 @@ class Settlement:
     benefit_units: int
     """Covered by the author's benefit (no units taken)."""
     platform_units: int
-    """Covered by the platform (re-processing; no units taken)."""
+    """Covered by the platform (re-processing, or the excess over the reserve
+    of a payer without credit; no units taken)."""
     charged_from_reserve: int
     charged_from_available: int
     released_units: int
@@ -551,6 +552,7 @@ async def settle(
     payer_source: PayerSource,
     rule_id: uuid.UUID | None = None,
     account_id: uuid.UUID | None = None,
+    excess_to_platform: bool = False,
     now: datetime | None = None,
 ) -> Settlement:
     """Charge an action that ended (models 3, 4, 5, 10).
@@ -562,6 +564,12 @@ async def settle(
     units; what is still missing is a difference against the payer; the rest
     of the reserve is released, and the released units repay older
     differences first.
+
+    ``excess_to_platform`` (BIL-E, operator 2026-11-11 and 2026-11-15): after
+    the benefit, only the action's reserve is charged; what the reserve does
+    not cover is a ``platform_covered`` movement (``payer_source=platform``)
+    — no charge beyond the reserve, no difference. For a student, and for an
+    author without credit; an author with credit keeps the difference.
 
     ``account_id`` (the payer) is needed only when the action has no reserve;
     with one, it must match. The movements carry ``beneficiary_account_id``
@@ -673,6 +681,17 @@ async def settle(
                 batch_id=batch_id,
                 action=action,
             )
+    if excess_to_platform and to_charge:
+        write(
+            session,
+            account_id=payer_id,
+            kind=MovementKind.PLATFORM_COVERED,
+            units=to_charge,
+            now=now,
+            action=action,
+            payment=Payment(beneficiary_account_id, PayerSource.PLATFORM, rule_id),
+        )
+        to_charge = 0
     for position in available(found_positions, now):
         if to_charge == 0:
             break

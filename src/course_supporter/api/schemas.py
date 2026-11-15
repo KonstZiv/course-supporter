@@ -2381,6 +2381,18 @@ class FeedbackTouch(BaseModel):
     updated_at: datetime
 
 
+class PortalBillingNote(BaseModel):
+    """Notification 6.3 (BIL-E): the review cost more than its reserve.
+
+    The student was charged ``charged_units`` (B, the reserve); the platform
+    took the rest of ``cost_units`` (F). The portal shows the words.
+    """
+
+    kind: Literal["cost_over_reserve"]
+    cost_units: int = Field(description="F: what the review cost, in units.")
+    charged_units: int = Field(description="B: what the student was charged.")
+
+
 class PortalSubmissionDetail(BaseModel):
     """One attempt — the full curated slice (Phase 6 T2 read-path detail).
 
@@ -2431,6 +2443,12 @@ class PortalSubmissionDetail(BaseModel):
     )
     rejection: PortalRejection | None = Field(
         default=None, description="Why the attempt was refused; null if it was not."
+    )
+    billing_note: PortalBillingNote | None = Field(
+        default=None,
+        description="BIL-E: the review cost more than the units held for it "
+        "and the platform took the rest; null otherwise, and always when the "
+        "author pays.",
     )
     not_opened: list[PortalNotOpened] = Field(
         default_factory=list,

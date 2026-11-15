@@ -207,7 +207,10 @@ class _RefusingFundsPort:
         return self.answer
 
     async def account_version_work_cost(
-        self, context: VersionWorkContext, actual_usd: float
+        self,
+        context: VersionWorkContext,
+        actual_usd: float,
+        outcome: SubmissionOutcome = SubmissionOutcome.COMPLETED,
     ) -> None:
         """Nothing was held."""
 

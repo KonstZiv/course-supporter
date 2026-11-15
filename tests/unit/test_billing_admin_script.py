@@ -429,3 +429,29 @@ def test_a_busy_or_failed_periodic_run_exits_with_1(
         code = billing_admin.main(["run-periodic", "--task", "billing_purge"])
     assert code == 1
     assert capsys.readouterr().err == message
+
+
+def test_every_kind_of_movement_has_words_in_the_statement() -> None:
+    """BIL-E (A7): a statement says what each movement means, new ones too."""
+    from course_supporter.billing.kinds import MovementKind
+    from course_supporter.storage.orm import BillingMovement
+
+    assert set(billing_admin.MOVEMENT_WORDS) == set(MovementKind)
+    line = billing_admin._movement_line(
+        BillingMovement(
+            account_id=uuid.uuid4(),
+            kind=MovementKind.PLATFORM_COVERED.value,
+            units=50,
+            action_kind="review",
+            action_key="k",
+            payer_source="platform",
+            created_at=datetime(2026, 11, 15, tzinfo=UTC),
+        )
+    )
+    assert "covered by the platform: the cost over the reserve" in line
+    assert "source=platform" in line
+
+
+def test_run_periodic_knows_the_resume_of_held_reviews() -> None:
+    args = _args("run-periodic", "--task", "billing_resume_funded", "--dry-run")
+    assert (args.task, args.dry_run) == ("billing_resume_funded", True)

@@ -72,6 +72,18 @@ class CodeSettings(_Frozen):
     calibrated: bool = False
 
 
+class NodeSummarySettings(_Frozen):
+    """What the regeneration of node summaries reads that the database lacks.
+
+    ``child_summary_chars`` — the size of a child's ``compressed_summary`` for
+    a child that has none yet (never generated), as the bottom-up prompt asks
+    for it.
+    """
+
+    child_summary_chars: int = Field(ge=0)
+    calibrated: bool = False
+
+
 class ProcessingSettings(_Frozen):
     """The cost drivers of processing an author's material, and its steps."""
 
@@ -79,6 +91,7 @@ class ProcessingSettings(_Frozen):
     video: VideoSettings
     denoise: DenoiseSettings
     code: CodeSettings
+    node_summary: NodeSummarySettings
     steps: dict[str, StepSettings]
 
 

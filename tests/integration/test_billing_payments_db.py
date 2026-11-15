@@ -63,6 +63,7 @@ from course_supporter.storage.orm import (
     BillingAccount,
     BillingAuditEntry,
     BillingBatch,
+    BillingCheckout,
     BillingConsent,
     BillingMovement,
     BillingProviderEvent,
@@ -185,6 +186,7 @@ async def world(
         for model, column in (
             (BillingMovement, BillingMovement.account_id),
             (BillingRefund, BillingRefund.account_id),
+            (BillingCheckout, BillingCheckout.account_id),
             (BillingBatch, BillingBatch.account_id),
             (BillingConsent, BillingConsent.account_id),
         ):
@@ -814,8 +816,9 @@ class TestPortalCheckout:
         assert request.provider_item == "fake_price_starter"
         assert request.language == "ukr"
         portal = get_settings().portal_base_url.rstrip("/")
+        ref = answer["checkout_ref"]
         assert request.success_url == (
-            f"{portal}/{world.tenant_id}/billing?checkout=success"
+            f"{portal}/{world.tenant_id}/billing/checkouts/{ref}"
         )
 
     @pytest.mark.parametrize(
@@ -900,7 +903,8 @@ class TestAuthorCheckout:
         assert request.account_id == author.id
         assert request.language is None
         base = get_settings().author_app_base_url.rstrip("/")
-        assert request.success_url == f"{base}/billing?checkout=success"
+        ref = request.checkout_ref
+        assert request.success_url == f"{base}/billing/checkouts/{ref}"
         [batch] = await _batches(session_factory, author.id)
         assert (batch.units, batch.provider) == (1000, FAKE)
 

@@ -19,7 +19,7 @@ Its webhook body (JSON)::
      "occurred_at": "<ISO 8601>", "data": {...}}
 
 * ``purchase.completed`` — ``data``: ``custom_data`` {``account_id``,
-  ``package_id``} (as the checkout sent them), ``transaction_id``,
+  ``package_id``, ``checkout_ref``} (as the checkout sent them), ``transaction_id``,
   ``line_id``, ``amount_minor``, ``currency``;
 * ``refund.approved`` / ``refund.rejected`` — ``adjustment_id``, and
   optionally ``transaction_id``, ``amount_minor``, ``currency``;
@@ -72,6 +72,7 @@ CHARGEBACK: Final = "chargeback.created"
 class _CustomData(BaseModel):
     account_id: str | None = None
     package_id: str | None = None
+    checkout_ref: str | None = None
 
 
 class _Purchase(BaseModel):
@@ -104,7 +105,7 @@ class _Envelope(BaseModel):
     data: dict[str, Any] = {}
 
 
-def _account(value: str | None) -> uuid.UUID | None:
+def _uuid(value: str | None) -> uuid.UUID | None:
     try:
         return uuid.UUID(value) if value else None
     except ValueError:
@@ -207,6 +208,7 @@ class FakeProvider:
                 "custom_data": {
                     "account_id": str(request.account_id),
                     "package_id": request.package.id,
+                    "checkout_ref": str(request.checkout_ref),
                 },
                 "transaction_id": f"fake_txn_{token}",
                 "line_id": f"fake_line_{token}",
@@ -240,7 +242,8 @@ class FakeProvider:
                 raise InvalidWebhookError("a purchase names no package")
             return PurchaseCompleted(
                 **common,
-                account_id=_account(paid.custom_data.account_id),
+                account_id=_uuid(paid.custom_data.account_id),
+                checkout_ref=_uuid(paid.custom_data.checkout_ref),
                 package_id=paid.custom_data.package_id,
                 amount_paid_minor=paid.amount_minor,
                 currency=paid.currency,
@@ -266,7 +269,7 @@ class FakeProvider:
             return Chargeback(
                 **common,
                 dispute_id=disputed.dispute_id or envelope.event_id,
-                account_id=_account(disputed.custom_data.account_id),
+                account_id=_uuid(disputed.custom_data.account_id),
                 transaction_id=disputed.transaction_id,
                 amount_minor=disputed.amount_minor,
                 currency=disputed.currency,

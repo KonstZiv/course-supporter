@@ -2768,3 +2768,27 @@ class BillingCheckoutResponse(BaseModel):
     provider: str = Field(description="The payment provider of the checkout.")
     checkout_id: str = Field(description="The provider's id of the checkout.")
     checkout_url: str = Field(description="Open it to pay.")
+    checkout_ref: uuid.UUID = Field(
+        description="The platform's own number of the checkout: the last "
+        "segment of the address the payer comes back to "
+        "({billing page}/checkouts/{checkout_ref}); ask its state by it."
+    )
+
+
+class BillingCheckoutStateResponse(BaseModel):
+    """GET /billing/checkouts/{checkout_ref}, GET /portal/billing/checkouts/
+    {checkout_ref}: where a checkout stands. Coming back from the provider
+    proves no payment; this does."""
+
+    state: Literal["pending", "credited", "failed"] = Field(
+        description="pending: no purchase yet (ask again; it stays pending if "
+        "the payer never paid); credited: the package's units arrived; failed: "
+        "the provider reported the payment failed (no provider reports it yet)."
+    )
+    package_id: str = Field(description="The package of the checkout.")
+    units: int | None = Field(
+        description="Credited: the units the purchase brought; null otherwise."
+    )
+    balance_after: int | None = Field(
+        description="Credited: the units available now; null otherwise."
+    )

@@ -21,7 +21,12 @@ One event, one transaction:
          and currency the provider says were paid, its transaction and line.
          No such account, or a closed one: the event FAILS with a WARNING and
          is answered 200 — the provider repeating it would not help; the row
-         waits for a person.
+         waits for a person. The batch is then linked to the checkout the
+         purchase names (:func:`.checkout.link_purchase`, by its
+         ``checkout_ref``), so the screen asking the checkout's state finds
+         it credited; a purchase that names no checkout, or not its own, is
+         credited all the same. No test-mode guard here: what was paid is
+         credited.
        * :class:`~.port.RefundApproved` / :class:`~.port.RefundRejected` —
          :func:`.refunds.refund_approve` / :func:`.refunds.refund_reject` of
          the provider's adjustment. An approval of an adjustment the journal
@@ -65,6 +70,7 @@ from course_supporter.billing import ledger, refunds
 from course_supporter.billing.errors import BillingError, BillingNotFoundError
 from course_supporter.billing.kinds import AccountStatus, EventState
 from course_supporter.billing.payments.catalog import Catalog
+from course_supporter.billing.payments.checkout import link_purchase
 from course_supporter.billing.payments.port import (
     Chargeback,
     ProviderEvent,
@@ -321,7 +327,7 @@ async def _credit(
         raise BillingNotFoundError(
             f"package {event.package_id!r} is not in the catalog"
         )
-    await ledger.credit_purchase(
+    credit = await ledger.credit_purchase(
         session,
         account_id=account.id,
         units=package.units,
@@ -332,6 +338,7 @@ async def _credit(
         provider_line_id=event.line_id,
         now=now,
     )
+    await link_purchase(session, provider=provider, event=event, batch=credit.batch)
     return EventState.PROCESSED, None
 
 

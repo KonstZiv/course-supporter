@@ -57,6 +57,7 @@ from course_supporter.storage.orm import (
     BillingAccount,
     BillingAuditEntry,
     BillingBatch,
+    BillingCheckout,
     BillingConsent,
     BillingDifference,
     BillingMovement,
@@ -301,6 +302,7 @@ async def world(
             (BillingRefund, BillingRefund.account_id),
             (BillingReservation, BillingReservation.account_id),
             (BillingDifference, BillingDifference.account_id),
+            (BillingCheckout, BillingCheckout.account_id),
             (BillingBatch, BillingBatch.account_id),
             (BillingConsent, BillingConsent.account_id),
         ):
@@ -469,10 +471,22 @@ class TestFullPath:
         [sent] = world.sent
         assert str(sent.url) == "https://test-api.creem.io/v1/checkouts"
         assert json.loads(sent.content)["product_id"] == "prod_starter_test"
-        assert world.metadata() == {
+        metadata = world.metadata()
+        ref = metadata["checkout_ref"]
+        assert metadata == {
             "account_id": str(batch.account_id),
             "package_id": "starter",
+            "checkout_ref": ref,
         }
+        # The number is in the path of the return address, never a parameter.
+        success_url = json.loads(sent.content)["success_url"]
+        assert success_url.endswith(f"/billing/checkouts/{ref}")
+        assert "?" not in success_url
+        # The purchase answered its checkout: the batch is linked to it.
+        async with session_factory() as session:
+            checkout = await session.get(BillingCheckout, uuid.UUID(ref))
+        assert checkout is not None
+        assert (checkout.provider, checkout.batch_id) == (CREEM, batch.id)
         # The purchase: a batch of provider creem, keyed by the order.
         assert (
             batch.units,

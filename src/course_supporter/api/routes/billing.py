@@ -27,6 +27,12 @@ Routes
   unavailable, 409 while the author has not agreed to the terms in force, 403
   while the provider is in test mode and the account is not marked for test
   purchases, 404 for a package not on sale or a provider not switched on.
+  The answer carries the checkout's own number (``checkout_ref``), which is
+  also the last segment of the address the author comes back to:
+  ``{AUTHOR_APP_BASE_URL}/billing/checkouts/{checkout_ref}``.
+- ``GET /billing/checkouts/{checkout_ref}`` — the state of the author's
+  checkout (pending | credited | failed); another's or an unknown one is 404
+  ``checkout_not_found``.
 
 Every refusal of a route but the webhook carries its reason code
 (``_billing_shared``).
@@ -53,6 +59,7 @@ from course_supporter.api.deps import (
 from course_supporter.api.routes._billing_shared import (
     CHECKOUT_REFUSALS,
     Refusal,
+    checkout_state_of,
     consent_required,
     open_checkout,
     packages_of,
@@ -63,6 +70,7 @@ from course_supporter.api.routes._billing_shared import (
 from course_supporter.api.schemas import (
     BillingCheckoutRequest,
     BillingCheckoutResponse,
+    BillingCheckoutStateResponse,
     BillingConsentRequest,
     BillingConsentResponse,
     BillingPackagesResponse,
@@ -254,9 +262,24 @@ async def post_author_checkout(
     author_app = get_settings().author_app_base_url.rstrip("/")
     return await open_checkout(
         body,
+        session=session,
         registry=registry,
         catalog=catalog,
         account=account,
         language=None,
         return_page=f"{author_app}/billing",
     )
+
+
+@router.get(
+    "/billing/checkouts/{checkout_ref}",
+    responses=responses(Refusal.CHECKOUT_NOT_FOUND),
+)
+async def get_author_checkout(
+    checkout_ref: str, tenant: PrepDep, session: SessionDep
+) -> BillingCheckoutStateResponse:
+    """The state of the author's checkout by its number."""
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
+    )
+    return await checkout_state_of(session, account, checkout_ref)

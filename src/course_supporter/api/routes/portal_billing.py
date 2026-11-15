@@ -19,7 +19,12 @@ Routes
   on), 409 while the student has not agreed to the terms in force, 403 while
   the provider is in test mode and the account is not marked for test
   purchases, 404 for a package not on sale or a provider not switched on,
-  else the link.
+  else the link and the checkout's own number (``checkout_ref``), which is
+  also the last segment of the address the student comes back to:
+  ``{PORTAL_BASE_URL}/{tenant_id}/billing/checkouts/{checkout_ref}``.
+- ``GET /portal/billing/checkouts/{checkout_ref}`` — the state of the
+  student's checkout (pending | credited | failed); another's or an unknown
+  one is 404 ``checkout_not_found``.
 
 Every refusal carries its reason code (``_billing_shared``).
 
@@ -46,6 +51,7 @@ from course_supporter.api.deps import (
 from course_supporter.api.routes._billing_shared import (
     CHECKOUT_REFUSALS,
     Refusal,
+    checkout_state_of,
     consent_required,
     open_checkout,
     packages_of,
@@ -56,6 +62,7 @@ from course_supporter.api.routes._billing_shared import (
 from course_supporter.api.schemas import (
     BillingCheckoutRequest,
     BillingCheckoutResponse,
+    BillingCheckoutStateResponse,
     BillingConsentRequest,
     BillingConsentResponse,
     BillingPackagesResponse,
@@ -190,9 +197,27 @@ async def post_billing_checkout(
     portal = settings.portal_base_url.rstrip("/")
     return await open_checkout(
         body,
+        session=session,
         registry=registry,
         catalog=catalog,
         account=account,
         language=student.preferred_language,
         return_page=f"{portal}/{student.tenant_id}/billing",
     )
+
+
+@router.get(
+    "/portal/billing/checkouts/{checkout_ref}",
+    responses=responses(Refusal.CHECKOUT_NOT_FOUND),
+)
+async def get_billing_checkout(
+    checkout_ref: str, student: StudentDep, session: SessionDep
+) -> BillingCheckoutStateResponse:
+    """The state of the student's checkout by its number."""
+    account = await find_active_account(
+        session,
+        kind=AccountKind.STUDENT,
+        tenant_id=student.tenant_id,
+        student_id=student.student_id,
+    )
+    return await checkout_state_of(session, account, checkout_ref)

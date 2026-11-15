@@ -10,6 +10,7 @@ Requires ``docker compose up -d``; run with ``--run-db``.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import uuid
 from collections.abc import AsyncGenerator, Iterator
@@ -467,3 +468,226 @@ async def test_the_packages_need_a_key_or_a_portal_session() -> None:
         portal = await client.get(f"{Who.STUDENT}/packages")
         author = await client.get(f"{Who.AUTHOR}/packages")
     assert (portal.status_code, author.status_code) == (401, 401)
+
+
+# ── The checkout's number and state ────────────────────────────────────
+
+
+def _page(world: World, who: str) -> str:
+    """The billing page the payer comes back to."""
+    settings = get_settings()
+    if who == Who.AUTHOR:
+        return f"{settings.author_app_base_url.rstrip('/')}/billing"
+    return f"{settings.portal_base_url.rstrip('/')}/{world.tenant_id}/billing"
+
+
+def _creem_paid(
+    creem: CreemProvider, metadata: dict[str, Any], order: str
+) -> tuple[dict[str, str], bytes]:
+    """Creem's checkout.completed of a checkout with this metadata, signed."""
+    body = json.dumps(
+        {
+            "id": f"evt_{order}",
+            "eventType": "checkout.completed",
+            "created_at": 1763200000000,
+            "object": {
+                "id": f"ch_{order}",
+                "object": "checkout",
+                "order": {
+                    "id": order,
+                    "amount_paid": 1198,
+                    "currency": "EUR",
+                    "status": "paid",
+                },
+                "units": 1,
+                "metadata": metadata,
+            },
+        }
+    ).encode()
+    return {"creem-signature": creem.sign(body)}, body
+
+
+async def _state(client: AsyncClient, who: str, ref: str) -> Response:
+    return await client.get(f"{who}/checkouts/{ref}")
+
+
+@pytest.mark.usefixtures("signed_in")
+class TestCheckout:
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_the_number_is_in_the_answer_the_return_path_and_the_metadata(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        who: str,
+    ) -> None:
+        creem = world.creem("https://test-api.creem.io/v1")
+        world.providers[:] = [creem]
+        async with _client() as client:
+            await _consent(client, who)
+            account_id = await _mark(session_factory, world, who)
+            response = await _buy(client, who)
+        assert response.status_code == 200, response.text
+        answer = response.json()
+        ref = answer["checkout_ref"]
+        assert uuid.UUID(ref)
+        [sent] = world.sent
+        payload = json.loads(sent.content)
+        assert payload["success_url"] == f"{_page(world, who)}/checkouts/{ref}"
+        assert payload["metadata"] == {
+            "account_id": str(account_id),
+            "package_id": "starter",
+            "checkout_ref": ref,
+        }
+        async with session_factory() as session:
+            row = await session.get(BillingCheckout, uuid.UUID(ref))
+        assert row is not None
+        assert (row.account_id, row.package_id, row.provider) == (
+            account_id,
+            "starter",
+            CREEM,
+        )
+        assert (row.provider_checkout_id, row.batch_id) == (answer["checkout_id"], None)
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_pending_until_creems_checkout_completed_then_credited(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        who: str,
+    ) -> None:
+        creem = world.creem("https://test-api.creem.io/v1")
+        world.providers[:] = [creem]
+        async with _client() as client:
+            await _consent(client, who)
+            await _mark(session_factory, world, who)
+            ref = (await _buy(client, who, "large")).json()["checkout_ref"]
+            before = await _state(client, who, ref)
+            metadata = json.loads(world.sent[0].content)["metadata"]
+            headers, body = _creem_paid(creem, metadata, f"ord_{uuid.uuid4().hex[:12]}")
+            paid = await client.post(
+                f"/api/v1/billing/webhooks/{CREEM}", content=body, headers=headers
+            )
+            after = await _state(client, who, ref)
+        assert before.status_code == 200
+        assert before.json() == {
+            "state": "pending",
+            "package_id": "large",
+            "units": None,
+            "balance_after": None,
+        }
+        assert paid.status_code == 200
+        assert after.json() == {
+            "state": "credited",
+            "package_id": "large",
+            "units": 5000,
+            "balance_after": 5000,
+        }
+
+    async def test_balance_after_is_what_is_available_now(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        async with _client() as client:
+            await _consent(client, Who.STUDENT)
+            await _mark(session_factory, world, Who.STUDENT)
+            refs = []
+            for package in ("starter", "large"):
+                opened = (await _buy(client, Who.STUDENT, package)).json()
+                refs.append(opened["checkout_ref"])
+                headers, body = world.fake.purchase_webhook(opened["checkout_id"])
+                assert (
+                    await client.post(WEBHOOK, content=body, headers=headers)
+                ).status_code == 200
+            first, second = [await _state(client, Who.STUDENT, r) for r in refs]
+        assert (first.json()["units"], first.json()["balance_after"]) == (1000, 6000)
+        assert (second.json()["units"], second.json()["balance_after"]) == (5000, 6000)
+
+    async def test_a_repeated_purchase_keeps_the_one_link(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        async with _client() as client:
+            await _consent(client, Who.STUDENT)
+            await _mark(session_factory, world, Who.STUDENT)
+            opened = (await _buy(client, Who.STUDENT)).json()
+            signed = world.fake.purchase_webhook(opened["checkout_id"])
+            for _ in range(2):
+                response = await client.post(
+                    WEBHOOK, content=signed[1], headers=signed[0]
+                )
+                assert response.status_code == 200
+            state = await _state(client, Who.STUDENT, opened["checkout_ref"])
+        assert state.json()["state"] == "credited"
+        assert state.json()["balance_after"] == 1000  # credited once
+
+    @pytest.mark.parametrize(
+        "ref",
+        [str(uuid.uuid4()), "not-a-number", "0"],
+        ids=["unknown", "not a number", "zero"],
+    )
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_an_unknown_checkout_is_404(self, who: str, ref: str) -> None:
+        async with _client() as client:
+            response = await _state(client, who, ref)
+        assert response.status_code == 404
+        assert response.json() == {
+            "detail": {"code": "checkout_not_found", "details": "No such checkout."}
+        }
+
+    async def test_anothers_checkout_is_404_not_403(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        async with _client() as client:
+            await _consent(client, Who.AUTHOR)
+            await _mark(session_factory, world, Who.AUTHOR)
+            ref = (await _buy(client, Who.AUTHOR)).json()["checkout_ref"]
+            own = await _state(client, Who.AUTHOR, ref)
+            by_the_student = await _state(client, Who.STUDENT, ref)
+            app.dependency_overrides[get_current_tenant] = lambda: TenantContext(
+                tenant_id=uuid.uuid4(),
+                tenant_name="another",
+                scopes=["prep"],
+                plan_id="basic",
+                key_prefix="cs_test",
+            )
+            by_another_tenant = await _state(client, Who.AUTHOR, ref)
+        assert own.status_code == 200
+        for response in (by_the_student, by_another_tenant):
+            assert (response.status_code, _code(response)) == (
+                404,
+                "checkout_not_found",
+            )
+
+    async def test_a_purchase_naming_anothers_checkout_is_credited_unlinked(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        """The units go where the purchase says; the other checkout stays
+        pending, and no account learns of another's checkout."""
+        async with _client() as client:
+            await _consent(client, Who.AUTHOR)
+            await _consent(client, Who.STUDENT)
+            await _mark(session_factory, world, Who.AUTHOR)
+            student_id = await _mark(session_factory, world, Who.STUDENT)
+            authors = (await _buy(client, Who.AUTHOR)).json()
+            students = (await _buy(client, Who.STUDENT)).json()
+            # The student's purchase comes back naming the author's checkout.
+            opened = world.fake.checkouts[students["checkout_id"]]
+            world.fake.checkouts[students["checkout_id"]] = dataclasses.replace(
+                opened, checkout_ref=uuid.UUID(authors["checkout_ref"])
+            )
+            headers, body = world.fake.purchase_webhook(students["checkout_id"])
+            paid = await client.post(WEBHOOK, content=body, headers=headers)
+            author_state = await _state(client, Who.AUTHOR, authors["checkout_ref"])
+            student_state = await _state(client, Who.STUDENT, students["checkout_ref"])
+        assert paid.status_code == 200
+        [batch] = await _batches(session_factory, student_id)
+        assert batch.units == 1000
+        assert author_state.json()["state"] == "pending"
+        assert student_state.json()["state"] == "pending"
+
+    async def test_the_checkout_state_needs_a_key_or_a_portal_session(self) -> None:
+        app.dependency_overrides.pop(get_current_student)
+        app.dependency_overrides.pop(get_current_tenant)
+        ref = uuid.uuid4()
+        async with _client() as client:
+            portal = await _state(client, Who.STUDENT, str(ref))
+            author = await _state(client, Who.AUTHOR, str(ref))
+        assert (portal.status_code, author.status_code) == (401, 401)

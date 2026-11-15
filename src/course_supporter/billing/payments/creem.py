@@ -14,8 +14,17 @@ Read from Creem's documentation on 2026-11-14:
   https://docs.creem.io/api-reference/endpoint/create-checkout. Sent:
   ``product_id`` (the catalog's ``providers.creem`` id of the package),
   ``units`` 1, ``success_url``, ``metadata`` {``account_id``,
-  ``package_id``}; answered: ``id`` (``ch_…``) and ``checkout_url``. Creem
-  takes no cancel URL and no locale, so neither is sent; no personal data is.
+  ``package_id``, ``checkout_ref``}; answered: ``id`` (``ch_…``) and
+  ``checkout_url``. Creem takes no cancel URL and no locale, so neither is
+  sent; no personal data is.
+* Return: https://docs.creem.io/features/checkout/checkout-api — after the
+  payment Creem sends the payer to ``success_url`` with its own query
+  parameters (``checkout_id``, ``order_id``, ``customer_id``, ``product_id``,
+  ``signature``, …). Its documentation (read 2026-11-15) does not say how it
+  appends them to an address that already has a query, so the platform's
+  number of the checkout travels in the address's PATH
+  (``…/billing/checkouts/{checkout_ref}``), never as a parameter. The return
+  proves no payment: the screen asks the checkout's state.
   ``metadata`` comes back on the checkout of ``checkout.completed`` (and on the
   ``checkout`` of a refund's or a dispute's event).
 * Webhooks: https://docs.creem.io/code/webhooks — the ``creem-signature``
@@ -201,7 +210,7 @@ def _metadata(value: Mapping[str, Any] | None, key: str) -> str | None:
     return found if isinstance(found, str) and found else None
 
 
-def _account(value: str | None) -> uuid.UUID | None:
+def _uuid(value: str | None) -> uuid.UUID | None:
     try:
         return uuid.UUID(value) if value else None
     except ValueError:
@@ -267,6 +276,7 @@ class CreemProvider:
             "metadata": {
                 "account_id": str(request.account_id),
                 "package_id": request.package.id,
+                "checkout_ref": str(request.checkout_ref),
             },
         }
         response = await self._post("/checkouts", payload)
@@ -384,7 +394,8 @@ class CreemProvider:
             raise InvalidWebhookError("a purchase without the amount paid")
         return PurchaseCompleted(
             **common,
-            account_id=_account(_metadata(paid.metadata, "account_id")),
+            account_id=_uuid(_metadata(paid.metadata, "account_id")),
+            checkout_ref=_uuid(_metadata(paid.metadata, "checkout_ref")),
             package_id=package_id,
             amount_paid_minor=paid.order.amount_paid,
             currency=paid.order.currency,
@@ -419,7 +430,7 @@ class CreemProvider:
         return Chargeback(
             **common,
             dispute_id=dispute.id,
-            account_id=_account(_metadata(metadata, "account_id")),
+            account_id=_uuid(_metadata(metadata, "account_id")),
             transaction_id=order,
             amount_minor=dispute.amount,
             currency=dispute.currency,

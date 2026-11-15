@@ -23,20 +23,26 @@ Packages:
 Checkout:
     Both checkout routes open a checkout through the one service
     (:func:`course_supporter.billing.payments.checkout.start_checkout`);
-    :func:`open_checkout` maps its refusals the same way for both.
+    :func:`open_checkout` maps its refusals the same way for both, and
+    :func:`checkout_state_of` answers both routes of a checkout's state: the
+    holder's own checkout, by its number — another's, or an unknown one, is
+    ``checkout_not_found`` (404, not 403).
 """
 
 from __future__ import annotations
 
+import uuid
 from enum import StrEnum
 from typing import Any, Final
 
 import structlog
 from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.schemas import (
     BillingCheckoutRequest,
     BillingCheckoutResponse,
+    BillingCheckoutStateResponse,
     BillingPackageResponse,
     BillingPackagesResponse,
     BillingPurchaseState,
@@ -48,6 +54,7 @@ from course_supporter.billing.payments.checkout import (
     ProviderNotSwitchedOnError,
     PurchaseClosed,
     PurchaseNotOpenError,
+    checkout_view,
     purchase_closed,
     start_checkout,
 )
@@ -83,6 +90,9 @@ class Refusal(StrEnum):
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     """The payment provider did not answer (502)."""
 
+    CHECKOUT_NOT_FOUND = "checkout_not_found"
+    """No checkout of the holder's by that number (404): another's is none."""
+
 
 STATUS: Final[dict[Refusal, int]] = {
     Refusal.PAYMENT_UNAVAILABLE: 503,
@@ -92,12 +102,14 @@ STATUS: Final[dict[Refusal, int]] = {
     Refusal.PACKAGE_NOT_FOUND: 404,
     Refusal.PROVIDER_NOT_FOUND: 404,
     Refusal.PROVIDER_UNAVAILABLE: 502,
+    Refusal.CHECKOUT_NOT_FOUND: 404,
 }
 """The status of each code (module docstring)."""
 
 PAYMENT_UNAVAILABLE = "Payment is unavailable."
 PURCHASE_NOT_OPEN = "Purchase is not open yet."
 PROVIDER_DID_NOT_ANSWER = "The payment provider did not answer."
+NO_SUCH_CHECKOUT = "No such checkout."
 
 
 def refusal(code: Refusal, details: str) -> HTTPException:
@@ -175,15 +187,18 @@ def terms_changed(current: str) -> HTTPException:
 async def open_checkout(
     body: BillingCheckoutRequest,
     *,
+    session: AsyncSession,
     registry: ProviderRegistry,
     catalog: Catalog,
     account: BillingAccount,
     language: str | None,
     return_page: str,
 ) -> BillingCheckoutResponse:
-    """Open the checkout; the service's refusals as their codes."""
+    """Open the checkout and commit its record; the service's refusals as
+    their codes."""
     try:
         started = await start_checkout(
+            session,
             registry=registry,
             catalog=catalog,
             account=account,
@@ -207,8 +222,39 @@ async def open_checkout(
             package_id=body.package_id,
         )
         raise refusal(Refusal.PROVIDER_UNAVAILABLE, PROVIDER_DID_NOT_ANSWER) from exc
+    await session.commit()
     return BillingCheckoutResponse(
         provider=started.provider,
         checkout_id=started.checkout_id,
         checkout_url=started.url,
+        checkout_ref=started.checkout_ref,
+    )
+
+
+async def checkout_state_of(
+    session: AsyncSession, account: BillingAccount | None, checkout_ref: str
+) -> BillingCheckoutStateResponse:
+    """The state of the holder's checkout ``checkout_ref``; ``account`` is
+    the holder's, None while they have none.
+
+    Raises:
+        HTTPException: ``checkout_not_found`` — not a number of the holder's
+            checkouts (another's, an unknown one, or not a number at all).
+    """
+    try:
+        ref = uuid.UUID(checkout_ref)
+    except ValueError:
+        ref = None
+    view = (
+        None
+        if ref is None or account is None
+        else await checkout_view(session, account_id=account.id, checkout_ref=ref)
+    )
+    if view is None:
+        raise refusal(Refusal.CHECKOUT_NOT_FOUND, NO_SUCH_CHECKOUT)
+    return BillingCheckoutStateResponse(
+        state=view.state.value,
+        package_id=view.package_id,
+        units=view.units,
+        balance_after=view.available,
     )

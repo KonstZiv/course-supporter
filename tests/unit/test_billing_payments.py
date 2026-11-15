@@ -67,6 +67,7 @@ from course_supporter.storage.orm import BillingAccount, BillingBatch
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 ACCOUNT = uuid.uuid4()
+REF = uuid.uuid4()
 STARTER = Package(id="starter", units=1000, prices_minor={"EUR": 990}, active=True)
 RETIRED = Package(id="retired", units=10, prices_minor={"EUR": 100}, active=False)
 CATALOG = Catalog(packages=(STARTER, RETIRED), providers={FAKE: {"starter": "x"}})
@@ -75,10 +76,11 @@ CATALOG = Catalog(packages=(STARTER, RETIRED), providers={FAKE: {"starter": "x"}
 def _request(package: Package = STARTER) -> CheckoutRequest:
     return CheckoutRequest(
         account_id=ACCOUNT,
+        checkout_ref=REF,
         package=package,
         provider_item=None,
         language="ukr",
-        success_url="https://campus.example/t/billing?checkout=success",
+        success_url=f"https://campus.example/t/billing/checkouts/{REF}",
         cancel_url="https://campus.example/t/billing?checkout=cancelled",
     )
 
@@ -145,6 +147,7 @@ class TestFakeEvents:
         [event] = fake.parse_webhook(headers, body)
         assert isinstance(event, PurchaseCompleted)
         assert (event.account_id, event.package_id) == (ACCOUNT, "starter")
+        assert event.checkout_ref == REF
         assert (event.amount_paid_minor, event.currency) == (990, "EUR")
         assert event.transaction_id.startswith("fake_txn_")
         assert event.line_id.startswith("fake_line_")
@@ -366,14 +369,29 @@ def _account(*, marked: bool = True) -> BillingAccount:
     return BillingAccount(id=ACCOUNT, kind="student", test_purchase_allowed=marked)
 
 
+class _Session:
+    """What the checkout service asks of a session: add a row, flush."""
+
+    def __init__(self) -> None:
+        self.added: list[Any] = []
+
+    def add(self, row: Any) -> None:
+        self.added.append(row)
+
+    async def flush(self) -> None:
+        return None
+
+
 async def _start(
     registry: ProviderRegistry,
     package_id: str = "starter",
     provider: str | None = None,
     *,
     account: BillingAccount | None = None,
+    session: _Session | None = None,
 ) -> Any:
     return await start_checkout(
+        session or _Session(),  # type: ignore[arg-type]
         registry=registry,
         catalog=CATALOG,
         account=account or _account(),
@@ -385,8 +403,8 @@ async def _start(
 
 
 async def test_a_checkout_through_the_default_provider() -> None:
-    fake = FakeProvider()
-    started = await _start(ProviderRegistry([fake]))
+    fake, session = FakeProvider(), _Session()
+    started = await _start(ProviderRegistry([fake]), session=session)
     assert started.provider == FAKE
     request = fake.checkouts[started.checkout_id]
     assert (request.account_id, request.package, request.provider_item) == (
@@ -395,10 +413,40 @@ async def test_a_checkout_through_the_default_provider() -> None:
         "x",
     )
     assert request.language == "ukr"
+    ref = started.checkout_ref
+    assert request.checkout_ref == ref
     assert (request.success_url, request.cancel_url) == return_urls(
-        "https://campus.example/t/billing"
+        "https://campus.example/t/billing", ref
     )
-    assert request.success_url.endswith("/t/billing?checkout=success")
+    # The number is in the path: a provider appends its own query parameters.
+    assert request.success_url == f"https://campus.example/t/billing/checkouts/{ref}"
+    assert "?" not in request.success_url
+    [row] = session.added
+    assert (row.id, row.account_id, row.package_id, row.provider) == (
+        ref,
+        ACCOUNT,
+        "starter",
+        FAKE,
+    )
+    assert (row.provider_checkout_id, row.batch_id) == (started.checkout_id, None)
+
+
+async def test_each_checkout_has_a_number_of_its_own() -> None:
+    fake = FakeProvider()
+    one = await _start(ProviderRegistry([fake]))
+    other = await _start(ProviderRegistry([fake]))
+    assert one.checkout_ref != other.checkout_ref
+
+
+async def test_a_refused_checkout_records_nothing() -> None:
+    session = _Session()
+    with pytest.raises(PurchaseNotOpenError):
+        await _start(
+            ProviderRegistry([FakeProvider()]),
+            account=_account(marked=False),
+            session=session,
+        )
+    assert session.added == []
 
 
 async def test_a_checkout_without_providers_is_unavailable() -> None:

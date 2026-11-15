@@ -22,7 +22,6 @@ Checkout:
 
 from __future__ import annotations
 
-import uuid
 from enum import StrEnum
 from typing import Any, Final
 
@@ -35,10 +34,13 @@ from course_supporter.billing.payments.checkout import (
     PackageNotOnSaleError,
     PaymentUnavailableError,
     ProviderNotSwitchedOnError,
+    PurchaseClosed,
+    PurchaseNotOpenError,
     start_checkout,
 )
 from course_supporter.billing.payments.port import PaymentProviderError
 from course_supporter.billing.payments.registry import ProviderRegistry
+from course_supporter.storage.orm import BillingAccount
 
 logger = structlog.get_logger()
 
@@ -46,8 +48,12 @@ logger = structlog.get_logger()
 class Refusal(StrEnum):
     """Why a billing route refused — the code a screen reads."""
 
-    PAYMENT_UNAVAILABLE = "payment_unavailable"
+    PAYMENT_UNAVAILABLE = PurchaseClosed.PAYMENT_UNAVAILABLE.value
     """No payment provider is switched on, or none sells the package (503)."""
+
+    PURCHASE_NOT_OPEN = PurchaseClosed.PURCHASE_NOT_OPEN.value
+    """The provider is in test mode and the account is not marked for test
+    purchases (403): the screen says the purchase is not open yet."""
 
     TERMS_CONSENT_REQUIRED = "terms_consent_required"
     """A purchase before the holder agreed to the terms in force (409)."""
@@ -67,6 +73,7 @@ class Refusal(StrEnum):
 
 STATUS: Final[dict[Refusal, int]] = {
     Refusal.PAYMENT_UNAVAILABLE: 503,
+    Refusal.PURCHASE_NOT_OPEN: 403,
     Refusal.TERMS_CONSENT_REQUIRED: 409,
     Refusal.TERMS_CHANGED: 409,
     Refusal.PACKAGE_NOT_FOUND: 404,
@@ -76,6 +83,7 @@ STATUS: Final[dict[Refusal, int]] = {
 """The status of each code (module docstring)."""
 
 PAYMENT_UNAVAILABLE = "Payment is unavailable."
+PURCHASE_NOT_OPEN = "Purchase is not open yet."
 PROVIDER_DID_NOT_ANSWER = "The payment provider did not answer."
 
 
@@ -98,6 +106,7 @@ def responses(*codes: Refusal) -> dict[int | str, dict[str, Any]]:
 
 CHECKOUT_REFUSALS: Final = (
     Refusal.PAYMENT_UNAVAILABLE,
+    Refusal.PURCHASE_NOT_OPEN,
     Refusal.TERMS_CONSENT_REQUIRED,
     Refusal.PACKAGE_NOT_FOUND,
     Refusal.PROVIDER_NOT_FOUND,
@@ -133,7 +142,7 @@ async def open_checkout(
     *,
     registry: ProviderRegistry,
     catalog: Catalog,
-    account_id: uuid.UUID,
+    account: BillingAccount,
     language: str | None,
     return_page: str,
 ) -> BillingCheckoutResponse:
@@ -142,7 +151,7 @@ async def open_checkout(
         started = await start_checkout(
             registry=registry,
             catalog=catalog,
-            account_id=account_id,
+            account=account,
             package_id=body.package_id,
             provider_name=body.provider,
             language=language,
@@ -150,6 +159,8 @@ async def open_checkout(
         )
     except PaymentUnavailableError as exc:
         raise refusal(Refusal.PAYMENT_UNAVAILABLE, PAYMENT_UNAVAILABLE) from exc
+    except PurchaseNotOpenError as exc:
+        raise refusal(Refusal.PURCHASE_NOT_OPEN, PURCHASE_NOT_OPEN) from exc
     except PackageNotOnSaleError as exc:
         raise refusal(Refusal.PACKAGE_NOT_FOUND, str(exc)) from exc
     except ProviderNotSwitchedOnError as exc:

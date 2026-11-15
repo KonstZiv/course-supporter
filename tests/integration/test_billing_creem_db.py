@@ -220,6 +220,22 @@ async def world(
         await session.flush()
         student = Student(tenant_id=tenant.id, external_id="creem-student")
         session.add(student)
+        await session.flush()
+        # The providers here are in test mode: the accounts are marked for
+        # test purchases (billing.payments.checkout), as the administrator does.
+        session.add_all(
+            [
+                BillingAccount(
+                    kind="author", tenant_id=tenant.id, test_purchase_allowed=True
+                ),
+                BillingAccount(
+                    kind="student",
+                    tenant_id=tenant.id,
+                    student_id=student.id,
+                    test_purchase_allowed=True,
+                ),
+            ]
+        )
         await session.commit()
     made = World(
         tenant_id=tenant.id,

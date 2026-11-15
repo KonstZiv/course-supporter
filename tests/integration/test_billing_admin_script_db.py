@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from scripts import billing_admin
@@ -346,3 +347,109 @@ def test_credit_invoice_is_a_purchase_audited_once(
     assert billing_admin.main(missing) == 1
     assert "not found" in capsys.readouterr().err
     engine.dispose()
+
+
+# ── test-purchase (BIL-PAY, operator 2026-11-15) ───────────────────────
+
+
+Entry = tuple[str, dict[str, Any], dict[str, Any]]
+
+
+def _marks(tenant: Tenant) -> list[tuple[str, bool, list[Entry]]]:
+    """Each account of the tenant: its kind, its mark, its mark's audit."""
+    engine = create_engine(get_settings().database_url)
+    with Session(engine) as session:
+        accounts = session.scalars(
+            select(BillingAccount)
+            .where(BillingAccount.tenant_id == tenant.id)
+            .order_by(BillingAccount.kind)
+        ).all()
+        out = []
+        for account in accounts:
+            entries = session.scalars(
+                select(BillingAuditEntry)
+                .where(
+                    BillingAuditEntry.entity_id == account.id,
+                    BillingAuditEntry.action == "account.test_purchase",
+                )
+                .order_by(BillingAuditEntry.created_at, BillingAuditEntry.id)
+            ).all()
+            out.append(
+                (
+                    account.kind,
+                    account.test_purchase_allowed,
+                    [(e.actor, e.before or {}, e.after or {}) for e in entries],
+                )
+            )
+    engine.dispose()
+    return out
+
+
+class TestTestPurchase:
+    def test_allow_creates_the_author_account_marked_and_audits(
+        self, tenant: Tenant
+    ) -> None:
+        argv = ["test-purchase", "--tenant", tenant.name, "--allow"]
+        assert billing_admin.main([*argv, "--actor", "kostiantyn"]) == 0
+        [(kind, marked, entries)] = _marks(tenant)
+        assert (kind, marked) == ("author", True)
+        [(actor, before, after)] = entries
+        assert actor == "kostiantyn"
+        assert before["test_purchase_allowed"] is False
+        assert after["test_purchase_allowed"] is True
+        assert "tenant_id" not in after  # the owner never enters the log
+
+    def test_the_same_mark_again_writes_nothing_and_deny_clears_it(
+        self, tenant: Tenant
+    ) -> None:
+        for flag in ("--allow", "--allow", "--deny", "--deny"):
+            argv = ["test-purchase", "--tenant", str(tenant.id), flag]
+            assert billing_admin.main([*argv, "--actor", "a"]) == 0
+        [(_, marked, entries)] = _marks(tenant)
+        assert marked is False
+        assert [after["test_purchase_allowed"] for _, _, after in entries] == [
+            True,
+            False,
+        ]
+
+    def test_a_students_account_is_marked_apart_from_the_authors(
+        self, tenant: Tenant
+    ) -> None:
+        engine = create_engine(get_settings().database_url)
+        with Session(engine, expire_on_commit=False) as session:
+            student = Student(tenant_id=tenant.id, external_id="reviewer-demo")
+            session.add(student)
+            session.commit()
+        engine.dispose()
+        argv = ["test-purchase", "--tenant", tenant.name]
+        argv += ["--student", str(student.id), "--allow", "--actor", "a"]
+        assert billing_admin.main(argv) == 0
+        [(kind, marked, entries)] = _marks(tenant)
+        assert (kind, marked, len(entries)) == ("student", True, 1)
+
+    def test_without_an_actor_or_a_choice_it_is_a_usage_error(
+        self, tenant: Tenant
+    ) -> None:
+        with pytest.raises(SystemExit) as no_actor:
+            billing_admin.main(["test-purchase", "--tenant", tenant.name, "--allow"])
+        with pytest.raises(SystemExit) as no_choice:
+            billing_admin.main(
+                ["test-purchase", "--tenant", tenant.name, "--actor", "a"]
+            )
+        with pytest.raises(SystemExit) as both:
+            billing_admin.main(
+                [
+                    *("test-purchase", "--tenant", tenant.name),
+                    *("--allow", "--deny", "--actor", "a"),
+                ]
+            )
+        assert no_actor.value.code == no_choice.value.code == both.value.code == 2
+        assert _marks(tenant) == []
+
+    def test_an_unknown_student_is_refused_and_nothing_is_written(
+        self, tenant: Tenant
+    ) -> None:
+        argv = ["test-purchase", "--tenant", tenant.name]
+        argv += ["--student", str(uuid.uuid4()), "--allow", "--actor", "a"]
+        assert billing_admin.main(argv) == 1
+        assert _marks(tenant) == []

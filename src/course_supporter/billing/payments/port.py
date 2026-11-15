@@ -15,6 +15,14 @@ The port (:class:`PaymentProvider`, a structural ``Protocol``):
     * ``name`` — the adapter's name: in ``BILLING_PROVIDERS``, in the address
       of its webhook (``/api/v1/billing/webhooks/{name}``), and in the journal
       as the ``provider`` of a batch, a refund, an event.
+    * ``test_mode`` — True when the adapter talks to the provider's test
+      environment: a test card pays there, yet its purchase credits real
+      units. While the provider is in test mode only an account marked for
+      test purchases may buy (``billing_accounts.test_purchase_allowed``,
+      operator 2026-11-15) — :func:`~.checkout.purchase_closed`, for every
+      provider alike. Every adapter answers it; when in doubt, True: a
+      mistake then closes purchases instead of opening them. A purchase the
+      provider reports is credited whatever the mode — it was paid.
     * :meth:`~PaymentProvider.create_checkout` — a :class:`CheckoutRequest`
       (the account, the package, the language, where to return) becomes a
       :class:`Checkout` (the link to open, the provider's id of it). The
@@ -319,6 +327,12 @@ class PaymentProvider(Protocol):
     @property
     def name(self) -> str:
         """The adapter's name: lowercase, as the journal spells a provider."""
+        ...
+
+    @property
+    def test_mode(self) -> bool:
+        """True when the adapter talks to the provider's test environment
+        (module docstring)."""
         ...
 
     async def create_checkout(self, request: CheckoutRequest) -> Checkout:

@@ -9,7 +9,9 @@ refunds and builds the signed webhooks a provider would send
 developer with ``curl`` — walks checkout → payment → units end to end.
 
 Its secret is in this file, so it is never registered outside development
-and testing (:mod:`.registry`; a test locks it).
+and testing (:mod:`.registry`; a test locks it). It is always in test mode
+(:attr:`FakeProvider.test_mode`): only an account marked for test purchases
+buys through it.
 
 Its webhook body (JSON)::
 
@@ -113,6 +115,8 @@ class FakeProvider:
     """The port's contract with no provider behind it (module docstring)."""
 
     name: Final = FAKE
+    test_mode: Final = True
+    """Never a real payment (module docstring)."""
 
     def __init__(self, secret: bytes = FAKE_SECRET) -> None:
         self._secret = secret

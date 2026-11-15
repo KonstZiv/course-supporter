@@ -14,8 +14,12 @@ Routes
   never a provider's id.
 - ``POST /portal/billing/checkout`` — open a checkout of a package for the
   student's account: 503 when payment is unavailable (no provider switched
-  on), 409 while the student has not agreed to the terms in force, 404 for a
-  package not on sale or a provider not switched on, else the link.
+  on), 409 while the student has not agreed to the terms in force, 403 while
+  the provider is in test mode and the account is not marked for test
+  purchases, 404 for a package not on sale or a provider not switched on,
+  else the link.
+
+Every refusal carries its reason code (``_billing_shared``).
 
 Under the student's own portal session (``get_current_student``), not an
 administrator's. The student's billing account is created on the first
@@ -181,7 +185,7 @@ async def post_billing_checkout(
         body,
         registry=registry,
         catalog=catalog,
-        account_id=account.id,
+        account=account,
         language=student.preferred_language,
         return_page=f"{portal}/{student.tenant_id}/billing",
     )

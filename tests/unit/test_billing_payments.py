@@ -27,8 +27,16 @@ from course_supporter.billing.payments.catalog import Catalog, Package
 from course_supporter.billing.payments.checkout import (
     CheckoutNotFoundError,
     PaymentUnavailableError,
+    PurchaseClosed,
+    PurchaseNotOpenError,
+    purchase_closed,
     return_urls,
     start_checkout,
+)
+from course_supporter.billing.payments.creem import (
+    LIVE_API_BASE,
+    TEST_API_BASE,
+    CreemProvider,
 )
 from course_supporter.billing.payments.fake import (
     FAKE,
@@ -55,7 +63,7 @@ from course_supporter.billing.payments.registry import (
     build_registry,
 )
 from course_supporter.config import Environment, Settings
-from course_supporter.storage.orm import BillingBatch
+from course_supporter.storage.orm import BillingAccount, BillingBatch
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 ACCOUNT = uuid.uuid4()
@@ -353,13 +361,22 @@ def test_a_provider_cannot_take_a_reserved_or_bad_name(name: str) -> None:
 # ── Checkout service ───────────────────────────────────────────────────
 
 
+def _account(*, marked: bool = True) -> BillingAccount:
+    """An account as loaded: marked for test purchases unless told."""
+    return BillingAccount(id=ACCOUNT, kind="student", test_purchase_allowed=marked)
+
+
 async def _start(
-    registry: ProviderRegistry, package_id: str = "starter", provider: str | None = None
+    registry: ProviderRegistry,
+    package_id: str = "starter",
+    provider: str | None = None,
+    *,
+    account: BillingAccount | None = None,
 ) -> Any:
     return await start_checkout(
         registry=registry,
         catalog=CATALOG,
-        account_id=ACCOUNT,
+        account=account or _account(),
         package_id=package_id,
         provider_name=provider,
         language="ukr",
@@ -411,6 +428,79 @@ async def test_a_provider_that_cannot_sell_makes_payment_unavailable() -> None:
 
     with pytest.raises(PaymentUnavailableError, match="no price"):
         await _start(ProviderRegistry([Unsellable()]))
+
+
+# ── Test mode (operator 2026-11-15) ────────────────────────────────────
+
+
+def _creem(api_base: str) -> CreemProvider:
+    return CreemProvider(api_key="k", webhook_secret="s", api_base=api_base)
+
+
+@pytest.mark.parametrize(
+    ("api_base", "test_mode"),
+    [
+        (TEST_API_BASE, True),
+        (LIVE_API_BASE, False),
+        (LIVE_API_BASE + "/", False),
+        ("https://test-api.creem.io/v1/", True),
+        ("https://creem.example/v1", True),  # anything not live: closed
+    ],
+)
+def test_creem_is_in_test_mode_unless_on_its_live_host(
+    api_base: str, test_mode: bool
+) -> None:
+    assert _creem(api_base).test_mode is test_mode
+
+
+def test_the_fake_is_always_in_test_mode() -> None:
+    assert FakeProvider().test_mode is True
+
+
+LIVE = _creem(LIVE_API_BASE)
+
+
+@pytest.mark.parametrize(
+    ("provider", "account", "closed"),
+    [
+        (None, None, PurchaseClosed.PAYMENT_UNAVAILABLE),
+        (None, _account(), PurchaseClosed.PAYMENT_UNAVAILABLE),
+        (FakeProvider(), None, PurchaseClosed.PURCHASE_NOT_OPEN),
+        (FakeProvider(), _account(marked=False), PurchaseClosed.PURCHASE_NOT_OPEN),
+        (FakeProvider(), _account(), None),
+        (LIVE, None, None),
+        (LIVE, _account(marked=False), None),
+        (LIVE, _account(), None),
+    ],
+    ids=[
+        "no provider, no account",
+        "no provider, a marked account",
+        "test mode, no account yet",
+        "test mode, not marked",
+        "test mode, marked",
+        "live, no account yet",
+        "live, not marked: the mark is not read",
+        "live, marked",
+    ],
+)
+def test_purchase_closed(
+    provider: Any, account: BillingAccount | None, closed: PurchaseClosed | None
+) -> None:
+    assert purchase_closed(provider, account) is closed
+
+
+async def test_an_unmarked_account_opens_no_checkout_in_test_mode() -> None:
+    fake = FakeProvider()
+    with pytest.raises(PurchaseNotOpenError, match="test mode"):
+        await _start(ProviderRegistry([fake]), account=_account(marked=False))
+    assert fake.checkouts == {}  # the provider was not asked
+
+
+async def test_the_guard_comes_before_the_package() -> None:
+    with pytest.raises(PurchaseNotOpenError):
+        await _start(
+            ProviderRegistry([FakeProvider()]), "nope", account=_account(marked=False)
+        )
 
 
 # ── Lock: the journal names no provider ────────────────────────────────

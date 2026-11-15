@@ -7,7 +7,9 @@ Read from Creem's documentation on 2026-11-14:
   host ``https://test-api.creem.io/v1`` and the live one
   ``https://api.creem.io/v1``, isolated, their keys not interchangeable; the
   key in the ``x-api-key`` header; amounts in cents (minor units),
-  currencies as upper-case ISO codes.
+  currencies as upper-case ISO codes. :attr:`CreemProvider.test_mode` is
+  False on the live host only: any other is the test environment, so a
+  mistaken address closes purchases rather than opens them.
 * Checkout: ``POST /v1/checkouts`` —
   https://docs.creem.io/api-reference/endpoint/create-checkout. Sent:
   ``product_id`` (the catalog's ``providers.creem`` id of the package),
@@ -78,6 +80,7 @@ import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 import httpx
 import structlog
@@ -238,6 +241,11 @@ class CreemProvider:
 
     def __repr__(self) -> str:
         return f"CreemProvider(api_base={self._api_base!r})"
+
+    @property
+    def test_mode(self) -> bool:
+        """False on Creem's live host only (module docstring)."""
+        return urlsplit(self._api_base).hostname != urlsplit(LIVE_API_BASE).hostname
 
     def sign(self, body: bytes) -> str:
         """The ``creem-signature`` of this body."""

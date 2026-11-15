@@ -21,8 +21,12 @@ Routes
   opens a checkout of a package for the tenant's author account, which pays
   for processing and, under a payment rule, for the reviews of the tenant's
   students. The same service as the portal's checkout; 503 when payment is
-  unavailable, 409 while the author has not agreed to the terms in force, 404
-  for a package not on sale or a provider not switched on.
+  unavailable, 409 while the author has not agreed to the terms in force, 403
+  while the provider is in test mode and the account is not marked for test
+  purchases, 404 for a package not on sale or a provider not switched on.
+
+Every refusal of a route but the webhook carries its reason code
+(``_billing_shared``).
 
 There is no administrator route (operator decision of 2026-11-05): the
 administrator's door is ``scripts/billing_admin.py``.
@@ -229,7 +233,7 @@ async def post_author_checkout(
         body,
         registry=registry,
         catalog=catalog,
-        account_id=account.id,
+        account=account,
         language=None,
         return_page=f"{author_app}/billing",
     )

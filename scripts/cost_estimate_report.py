@@ -42,6 +42,7 @@ from course_supporter.storage.orm import ActionCostEstimate, ExternalServiceCall
 
 _COLUMNS = (
     "action_kind",
+    "job_type",
     "action_key",
     "e_usd",
     "fact_usd",
@@ -61,6 +62,16 @@ async def _load(
         query = query.where(ActionCostEstimate.action_kind == kind)
     if limit is not None:
         query = query.limit(limit)
+    stored = list((await session.execute(query)).scalars())
+    # What kind of job ran each action: a processing estimate is a material's
+    # pipeline or a regeneration of node summaries (``Job.job_type``).
+    job_types: dict[uuid.UUID, str] = {}
+    estimated_jobs = {e.job_id for e in stored if e.job_id is not None}
+    if estimated_jobs:
+        rows = await session.execute(
+            select(Job.id, Job.job_type).where(Job.id.in_(estimated_jobs))
+        )
+        job_types = {job_id: job_type for job_id, job_type in rows}
     estimates = [
         EstimateRow(
             action_kind=e.action_kind,
@@ -69,8 +80,9 @@ async def _load(
             e_usd=e.e_usd,
             breakdown=e.breakdown,
             created_at=e.created_at,
+            job_type=job_types.get(e.job_id) if e.job_id is not None else None,
         )
-        for e in (await session.execute(query)).scalars()
+        for e in stored
     ]
 
     # The jobs of each reviewed submission (their subject is the submission).

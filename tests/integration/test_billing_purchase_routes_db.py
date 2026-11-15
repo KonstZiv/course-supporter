@@ -11,6 +11,7 @@ Requires ``docker compose up -d``; run with ``--run-db``.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import json
 import uuid
 from collections.abc import AsyncGenerator, Iterator
@@ -49,7 +50,14 @@ from course_supporter.billing.payments.creem import (
 )
 from course_supporter.billing.payments.fake import FAKE, FakeProvider
 from course_supporter.billing.payments.registry import ProviderRegistry
-from course_supporter.billing.refunds import refund_hold
+from course_supporter.billing.refunds import (
+    dispute_hold,
+    dispute_lost,
+    dispute_won,
+    refund_approve,
+    refund_hold,
+    refund_reject,
+)
 from course_supporter.config import get_settings
 from course_supporter.storage.orm import (
     BillingAccount,
@@ -833,17 +841,31 @@ def _iso(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
 
 
-def _items(response: Response) -> list[tuple[str, int, int, str | None]]:
-    """(kind, units, balance_after, action id) of each line."""
+Item = tuple[str, bool, int, int, str | None]
+
+
+def _items(response: Response) -> list[Item]:
+    """(kind, affects_balance, units, balance_after, action id) of each line."""
     return [
         (
             item["kind"],
+            item["affects_balance"],
             item["units"],
             item["balance_after"],
             item["action"]["id"] if item["action"] else None,
         )
         for item in response.json()["items"]
     ]
+
+
+def _consistent(items: list[Item]) -> None:
+    """Newest first: each line's balance is the older line's plus its units
+    when it affects the balance, the older line's as it was otherwise."""
+    for newer, older in itertools.pairwise(items):
+        _, affects, units, after, _ = newer
+        assert after == older[3] + (units if affects else 0), newer
+        if not affects:
+            assert units > 0, newer
 
 
 @pytest.mark.usefixtures("signed_in")
@@ -966,18 +988,20 @@ class TestStatement:
         async with _client() as client:
             response = await client.get(f"{Who.AUTHOR}/statement")
         assert response.status_code == 200
-        assert _items(response) == [
-            ("expired", -100, 670, None),
-            ("difference_repaid", -40, 770, None),
-            ("purchase", 500, 810, None),
-            ("difference_arisen", -40, 310, c),
-            ("charge", -760, 310, c),
-            ("refund_hold", -200, 1070, None),
-            ("platform_covered", -15, 1070, e),
-            ("charge", -30, 1070, a),
-            ("purchase", 1000, 1100, None),
-            ("admin_credit", 100, 100, None),
+        items = _items(response)
+        assert items == [
+            ("expired", True, -100, 670, None),
+            ("difference_repaid", True, -40, 770, None),
+            ("purchase", True, 500, 810, None),
+            ("difference_arisen", False, 40, 310, c),
+            ("charge", True, -760, 310, c),
+            ("refund_hold", False, 200, 1070, None),
+            ("platform_covered", False, 15, 1070, e),  # not a charge to the author
+            ("charge", True, -30, 1070, a),
+            ("purchase", True, 1000, 1100, None),
+            ("admin_credit", True, 100, 100, None),
         ]
+        _consistent(items)
         body = response.json()
         assert body["next_cursor"] is None
         # The newest line's balance is the balance now.
@@ -987,7 +1011,14 @@ class TestStatement:
         # Reserving and releasing are not lines; no money, no provider's id.
         assert "reserve" not in {item["kind"] for item in body["items"]}
         for item in body["items"]:
-            assert set(item) == {"at", "kind", "units", "balance_after", "action"}
+            assert set(item) == {
+                "at",
+                "kind",
+                "affects_balance",
+                "units",
+                "balance_after",
+                "action",
+            }
         assert "txn_" not in response.text and "adj_" not in response.text
         charge = body["items"][-3]
         assert charge["action"] == {"kind": "processing", "id": a}
@@ -999,7 +1030,7 @@ class TestStatement:
         await _author_journal(session_factory, world)
         async with _client() as client:
             whole = _items(await client.get(f"{Who.AUTHOR}/statement"))
-            pages: list[list[tuple[str, int, int, str | None]]] = []
+            pages: list[list[Item]] = []
             cursor: str | None = None
             while True:
                 params: dict[str, Any] = {"limit": 4}
@@ -1035,9 +1066,9 @@ class TestStatement:
                 },
             )
         assert _items(period) == [
-            ("difference_arisen", -40, 310, c),
-            ("charge", -760, 310, c),
-            ("refund_hold", -200, 1070, None),
+            ("difference_arisen", False, 40, 310, c),
+            ("charge", True, -760, 310, c),
+            ("refund_hold", False, 200, 1070, None),
         ]
         assert _items(naive) == _items(period)  # without a zone: UTC
 
@@ -1076,7 +1107,7 @@ class TestStatement:
             headers, body = world.fake.purchase_webhook(opened["checkout_id"])
             await client.post(WEBHOOK, content=body, headers=headers)
             student = await client.get(f"{Who.STUDENT}/statement")
-        assert _items(student) == [("purchase", 1000, 1000, None)]
+        assert _items(student) == [("purchase", True, 1000, 1000, None)]
 
 
 # ── Reason codes on the author's side ──────────────────────────────────
@@ -1166,3 +1197,116 @@ async def _checkouts(
             .where(BillingAccount.tenant_id == world.tenant_id)
         )
         return len(rows.all())
+
+
+@pytest.mark.usefixtures("signed_in")
+class TestRefundsAndDisputesInTheStatement:
+    async def test_one_refund_is_a_hold_and_one_outflow_and_a_lost_dispute_its_own(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        """A refund held then approved: +100 held (no change), -100 out — never
+        two minuses. A refund rejected: held, then freed. A dispute lost:
+        dispute_lost, not refund. A dispute won: held, then freed."""
+        start = datetime.now(UTC) - timedelta(days=3)
+
+        def at(minutes: int) -> datetime:
+            return start + timedelta(minutes=minutes)
+
+        token = uuid.uuid4().hex[:12]
+        async with session_factory() as session:
+            account = await get_or_create_student_account(
+                session, tenant_id=world.tenant_id, student_id=world.student.student_id
+            )
+            first = await ledger.credit_purchase(
+                session,
+                account_id=account.id,
+                units=1000,
+                amount_paid_minor=990,
+                currency="EUR",
+                provider=FAKE,
+                provider_transaction_id=f"txn_{token}_1",
+                provider_line_id=f"line_{token}_1",
+                now=at(1),
+            )
+            for adjustment, units, minute in ((f"adj_{token}_a", 100, 2),):
+                await refund_hold(
+                    session,
+                    account_id=account.id,
+                    batch_id=first.batch.id,
+                    units=units,
+                    provider=FAKE,
+                    provider_adjustment_id=adjustment,
+                    now=at(minute),
+                )
+            await refund_approve(
+                session,
+                provider=FAKE,
+                provider_adjustment_id=f"adj_{token}_a",
+                now=at(3),
+            )
+            await refund_hold(
+                session,
+                account_id=account.id,
+                batch_id=first.batch.id,
+                units=50,
+                provider=FAKE,
+                provider_adjustment_id=f"adj_{token}_b",
+                now=at(4),
+            )
+            await refund_reject(
+                session,
+                provider=FAKE,
+                provider_adjustment_id=f"adj_{token}_b",
+                now=at(5),
+            )
+            await dispute_hold(
+                session,
+                provider=FAKE,
+                dispute_id=f"dsp_{token}_1",
+                transaction_id=f"txn_{token}_1",
+                now=at(6),
+            )
+            await dispute_lost(
+                session, provider=FAKE, dispute_id=f"dsp_{token}_1", now=at(7)
+            )
+            await ledger.credit_purchase(
+                session,
+                account_id=account.id,
+                units=500,
+                amount_paid_minor=500,
+                currency="EUR",
+                provider=FAKE,
+                provider_transaction_id=f"txn_{token}_2",
+                provider_line_id=f"line_{token}_2",
+                now=at(8),
+            )
+            await dispute_hold(
+                session,
+                provider=FAKE,
+                dispute_id=f"dsp_{token}_2",
+                transaction_id=f"txn_{token}_2",
+                now=at(9),
+            )
+            await dispute_won(
+                session, provider=FAKE, dispute_id=f"dsp_{token}_2", now=at(10)
+            )
+            await session.commit()
+        async with _client() as client:
+            statement = await client.get(f"{Who.STUDENT}/statement")
+            balance = await client.get(f"{Who.STUDENT}/balance")
+        items = _items(statement)
+        assert items == [
+            ("dispute_released", False, 500, 500, None),
+            ("dispute_hold", False, 500, 500, None),
+            ("purchase", True, 500, 500, None),
+            ("dispute_lost", True, -900, 0, None),
+            ("dispute_hold", False, 900, 900, None),
+            ("refund_released", False, 50, 900, None),
+            ("refund_hold", False, 50, 900, None),
+            ("refund", True, -100, 900, None),
+            ("refund_hold", False, 100, 1000, None),
+            ("purchase", True, 1000, 1000, None),
+        ]
+        _consistent(items)
+        assert balance.json()["balance"] == items[0][3] == 500
+        assert "dsp_" not in statement.text and "adj_" not in statement.text

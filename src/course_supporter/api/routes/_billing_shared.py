@@ -346,6 +346,7 @@ async def statement_of(
             BillingStatementItem(
                 at=line.at,
                 kind=line.kind,
+                affects_balance=line.affects_balance,
                 units=line.units,
                 balance_after=line.balance_after,
                 action=(

@@ -2820,13 +2820,20 @@ class BillingStatementItem(BaseModel):
     kind: StatementLineKind = Field(
         description="What happened: the key the screen translates."
     )
+    affects_balance: bool = Field(
+        description="True when the line changes the balance: a credit, or "
+        "units taken out of a batch (a charge, an expiry, a refund, a dispute "
+        "lost, a difference repaid)."
+    )
     units: int = Field(
-        description="Signed: + units came in (or were freed), - went out (or "
-        "were blocked)."
+        description="affects_balance: signed by the change, + came in, - went "
+        "out. Otherwise a positive amount: held or freed (a refund's or a "
+        "dispute's hold and its release), covered (by a benefit, by the "
+        "platform), a difference arisen or annulled."
     )
     balance_after: int = Field(
-        description="The balance after the line; lines that move no batch's "
-        "units (holds, differences, covered units) leave it as it was."
+        description="The balance after the line; a line that does not affect "
+        "the balance leaves it as it was."
     )
     action: BillingStatementAction | None = Field(
         description="The action the units moved for; null when none."

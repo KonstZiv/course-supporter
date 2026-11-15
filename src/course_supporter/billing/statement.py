@@ -15,9 +15,21 @@ The balance (:func:`holder_balance`):
 
 The statement (:func:`statement_page`):
     The account's movements, the newest first, each with its kind for the
-    screen (:class:`StatementLineKind`), its units signed — ``+`` came in, ``-`` went
-    out or was blocked — and the balance after it. Reserving and releasing a
-    reserve are not lines: the current reserve is in the balance.
+    screen (:class:`StatementLineKind`), whether it changes the balance
+    (``affects_balance``), its units and the balance after it. Reserving and
+    releasing a reserve are not lines: the current reserve is in the balance.
+
+    ``affects_balance`` is the journal's own rule, not a choice of this
+    module: a credit (:attr:`~.kinds.MovementKind.CREDIT`) and the kinds that
+    take units out of a batch (:data:`.kinds.OUTFLOW_KINDS`) change the
+    balance; nothing else does (:func:`balance_effect`). Such a line's units
+    are signed by that change — ``+`` came in, ``-`` went out. Every other
+    line — a refund's or a dispute's hold and its release, units a benefit or
+    the platform covered, a difference arisen or annulled — gives its units as
+    a positive amount (how many were held, freed, covered, arose, annulled)
+    and leaves ``balance_after`` as it was. So one refund reads as a hold and
+    one outflow, never as two minuses, and what the platform covered never
+    reads as a charge to the holder.
 
     Which movement becomes which line is ONE table, :data:`LINES`: every
     :class:`~.kinds.MovementKind` is either there (by itself, or by the
@@ -137,62 +149,68 @@ class StatementLineKind(StrEnum):
     REFUND_RELEASED = "refund_released"
     DISPUTE_HOLD = "dispute_hold"
     DISPUTE_RELEASED = "dispute_released"
+    DISPUTE_LOST = "dispute_lost"
     DIFFERENCE_ARISEN = "difference_arisen"
     DIFFERENCE_REPAID = "difference_repaid"
     DIFFERENCE_ANNULLED = "difference_annulled"
 
 
+def balance_effect(movement: MovementKind) -> int:
+    """How a movement of this kind changes the balance: +1 (a credit), -1 (a
+    kind that takes units out of a batch, :data:`.kinds.OUTFLOW_KINDS`), 0
+    (none — it moves units between free and held, or touches no batch)."""
+    if movement is MovementKind.CREDIT:
+        return +1
+    if movement in OUTFLOW_KINDS:
+        return -1
+    return 0
+
+
 @dataclass(frozen=True, slots=True)
 class Line:
-    """How a movement shows: its kind, and the sign of its units."""
+    """How a movement shows: its kind, and its effect on the balance."""
 
     kind: StatementLineKind
-    sign: int
-    """+1: units came in (or were freed); -1: went out (or were blocked)."""
+    effect: int
+    """:func:`balance_effect` of the movement: +1, -1, or 0 (none)."""
+
+    @property
+    def affects_balance(self) -> bool:
+        """True when the line changes the balance."""
+        return self.effect != 0
+
+    def units(self, amount: int) -> int:
+        """The line's units for a movement of ``amount`` (always positive in
+        the journal): signed by the effect, or the amount itself when none."""
+        return self.effect * amount if self.effect else amount
 
 
 Qualifier = BatchSource | RefundKind | None
 """What else decides the line: the source of a credit's batch, the kind of a
 refund's row; None for every other movement."""
 
-LINES: Final[Mapping[tuple[MovementKind, Qualifier], Line]] = {
-    (MovementKind.CREDIT, BatchSource.PURCHASE): Line(StatementLineKind.PURCHASE, +1),
-    (MovementKind.CREDIT, BatchSource.ADMIN_CREDIT): Line(
-        StatementLineKind.ADMIN_CREDIT, +1
-    ),
-    (MovementKind.DEBIT, None): Line(StatementLineKind.CHARGE, -1),
-    (MovementKind.BENEFIT_COVERED, None): Line(StatementLineKind.BENEFIT_COVERED, -1),
-    (MovementKind.PLATFORM_COVERED, None): Line(StatementLineKind.PLATFORM_COVERED, -1),
-    (MovementKind.BATCH_EXPIRED, None): Line(StatementLineKind.EXPIRED, -1),
-    (MovementKind.REFUND_HOLD, RefundKind.REFUND): Line(
-        StatementLineKind.REFUND_HOLD, -1
-    ),
-    (MovementKind.REFUND_HOLD, RefundKind.DISPUTE): Line(
-        StatementLineKind.DISPUTE_HOLD, -1
-    ),
-    (MovementKind.REFUND_COMPLETED, RefundKind.REFUND): Line(
-        StatementLineKind.REFUND, -1
-    ),
-    # A dispute lost: the held units leave the batch — the money went back
-    # to the payer through their bank, a refund to the screen.
-    (MovementKind.REFUND_COMPLETED, RefundKind.DISPUTE): Line(
-        StatementLineKind.REFUND, -1
-    ),
-    (MovementKind.REFUND_REJECTED, RefundKind.REFUND): Line(
-        StatementLineKind.REFUND_RELEASED, +1
-    ),
-    (MovementKind.REFUND_REJECTED, RefundKind.DISPUTE): Line(
-        StatementLineKind.DISPUTE_RELEASED, +1
-    ),
-    (MovementKind.DIFFERENCE_ARISEN, None): Line(
-        StatementLineKind.DIFFERENCE_ARISEN, -1
-    ),
-    (MovementKind.DIFFERENCE_REPAID, None): Line(
-        StatementLineKind.DIFFERENCE_REPAID, -1
-    ),
-    (MovementKind.DIFFERENCE_ANNULLED, None): Line(
-        StatementLineKind.DIFFERENCE_ANNULLED, +1
-    ),
+LINES: Final[Mapping[tuple[MovementKind, Qualifier], StatementLineKind]] = {
+    (MovementKind.CREDIT, BatchSource.PURCHASE): StatementLineKind.PURCHASE,
+    (MovementKind.CREDIT, BatchSource.ADMIN_CREDIT): StatementLineKind.ADMIN_CREDIT,
+    (MovementKind.DEBIT, None): StatementLineKind.CHARGE,
+    (MovementKind.BENEFIT_COVERED, None): StatementLineKind.BENEFIT_COVERED,
+    (MovementKind.PLATFORM_COVERED, None): StatementLineKind.PLATFORM_COVERED,
+    (MovementKind.BATCH_EXPIRED, None): StatementLineKind.EXPIRED,
+    (MovementKind.REFUND_HOLD, RefundKind.REFUND): StatementLineKind.REFUND_HOLD,
+    (MovementKind.REFUND_HOLD, RefundKind.DISPUTE): StatementLineKind.DISPUTE_HOLD,
+    (MovementKind.REFUND_COMPLETED, RefundKind.REFUND): StatementLineKind.REFUND,
+    (MovementKind.REFUND_COMPLETED, RefundKind.DISPUTE): StatementLineKind.DISPUTE_LOST,
+    (
+        MovementKind.REFUND_REJECTED,
+        RefundKind.REFUND,
+    ): StatementLineKind.REFUND_RELEASED,
+    (
+        MovementKind.REFUND_REJECTED,
+        RefundKind.DISPUTE,
+    ): StatementLineKind.DISPUTE_RELEASED,
+    (MovementKind.DIFFERENCE_ARISEN, None): StatementLineKind.DIFFERENCE_ARISEN,
+    (MovementKind.DIFFERENCE_REPAID, None): StatementLineKind.DIFFERENCE_REPAID,
+    (MovementKind.DIFFERENCE_ANNULLED, None): StatementLineKind.DIFFERENCE_ANNULLED,
 }
 """Every movement the statement shows, as which line (module docstring)."""
 
@@ -234,7 +252,7 @@ def line_of(kind: str, source: str | None, refund_kind: str | None) -> Line:
     if found is None:
         msg = f"no statement line for {movement.value} ({qualifier})"
         raise UnmappedMovementError(msg)
-    return found
+    return Line(kind=found, effect=balance_effect(movement))
 
 
 # ── The statement: the page ────────────────────────────────────────────
@@ -267,8 +285,10 @@ class StatementLine:
 
     at: datetime
     kind: StatementLineKind
+    affects_balance: bool
     units: int
-    """Signed: + came in, - went out."""
+    """Affecting the balance: signed, + came in, - went out; otherwise the
+    positive amount held, freed, covered, arisen or annulled."""
     balance_after: int
     action_kind: str | None
     action_id: str | None
@@ -298,7 +318,7 @@ async def statement_page(
         UnmappedMovementError: a movement :data:`LINES` does not know.
     """
     limit = max(1, min(limit, MAX_LIMIT))
-    effect = case(
+    effect = case(  # balance_effect, in SQL
         (BillingMovement.kind == MovementKind.CREDIT.value, BillingMovement.units),
         (
             BillingMovement.kind.in_([k.value for k in OUTFLOW_KINDS]),
@@ -353,7 +373,8 @@ async def statement_page(
             StatementLine(
                 at=row.created_at,
                 kind=line.kind,
-                units=line.sign * row.units,
+                affects_balance=line.affects_balance,
+                units=line.units(row.units),
                 balance_after=int(row.balance_after),
                 action_kind=row.action_kind,
                 action_id=row.action_key,

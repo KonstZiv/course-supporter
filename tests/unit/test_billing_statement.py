@@ -13,7 +13,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from course_supporter.billing.kinds import BatchSource, MovementKind, RefundKind
+from course_supporter.billing.kinds import (
+    OUTFLOW_KINDS,
+    BatchSource,
+    MovementKind,
+    RefundKind,
+)
 from course_supporter.billing.statement import (
     HIDDEN,
     LINES,
@@ -24,6 +29,7 @@ from course_supporter.billing.statement import (
     UnmappedMovementError,
     _decode,
     _encode,
+    balance_effect,
     line_of,
 )
 
@@ -59,7 +65,7 @@ def test_the_other_movements_stand_alone() -> None:
 
 
 def test_every_line_kind_is_reachable() -> None:
-    assert {line.kind for line in LINES.values()} == set(StatementLineKind)
+    assert set(LINES.values()) == set(StatementLineKind)
 
 
 def test_the_line_kinds_are_the_screens_keys() -> None:
@@ -75,6 +81,7 @@ def test_the_line_kinds_are_the_screens_keys() -> None:
         "refund_released",
         "dispute_hold",
         "dispute_released",
+        "dispute_lost",
         "difference_arisen",
         "difference_repaid",
         "difference_annulled",
@@ -82,16 +89,72 @@ def test_the_line_kinds_are_the_screens_keys() -> None:
 
 
 @pytest.mark.parametrize(
-    ("kind", "source", "refund", "line", "sign"),
+    ("kind", "source", "refund", "line", "affects", "units"),
     [
-        ("credit", "purchase", None, StatementLineKind.PURCHASE, +1),
-        ("credit", "admin_credit", None, StatementLineKind.ADMIN_CREDIT, +1),
-        ("debit", None, None, StatementLineKind.CHARGE, -1),
-        ("batch_expired", "purchase", None, StatementLineKind.EXPIRED, -1),
-        ("refund_hold", "purchase", "dispute", StatementLineKind.DISPUTE_HOLD, -1),
-        ("refund_rejected", "purchase", "refund", StatementLineKind.REFUND_RELEASED, 1),
-        ("refund_completed", "purchase", "dispute", StatementLineKind.REFUND, -1),
-        ("difference_annulled", None, None, StatementLineKind.DIFFERENCE_ANNULLED, 1),
+        ("credit", "purchase", None, StatementLineKind.PURCHASE, True, 7),
+        ("credit", "admin_credit", None, StatementLineKind.ADMIN_CREDIT, True, 7),
+        ("debit", None, None, StatementLineKind.CHARGE, True, -7),
+        ("batch_expired", "purchase", None, StatementLineKind.EXPIRED, True, -7),
+        (
+            "difference_repaid",
+            "purchase",
+            None,
+            StatementLineKind.DIFFERENCE_REPAID,
+            True,
+            -7,
+        ),
+        ("refund_completed", "purchase", "refund", StatementLineKind.REFUND, True, -7),
+        (
+            "refund_completed",
+            "purchase",
+            "dispute",
+            StatementLineKind.DISPUTE_LOST,
+            True,
+            -7,
+        ),
+        ("refund_hold", "purchase", "refund", StatementLineKind.REFUND_HOLD, False, 7),
+        (
+            "refund_hold",
+            "purchase",
+            "dispute",
+            StatementLineKind.DISPUTE_HOLD,
+            False,
+            7,
+        ),
+        (
+            "refund_rejected",
+            "purchase",
+            "refund",
+            StatementLineKind.REFUND_RELEASED,
+            False,
+            7,
+        ),
+        (
+            "refund_rejected",
+            "purchase",
+            "dispute",
+            StatementLineKind.DISPUTE_RELEASED,
+            False,
+            7,
+        ),
+        ("benefit_covered", None, None, StatementLineKind.BENEFIT_COVERED, False, 7),
+        ("platform_covered", None, None, StatementLineKind.PLATFORM_COVERED, False, 7),
+        (
+            "difference_arisen",
+            None,
+            None,
+            StatementLineKind.DIFFERENCE_ARISEN,
+            False,
+            7,
+        ),
+        (
+            "difference_annulled",
+            None,
+            None,
+            StatementLineKind.DIFFERENCE_ANNULLED,
+            False,
+            7,
+        ),
     ],
 )
 def test_line_of(
@@ -99,10 +162,36 @@ def test_line_of(
     source: str | None,
     refund: str | None,
     line: StatementLineKind,
-    sign: int,
+    affects: bool,
+    units: int,
 ) -> None:
+    """A movement of 7 units: signed when it changes the balance, else 7."""
     found = line_of(kind, source, refund)
-    assert (found.kind, found.sign) == (line, sign)
+    assert (found.kind, found.affects_balance, found.units(7)) == (line, affects, units)
+
+
+def test_the_balance_is_changed_by_a_credit_and_the_outflows_only() -> None:
+    """affects_balance is the journal's rule (kinds.py), for every line."""
+    changing = {MovementKind.CREDIT} | OUTFLOW_KINDS
+    for movement, qualifier in LINES:
+        line = line_of(
+            movement.value,
+            qualifier.value if isinstance(qualifier, BatchSource) else "purchase",
+            qualifier.value if isinstance(qualifier, RefundKind) else None,
+        )
+        assert line.affects_balance is (movement in changing), movement
+        assert balance_effect(movement) == (
+            +1 if movement is MovementKind.CREDIT else -1 if movement in changing else 0
+        )
+
+
+def test_a_lost_dispute_is_its_own_line() -> None:
+    lost = line_of("refund_completed", "purchase", "dispute")
+    refunded = line_of("refund_completed", "purchase", "refund")
+    assert (lost.kind, refunded.kind) == (
+        StatementLineKind.DISPUTE_LOST,
+        StatementLineKind.REFUND,
+    )
 
 
 @pytest.mark.parametrize(

@@ -718,7 +718,8 @@ class TestAuthorConsent:
             }
             refused = await client.post(AUTHOR_CHECKOUT, json={"package_id": "starter"})
             assert refused.status_code == 409
-            assert current in refused.json()["detail"]
+            assert refused.json()["detail"]["code"] == "terms_consent_required"
+            assert current in refused.json()["detail"]["details"]
             assert world.sent == []  # Creem was not asked
 
             agreed = await client.post(
@@ -768,10 +769,12 @@ class TestAuthorConsent:
                     AUTHOR_CHECKOUT, json={"package_id": "starter"}
                 )
                 assert refused.status_code == 409
+                assert refused.json()["detail"]["code"] == "terms_consent_required"
                 stale = await client.post(
                     AUTHOR_CONSENT, json={"terms_version": current, "text_sha256": SHA}
                 )
                 assert stale.status_code == 409
+                assert stale.json()["detail"]["code"] == "terms_changed"
                 fresh = await client.post(
                     AUTHOR_CONSENT,
                     json={"terms_version": "2099-01-01", "text_sha256": SHA},

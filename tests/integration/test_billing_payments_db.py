@@ -758,7 +758,9 @@ class TestPortalCheckout:
         async with _client() as client:
             response = await client.post(CHECKOUT, json={"package_id": "starter"})
         assert response.status_code == 409
-        assert get_settings().billing_terms_version in response.json()["detail"]
+        refused = response.json()["detail"]
+        assert refused["code"] == "terms_consent_required"
+        assert get_settings().billing_terms_version in refused["details"]
         assert world.fake.checkouts == {}
 
     async def test_without_providers_it_is_503(self, world: World) -> None:
@@ -768,7 +770,13 @@ class TestPortalCheckout:
             await _consent(client)
             still = await client.post(CHECKOUT, json={"package_id": "starter"})
         assert (refused.status_code, still.status_code) == (503, 503)
-        assert still.json() == {"detail": "Payment is unavailable."}
+        unavailable = {
+            "detail": {
+                "code": "payment_unavailable",
+                "details": "Payment is unavailable.",
+            }
+        }
+        assert refused.json() == still.json() == unavailable
 
     async def test_with_the_fake_it_is_the_link(
         self, session_factory: async_sessionmaker[AsyncSession], world: World
@@ -793,19 +801,22 @@ class TestPortalCheckout:
         )
 
     @pytest.mark.parametrize(
-        "body",
+        ("body", "code"),
         [
-            {"package_id": "nope"},
-            {"package_id": "retired"},
-            {"package_id": "starter", "provider": "paddle"},
+            ({"package_id": "nope"}, "package_not_found"),
+            ({"package_id": "retired"}, "package_not_found"),
+            ({"package_id": "starter", "provider": "paddle"}, "provider_not_found"),
         ],
         ids=["unknown package", "package off sale", "provider not switched on"],
     )
-    async def test_nothing_on_sale_is_404(self, body: dict[str, str]) -> None:
+    async def test_nothing_on_sale_is_404(
+        self, body: dict[str, str], code: str
+    ) -> None:
         async with _client() as client:
             await _consent(client)
             response = await client.post(CHECKOUT, json=body)
         assert response.status_code == 404
+        assert response.json()["detail"]["code"] == code
 
     async def test_a_provider_that_does_not_answer_is_502(self, world: World) -> None:
         class Down(FakeProvider):
@@ -817,7 +828,12 @@ class TestPortalCheckout:
             await _consent(client)
             response = await client.post(CHECKOUT, json={"package_id": "starter"})
         assert response.status_code == 502
-        assert response.json() == {"detail": "The payment provider did not answer."}
+        assert response.json() == {
+            "detail": {
+                "code": "provider_unavailable",
+                "details": "The payment provider did not answer.",
+            }
+        }
 
     async def test_a_body_with_more_is_422(self) -> None:
         async with _client() as client:
@@ -891,6 +907,7 @@ class TestAuthorCheckout:
                 AUTHOR_CHECKOUT, json={"package_id": "starter"}
             )
         assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "payment_unavailable"
 
 
 # ── Schema: the events table, the migration ────────────────────────────

@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import (
@@ -38,9 +38,13 @@ from course_supporter.api.deps import (
     get_session,
 )
 from course_supporter.api.routes._billing_shared import (
-    CHECKOUT_RESPONSES,
+    CHECKOUT_REFUSALS,
+    Refusal,
+    consent_required,
     open_checkout,
     require_payment,
+    responses,
+    terms_changed,
 )
 from course_supporter.api.schemas import (
     BillingCheckoutRequest,
@@ -95,7 +99,7 @@ async def get_billing_terms(
     status_code=201,
     responses={
         200: {"description": "Already agreed to this revision; the earlier record."},
-        409: {"description": "Not the revision in force."},
+        **responses(Refusal.TERMS_CHANGED),
     },
 )
 async def post_billing_consent(
@@ -117,10 +121,7 @@ async def post_billing_consent(
             channel=ConsentChannel.PORTAL,
         )
     except BillingConflictError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=f"The billing terms changed: the current revision is {current}.",
-        ) from exc
+        raise terms_changed(current) from exc
     await session.commit()
     if created:
         logger.info(
@@ -151,13 +152,7 @@ async def get_billing_packages(catalog: CatalogDep) -> BillingPackagesResponse:
     )
 
 
-@router.post(
-    "/portal/billing/checkout",
-    responses={
-        **CHECKOUT_RESPONSES,
-        409: {"description": "The student has not agreed to the terms in force."},
-    },
-)
+@router.post("/portal/billing/checkout", responses=responses(*CHECKOUT_REFUSALS))
 async def post_billing_checkout(
     body: BillingCheckoutRequest,
     student: StudentDep,
@@ -176,11 +171,7 @@ async def post_billing_checkout(
         terms_version=current,
     )
     if terms.consent_required:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Agree to the billing terms first: the current revision is "
-            f"{current}.",
-        )
+        raise consent_required(current)
     account = await get_or_create_student_account(
         session, tenant_id=student.tenant_id, student_id=student.student_id
     )

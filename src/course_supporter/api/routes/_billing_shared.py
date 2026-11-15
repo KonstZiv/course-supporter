@@ -1,13 +1,30 @@
-"""What the portal's and the author's checkout routes share (BIL-PAY).
+"""What the portal's and the author's billing routes share (BIL-PAY).
 
-Both open a checkout through the one service
-(:func:`course_supporter.billing.payments.checkout.start_checkout`); this
-maps its refusals to HTTP the same way for both.
+Refusals:
+    Every refusal of a billing route the screens call (the author's with the
+    tenant's key, the student's in the portal) carries a reason code — a
+    service key the screen picks its own words by — in the project's form of a
+    coded refusal (``api/routes/_author_shared.py``, ``criteria.py``)::
+
+        {"detail": {"code": "<reason>", "details": "<text for the logs>"}}
+
+    :class:`Refusal` is every code; :func:`refusal` builds the answer, and the
+    code fixes the status, so one code never stands under two statuses. The
+    ``details`` say what happened in English and nothing technical (no
+    provider's id, no error of its API). The providers' webhook is not a
+    screen's route and keeps its bare statuses.
+
+Checkout:
+    Both checkout routes open a checkout through the one service
+    (:func:`course_supporter.billing.payments.checkout.start_checkout`);
+    :func:`open_checkout` maps its refusals the same way for both.
 """
 
 from __future__ import annotations
 
 import uuid
+from enum import StrEnum
+from typing import Any, Final
 
 import structlog
 from fastapi import HTTPException
@@ -15,8 +32,9 @@ from fastapi import HTTPException
 from course_supporter.api.schemas import BillingCheckoutRequest, BillingCheckoutResponse
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.checkout import (
-    CheckoutNotFoundError,
+    PackageNotOnSaleError,
     PaymentUnavailableError,
+    ProviderNotSwitchedOnError,
     start_checkout,
 )
 from course_supporter.billing.payments.port import PaymentProviderError
@@ -24,19 +42,90 @@ from course_supporter.billing.payments.registry import ProviderRegistry
 
 logger = structlog.get_logger()
 
-PAYMENT_UNAVAILABLE = "Payment is unavailable."
 
-CHECKOUT_RESPONSES: dict[int | str, dict[str, str]] = {
-    404: {"description": "No such package on sale, or no such provider."},
-    502: {"description": "The payment provider did not answer."},
-    503: {"description": "Payment is unavailable: no provider is switched on."},
+class Refusal(StrEnum):
+    """Why a billing route refused — the code a screen reads."""
+
+    PAYMENT_UNAVAILABLE = "payment_unavailable"
+    """No payment provider is switched on, or none sells the package (503)."""
+
+    TERMS_CONSENT_REQUIRED = "terms_consent_required"
+    """A purchase before the holder agreed to the terms in force (409)."""
+
+    TERMS_CHANGED = "terms_changed"
+    """A consent to a revision that is not the one in force (409)."""
+
+    PACKAGE_NOT_FOUND = "package_not_found"
+    """No such package on sale (404)."""
+
+    PROVIDER_NOT_FOUND = "provider_not_found"
+    """The payment provider named is not switched on (404)."""
+
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    """The payment provider did not answer (502)."""
+
+
+STATUS: Final[dict[Refusal, int]] = {
+    Refusal.PAYMENT_UNAVAILABLE: 503,
+    Refusal.TERMS_CONSENT_REQUIRED: 409,
+    Refusal.TERMS_CHANGED: 409,
+    Refusal.PACKAGE_NOT_FOUND: 404,
+    Refusal.PROVIDER_NOT_FOUND: 404,
+    Refusal.PROVIDER_UNAVAILABLE: 502,
 }
+"""The status of each code (module docstring)."""
+
+PAYMENT_UNAVAILABLE = "Payment is unavailable."
+PROVIDER_DID_NOT_ANSWER = "The payment provider did not answer."
+
+
+def refusal(code: Refusal, details: str) -> HTTPException:
+    """The refusal of ``code`` (module docstring): raise it."""
+    return HTTPException(
+        status_code=STATUS[code], detail={"code": code.value, "details": details}
+    )
+
+
+def responses(*codes: Refusal) -> dict[int | str, dict[str, Any]]:
+    """The OpenAPI ``responses`` of a route that refuses with ``codes``."""
+    found: dict[int | str, dict[str, Any]] = {}
+    for code in codes:
+        status = STATUS[code]
+        listed = found.setdefault(status, {"description": "Refused; detail.code:"})
+        listed["description"] += f" {code.value}"
+    return found
+
+
+CHECKOUT_REFUSALS: Final = (
+    Refusal.PAYMENT_UNAVAILABLE,
+    Refusal.TERMS_CONSENT_REQUIRED,
+    Refusal.PACKAGE_NOT_FOUND,
+    Refusal.PROVIDER_NOT_FOUND,
+    Refusal.PROVIDER_UNAVAILABLE,
+)
+"""What a checkout route refuses with."""
 
 
 def require_payment(registry: ProviderRegistry) -> None:
-    """503 when no provider is switched on."""
+    """``payment_unavailable`` when no provider is switched on."""
     if not len(registry):
-        raise HTTPException(status_code=503, detail=PAYMENT_UNAVAILABLE)
+        raise refusal(Refusal.PAYMENT_UNAVAILABLE, PAYMENT_UNAVAILABLE)
+
+
+def consent_required(current: str) -> HTTPException:
+    """``terms_consent_required``: a purchase before the consent."""
+    return refusal(
+        Refusal.TERMS_CONSENT_REQUIRED,
+        f"Agree to the billing terms first: the current revision is {current}.",
+    )
+
+
+def terms_changed(current: str) -> HTTPException:
+    """``terms_changed``: a consent to a revision not in force."""
+    return refusal(
+        Refusal.TERMS_CHANGED,
+        f"The billing terms changed: the current revision is {current}.",
+    )
 
 
 async def open_checkout(
@@ -48,7 +137,7 @@ async def open_checkout(
     language: str | None,
     return_page: str,
 ) -> BillingCheckoutResponse:
-    """Open the checkout; 404 / 502 / 503 for the service's refusals."""
+    """Open the checkout; the service's refusals as their codes."""
     try:
         started = await start_checkout(
             registry=registry,
@@ -60,18 +149,18 @@ async def open_checkout(
             return_page=return_page,
         )
     except PaymentUnavailableError as exc:
-        raise HTTPException(status_code=503, detail=PAYMENT_UNAVAILABLE) from exc
-    except CheckoutNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise refusal(Refusal.PAYMENT_UNAVAILABLE, PAYMENT_UNAVAILABLE) from exc
+    except PackageNotOnSaleError as exc:
+        raise refusal(Refusal.PACKAGE_NOT_FOUND, str(exc)) from exc
+    except ProviderNotSwitchedOnError as exc:
+        raise refusal(Refusal.PROVIDER_NOT_FOUND, str(exc)) from exc
     except PaymentProviderError as exc:
         logger.exception(
             "billing_checkout_provider_failed",
             provider=body.provider or registry.names[0],
             package_id=body.package_id,
         )
-        raise HTTPException(
-            status_code=502, detail="The payment provider did not answer."
-        ) from exc
+        raise refusal(Refusal.PROVIDER_UNAVAILABLE, PROVIDER_DID_NOT_ANSWER) from exc
     return BillingCheckoutResponse(
         provider=started.provider,
         checkout_id=started.checkout_id,

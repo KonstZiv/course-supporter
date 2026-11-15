@@ -43,6 +43,14 @@ class CheckoutNotFoundError(Exception):
     """No such package on sale, or no such provider switched on."""
 
 
+class PackageNotOnSaleError(CheckoutNotFoundError):
+    """No such package, or one no longer on sale."""
+
+
+class ProviderNotSwitchedOnError(CheckoutNotFoundError):
+    """The provider named is not switched on."""
+
+
 @dataclass(frozen=True, slots=True)
 class CheckoutStarted:
     """The checkout opened at the provider."""
@@ -88,10 +96,11 @@ async def start_checkout(
         registry.default() if provider_name is None else registry.get(provider_name)
     )
     if provider is None:
-        raise CheckoutNotFoundError(f"provider {provider_name!r} is not switched on")
+        msg = f"provider {provider_name!r} is not switched on"
+        raise ProviderNotSwitchedOnError(msg)
     package = catalog.package(package_id)
     if package is None or not package.active:
-        raise CheckoutNotFoundError(f"package {package_id!r} is not on sale")
+        raise PackageNotOnSaleError(f"package {package_id!r} is not on sale")
     success_url, cancel_url = return_urls(return_page)
     try:
         checkout = await provider.create_checkout(

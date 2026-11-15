@@ -125,7 +125,9 @@ class TestConsentRoutes:
             )
             status = await client.get(TERMS)
         assert response.status_code == 409
-        assert get_settings().billing_terms_version in response.json()["detail"]
+        refused = response.json()["detail"]
+        assert refused["code"] == "terms_changed"
+        assert get_settings().billing_terms_version in refused["details"]
         assert status.json()["consent_required"] is True
 
     async def test_a_fingerprint_is_64_lowercase_hex(self) -> None:

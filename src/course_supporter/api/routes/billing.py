@@ -44,9 +44,13 @@ from course_supporter.api.deps import (
     get_session,
 )
 from course_supporter.api.routes._billing_shared import (
-    CHECKOUT_RESPONSES,
+    CHECKOUT_REFUSALS,
+    Refusal,
+    consent_required,
     open_checkout,
     require_payment,
+    responses,
+    terms_changed,
 )
 from course_supporter.api.schemas import (
     BillingCheckoutRequest,
@@ -166,7 +170,7 @@ async def get_author_billing_terms(
     status_code=201,
     responses={
         200: {"description": "Already agreed to this revision; the earlier record."},
-        409: {"description": "Not the revision in force."},
+        **responses(Refusal.TERMS_CHANGED),
     },
 )
 async def post_author_billing_consent(
@@ -186,9 +190,7 @@ async def post_author_billing_consent(
             text_sha256=body.text_sha256,
         )
     except BillingConflictError as exc:
-        raise _status(
-            409, f"The billing terms changed: the current revision is {current}."
-        ) from exc
+        raise terms_changed(current) from exc
     await session.commit()
     if created:
         logger.info(
@@ -204,13 +206,7 @@ async def post_author_billing_consent(
     )
 
 
-@router.post(
-    "/billing/checkout",
-    responses={
-        **CHECKOUT_RESPONSES,
-        409: {"description": "The author has not agreed to the terms in force."},
-    },
-)
+@router.post("/billing/checkout", responses=responses(*CHECKOUT_REFUSALS))
 async def post_author_checkout(
     body: BillingCheckoutRequest,
     tenant: PrepDep,
@@ -225,9 +221,7 @@ async def post_author_checkout(
         session, tenant_id=tenant.tenant_id, terms_version=current
     )
     if terms.consent_required:
-        raise _status(
-            409, f"Agree to the billing terms first: the current revision is {current}."
-        )
+        raise consent_required(current)
     account = await get_or_create_author_account(session, tenant_id=tenant.tenant_id)
     await session.commit()  # no transaction stays open across the provider's call
     author_app = get_settings().author_app_base_url.rstrip("/")

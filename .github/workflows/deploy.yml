@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Deploy via SSH
+        id: deploy
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -185,13 +186,17 @@ jobs:
                 ${{ secrets.SMOKE_TEST_API_KEY }}
 
       - name: Prune old images and build cache
-        if: success()
+        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
+            # Build cache limit: cache grows ~1.3GB per deploy, ~5GB free disk space;
+            # 3GB caps the cache while retaining dependency layers for fast builds.
+            BUILD_CACHE_LIMIT="3GB"
+
             echo "=== Disk usage before cleanup ==="
             docker system df || true
 
@@ -221,6 +226,10 @@ jobs:
               # 3. Prune builder cache older than 7 days (168h)
               echo "Pruning build cache older than 168h..."
               docker builder prune -f --filter "until=168h"
+
+              # 4. Prune builder cache by size limit (flag differs across Docker versions)
+              docker version --format '{{.Server.Version}}' || true
+              if docker builder prune --help 2>/dev/null | grep -q -- '--max-used-space'; then docker builder prune -f --max-used-space "$BUILD_CACHE_LIMIT"; else docker builder prune -f --keep-storage "$BUILD_CACHE_LIMIT"; fi
             ); then
               echo "::warning::Docker image cleanup encountered errors"
             fi

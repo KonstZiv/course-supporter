@@ -279,7 +279,11 @@ class TestPublication:
             "test",
             "ukr",
         )
-        assert job.input_params == {"reference_id": str(explanation.id)}
+        # The author published: their own action (BIL-E), not a submission's.
+        assert job.input_params == {
+            "reference_id": str(explanation.id),
+            "requested_by_submission": False,
+        }
 
     async def test_an_unfinished_draft_is_not_published(
         self, db_session: AsyncSession, seed_root_node: CourseNode

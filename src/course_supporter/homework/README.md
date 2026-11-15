@@ -541,6 +541,14 @@ curl -X DELETE -H "X-API-Key: $PREP_KEY" \
      https://api/api/v1/documents/$DOC_ID/reference/override
 ```
 
+Ціну пояснень у юнітах до запиту (BIL-E) показує четвертий маршрут — лише читання, нічого не
+пише: `price_units`, `available_units`, `enough`, `missing_units`, `charging_enabled`.
+
+```bash
+curl -X POST -H "X-API-Key: $PREP_KEY" \
+     https://api/api/v1/documents/$DOC_ID/reference/estimate
+```
+
 Усі три відповідають однаковим тілом: `status` (`awaiting_key` / `generating` / `ready` /
 `failed`), `version`, `answers`, `explanations`, `carried_over`, `language`, `failure_reason`, а з
 задачі 07 — ще `pass_threshold` і `doubts`. Поріг заліку (1–100, відсоток правильних відповідей)

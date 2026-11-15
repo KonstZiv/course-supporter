@@ -1,8 +1,8 @@
 """The catalog of packages, ``config/billing_packages.yaml`` (BIL-PAY).
 
-The shipped file loads and keeps its placeholders off sale; the shape of a
-package is locked field by field; a file that breaks a rule is refused when
-it is read.
+The shipped file loads and sells the four packages of the pricing page; the
+shape of a package is locked field by field; a file that breaks a rule is
+refused when it is read.
 """
 
 from __future__ import annotations
@@ -47,16 +47,13 @@ class TestShippedCatalog:
         assert catalog.packages
         assert all(REQUIRED_CURRENCY in p.prices_minor for p in catalog.packages)
 
-    def test_its_placeholders_are_off_sale(self) -> None:
-        """Placeholder packages («рішення оператора; не публікувати») stay off
-        sale until the operator sets the real values; the only active package
-        shipped is the sandbox test package for Creem."""
-        catalog = load_catalog(SHIPPED)
-        assert tuple(p.id for p in catalog.active()) == ("sandbox-test-500",)
-        placeholders = [p for p in catalog.packages if p.id != "sandbox-test-500"]
-        assert all(not p.active for p in placeholders)
+    def test_its_header_documents_pricing_page(self) -> None:
+        """The placeholder packages were removed; the header documents that
+        the active packages match the pricing page, with provider product ids
+        in test mode."""
         text = SHIPPED.read_text(encoding="utf-8")
-        assert text.count("рішення оператора; не публікувати") >= 2 * len(placeholders)
+        assert "рішення оператора; не публікувати" not in text
+        assert "Активні пакети — ті, що на сторінці цін" in text
 
     def test_sandbox_package_loads(self) -> None:
         catalog = load_catalog(SHIPPED)
@@ -64,11 +61,37 @@ class TestShippedCatalog:
         assert sandbox is not None
         assert sandbox.units == 500
         assert sandbox.prices_minor == {"EUR": 500}
-        assert sandbox.active is True
+        assert sandbox.active is False
         assert (
             catalog.provider_item("creem", "sandbox-test-500")
             == "prod_2oJ3Yqnf53wOrikCrQGDtk"
         )
+
+    def test_pricing_page_packages_are_active(self) -> None:
+        catalog = load_catalog(SHIPPED)
+        active = catalog.active()
+        assert tuple(p.id for p in active) == (
+            "units-500-v1",
+            "units-1500-v1",
+            "units-5000-v1",
+            "units-10000-v1",
+        )
+        assert tuple(p.units for p in active) == (500, 1500, 5000, 10000)
+        assert tuple(p.prices_minor["EUR"] for p in active) == (999, 1499, 3999, 6999)
+        assert all(p.active for p in active)
+
+        expected_creem = {
+            "units-500-v1": "prod_IjKGKARYgwR25ktF0By1A",
+            "units-1500-v1": "prod_7MjqlyfEXv7zVO37m0vCjN",
+            "units-5000-v1": "prod_5DTm2EO5XM9Rbm53bRKVps",
+            "units-10000-v1": "prod_2u00d6l8qzsfhjeaDTl6FL",
+        }
+        for package_id, expected_product in expected_creem.items():
+            assert catalog.provider_item("creem", package_id) == expected_product
+
+        sandbox = catalog.package("sandbox-test-500")
+        assert sandbox is not None
+        assert sandbox.active is False
 
     def test_its_packages_have_exactly_the_locked_fields(self) -> None:
         raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))

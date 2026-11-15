@@ -1,0 +1,40 @@
+name: Test Prune Condition and Flag Pick
+
+on:
+  push:
+    branches:
+      - antigravity/deploy-prune
+
+jobs:
+  smoke-red:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Deploy via SSH
+        id: deploy
+        run: echo deploy ok
+      - name: Smoke test
+        run: exit 1
+      - name: Prune old images and build cache
+        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
+        run: echo "PRUNE RAN"
+
+  deploy-red:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Deploy via SSH
+        id: deploy
+        run: exit 1
+      - name: Prune old images and build cache
+        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
+        run: echo "PRUNE RAN"
+
+  flag-pick:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Pick flag
+        run: |
+          BUILD_CACHE_LIMIT="3GB"
+          docker version --format '{{.Server.Version}}' || true
+          if docker builder prune --help 2>/dev/null | grep -q -- '--max-used-space'; then echo "branch: --max-used-space"; else echo "branch: --keep-storage"; fi
+          if docker builder prune --help 2>/dev/null | grep -q -- '--max-used-space'; then docker builder prune -f --max-used-space "$BUILD_CACHE_LIMIT"; else docker builder prune -f --keep-storage "$BUILD_CACHE_LIMIT"; fi
+          echo "Exit code: $?"

@@ -21,9 +21,11 @@ The rules (operator 2026-10-30, 2026-11-04, 2026-11-11, 2026-11-15):
       does not work on credit — the review waits for the author's units). A
       task preparation a student's submission started never waits for the
       author's units; an author with credit is never stopped.
-    * Before, when the estimate failed: the price is the ceiling N
+    * Before, when the estimate failed: the price shown is the ceiling N
       (:func:`ceiling_units`) — the most the reserve can hold, so "no more
-      than N" is true; the threshold is ``available >= N``.
+      than N" is true; the threshold is the task's typical price, else
+      ``available > 0`` (``quotes.ceiling_threshold``); the reserve is
+      ``min(N, available)``.
     * Start: a reserve of ``min(2E, the ceiling, available)`` units
       (:func:`reserve_for`; the ledger caps it by what is available, so it
       may be 0).

@@ -15,15 +15,17 @@ Attribution rules (operator decisions 2026-11-06 / 2026-11-11):
   included in call counts and counted explicitly in ``unknown_calls``.
 
 Units billed beside the dollars (BIL-E2, operator 2026-11-15, 5b item 3):
-- ``billed`` — ``debit`` + ``difference_arisen`` of an action: charged to its
-  payer, whoever that is (a student, or the author under a rule); ``covered``
-  — ``benefit_covered`` + ``platform_covered``: borne by the benefit or the
-  platform. As the author's spending page counts them (:mod:`.spending`).
-- An author row: the movements on the tenant's accounts (the author's and its
-  students'); a student row: the movements of reviews for that student,
-  whoever paid. Dated by the movement, as the dollars by the call — an
-  action that straddles the period's edge can show its dollars in one period
-  and its units in the next, and a row may have units without calls.
+- billed — ``debit`` + ``difference_arisen`` of an action, in two columns by
+  the account it is on: billed to the author (the tenant's author account) and
+  billed to students (the tenant's student accounts); ``covered`` —
+  ``benefit_covered`` + ``platform_covered``: borne by the benefit or the
+  platform, billed to no one (:class:`BilledUnits`).
+- An author row: the movements on the tenant's accounts; a student row: the
+  movements of reviews for that student, whoever paid. The dollars are dated
+  by the call, the units by the movement of the journal — an action that
+  straddles the period's edge can show its dollars in one period and its
+  units in the next (:data:`DATING_NOTE`), and a row may have units without
+  calls.
 - ``--by task`` (``by="task"``): author → course → homework task, dollars and
   units through the one link :func:`.links.link_actions`; a processing is its
   course's (no task), an action that leads to no course is a row without one.
@@ -40,6 +42,7 @@ from typing import Any, Literal
 
 from sqlalchemy import ColumnElement, Row, and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from course_supporter.billing.errors import BillingInvalidError
 from course_supporter.billing.kinds import AccountKind, ActionKind, MovementKind
@@ -69,6 +72,12 @@ CostReportScope = Literal["author", "student", "both", "task"]
 
 
 _PAID_CALL = ExternalServiceCall.cost_kind.is_not(None)
+
+DATING_NOTE = (
+    "Долари датовано викликом, юніти — рухом журналу: на межі періоду "
+    "вони можуть розійтися."
+)
+"""The line of the report's head about the two datings."""
 
 BILLED_KINDS: frozenset[str] = frozenset(
     {MovementKind.DEBIT.value, MovementKind.DIFFERENCE_ARISEN.value}
@@ -149,6 +158,35 @@ class UnitsSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class BilledUnits:
+    """Units of some actions in the cost report: billed to the author's
+    account, billed to students' accounts, and covered (by the benefit or the
+    platform — billed to no one)."""
+
+    author_units: int = 0
+    students_units: int = 0
+    covered_units: int = 0
+
+    @classmethod
+    def of(cls, kind: str, units: int, *, payer_kind: str) -> BilledUnits:
+        """One movement's units, by its kind and the kind of the account it is on."""
+        if kind in COVERED_KINDS:
+            return cls(covered_units=units)
+        if kind not in BILLED_KINDS:
+            return cls()
+        if payer_kind == AccountKind.AUTHOR.value:
+            return cls(author_units=units)
+        return cls(students_units=units)
+
+    def __add__(self, other: BilledUnits) -> BilledUnits:
+        return BilledUnits(
+            author_units=self.author_units + other.author_units,
+            students_units=self.students_units + other.students_units,
+            covered_units=self.covered_units + other.covered_units,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ActionSpend:
     """Spend totals for one author action category."""
 
@@ -180,7 +218,7 @@ class AuthorCostRow:
     task_preparation: ActionSpend
     review: ActionSpend
     other: ActionSpend
-    units: UnitsSummary = UnitsSummary()
+    units: BilledUnits = BilledUnits()
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +230,7 @@ class AuthorCostTotals:
     task_preparation: ActionSpend
     review: ActionSpend
     other: ActionSpend
-    units: UnitsSummary = UnitsSummary()
+    units: BilledUnits = BilledUnits()
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,7 +242,7 @@ class StudentCostRow:
     student_id: uuid.UUID
     submissions: int
     spend: SpendSummary
-    units: UnitsSummary = UnitsSummary()
+    units: BilledUnits = BilledUnits()
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,7 +251,7 @@ class StudentCostTotals:
 
     submissions: int
     spend: SpendSummary
-    units: UnitsSummary = UnitsSummary()
+    units: BilledUnits = BilledUnits()
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,7 +270,7 @@ class TaskCostRow:
     authored_document_id: uuid.UUID | None
     task_title: str | None
     spend: SpendSummary
-    units: UnitsSummary
+    units: BilledUnits
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,7 +278,7 @@ class TaskCostTotals:
     """Totals row across all tasks in the report."""
 
     spend: SpendSummary
-    units: UnitsSummary
+    units: BilledUnits
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,7 +295,7 @@ class CostReport:
     students_total: StudentCostTotals
     tasks: tuple[TaskCostRow, ...] = ()
     tasks_total: TaskCostTotals = TaskCostTotals(
-        spend=SpendSummary.zero(), units=UnitsSummary()
+        spend=SpendSummary.zero(), units=BilledUnits()
     )
 
 
@@ -395,7 +433,7 @@ async def _query_authors(
     total_prep = ActionSpend.zero()
     total_review = ActionSpend.zero()
     total_other = ActionSpend.zero()
-    total_units = UnitsSummary()
+    total_units = BilledUnits()
 
     for (t_id, t_name), buckets in sorted(
         grouped.items(), key=lambda item: (item[0][1] or "", str(item[0][0]))
@@ -418,7 +456,7 @@ async def _query_authors(
         task_preparation = _action_spend("task_preparation")
         review = _action_spend("review")
         other = _action_spend("other")
-        row_units = units.get(t_id, UnitsSummary()) if t_id else UnitsSummary()
+        row_units = units.get(t_id, BilledUnits()) if t_id else BilledUnits()
 
         author_rows.append(
             AuthorCostRow(
@@ -508,7 +546,7 @@ async def _query_students(
             student_id=row.student_id,
             submissions=int(row.submissions or 0),
             spend=_spend_from_row(row),
-            units=units.get(key, UnitsSummary()),
+            units=units.get(key, BilledUnits()),
         )
     names = await _tenant_names(session, {t for t, _ in set(units) - set(found)})
     for t_id, s_id in set(units) - set(found):
@@ -527,7 +565,7 @@ async def _query_students(
 
     total_submissions = 0
     total_spend = SpendSummary.zero()
-    total_units = UnitsSummary()
+    total_units = BilledUnits()
     for student_row in student_rows:
         total_submissions += student_row.submissions
         total_spend = total_spend + student_row.spend
@@ -567,11 +605,12 @@ async def _units_by_tenant(
     start_dt: datetime,
     end_dt_exclusive: datetime,
     tenant_id: uuid.UUID | None,
-) -> dict[uuid.UUID, UnitsSummary]:
+) -> dict[uuid.UUID, BilledUnits]:
     """Billed and covered units on each tenant's accounts (author's, students')."""
     stmt = (
         select(
             BillingAccount.tenant_id,
+            BillingAccount.kind,
             BillingMovement.kind,
             func.sum(BillingMovement.units),
         )
@@ -582,14 +621,16 @@ async def _units_by_tenant(
             BillingMovement.created_at >= start_dt,
             BillingMovement.created_at < end_dt_exclusive,
         )
-        .group_by(BillingAccount.tenant_id, BillingMovement.kind)
+        .group_by(BillingAccount.tenant_id, BillingAccount.kind, BillingMovement.kind)
     )
     if tenant_id is not None:
         stmt = stmt.where(BillingAccount.tenant_id == tenant_id)
-    found: dict[uuid.UUID, UnitsSummary] = defaultdict(UnitsSummary)
-    for t_id, kind, units in (await session.execute(stmt)).tuples():
+    found: dict[uuid.UUID, BilledUnits] = defaultdict(BilledUnits)
+    for t_id, payer_kind, kind, units in (await session.execute(stmt)).tuples():
         if t_id is not None:
-            found[t_id] = found[t_id] + UnitsSummary.of(kind, int(units))
+            found[t_id] = found[t_id] + BilledUnits.of(
+                kind, int(units), payer_kind=payer_kind
+            )
     return dict(found)
 
 
@@ -599,17 +640,21 @@ async def _units_by_student(
     start_dt: datetime,
     end_dt_exclusive: datetime,
     tenant_id: uuid.UUID | None,
-) -> dict[tuple[uuid.UUID, uuid.UUID], UnitsSummary]:
-    """Billed and covered units of the reviews for each student, whoever paid."""
-    beneficiary = BillingAccount
+) -> dict[tuple[uuid.UUID, uuid.UUID], BilledUnits]:
+    """Units of the reviews for each student: billed to the author (under a
+    payment rule) or to the student, and covered."""
+    beneficiary = aliased(BillingAccount)
+    payer = aliased(BillingAccount)
     stmt = (
         select(
             beneficiary.tenant_id,
             beneficiary.student_id,
+            payer.kind,
             BillingMovement.kind,
             func.sum(BillingMovement.units),
         )
         .join(beneficiary, beneficiary.id == BillingMovement.beneficiary_account_id)
+        .join(payer, payer.id == BillingMovement.account_id)
         .where(
             *_units_of_actions(),
             BillingMovement.action_kind == ActionKind.REVIEW.value,
@@ -619,15 +664,20 @@ async def _units_by_student(
             BillingMovement.created_at >= start_dt,
             BillingMovement.created_at < end_dt_exclusive,
         )
-        .group_by(beneficiary.tenant_id, beneficiary.student_id, BillingMovement.kind)
+        .group_by(
+            beneficiary.tenant_id,
+            beneficiary.student_id,
+            payer.kind,
+            BillingMovement.kind,
+        )
     )
     if tenant_id is not None:
         stmt = stmt.where(beneficiary.tenant_id == tenant_id)
-    found: dict[tuple[uuid.UUID, uuid.UUID], UnitsSummary] = defaultdict(UnitsSummary)
-    for t_id, s_id, kind, units in (await session.execute(stmt)).tuples():
+    found: dict[tuple[uuid.UUID, uuid.UUID], BilledUnits] = defaultdict(BilledUnits)
+    for t_id, s_id, payer_kind, kind, units in (await session.execute(stmt)).tuples():
         if t_id is not None and s_id is not None:
-            found[(t_id, s_id)] = found[(t_id, s_id)] + UnitsSummary.of(
-                kind, int(units)
+            found[(t_id, s_id)] = found[(t_id, s_id)] + BilledUnits.of(
+                kind, int(units), payer_kind=payer_kind
             )
     return dict(found)
 
@@ -688,6 +738,7 @@ async def _query_tasks(
     moves = (
         select(
             BillingAccount.tenant_id,
+            BillingAccount.kind,
             BillingMovement.action_kind,
             BillingMovement.action_key,
             BillingMovement.kind,
@@ -701,6 +752,7 @@ async def _query_tasks(
         )
         .group_by(
             BillingAccount.tenant_id,
+            BillingAccount.kind,
             BillingMovement.action_kind,
             BillingMovement.action_key,
             BillingMovement.kind,
@@ -709,8 +761,14 @@ async def _query_tasks(
     if tenant_id is not None:
         moves = moves.where(BillingAccount.tenant_id == tenant_id)
     moved = [
-        (t_id, ActionRef(ActionKind(action_kind), key), UnitsSummary.of(kind, int(n)))
-        for t_id, action_kind, key, kind, n in (await session.execute(moves)).tuples()
+        (
+            t_id,
+            ActionRef(ActionKind(action_kind), key),
+            BilledUnits.of(kind, int(n), payer_kind=payer_kind),
+        )
+        for t_id, payer_kind, action_kind, key, kind, n in (
+            await session.execute(moves)
+        ).tuples()
         if action_kind is not None and key is not None
     ]
 
@@ -719,7 +777,7 @@ async def _query_tasks(
         [ref for _, ref, _ in spent if ref is not None] + [ref for _, ref, _ in moved],
     )
     spends: dict[TaskKey, SpendSummary] = defaultdict(SpendSummary.zero)
-    units: dict[TaskKey, UnitsSummary] = defaultdict(UnitsSummary)
+    units: dict[TaskKey, BilledUnits] = defaultdict(BilledUnits)
     for t_id, call_ref, spend in spent:
         key = _task_key(t_id, call_ref, links.get(call_ref) if call_ref else None)
         spends[key] = spends[key] + spend
@@ -741,7 +799,7 @@ async def _query_tasks(
                 authored_document_id=d_id,
                 task_title=tasks.get(d_id) if d_id else None,
                 spend=spends.get((t_id, c_id, d_id), SpendSummary.zero()),
-                units=units.get((t_id, c_id, d_id), UnitsSummary()),
+                units=units.get((t_id, c_id, d_id), BilledUnits()),
             )
             for t_id, c_id, d_id in keys
         ),
@@ -757,7 +815,7 @@ async def _query_tasks(
         ),
     )
     total_spend = SpendSummary.zero()
-    total_units = UnitsSummary()
+    total_units = BilledUnits()
     for task_row in task_rows:
         total_spend = total_spend + task_row.spend
         total_units = total_units + task_row.units
@@ -844,7 +902,7 @@ async def build_cost_report(
         )
 
     tasks: tuple[TaskCostRow, ...] = ()
-    tasks_total = TaskCostTotals(spend=SpendSummary.zero(), units=UnitsSummary())
+    tasks_total = TaskCostTotals(spend=SpendSummary.zero(), units=BilledUnits())
     if by == "task":
         tasks, tasks_total = await _query_tasks(
             session,

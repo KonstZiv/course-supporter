@@ -16,9 +16,11 @@ When the payer can pay:
     author pays for waits for the author's units like a student's for theirs).
     Its available units cover the review's price P — the one its run was
     refused with, from the review's estimate row (``action_cost_estimates``,
-    key: the submission); without a row, the typical price of the task
-    (:func:`.held.price_of_held`). A test needs a balance above 0. An author
-    with credit is never waited for: their reviews are continued at once.
+    key: the submission); without a row, the threshold of a review priced at
+    its ceiling — the task's typical price, else ``available > 0``
+    (:func:`.held.price_of_held`, :func:`.quotes.ceiling_threshold`). A test
+    needs a balance above 0. An author with credit is never waited for: their
+    reviews are continued at once.
 
 Idempotent: a submission with a job in flight is skipped
 (``start_continuation_job``), and a continued one leaves ``awaiting_funds``

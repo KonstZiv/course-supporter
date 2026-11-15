@@ -123,9 +123,11 @@ up to today, all tenants, --by both, --format table):
     costs --from 2026-11-01 --to 2026-11-30 --tenant "Python Academy"
     costs --by student --format csv
     costs --from 2026-11-01 --to 2026-11-15 --by author
-Beside the dollars, the units billed to the payers from the journal (BIL-E2):
-"виставлено_юнітів" (debit + difference) and "покрито_юнітів" (borne by the
-benefit or the platform), as the author's spending page counts them. --by task
+Beside the dollars, the units from the journal (BIL-E2): billed (debit +
+difference) to the author — "виставлено_авторові" — and to the tenant's
+students — "виставлено_студентам", and "покрито_юнітів" (borne by the benefit
+or the platform). The dollars are dated by the call, the units by the movement:
+at the period's edge they can part (the report's head says so). --by task
 breaks it down author → course → homework task (processing is the course's):
     costs --by task --from 2026-11-01 --to 2026-11-30 [--format csv]
 
@@ -676,7 +678,7 @@ def _render_author_table(report: billing_costs.CostReport) -> list[str]:
         prep: billing_costs.ActionSpend,
         review: billing_costs.ActionSpend,
         other: billing_costs.ActionSpend,
-        units: billing_costs.UnitsSummary,
+        units: billing_costs.BilledUnits,
     ) -> list[str]:
         cells = [
             tenant_id_str,
@@ -721,7 +723,7 @@ def _render_author_table(report: billing_costs.CostReport) -> list[str]:
     )
     lines = ["По авторах:"]
     lines.extend(
-        _format_ascii_table(headers, rows, total_row, right_align={2, 3, 4, 5, 8})
+        _format_ascii_table(headers, rows, total_row, right_align={2, 3, 4, 5, 6, 9})
     )
     lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
     return lines
@@ -747,7 +749,7 @@ def _render_student_table(report: billing_costs.CostReport) -> list[str]:
         student_id_str: str,
         submissions: int,
         spend: billing_costs.SpendSummary,
-        units: billing_costs.UnitsSummary,
+        units: billing_costs.BilledUnits,
     ) -> list[str]:
         return [
             tenant_id_str,
@@ -777,21 +779,28 @@ def _render_student_table(report: billing_costs.CostReport) -> list[str]:
     total_row = _cells("разом", "", "", totals.submissions, totals.spend, totals.units)
     lines = ["По студентах:"]
     lines.extend(
-        _format_ascii_table(headers, rows, total_row, right_align={3, 4, 5, 6, 7, 10})
+        _format_ascii_table(
+            headers, rows, total_row, right_align={3, 4, 5, 6, 7, 8, 11}
+        )
     )
     lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
     return lines
 
 
-_UNITS_HEADERS = ("виставлено_юнітів", "покрито_юнітів")
-"""Units billed to the payers, and borne by the benefit or the platform."""
+_UNITS_HEADERS = ("виставлено_авторові", "виставлено_студентам", "покрито_юнітів")
+"""Units billed to the author, to students, and borne by the benefit or the
+platform (``costs.BilledUnits``)."""
 
 NO_COURSE = "(без курсу)"
 NO_TASK = "(без завдання)"
 
 
-def _units_cells(units: billing_costs.UnitsSummary) -> list[str]:
-    return [str(units.billed_units), str(units.covered_units)]
+def _units_cells(units: billing_costs.BilledUnits) -> list[str]:
+    return [
+        str(units.author_units),
+        str(units.students_units),
+        str(units.covered_units),
+    ]
 
 
 def _render_task_table(report: billing_costs.CostReport) -> list[str]:
@@ -812,7 +821,7 @@ def _render_task_table(report: billing_costs.CostReport) -> list[str]:
         course: str,
         task: str,
         spend: billing_costs.SpendSummary,
-        units: billing_costs.UnitsSummary,
+        units: billing_costs.BilledUnits,
         course_id: str,
         task_id: str,
     ) -> list[str]:
@@ -844,7 +853,7 @@ def _render_task_table(report: billing_costs.CostReport) -> list[str]:
     total_row = _cells("разом", "", "", totals.spend, totals.units, "", "")
     lines = ["По завданнях (автор → курс → завдання):"]
     lines.extend(
-        _format_ascii_table(headers, rows, total_row, right_align={3, 4, 5, 6, 7})
+        _format_ascii_table(headers, rows, total_row, right_align={3, 4, 5, 6, 7, 8})
     )
     lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
     return lines
@@ -858,7 +867,8 @@ def _render_cost_table(
         (
             f"Період (UTC): {report.from_date.isoformat()} .. "
             f"{report.to_date.isoformat()} (включно) | Орендар: {tenant_text}"
-        )
+        ),
+        billing_costs.DATING_NOTE,
     ]
     if report.by in ("author", "both"):
         lines.append("")
@@ -894,7 +904,8 @@ _CSV_FIELDNAMES = (
     "review_usd",
     "other_calls",
     "other_usd",
-    "billed_units",
+    "billed_author_units",
+    "billed_students_units",
     "covered_units",
     "course_id",
     "course_title",
@@ -934,9 +945,10 @@ def _spend_csv_fields(spend: billing_costs.SpendSummary) -> dict[str, str]:
     }
 
 
-def _units_csv_fields(units: billing_costs.UnitsSummary) -> dict[str, str]:
+def _units_csv_fields(units: billing_costs.BilledUnits) -> dict[str, str]:
     return {
-        "billed_units": str(units.billed_units),
+        "billed_author_units": str(units.author_units),
+        "billed_students_units": str(units.students_units),
         "covered_units": str(units.covered_units),
     }
 

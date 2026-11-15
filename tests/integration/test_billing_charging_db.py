@@ -24,7 +24,15 @@ import pytest
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from course_supporter.billing import admin, benefit, charging, funds, ledger
+from course_supporter.billing import (
+    admin,
+    benefit,
+    charging,
+    estimates,
+    funds,
+    ledger,
+    quotes,
+)
 from course_supporter.billing.accounts import (
     get_or_create_author_account,
     get_or_create_student_account,
@@ -570,34 +578,157 @@ class TestTestsUnderTheAuthorsRule:
         assert (await balance(session_factory, w.author)).available == 1
 
 
-class TestTheCeiling:
-    """BIL-E2, 4a: an estimate fallen to the ceiling (``expected_usd`` None) —
-    the threshold and the reserve are N = ceil(ceiling x K), no margin."""
+CEILING_USD = 0.89
+"""The money ceiling of the ``task`` path a first submission takes
+(config/submission_paths.yaml): N = ceil(0.89 x 1700) = 1513."""
+N = 1513
 
-    async def test_the_threshold_and_the_reserve_are_n(
+
+async def typical_price(
+    session_factory: async_sessionmaker[AsyncSession], w: World
+) -> int:
+    """The task's typical price (basis ``typical``), as a screen shows it."""
+    async with session_factory() as session:
+        task = await session.get(AuthoredDocument, w.task_id)
+        assert task is not None
+        found = await quotes.review_price(
+            session, task=task, tenant_id=w.tenant_id, student_id=w.student_id
+        )
+        await session.commit()
+    assert found.basis == "typical"
+    assert 0 < found.units < N, "the test needs room between the two"
+    return found.units
+
+
+def _no_estimate(*_: Any, **__: Any) -> Any:
+    raise RuntimeError("estimate broke")
+
+
+class TestTheCeiling:
+    """An estimate fallen to the ceiling (``expected_usd`` None; operator
+    2026-11-15): the start needs the task's typical price, else a balance
+    above 0; the reserve is min(N, available); the excess is the platform's."""
+
+    async def test_between_the_typical_price_and_n_it_starts_with_what_is_there(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         w = await make_world(session_factory)
-        n = 170  # a ceiling of $0.10: ceil(0.10 x 1700)
+        p_typ = await typical_price(session_factory, w)
         context = replace(review(w), expected_usd=None)
         port = funds.LedgerFundsPort(session_factory)
-        await buy(session_factory, w.student, n - 1)
+        await buy(session_factory, w.student, p_typ + 10)
 
-        short = await port.check_and_reserve(context, 0.10)
-        await buy(session_factory, w.student, 1)
-        enough = await port.check_and_reserve(context, 0.10)
+        answer = await port.check_and_reserve(context, CEILING_USD)
 
-        assert short.decision is FundsDecision.REFUSED, "N - 1 is short of N"
-        assert enough.decision is FundsDecision.ALLOWED, (
-            "N, not P = ceil(0.10 x 1.2 x 1700) = 204"
-        )
+        assert answer.decision is FundsDecision.ALLOWED, "N is not needed"
         (held,) = await reservations(session_factory, ActionKind.REVIEW, key_of(w))
-        assert held.units == n
+        assert held.units == p_typ + 10, "min(N, available)"
+
+        await call(session_factory, w.homework_job_id, "0.50")  # F = 850
+        await port.release_remainder(context, SubmissionOutcome.COMPLETED)
+
+        moved = await sums(session_factory, ActionKind.REVIEW, key_of(w))
+        assert moved[MovementKind.DEBIT.value] == p_typ + 10
+        assert moved[MovementKind.PLATFORM_COVERED.value] == 850 - (p_typ + 10)
+
+    async def test_below_the_typical_price_it_is_held(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        w = await make_world(session_factory)
+        p_typ = await typical_price(session_factory, w)
+        await buy(session_factory, w.student, p_typ - 1)
+
+        answer = await funds.LedgerFundsPort(session_factory).check_and_reserve(
+            replace(review(w), expected_usd=None), CEILING_USD
+        )
+
+        assert answer.decision is FundsDecision.REFUSED
+        assert await reservations(session_factory, ActionKind.REVIEW, key_of(w)) == []
+
+    async def test_neither_priced_a_balance_above_zero_is_enough(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(estimates, "estimate_review", _no_estimate)
+        w = await make_world(session_factory)
+        context = replace(review(w), expected_usd=None)
+        port = funds.LedgerFundsPort(session_factory)
+
+        empty = await port.check_and_reserve(context, CEILING_USD)
+        await buy(session_factory, w.student, 1)
+        one = await port.check_and_reserve(context, CEILING_USD)
+
+        assert empty.decision is FundsDecision.REFUSED
+        assert one.decision is FundsDecision.ALLOWED
+        (held,) = await reservations(session_factory, ActionKind.REVIEW, key_of(w))
+        assert held.units == 1
         await port.release_remainder(context, SubmissionOutcome.FAILED)
+
+    async def test_the_author_under_a_rule_by_the_same_rule(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        w = await make_world(session_factory)
+        await course_rule(session_factory, w)
+        p_typ = await typical_price(session_factory, w)
+        context = replace(review(w), expected_usd=None)
+        port = funds.LedgerFundsPort(session_factory)
+        await buy(session_factory, w.author, p_typ - 1)
+
+        short = await port.check_and_reserve(context, CEILING_USD)
+        await buy(session_factory, w.author, 11)
+        enough = await port.check_and_reserve(context, CEILING_USD)
+
+        assert short.decision is FundsDecision.REFUSED
+        assert enough.decision is FundsDecision.ALLOWED
+        (held,) = await reservations(session_factory, ActionKind.REVIEW, key_of(w))
+        assert (held.account_id, held.units) == (w.author, p_typ + 10)
+        await port.release_remainder(context, SubmissionOutcome.FAILED)
+
+    async def test_a_held_review_without_an_estimate_continues_by_the_same_rule(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No estimate row: the typical price; neither priced: a balance > 0."""
+        from course_supporter.billing.resume_funded import can_pay
+
+        w = await make_world(session_factory)
+        p_typ = await typical_price(session_factory, w)
+        await buy(session_factory, w.student, p_typ - 1)
+
+        async def payable() -> bool:
+            async with session_factory() as session:
+                submission = await session.get(HomeworkSubmission, w.submission_id)
+                assert submission is not None
+                return await can_pay(session, submission)
+
+        short = await payable()
+        await buy(session_factory, w.student, 1)
+        typical = await payable()
+        monkeypatch.setattr(estimates, "estimate_review", _no_estimate)
+        neither = await payable()
+
+        assert (short, typical, neither) == (False, True, True)
+
+    async def test_neither_priced_a_held_review_waits_at_zero(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from course_supporter.billing.resume_funded import can_pay
+
+        monkeypatch.setattr(estimates, "estimate_review", _no_estimate)
+        w = await make_world(session_factory)
+        async with session_factory() as session:
+            submission = await session.get(HomeworkSubmission, w.submission_id)
+            assert submission is not None
+            assert await can_pay(session, submission) is False
 
     def test_n_is_the_cap_of_every_reserve(self) -> None:
         assert charging.ceiling_units(Decimal("0.10")) == 170
         assert charging.reserve_request(Decimal(1), Decimal("0.10")) == 170
+        assert charging.ceiling_units(Decimal(str(CEILING_USD))) == N
 
 
 class TestPathTestMode:

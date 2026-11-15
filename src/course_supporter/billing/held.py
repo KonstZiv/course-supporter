@@ -77,10 +77,11 @@ async def price_of_held(
     """The units the held review's start needs.
 
     P the run was refused with — its estimate row (``action_cost_estimates``,
-    key: the submission); without a row, the typical price of the task
-    (:func:`.quotes.review_price`, whoever pays). A test: :data:`TEST_NEED`.
+    key: the submission); without a row, the threshold of a review priced at
+    its ceiling (:func:`.quotes.ceiling_threshold`, whoever pays): the task's
+    typical price, else ``available > 0``. A test: :data:`TEST_NEED`.
     """
-    from course_supporter.billing.quotes import review_price
+    from course_supporter.billing.quotes import ceiling_threshold
 
     if task.task_type == AssignmentType.TEST.value:
         return TEST_NEED
@@ -92,13 +93,12 @@ async def price_of_held(
     )
     if p_units is not None:
         return int(p_units)
-    found = await review_price(
+    return await ceiling_threshold(
         session,
         task=task,
         tenant_id=submission.tenant_id,
         student_id=submission.student_id,
     )
-    return found.units
 
 
 async def waiting_for_author(

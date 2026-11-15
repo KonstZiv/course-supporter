@@ -531,41 +531,40 @@ class TestCostReport:
             )
 
         rows = {
-            (r.course_node_id, r.authored_document_id): (
-                r.spend.known_usd,
-                r.units.billed_units,
-                r.units.covered_units,
-            )
+            (r.course_node_id, r.authored_document_id): (r.spend.known_usd, r.units)
             for r in by_task.tasks
         }
         assert rows == {
-            (w.course_1, w.task_1): (Decimal("0.12"), 150, 0),
-            (w.course_1, None): (Decimal("0.20"), 200, 0),
-            (w.course_2, w.task_2): (Decimal("0.08"), 40, 30),
-            (None, None): (Decimal(0), 19, 0),
+            (w.course_1, w.task_1): (Decimal("0.12"), costs.BilledUnits(150, 0, 0)),
+            (w.course_1, None): (Decimal("0.20"), costs.BilledUnits(200, 0, 0)),
+            (w.course_2, w.task_2): (Decimal("0.08"), costs.BilledUnits(40, 0, 30)),
+            (None, None): (Decimal(0), costs.BilledUnits(10, 9, 0)),
         }, (
             "a preparation inside a review is its task's; processing the course's; "
-            "no course: the author's 7 + 3 and the student's own 9 (its key leads "
-            "to no submission) — every payer of the tenant, as the author row"
+            "no course: the author's 7 + 3, and the student's own 9 (its key leads "
+            "to no submission) in the students' column"
         )
-        assert (
-            by_task.tasks_total.spend.known_usd,
-            by_task.tasks_total.units.billed_units,
-            by_task.tasks_total.units.covered_units,
-        ) == (Decimal("0.40"), 409, 30)
+        assert (by_task.tasks_total.spend.known_usd, by_task.tasks_total.units) == (
+            Decimal("0.40"),
+            costs.BilledUnits(author_units=400, students_units=9, covered_units=30),
+        )
 
         (author,) = both.authors
         assert (author.spend.known_usd, author.units) == (
             Decimal("0.40"),
-            costs.UnitsSummary(billed_units=409, covered_units=30),
-        ), "the tenant's accounts: the author's 400 and the student's own 9"
+            costs.BilledUnits(author_units=400, students_units=9, covered_units=30),
+        ), "the tenant's accounts: the author's 400, its student's own 9"
         (student,) = both.students
         assert (student.spend.known_usd, student.units) == (
             Decimal("0.15"),
-            costs.UnitsSummary(billed_units=169, covered_units=30),
-        ), "the reviews for the student, whoever paid: 100 + 50 + 7 + 3 + 9; 30"
+            costs.BilledUnits(author_units=160, students_units=9, covered_units=30),
+        ), "the reviews for the student: the author paid 100 + 50 + 7 + 3, they 9"
 
         table = billing_admin._render_cost_table(by_task, tenant_label=None)
+        head = table.splitlines()[:2]
+        assert head[1] == costs.DATING_NOTE, "the report's head names the two datings"
+        assert "виставлено_авторові" in table
+        assert "виставлено_студентам" in table
         assert "По завданнях (автор → курс → завдання):" in table
         assert "Завдання 1" in table
         assert billing_admin.NO_TASK in table
@@ -576,6 +575,7 @@ class TestCostReport:
         ]
         header = csv_rows[0]
         total = next(r for r in csv_rows if r[0] == "task" and r[1] == "total")
-        assert total[header.index("billed_units")] == "409"
+        assert total[header.index("billed_author_units")] == "400"
+        assert total[header.index("billed_students_units")] == "9"
         assert total[header.index("covered_units")] == "30"
         assert Decimal(total[header.index("total_usd")]) == Decimal("0.40")

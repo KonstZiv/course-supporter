@@ -42,6 +42,7 @@ from sqlalchemy import select
 from course_supporter.billing import charging
 from course_supporter.billing.estimates import preparation_e_usd, processing_e_usd
 from course_supporter.billing.kinds import AccountKind, ActionKind, MovementKind
+from course_supporter.billing.quotes import NOTHING_PRICED_THRESHOLD, ceiling_threshold
 from course_supporter.cost_estimate.shadow import (
     preparation_key,
     processing_key,
@@ -117,8 +118,10 @@ class LedgerFundsPort:
     ``awaiting_funds`` like a student's (BIL-E2, 5a, item 2) — reserves
     ``min(2E, the path's ceiling, available)`` and is settled, at its end, with
     the cost of its calls (:func:`.charging.review_fact_usd`). A review whose
-    estimate fell to the ceiling (``expected_usd`` is ``None``) is priced at
-    the ceiling N, no margin, and reserves N. A failure releases everything.
+    estimate fell to the ceiling (``expected_usd`` is ``None``) needs the
+    task's typical price to start, else ``available > 0``
+    (:func:`.quotes.ceiling_threshold`), and reserves ``min(N, available)``,
+    N the ceiling in units. A failure releases everything.
     The numbers of every answer are also kept on the funds-port row of the
     call register, as by the first implementation.
     """
@@ -153,12 +156,8 @@ class LedgerFundsPort:
         if in_test_mode(task_type):
             return FundsAnswer.allowed()
         ceiling = Decimal(str(ceiling_estimate_usd))
-        if context.expected_usd is None:
-            # The estimate fell to the ceiling (BIL-E2, 4a): the price is N, the
-            # most the reserve can hold — no margin over it.
-            e_usd, price = ceiling, charging.ceiling_units(ceiling)
-        else:
-            e_usd, price = context.expected_usd, charging.price_of(context.expected_usd)
+        at_ceiling = context.expected_usd is None
+        e_usd = ceiling if context.expected_usd is None else context.expected_usd
         async with self._session_factory() as session:
             task = await _task_of_submission(session, context.submission_id)
             payer = await charging.payer_of(
@@ -176,11 +175,28 @@ class LedgerFundsPort:
                     if allowed
                     else FundsAnswer.refused(FundsRefusalReason.INSUFFICIENT_FUNDS)
                 )
+            threshold = charging.price_of(e_usd)
+            if at_ceiling and charging.threshold_applies(
+                ActionKind.REVIEW, payer, own_action=False
+            ):
+                # The estimate fell to the ceiling: the start needs the task's
+                # typical price (else available > 0); the reserve below is
+                # min(N, available), the excess over it the platform's.
+                threshold = (
+                    await ceiling_threshold(
+                        session,
+                        task=task,
+                        tenant_id=context.tenant_id,
+                        student_id=context.student_id,
+                    )
+                    if task is not None
+                    else NOTHING_PRICED_THRESHOLD
+                )
             found = await charging.quote(
                 session,
                 action_kind=ActionKind.REVIEW,
                 payer=payer,
-                price_units=price,
+                price_units=threshold,
                 lock=True,
             )
             if not found.enough:

@@ -437,9 +437,11 @@ class TestTheCeiling:
         assert body["price_units"] == _n_of(list(SubmissionState)), (
             "no path chosen: the widest of the type's paths"
         )
-        assert [e["reason"] for e in logs if e["event"] == "billing_quote_ceiling"] == [
-            "path_choice_failed"
-        ]
+        reasons = [e["reason"] for e in logs if e["event"] == "billing_quote_ceiling"]
+        assert set(reasons) == {"path_choice_failed"}, (
+            "a warning for each failed estimate: the file's and the typical one "
+            "the threshold needs"
+        )
 
     async def test_reading_the_file_fails(
         self, world: World, monkeypatch: pytest.MonkeyPatch
@@ -498,21 +500,51 @@ class TestTheCeiling:
         assert response.status_code == 422, response.text
         assert response.json()["detail"]["code"] == "forbidden_type"
 
-    async def test_the_threshold_is_n(
+    async def test_neither_priced_a_balance_above_zero_is_enough(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         world: World,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """Operator 2026-11-15: neither the price nor the typical price — the
+        start needs only a balance above 0; the screen still says N."""
         monkeypatch.setattr(estimates, "estimate_review", _boom)
-        n = _n_of()
-        await buy(session_factory, world.student, n - 1)
-        short = (await self._estimate(world)).json()
+        empty = (await self._estimate(world)).json()
         await buy(session_factory, world.student, 1)
-        enough = (await self._estimate(world)).json()
+        one = (await self._estimate(world)).json()
 
+        assert (empty["price_units"], empty["enough"], empty["missing_units"]) == (
+            _n_of(),
+            False,
+            1,
+        )
+        assert (one["price_units"], one["enough"], one["missing_units"]) == (
+            _n_of(),
+            True,
+            0,
+        )
+
+    async def test_the_threshold_of_a_failed_file_is_the_typical_price(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from course_supporter.api.routes import billing_estimates
+
+        typical = (await self._estimate(world)).json()["price_units"]
+        monkeypatch.setattr(billing_estimates, "read_for_quote", _aboom)
+        await buy(session_factory, world.student, typical - 1)
+        short = (await self._estimate(world, with_file=True)).json()
+        await buy(session_factory, world.student, 1)
+        enough = (await self._estimate(world, with_file=True)).json()
+
+        assert 0 < typical < _n_of()
+        assert (short["basis"], short["price_units"]) == ("ceiling", _n_of())
         assert (short["enough"], short["missing_units"]) == (False, 1)
-        assert (enough["enough"], enough["missing_units"]) == (True, 0)
+        assert (enough["enough"], enough["missing_units"]) == (True, 0), (
+            "the typical price is enough; N is not needed"
+        )
 
     async def test_the_author_pays_no_numbers_even_at_the_ceiling(
         self,
@@ -581,6 +613,54 @@ class TestRefusal:
                 file=None,
             )  # the author has 0 units: no refusal
 
+    async def test_at_the_ceiling_the_gate_needs_the_typical_price(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Operator 2026-11-15: the file's price fell to the ceiling — between
+        the typical price and N the submission is taken; below it, 402."""
+        from fastapi import HTTPException
+
+        from course_supporter.api.routes import billing_estimates
+
+        async with _client() as client:
+            typical = (
+                await client.post(f"/api/v1/portal/tasks/{world.task_id}/estimate")
+            ).json()["price_units"]
+        monkeypatch.setattr(billing_estimates, "read_for_quote", _aboom)
+        await buy(session_factory, world.student, typical - 1)
+        with pytest.raises(HTTPException) as refused:
+            await _gate(session_factory, world, with_file=True)
+        await buy(session_factory, world.student, 1)
+        await _gate(session_factory, world, with_file=True)  # taken
+
+        detail: Any = refused.value.detail  # the coded refusal, a dict
+        assert 0 < typical < _n_of()
+        assert refused.value.status_code == 402
+        assert detail["details"] == {
+            "price_units": _n_of(),
+            "available_units": typical - 1,
+            "missing_units": 1,
+        }
+
+    async def test_neither_priced_the_gate_needs_a_balance_above_zero(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from fastapi import HTTPException
+
+        monkeypatch.setattr(estimates, "estimate_review", _boom)
+        with pytest.raises(HTTPException) as refused:
+            await _gate(session_factory, world, with_file=True)
+        await buy(session_factory, world.student, 1)
+        await _gate(session_factory, world, with_file=True)  # taken
+
+        assert refused.value.status_code == 402
+
     async def test_off_nothing_is_refused(
         self,
         session_factory: async_sessionmaker[AsyncSession],
@@ -604,6 +684,38 @@ class TestRefusal:
                 ),
                 file=None,
             )
+
+
+async def _gate(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: World,
+    *,
+    with_file: bool,
+) -> None:
+    """The submission's gate (``_require_units``) on the world's task."""
+    import io
+
+    from fastapi import UploadFile
+
+    from course_supporter.api.routes.portal_submissions import _require_units
+
+    async with session_factory() as session:
+        task = await session.get(AuthoredDocument, world.task_id)
+        assert task is not None
+        await _require_units(
+            session,
+            task,
+            StudentContext(
+                student_id=world.student_id,
+                tenant_id=world.tenant_id,
+                login="s",
+                display_name=None,
+            ),
+            file=UploadFile(io.BytesIO(WORK), filename="work.py")
+            if with_file
+            else None,
+        )
+        await session.commit()
 
 
 # ── B2: an author's own action ────────────────────────────────────────

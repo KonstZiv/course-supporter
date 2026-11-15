@@ -23,7 +23,11 @@ Purpose:
       422), the typical size, the estimate, the rate K — the price is the
       ceiling N (basis ``ceiling``, :func:`.charging.ceiling_units`): "no more
       than N", and the fact is charged (BIL-E2, 4a). One WARNING
-      ``billing_quote_ceiling`` names the reason, never the work.
+      ``billing_quote_ceiling`` per failed estimate names the reason, never
+      the work.
+    * :func:`ceiling_threshold` — what a review priced at its ceiling needs to
+      start: the task's typical price, else ``available > 0``; the reserve
+      is ``min(N, available)`` (operator 2026-11-15).
     * :func:`author_quote` — an author's processing or task preparation from
       its expected cost.
     * :class:`UnitsRefusedError` — the refusal of an action for want of
@@ -341,6 +345,47 @@ async def review_price(
     return ReviewPrice(charging.price_of(e_usd), basis)
 
 
+NOTHING_PRICED_THRESHOLD: Final = 1
+"""The threshold of a review that cannot be priced at all: ``available > 0``."""
+
+
+async def ceiling_threshold(
+    session: AsyncSession,
+    *,
+    task: AuthoredDocument,
+    tenant_id: uuid.UUID,
+    student_id: uuid.UUID,
+    typical: ReviewPrice | None = None,
+    config: PathConfig | None = None,
+) -> int:
+    """The threshold of a review priced at its ceiling (operator 2026-11-15).
+
+    The price shown is N, the most the review can cost; the start needs only
+    the task's typical price — basis ``typical``, the median size of its
+    history or ``typical_submission.chars``, margin included. When even that
+    cannot be priced, ``available > 0``
+    (:data:`NOTHING_PRICED_THRESHOLD`). The reserve is then the smaller of N
+    and what is available, the fact is charged, and what it costs over the
+    reserve is the platform's — as for any payer without credit.
+
+    The ONE answer for the gate of a submission (:func:`review_quote`), the
+    start of its run (``funds.LedgerFundsPort``) and the continuation of a
+    held review (:func:`.held.price_of_held`). ``typical`` — the typical price
+    already tried (a review sent without a file); ``None`` — it is priced here.
+    """
+    if typical is None:
+        typical = await review_price(
+            session,
+            task=task,
+            tenant_id=tenant_id,
+            student_id=student_id,
+            config=config,
+        )
+    if typical.basis == "typical":
+        return typical.units
+    return NOTHING_PRICED_THRESHOLD
+
+
 async def review_quote(
     session: AsyncSession,
     *,
@@ -356,9 +401,9 @@ async def review_quote(
     ``reading`` — the doors' reading of the file about to be sent
     (:class:`~course_supporter.homework.doors.DoorReading`), or ``None`` for
     the typical price (:func:`_typical_chars`); ``read_error`` — reading the
-    file sent failed (:func:`review_price`). The threshold is
-    ``available >= P`` — the run's own (:func:`.charging.threshold_applies`),
-    P being N at the ceiling.
+    file sent failed (:func:`review_price`). The threshold is the run's own
+    (:func:`.charging.threshold_applies`): ``available >= P``; at the ceiling
+    the price shown is N and the threshold is :func:`ceiling_threshold`.
     """
     config = config if config is not None else get_path_config()
     task_type = AssignmentType(task.task_type or "")
@@ -390,7 +435,17 @@ async def review_quote(
             config=config,
         )
         price, basis = found.units, found.basis
-        missing = max(0, price - available)
+        threshold = price
+        if basis == "ceiling":
+            threshold = await ceiling_threshold(
+                session,
+                task=task,
+                tenant_id=tenant_id,
+                student_id=student_id,
+                typical=None if sent else found,
+                config=config,
+            )
+        missing = max(0, threshold - available)
         enough = missing == 0
     if not enabled:
         return Quote(price, available, True, 0, enabled, basis, "self")

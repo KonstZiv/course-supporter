@@ -50,6 +50,7 @@ from course_supporter.api.schemas import (
     FeedbackTouch,
     OptionalLanguageForm,
     PortalBaseDownload,
+    PortalBillingNote,
     PortalDeltaReceipt,
     PortalSubmissionDetail,
     PortalSubmissionListItem,
@@ -585,6 +586,7 @@ def _to_detail(
     *,
     delta: PortalDeltaReceipt | None = None,
     own_feedback: FeedbackTouch | None = None,
+    billing_note: PortalBillingNote | None = None,
 ) -> PortalSubmissionDetail:
     """Curated detail — adds review_markdown and the structure; no trace.
 
@@ -606,6 +608,7 @@ def _to_detail(
         original_filename=submission.original_filename,
         delta=delta,
         own_feedback=own_feedback,
+        billing_note=billing_note,
         rejection=curated_rejection(submission),
         not_opened=curated_not_opened(submission),
         recovered_encoding=curated_recovered_encoding(submission),
@@ -702,10 +705,14 @@ async def get_portal_submission(
         target_kind=FeedbackTargetKind.REVIEW,
         target_id=submission.id,
     )
+    from course_supporter.billing.funds import billing_note
+
+    note = await billing_note(session, submission.id)
     return _to_detail(
         submission,
         delta=delta,
         own_feedback=to_touch(own) if own is not None else None,
+        billing_note=PortalBillingNote(**note) if note is not None else None,
     )
 
 

@@ -210,7 +210,10 @@ class _PortDouble:
         raise AssertionError("the submission path must not use the version operations")
 
     async def account_version_work_cost(
-        self, context: VersionWorkContext, actual_usd: float
+        self,
+        context: VersionWorkContext,
+        actual_usd: float,
+        outcome: SubmissionOutcome = SubmissionOutcome.COMPLETED,
     ) -> None:
         """Nothing on a submission path is a work-once-per-version (task 06)."""
         raise AssertionError("the submission path must not use the version operations")

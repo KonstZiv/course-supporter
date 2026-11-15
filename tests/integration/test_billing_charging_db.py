@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.billing import admin, benefit, charging, funds, ledger
@@ -887,14 +887,12 @@ class TestHeldForFunds:
         await buy(session_factory, w.student, 1)
         async with session_factory() as session:
             await session.execute(
-                HomeworkSubmission.__table__.update()
+                update(HomeworkSubmission)
                 .where(HomeworkSubmission.id == w.submission_id)
                 .values(status="awaiting_funds")
             )
             await session.execute(
-                Job.__table__.update()
-                .where(Job.id == w.homework_job_id)
-                .values(status="complete")
+                update(Job).where(Job.id == w.homework_job_id).values(status="complete")
             )
             await session.commit()
         arq = AsyncMock()
@@ -923,3 +921,45 @@ class TestHeldForFunds:
         assert w.submission_id not in again.resumed, "a job is in flight already"
         assert jobs == 1
         assert status == "awaiting_funds", "the run of the new job lifts the hold"
+
+
+async def test_the_portal_detail_carries_the_billing_note(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A3: ``GET /portal/submissions/{id}`` — ``billing_note`` (F and B)."""
+    from httpx import ASGITransport, AsyncClient
+
+    from course_supporter.api.app import app
+    from course_supporter.api.deps import get_current_student
+    from course_supporter.auth.context import StudentContext
+    from course_supporter.storage.database import get_session
+
+    w = await make_world(session_factory)
+    await buy(session_factory, w.student, 120)
+    port = funds.LedgerFundsPort(session_factory)
+    await port.check_and_reserve(review(w), 1.0)
+    await call(session_factory, w.homework_job_id, "0.10")
+    await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
+
+    async def _session() -> Any:
+        async with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[get_current_student] = lambda: StudentContext(
+        student_id=w.student_id, tenant_id=w.tenant_id, login="s", display_name=None
+    )
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(f"/api/v1/portal/submissions/{w.submission_id}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    assert response.json()["billing_note"] == {
+        "kind": "cost_over_reserve",
+        "cost_units": 170,
+        "charged_units": 120,
+    }

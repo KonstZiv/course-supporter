@@ -141,7 +141,7 @@ from course_supporter.billing.errors import (
     BillingInvalidError,
     BillingNotFoundError,
 )
-from course_supporter.billing.kinds import ActionKind, Benefit, RuleScope
+from course_supporter.billing.kinds import ActionKind, Benefit, MovementKind, RuleScope
 from course_supporter.billing.payments import invoice
 from course_supporter.billing.periodic import BILLING_TASKS
 from course_supporter.config import get_settings
@@ -240,10 +240,32 @@ def _balance_line(account_id: uuid.UUID, view: ledger.Balance) -> str:
     )
 
 
+MOVEMENT_WORDS: dict[MovementKind, str] = {
+    MovementKind.CREDIT: "units arrived (a purchase or a credit)",
+    MovementKind.RESERVE: "held for an action at its start",
+    MovementKind.RESERVE_RELEASE: "free again: the rest of a reserve",
+    MovementKind.DEBIT: "charged for an action",
+    MovementKind.DIFFERENCE_ARISEN: "owed: the action cost more than was there",
+    MovementKind.DIFFERENCE_REPAID: "repaid what was owed",
+    MovementKind.BATCH_EXPIRED: "burned: the batch expired",
+    MovementKind.DIFFERENCE_ANNULLED: "owed no more: the difference annulled",
+    MovementKind.BENEFIT_COVERED: "covered by the author's benefit",
+    MovementKind.PLATFORM_COVERED: (
+        "covered by the platform: the cost over the reserve, or a re-processing"
+    ),
+    MovementKind.REFUND_HOLD: "held for a refund or a dispute",
+    MovementKind.REFUND_COMPLETED: "refunded: gone from the batch",
+    MovementKind.REFUND_REJECTED: "free again: the refund or hold did not happen",
+}
+"""What each kind of movement means, for a person reading a statement (BIL-E)."""
+
+
 def _movement_line(m: BillingMovement) -> str:
     action = f"{m.action_kind}:{m.action_key}" if m.action_kind else "-"
+    words = MOVEMENT_WORDS.get(MovementKind(m.kind), m.kind)
     return (
         f"{m.created_at:%Y-%m-%d %H:%M:%S}  {m.kind:<19} {m.units:>7}  "
+        f"({words})  "
         f"batch={m.batch_id or '-'}  action={action}  "
         f"for={m.beneficiary_account_id or '-'}  source={m.payer_source or '-'}  "
         f"rule={m.rule_id or '-'}  actor={m.actor or '-'}"

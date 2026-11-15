@@ -867,3 +867,59 @@ class TestTheSwitch:
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         assert isinstance(build_funds_port(session_factory), funds.LedgerFundsPort)
+
+
+# ── A5: units spent between the submission and its start ──────────────
+
+
+class TestHeldForFunds:
+    async def test_held_then_continued_once_the_student_can_pay(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The run was refused (``awaiting_funds``, nothing lost); a purchase
+        that is not enough continues nothing; one that is — a new job."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from course_supporter.billing.resume_funded import resume_funded
+
+        w = await make_world(session_factory)
+        await buy(session_factory, w.student, 1)
+        async with session_factory() as session:
+            await session.execute(
+                HomeworkSubmission.__table__.update()
+                .where(HomeworkSubmission.id == w.submission_id)
+                .values(status="awaiting_funds")
+            )
+            await session.execute(
+                Job.__table__.update()
+                .where(Job.id == w.homework_job_id)
+                .values(status="complete")
+            )
+            await session.commit()
+        arq = AsyncMock()
+        arq.enqueue_job = AsyncMock(return_value=MagicMock(job_id="arq:hw:resume"))
+
+        async with session_factory() as session:
+            short = await resume_funded(session, arq, dry_run=False)
+        await buy(session_factory, w.student, 10_000)
+        async with session_factory() as session:
+            funded = await resume_funded(session, arq, dry_run=False)
+        async with session_factory() as session:
+            again = await resume_funded(session, arq, dry_run=False)
+            jobs = await session.scalar(
+                select(func.count(Job.id)).where(
+                    Job.subject_id == w.submission_id, Job.status == "queued"
+                )
+            )
+            status = await session.scalar(
+                select(HomeworkSubmission.status).where(
+                    HomeworkSubmission.id == w.submission_id
+                )
+            )
+
+        assert w.submission_id not in short.resumed
+        assert w.submission_id in funded.resumed
+        assert w.submission_id not in again.resumed, "a job is in flight already"
+        assert jobs == 1
+        assert status == "awaiting_funds", "the run of the new job lifts the hold"

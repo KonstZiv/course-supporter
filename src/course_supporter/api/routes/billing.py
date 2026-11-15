@@ -33,6 +33,11 @@ Routes
 - ``GET /billing/checkouts/{checkout_ref}`` — the state of the author's
   checkout (pending | credited | failed); another's or an unknown one is 404
   ``checkout_not_found``.
+- ``GET /billing/balance`` — where the author's units stand: balance,
+  reserved, held, available, difference, the next expiry. Units only.
+- ``GET /billing/statement?limit=&cursor=&from=&to=`` — the author's
+  movements of units, the newest first, a page at a time (``invalid_cursor``
+  422 for a cursor this server did not give).
 
 Every refusal of a route but the webhook carries its reason code
 (``_billing_shared``).
@@ -44,10 +49,11 @@ administrator's door is ``scripts/billing_admin.py``.
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 from typing import Annotated, Final
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,21 +65,25 @@ from course_supporter.api.deps import (
 from course_supporter.api.routes._billing_shared import (
     CHECKOUT_REFUSALS,
     Refusal,
+    balance_of,
     checkout_state_of,
     consent_required,
     open_checkout,
     packages_of,
     require_payment,
     responses,
+    statement_of,
     terms_changed,
 )
 from course_supporter.api.schemas import (
+    BillingBalanceResponse,
     BillingCheckoutRequest,
     BillingCheckoutResponse,
     BillingCheckoutStateResponse,
     BillingConsentRequest,
     BillingConsentResponse,
     BillingPackagesResponse,
+    BillingStatementResponse,
     BillingTermsResponse,
 )
 from course_supporter.auth.context import TenantContext
@@ -96,6 +106,7 @@ from course_supporter.billing.payments.webhooks import (
     EventHandlingError,
     handle_events,
 )
+from course_supporter.billing.statement import MAX_LIMIT
 from course_supporter.config import get_settings
 
 router = APIRouter(tags=["billing"])
@@ -283,3 +294,43 @@ async def get_author_checkout(
         session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
     )
     return await checkout_state_of(session, account, checkout_ref)
+
+
+@router.get("/billing/balance")
+async def get_author_balance(
+    tenant: PrepDep, session: SessionDep
+) -> BillingBalanceResponse:
+    """Where the author's units stand."""
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
+    )
+    return await balance_of(session, account)
+
+
+@router.get("/billing/statement", responses=responses(Refusal.INVALID_CURSOR))
+async def get_author_statement(
+    tenant: PrepDep,
+    session: SessionDep,
+    limit: Annotated[
+        int, Query(ge=1, le=MAX_LIMIT, description="Lines on the page.")
+    ] = 50,
+    cursor: Annotated[
+        str | None,
+        Query(max_length=256, description="next_cursor of the page before."),
+    ] = None,
+    since: Annotated[
+        datetime | None,
+        Query(alias="from", description="From (inclusive); without a zone, UTC."),
+    ] = None,
+    until: Annotated[
+        datetime | None,
+        Query(alias="to", description="To (exclusive); without a zone, UTC."),
+    ] = None,
+) -> BillingStatementResponse:
+    """The author's movements of units, the newest first."""
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
+    )
+    return await statement_of(
+        session, account, limit=limit, cursor=cursor, since=since, until=until
+    )

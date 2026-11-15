@@ -25,6 +25,10 @@ Routes
 - ``GET /portal/billing/checkouts/{checkout_ref}`` — the state of the
   student's checkout (pending | credited | failed); another's or an unknown
   one is 404 ``checkout_not_found``.
+- ``GET /portal/billing/balance`` — where the student's units stand (the
+  difference is always 0 for a student). Units only.
+- ``GET /portal/billing/statement?limit=&cursor=&from=&to=`` — the student's
+  movements of units, the newest first, a page at a time.
 
 Every refusal carries its reason code (``_billing_shared``).
 
@@ -36,10 +40,11 @@ consent (``billing.accounts``). The logic is ``billing.consent`` and
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import (
@@ -51,21 +56,25 @@ from course_supporter.api.deps import (
 from course_supporter.api.routes._billing_shared import (
     CHECKOUT_REFUSALS,
     Refusal,
+    balance_of,
     checkout_state_of,
     consent_required,
     open_checkout,
     packages_of,
     require_payment,
     responses,
+    statement_of,
     terms_changed,
 )
 from course_supporter.api.schemas import (
+    BillingBalanceResponse,
     BillingCheckoutRequest,
     BillingCheckoutResponse,
     BillingCheckoutStateResponse,
     BillingConsentRequest,
     BillingConsentResponse,
     BillingPackagesResponse,
+    BillingStatementResponse,
     BillingTermsResponse,
 )
 from course_supporter.auth.context import StudentContext
@@ -81,7 +90,9 @@ from course_supporter.billing.errors import BillingConflictError
 from course_supporter.billing.kinds import AccountKind, ConsentChannel
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.registry import ProviderRegistry
+from course_supporter.billing.statement import MAX_LIMIT
 from course_supporter.config import get_settings
+from course_supporter.storage.orm import BillingAccount
 
 router = APIRouter(tags=["portal"])
 logger = structlog.get_logger()
@@ -221,3 +232,53 @@ async def get_billing_checkout(
         student_id=student.student_id,
     )
     return await checkout_state_of(session, account, checkout_ref)
+
+
+async def _own_account(
+    session: AsyncSession, student: StudentContext
+) -> BillingAccount | None:
+    return await find_active_account(
+        session,
+        kind=AccountKind.STUDENT,
+        tenant_id=student.tenant_id,
+        student_id=student.student_id,
+    )
+
+
+@router.get("/portal/billing/balance")
+async def get_billing_balance(
+    student: StudentDep, session: SessionDep
+) -> BillingBalanceResponse:
+    """Where the student's units stand."""
+    return await balance_of(session, await _own_account(session, student))
+
+
+@router.get("/portal/billing/statement", responses=responses(Refusal.INVALID_CURSOR))
+async def get_billing_statement(
+    student: StudentDep,
+    session: SessionDep,
+    limit: Annotated[
+        int, Query(ge=1, le=MAX_LIMIT, description="Lines on the page.")
+    ] = 50,
+    cursor: Annotated[
+        str | None,
+        Query(max_length=256, description="next_cursor of the page before."),
+    ] = None,
+    since: Annotated[
+        datetime | None,
+        Query(alias="from", description="From (inclusive); without a zone, UTC."),
+    ] = None,
+    until: Annotated[
+        datetime | None,
+        Query(alias="to", description="To (exclusive); without a zone, UTC."),
+    ] = None,
+) -> BillingStatementResponse:
+    """The student's movements of units, the newest first."""
+    return await statement_of(
+        session,
+        await _own_account(session, student),
+        limit=limit,
+        cursor=cursor,
+        since=since,
+        until=until,
+    )

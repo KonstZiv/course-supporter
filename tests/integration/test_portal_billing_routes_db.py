@@ -161,10 +161,14 @@ def test_billing_has_no_administrator_route() -> None:
         ("/api/v1/portal/billing/packages", "GET"),
         ("/api/v1/portal/billing/checkout", "POST"),
         ("/api/v1/portal/billing/checkouts/{checkout_ref}", "GET"),
+        ("/api/v1/portal/billing/balance", "GET"),
+        ("/api/v1/portal/billing/statement", "GET"),
         ("/api/v1/billing/terms", "GET"),  # the author's, the tenant's key
         ("/api/v1/billing/consent", "POST"),  # the author's, the tenant's key
         ("/api/v1/billing/packages", "GET"),  # the author's, the tenant's key
         ("/api/v1/billing/checkout", "POST"),  # the author's, the tenant's key
         ("/api/v1/billing/checkouts/{checkout_ref}", "GET"),  # the author's
+        ("/api/v1/billing/balance", "GET"),  # the author's, the tenant's key
+        ("/api/v1/billing/statement", "GET"),  # the author's, the tenant's key
         ("/api/v1/billing/webhooks/{provider}", "POST"),  # the provider's signature
     }

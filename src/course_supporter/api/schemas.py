@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from course_supporter.billing.statement import StatementLineKind
 from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.feedback_kinds import FeedbackKind, FeedbackValue
 from course_supporter.homework.criteria_edit_service import (
@@ -2772,6 +2773,74 @@ class BillingCheckoutResponse(BaseModel):
         description="The platform's own number of the checkout: the last "
         "segment of the address the payer comes back to "
         "({billing page}/checkouts/{checkout_ref}); ask its state by it."
+    )
+
+
+class BillingNextExpiry(BaseModel):
+    """The units that burn first, and the day they do."""
+
+    units: int = Field(description="Free units that burn on that day.")
+    expires_on: date = Field(description="The day they burn (UTC).")
+
+
+class BillingBalanceResponse(BaseModel):
+    """GET /billing/balance, GET /portal/billing/balance: where the holder's
+    units stand. Units only."""
+
+    balance: int = Field(
+        description="Units of valid batches (reserved and held ones included)."
+    )
+    reserved: int = Field(description="Units reserved for actions under way.")
+    held: int = Field(
+        description="Units held while a refund is reviewed or a dispute lasts."
+    )
+    available: int = Field(
+        description="balance - reserved - held: what a new action can use."
+    )
+    difference: int = Field(
+        description="Units owed (an author's actions that cost more than was "
+        "available); always 0 for a student."
+    )
+    next_expiry: BillingNextExpiry | None = Field(
+        description="The free units that burn first; null when none will."
+    )
+
+
+class BillingStatementAction(BaseModel):
+    """The action units moved for."""
+
+    kind: str = Field(description="review | processing | task_preparation.")
+    id: str = Field(description="The action's key.")
+
+
+class BillingStatementItem(BaseModel):
+    """One line of the statement."""
+
+    at: datetime = Field(description="When the units moved.")
+    kind: StatementLineKind = Field(
+        description="What happened: the key the screen translates."
+    )
+    units: int = Field(
+        description="Signed: + units came in (or were freed), - went out (or "
+        "were blocked)."
+    )
+    balance_after: int = Field(
+        description="The balance after the line; lines that move no batch's "
+        "units (holds, differences, covered units) leave it as it was."
+    )
+    action: BillingStatementAction | None = Field(
+        description="The action the units moved for; null when none."
+    )
+
+
+class BillingStatementResponse(BaseModel):
+    """GET /billing/statement, GET /portal/billing/statement: the holder's
+    movements of units, the newest first. Reserving and releasing a reserve
+    are not lines (the current reserve is in the balance)."""
+
+    items: list[BillingStatementItem]
+    next_cursor: str | None = Field(
+        description="Pass it as cursor for the next page; null on the last."
     )
 
 

@@ -15,6 +15,7 @@ import json
 import uuid
 from collections.abc import AsyncGenerator, Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -32,7 +33,14 @@ from course_supporter.api.deps import (
     get_session,
 )
 from course_supporter.auth.context import StudentContext, TenantContext
-from course_supporter.billing import admin
+from course_supporter.billing import admin, ledger
+from course_supporter.billing.accounts import (
+    get_or_create_author_account,
+    get_or_create_student_account,
+)
+from course_supporter.billing.expiry import expire_batches
+from course_supporter.billing.journal import add_months
+from course_supporter.billing.kinds import ActionKind, PayerSource
 from course_supporter.billing.payments.catalog import Catalog, Package
 from course_supporter.billing.payments.creem import (
     CREEM,
@@ -41,6 +49,7 @@ from course_supporter.billing.payments.creem import (
 )
 from course_supporter.billing.payments.fake import FAKE, FakeProvider
 from course_supporter.billing.payments.registry import ProviderRegistry
+from course_supporter.billing.refunds import refund_hold
 from course_supporter.config import get_settings
 from course_supporter.storage.orm import (
     BillingAccount,
@@ -691,3 +700,469 @@ class TestCheckout:
             portal = await _state(client, Who.STUDENT, str(ref))
             author = await _state(client, Who.AUTHOR, str(ref))
         assert (portal.status_code, author.status_code) == (401, 401)
+
+
+# ── Balance and statement ──────────────────────────────────────────────
+
+
+@dataclass
+class Journal:
+    """A known state of an author's journal (:func:`_author_journal`)."""
+
+    account_id: uuid.UUID
+    at: dict[str, datetime]
+    actions: dict[str, str]
+
+
+async def _author_journal(
+    session_factory: async_sessionmaker[AsyncSession], world: World
+) -> Journal:
+    """An admin credit that expired and burned; a purchase; a charge from a
+    reserve; a re-processing the platform covered; a reserve still active; a
+    refund held; a charge beyond what was available (a difference); a second
+    purchase that repaid it."""
+    now = datetime.now(UTC)
+    at = {
+        "credit": add_months(now, -7),
+        "bought": now - timedelta(days=10),
+        "charged": now - timedelta(days=9),
+        "platform": now - timedelta(days=9) + timedelta(hours=1),
+        "reserved": now - timedelta(days=8),
+        "held": now - timedelta(days=7),
+        "short": now - timedelta(days=6),
+        "bought_again": now - timedelta(days=5),
+        "burned": now - timedelta(seconds=1),
+    }
+    token = uuid.uuid4().hex[:12]
+    actions = {name: f"{name}-{token}" for name in ("a", "b", "c", "e")}
+    async with session_factory() as session:
+        account = await get_or_create_author_account(session, tenant_id=world.tenant_id)
+        await ledger.credit_admin(
+            session,
+            account_id=account.id,
+            units=100,
+            reason="pilot",
+            actor="tests",
+            now=at["credit"],
+        )
+        first = await ledger.credit_purchase(
+            session,
+            account_id=account.id,
+            units=1000,
+            amount_paid_minor=990,
+            currency="EUR",
+            provider=FAKE,
+            provider_transaction_id=f"txn_{token}_1",
+            provider_line_id=f"line_{token}_1",
+            now=at["bought"],
+        )
+        await ledger.reserve(
+            session,
+            action_kind=ActionKind.PROCESSING,
+            action_key=actions["a"],
+            account_id=account.id,
+            units=50,
+            now=at["charged"],
+        )
+        await ledger.settle(
+            session,
+            action_kind=ActionKind.PROCESSING,
+            action_key=actions["a"],
+            fact_units=30,
+            beneficiary_account_id=account.id,
+            payer_source=PayerSource.DEFAULT,
+            now=at["charged"],
+        )
+        await ledger.settle(
+            session,
+            action_kind=ActionKind.PROCESSING,
+            action_key=actions["e"],
+            fact_units=15,
+            beneficiary_account_id=account.id,
+            payer_source=PayerSource.PLATFORM,
+            account_id=account.id,
+            now=at["platform"],
+        )
+        await ledger.reserve(
+            session,
+            action_kind=ActionKind.PROCESSING,
+            action_key=actions["b"],
+            account_id=account.id,
+            units=10,
+            now=at["reserved"],
+        )
+        await refund_hold(
+            session,
+            account_id=account.id,
+            batch_id=first.batch.id,
+            units=200,
+            provider=FAKE,
+            provider_adjustment_id=f"adj_{token}",
+            now=at["held"],
+        )
+        await ledger.settle(
+            session,
+            action_kind=ActionKind.PROCESSING,
+            action_key=actions["c"],
+            fact_units=800,
+            beneficiary_account_id=account.id,
+            payer_source=PayerSource.DEFAULT,
+            account_id=account.id,
+            now=at["short"],
+        )
+        await ledger.credit_purchase(
+            session,
+            account_id=account.id,
+            units=500,
+            amount_paid_minor=500,
+            currency="EUR",
+            provider=FAKE,
+            provider_transaction_id=f"txn_{token}_2",
+            provider_line_id=f"line_{token}_2",
+            now=at["bought_again"],
+        )
+        await session.commit()
+        account_id = account.id
+    async with session_factory() as session:
+        await expire_batches(session, at["burned"])  # the admin credit burns
+        await session.commit()
+    return Journal(account_id=account_id, at=at, actions=actions)
+
+
+def _iso(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _items(response: Response) -> list[tuple[str, int, int, str | None]]:
+    """(kind, units, balance_after, action id) of each line."""
+    return [
+        (
+            item["kind"],
+            item["units"],
+            item["balance_after"],
+            item["action"]["id"] if item["action"] else None,
+        )
+        for item in response.json()["items"]
+    ]
+
+
+@pytest.mark.usefixtures("signed_in")
+class TestBalance:
+    async def test_the_sums_against_a_known_journal(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        journal = await _author_journal(session_factory, world)
+        async with _client() as client:
+            response = await client.get(f"{Who.AUTHOR}/balance")
+        assert response.status_code == 200
+        # Batch 1: 1000 - 30 - 760 = 210 (10 reserved, 200 held); batch 2: 500
+        # - 40 repaid = 460 free; the admin credit burned; the difference repaid.
+        assert response.json() == {
+            "balance": 670,
+            "reserved": 10,
+            "held": 200,
+            "available": 460,
+            "difference": 0,
+            "next_expiry": {
+                "units": 460,
+                "expires_on": add_months(journal.at["bought_again"], 6)
+                .date()
+                .isoformat(),
+            },
+        }
+        async with session_factory() as session:
+            standing = await ledger.balance(session, journal.account_id)
+        body = response.json()
+        assert (
+            standing.balance,
+            standing.reserved,
+            standing.held,
+            standing.available,
+            standing.difference,
+        ) == tuple(
+            body[k] for k in ("balance", "reserved", "held", "available", "difference")
+        )
+
+    @pytest.mark.parametrize(
+        ("who", "difference"), [(Who.AUTHOR, 25), (Who.STUDENT, 0)], ids=PAYER_IDS
+    )
+    async def test_a_difference_is_an_authors_only(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        who: str,
+        difference: int,
+    ) -> None:
+        async with session_factory() as session:
+            account = (
+                await get_or_create_author_account(session, tenant_id=world.tenant_id)
+                if who == Who.AUTHOR
+                else await get_or_create_student_account(
+                    session,
+                    tenant_id=world.tenant_id,
+                    student_id=world.student.student_id,
+                )
+            )
+            await ledger.settle(
+                session,
+                action_kind=ActionKind.REVIEW,
+                action_key=f"owed-{uuid.uuid4().hex}",
+                fact_units=25,
+                beneficiary_account_id=account.id,
+                payer_source=PayerSource.DEFAULT,
+                account_id=account.id,
+            )
+            await session.commit()
+            owed = (await ledger.balance(session, account.id)).difference
+        async with _client() as client:
+            response = await client.get(f"{who}/balance")
+        assert owed == 25  # the journal's
+        assert response.json() == {
+            "balance": 0,
+            "reserved": 0,
+            "held": 0,
+            "available": 0,
+            "difference": difference,
+            "next_expiry": None,
+        }
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_no_account_yet_is_zero_and_creates_none(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        who: str,
+    ) -> None:
+        async with _client() as client:
+            balance = await client.get(f"{who}/balance")
+            statement = await client.get(f"{who}/statement")
+        assert balance.json() == {
+            "balance": 0,
+            "reserved": 0,
+            "held": 0,
+            "available": 0,
+            "difference": 0,
+            "next_expiry": None,
+        }
+        assert statement.json() == {"items": [], "next_cursor": None}
+        assert await _accounts(session_factory, world) == []
+
+    async def test_a_students_balance_is_the_students_own(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        await _author_journal(session_factory, world)  # the author's units
+        async with _client() as client:
+            response = await client.get(f"{Who.STUDENT}/balance")
+        assert response.json()["balance"] == 0
+
+
+@pytest.mark.usefixtures("signed_in")
+class TestStatement:
+    async def test_the_lines_newest_first_signed_with_the_balance_after(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        journal = await _author_journal(session_factory, world)
+        a, c, e = (journal.actions[k] for k in ("a", "c", "e"))
+        async with _client() as client:
+            response = await client.get(f"{Who.AUTHOR}/statement")
+        assert response.status_code == 200
+        assert _items(response) == [
+            ("expired", -100, 670, None),
+            ("difference_repaid", -40, 770, None),
+            ("purchase", 500, 810, None),
+            ("difference_arisen", -40, 310, c),
+            ("charge", -760, 310, c),
+            ("refund_hold", -200, 1070, None),
+            ("platform_covered", -15, 1070, e),
+            ("charge", -30, 1070, a),
+            ("purchase", 1000, 1100, None),
+            ("admin_credit", 100, 100, None),
+        ]
+        body = response.json()
+        assert body["next_cursor"] is None
+        # The newest line's balance is the balance now.
+        async with _client() as client:
+            balance = (await client.get(f"{Who.AUTHOR}/balance")).json()["balance"]
+        assert body["items"][0]["balance_after"] == balance
+        # Reserving and releasing are not lines; no money, no provider's id.
+        assert "reserve" not in {item["kind"] for item in body["items"]}
+        for item in body["items"]:
+            assert set(item) == {"at", "kind", "units", "balance_after", "action"}
+        assert "txn_" not in response.text and "adj_" not in response.text
+        charge = body["items"][-3]
+        assert charge["action"] == {"kind": "processing", "id": a}
+        assert datetime.fromisoformat(charge["at"]) == journal.at["charged"]
+
+    async def test_pages_by_cursor_in_a_stable_order(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        await _author_journal(session_factory, world)
+        async with _client() as client:
+            whole = _items(await client.get(f"{Who.AUTHOR}/statement"))
+            pages: list[list[tuple[str, int, int, str | None]]] = []
+            cursor: str | None = None
+            while True:
+                params: dict[str, Any] = {"limit": 4}
+                if cursor is not None:
+                    params["cursor"] = cursor
+                page = await client.get(f"{Who.AUTHOR}/statement", params=params)
+                assert page.status_code == 200
+                pages.append(_items(page))
+                cursor = page.json()["next_cursor"]
+                if cursor is None:
+                    break
+        assert [len(p) for p in pages] == [4, 4, 2]
+        assert [line for page in pages for line in page] == whole
+
+    async def test_a_period_is_from_inclusive_to_exclusive(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        journal = await _author_journal(session_factory, world)
+        c = journal.actions["c"]
+        async with _client() as client:
+            period = await client.get(
+                f"{Who.AUTHOR}/statement",
+                params={
+                    "from": _iso(journal.at["held"]),
+                    "to": _iso(journal.at["bought_again"]),
+                },
+            )
+            naive = await client.get(
+                f"{Who.AUTHOR}/statement",
+                params={
+                    "from": journal.at["held"].replace(tzinfo=None).isoformat(),
+                    "to": journal.at["bought_again"].replace(tzinfo=None).isoformat(),
+                },
+            )
+        assert _items(period) == [
+            ("difference_arisen", -40, 310, c),
+            ("charge", -760, 310, c),
+            ("refund_hold", -200, 1070, None),
+        ]
+        assert _items(naive) == _items(period)  # without a zone: UTC
+
+    @pytest.mark.parametrize(
+        "params",
+        [{"limit": 0}, {"limit": 101}, {"from": "yesterday"}],
+        ids=["limit 0", "limit 101", "not a date"],
+    )
+    async def test_bad_parameters_are_422(self, params: dict[str, Any]) -> None:
+        async with _client() as client:
+            response = await client.get(f"{Who.AUTHOR}/statement", params=params)
+        assert response.status_code == 422
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_a_cursor_not_given_is_invalid_cursor(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        who: str,
+    ) -> None:
+        await _mark(session_factory, world, who)  # an account, so a statement
+        async with _client() as client:
+            response = await client.get(
+                f"{who}/statement", params={"cursor": "not-a-cursor"}
+            )
+        assert (response.status_code, _code(response)) == (422, "invalid_cursor")
+
+    async def test_each_holder_sees_their_own_lines(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        await _author_journal(session_factory, world)
+        async with _client() as client:
+            await _consent(client, Who.STUDENT)
+            await _mark(session_factory, world, Who.STUDENT)
+            opened = (await _buy(client, Who.STUDENT)).json()
+            headers, body = world.fake.purchase_webhook(opened["checkout_id"])
+            await client.post(WEBHOOK, content=body, headers=headers)
+            student = await client.get(f"{Who.STUDENT}/statement")
+        assert _items(student) == [("purchase", 1000, 1000, None)]
+
+
+# ── Reason codes on the author's side ──────────────────────────────────
+
+
+@pytest.mark.usefixtures("signed_in")
+class TestAuthorReasonCodes:
+    async def test_terms_consent_required_then_terms_changed(self) -> None:
+        async with _client() as client:
+            purchase = await _buy(client, Who.AUTHOR)
+            consent = await client.post(
+                f"{Who.AUTHOR}/consent",
+                json={"terms_version": "2000-01-01", "text_sha256": SHA},
+            )
+        assert (purchase.status_code, _code(purchase)) == (
+            409,
+            "terms_consent_required",
+        )
+        assert (consent.status_code, _code(consent)) == (409, "terms_changed")
+
+    @pytest.mark.parametrize(
+        ("body", "status", "code"),
+        [
+            ({"package_id": "nope"}, 404, "package_not_found"),
+            ({"package_id": "retired"}, 404, "package_not_found"),
+            (
+                {"package_id": "starter", "provider": "paddle"},
+                404,
+                "provider_not_found",
+            ),
+        ],
+    )
+    async def test_nothing_on_sale(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        body: dict[str, str],
+        status: int,
+        code: str,
+    ) -> None:
+        async with _client() as client:
+            await _consent(client, Who.AUTHOR)
+            await _mark(session_factory, world, Who.AUTHOR)
+            response = await client.post(f"{Who.AUTHOR}/checkout", json=body)
+        assert (response.status_code, _code(response)) == (status, code)
+
+    async def test_payment_unavailable(self, world: World) -> None:
+        world.providers.clear()
+        async with _client() as client:
+            response = await _buy(client, Who.AUTHOR)
+        assert (response.status_code, _code(response)) == (503, "payment_unavailable")
+
+    async def test_provider_unavailable(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        def down(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("no answer", request=request)
+
+        world.providers[:] = [
+            CreemProvider(
+                api_key="creem_key_for_tests_only",
+                webhook_secret="whsec_for_tests_only",
+                api_base=LIVE_API_BASE,
+                transport=httpx.MockTransport(down),
+            )
+        ]
+        async with _client() as client:
+            await _consent(client, Who.AUTHOR)
+            response = await _buy(client, Who.AUTHOR)
+        assert response.status_code == 502
+        assert response.json() == {
+            "detail": {
+                "code": "provider_unavailable",
+                "details": "The payment provider did not answer.",
+            }
+        }
+        assert await _checkouts(session_factory, world) == 0  # nothing recorded
+
+
+async def _checkouts(
+    session_factory: async_sessionmaker[AsyncSession], world: World
+) -> int:
+    async with session_factory() as session:
+        rows = await session.execute(
+            select(BillingCheckout.id)
+            .join(BillingAccount, BillingAccount.id == BillingCheckout.account_id)
+            .where(BillingAccount.tenant_id == world.tenant_id)
+        )
+        return len(rows.all())

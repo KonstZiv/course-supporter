@@ -27,11 +27,17 @@ Checkout:
     :func:`checkout_state_of` answers both routes of a checkout's state: the
     holder's own checkout, by its number — another's, or an unknown one, is
     ``checkout_not_found`` (404, not 403).
+
+Balance and statement:
+    :func:`balance_of` and :func:`statement_of` answer the author's and the
+    student's routes from the journal (``billing.statement``): units only. A
+    holder without an account yet has nothing: zeros, no lines.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Final
 
@@ -40,12 +46,17 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.schemas import (
+    BillingBalanceResponse,
     BillingCheckoutRequest,
     BillingCheckoutResponse,
     BillingCheckoutStateResponse,
+    BillingNextExpiry,
     BillingPackageResponse,
     BillingPackagesResponse,
     BillingPurchaseState,
+    BillingStatementAction,
+    BillingStatementItem,
+    BillingStatementResponse,
 )
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.checkout import (
@@ -60,6 +71,11 @@ from course_supporter.billing.payments.checkout import (
 )
 from course_supporter.billing.payments.port import PaymentProviderError
 from course_supporter.billing.payments.registry import ProviderRegistry
+from course_supporter.billing.statement import (
+    InvalidCursorError,
+    holder_balance,
+    statement_page,
+)
 from course_supporter.storage.orm import BillingAccount
 
 logger = structlog.get_logger()
@@ -93,6 +109,9 @@ class Refusal(StrEnum):
     CHECKOUT_NOT_FOUND = "checkout_not_found"
     """No checkout of the holder's by that number (404): another's is none."""
 
+    INVALID_CURSOR = "invalid_cursor"
+    """A statement cursor this server did not give (422)."""
+
 
 STATUS: Final[dict[Refusal, int]] = {
     Refusal.PAYMENT_UNAVAILABLE: 503,
@@ -103,6 +122,7 @@ STATUS: Final[dict[Refusal, int]] = {
     Refusal.PROVIDER_NOT_FOUND: 404,
     Refusal.PROVIDER_UNAVAILABLE: 502,
     Refusal.CHECKOUT_NOT_FOUND: 404,
+    Refusal.INVALID_CURSOR: 422,
 }
 """The status of each code (module docstring)."""
 
@@ -110,6 +130,7 @@ PAYMENT_UNAVAILABLE = "Payment is unavailable."
 PURCHASE_NOT_OPEN = "Purchase is not open yet."
 PROVIDER_DID_NOT_ANSWER = "The payment provider did not answer."
 NO_SUCH_CHECKOUT = "No such checkout."
+NOT_A_CURSOR = "Not a cursor of this statement: start again without one."
 
 
 def refusal(code: Refusal, details: str) -> HTTPException:
@@ -257,4 +278,85 @@ async def checkout_state_of(
         package_id=view.package_id,
         units=view.units,
         balance_after=view.available,
+    )
+
+
+async def balance_of(
+    session: AsyncSession, account: BillingAccount | None
+) -> BillingBalanceResponse:
+    """The holder's balance; zeros while they have no account."""
+    if account is None:
+        return BillingBalanceResponse(
+            balance=0, reserved=0, held=0, available=0, difference=0, next_expiry=None
+        )
+    found = await holder_balance(session, account, now=datetime.now(UTC))
+    return BillingBalanceResponse(
+        balance=found.balance,
+        reserved=found.reserved,
+        held=found.held,
+        available=found.available,
+        difference=found.difference,
+        next_expiry=(
+            None
+            if found.next_expiry is None
+            else BillingNextExpiry(
+                units=found.next_expiry.units,
+                expires_on=found.next_expiry.expires_on,
+            )
+        ),
+    )
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    """A bound of the statement; without a zone it is UTC."""
+    if value is None or value.utcoffset() is not None:
+        return value
+    return value.replace(tzinfo=UTC)
+
+
+async def statement_of(
+    session: AsyncSession,
+    account: BillingAccount | None,
+    *,
+    limit: int,
+    cursor: str | None,
+    since: datetime | None,
+    until: datetime | None,
+) -> BillingStatementResponse:
+    """One page of the holder's statement; empty while they have no account.
+
+    Raises:
+        HTTPException: ``invalid_cursor`` — a cursor this server did not give.
+    """
+    if account is None:
+        return BillingStatementResponse(items=[], next_cursor=None)
+    try:
+        page = await statement_page(
+            session,
+            account.id,
+            limit=limit,
+            cursor=cursor,
+            since=_utc(since),
+            until=_utc(until),
+        )
+    except InvalidCursorError as exc:
+        raise refusal(Refusal.INVALID_CURSOR, NOT_A_CURSOR) from exc
+    return BillingStatementResponse(
+        items=[
+            BillingStatementItem(
+                at=line.at,
+                kind=line.kind,
+                units=line.units,
+                balance_after=line.balance_after,
+                action=(
+                    None
+                    if line.action_kind is None or line.action_id is None
+                    else BillingStatementAction(
+                        kind=line.action_kind, id=line.action_id
+                    )
+                ),
+            )
+            for line in page.lines
+        ],
+        next_cursor=page.next_cursor,
     )

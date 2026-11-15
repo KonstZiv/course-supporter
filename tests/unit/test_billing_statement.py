@@ -1,0 +1,129 @@
+"""The statement's table of lines, without a database (BIL-PAY).
+
+The lock of completeness: every kind of movement the journal writes is
+either a line of the statement or explicitly hidden — a new kind (the
+parallel BIL-E work may add one) turns this red instead of vanishing from
+the statement. Also the cursor's round trip.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+
+import pytest
+
+from course_supporter.billing.kinds import BatchSource, MovementKind, RefundKind
+from course_supporter.billing.statement import (
+    HIDDEN,
+    LINES,
+    QUALIFIED_BY_BATCH,
+    QUALIFIED_BY_REFUND,
+    InvalidCursorError,
+    StatementLineKind,
+    UnmappedMovementError,
+    _decode,
+    _encode,
+    line_of,
+)
+
+
+def test_every_movement_kind_is_a_line_or_hidden() -> None:
+    shown = {kind for kind, _ in LINES}
+    assert shown.isdisjoint(HIDDEN)
+    assert shown | HIDDEN == set(MovementKind), (
+        f"not mapped: {set(MovementKind) - shown - HIDDEN}"
+    )
+
+
+def test_reserving_is_hidden_and_nothing_else_is() -> None:
+    assert {MovementKind.RESERVE, MovementKind.RESERVE_RELEASE} == HIDDEN
+
+
+@pytest.mark.parametrize("kind", sorted(QUALIFIED_BY_BATCH))
+def test_a_credit_is_a_line_for_every_source_of_batch(kind: MovementKind) -> None:
+    assert {q for k, q in LINES if k is kind} == set(BatchSource)
+
+
+@pytest.mark.parametrize("kind", sorted(QUALIFIED_BY_REFUND))
+def test_a_refunds_movement_is_a_line_for_every_kind_of_refund(
+    kind: MovementKind,
+) -> None:
+    assert {q for k, q in LINES if k is kind} == set(RefundKind)
+
+
+def test_the_other_movements_stand_alone() -> None:
+    alone = set(MovementKind) - HIDDEN - QUALIFIED_BY_BATCH - QUALIFIED_BY_REFUND
+    for kind in alone:
+        assert {q for k, q in LINES if k is kind} == {None}, kind
+
+
+def test_every_line_kind_is_reachable() -> None:
+    assert {line.kind for line in LINES.values()} == set(StatementLineKind)
+
+
+def test_the_line_kinds_are_the_screens_keys() -> None:
+    assert {k.value for k in StatementLineKind} == {
+        "purchase",
+        "admin_credit",
+        "charge",
+        "benefit_covered",
+        "platform_covered",
+        "expired",
+        "refund",
+        "refund_hold",
+        "refund_released",
+        "dispute_hold",
+        "dispute_released",
+        "difference_arisen",
+        "difference_repaid",
+        "difference_annulled",
+    }
+
+
+@pytest.mark.parametrize(
+    ("kind", "source", "refund", "line", "sign"),
+    [
+        ("credit", "purchase", None, StatementLineKind.PURCHASE, +1),
+        ("credit", "admin_credit", None, StatementLineKind.ADMIN_CREDIT, +1),
+        ("debit", None, None, StatementLineKind.CHARGE, -1),
+        ("batch_expired", "purchase", None, StatementLineKind.EXPIRED, -1),
+        ("refund_hold", "purchase", "dispute", StatementLineKind.DISPUTE_HOLD, -1),
+        ("refund_rejected", "purchase", "refund", StatementLineKind.REFUND_RELEASED, 1),
+        ("refund_completed", "purchase", "dispute", StatementLineKind.REFUND, -1),
+        ("difference_annulled", None, None, StatementLineKind.DIFFERENCE_ANNULLED, 1),
+    ],
+)
+def test_line_of(
+    kind: str,
+    source: str | None,
+    refund: str | None,
+    line: StatementLineKind,
+    sign: int,
+) -> None:
+    found = line_of(kind, source, refund)
+    assert (found.kind, found.sign) == (line, sign)
+
+
+@pytest.mark.parametrize(
+    ("kind", "source", "refund"),
+    [("reserve", "purchase", None), ("credit", None, None), ("refund_hold", "x", None)],
+)
+def test_what_the_table_does_not_know_is_never_dropped(
+    kind: str, source: str | None, refund: str | None
+) -> None:
+    with pytest.raises(UnmappedMovementError):
+        line_of(kind, source, refund)
+
+
+def test_the_cursor_goes_and_comes_back() -> None:
+    at, movement = datetime(2026, 11, 15, 12, 30, 1, 123456, tzinfo=UTC), uuid.uuid4()
+    assert _decode(_encode(at, movement)) == (at, movement)
+
+
+@pytest.mark.parametrize(
+    "cursor", ["", "x", "bm90IGpzb24", _encode(datetime(2026, 1, 1), uuid.uuid4())]
+)
+def test_a_cursor_not_given_is_refused(cursor: str) -> None:
+    with pytest.raises(InvalidCursorError):
+        _decode(cursor)

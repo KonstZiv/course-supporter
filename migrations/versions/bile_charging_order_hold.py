@@ -1,7 +1,7 @@
 """BIL-E: a refund hold keyed by the provider's order; audit values.
 
 Revision ID: bile_charging_order_hold
-Revises: bilpay_creem_disputes
+Revises: bilpay_purchase_screens
 Create Date: 2026-11-15
 
 Charging an action (BIL-E) needs no table of its own: it calls the journal
@@ -37,7 +37,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "bile_charging_order_hold"
-down_revision: str | Sequence[str] | None = "bilpay_creem_disputes"
+down_revision: str | Sequence[str] | None = "bilpay_purchase_screens"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -57,14 +57,14 @@ _ADJUSTMENT_OLD = (
 )
 _ACTION_NEW = (
     "What was done, e.g. author_settings.update, payment_rule.create, "
-    "payment_rule.end, account.anonymize, batch.admin_credit, "
-    "batch.invoice_credit, dispute.lost, dispute.won, refund.order_hold, "
-    "refund.order_release."
+    "payment_rule.end, account.anonymize, account.test_purchase, "
+    "batch.admin_credit, batch.invoice_credit, dispute.lost, dispute.won, "
+    "refund.order_hold, refund.order_release."
 )
 _ACTION_OLD = (
     "What was done, e.g. author_settings.update, payment_rule.create, "
-    "payment_rule.end, account.anonymize, batch.admin_credit, "
-    "batch.invoice_credit, dispute.lost, dispute.won."
+    "payment_rule.end, account.anonymize, account.test_purchase, "
+    "batch.admin_credit, batch.invoice_credit, dispute.lost, dispute.won."
 )
 
 

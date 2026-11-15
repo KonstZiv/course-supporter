@@ -16,10 +16,16 @@ The rules (operator 2026-10-30, 2026-11-04, 2026-11-11, 2026-11-15):
       action call the same one). An action may start only while its payer has
       ``available >= P`` — where the threshold applies
       (:func:`threshold_applies`): a student paying for their own review; an
-      author without credit paying for their own action. A review an author
-      pays for under a payment rule, and a task preparation a student's
-      submission started, never wait for the author's units; an author with
-      credit is never stopped.
+      author without credit paying for their own action or for a student's
+      review under a payment rule (operator 2026-11-15, 5a, item 2: the platform
+      does not work on credit — the review waits for the author's units). A
+      task preparation a student's submission started never waits for the
+      author's units; an author with credit is never stopped.
+    * Before, when the estimate failed: the price shown is the ceiling N
+      (:func:`ceiling_units`) — the most the reserve can hold, so "no more
+      than N" is true; the threshold is the task's typical price, else
+      ``available > 0`` (``quotes.ceiling_threshold``); the reserve is
+      ``min(N, available)``.
     * Start: a reserve of ``min(2E, the ceiling, available)`` units
       (:func:`reserve_for`; the ledger caps it by what is available, so it
       may be 0).
@@ -34,7 +40,8 @@ The rules (operator 2026-10-30, 2026-11-04, 2026-11-11, 2026-11-15):
 
     A test (a task of kind ``test``: checked against the key, no model) is
     free while its payer's balance, reserved units included, is above 0
-    (:func:`test_allowed`); it reserves and charges nothing.
+    (:func:`test_allowed`) — an author with credit is never stopped; it
+    reserves and charges nothing.
 
 Keys:
     The estimate's: a review is its submission (all its jobs), a processing is
@@ -58,7 +65,6 @@ import structlog
 from sqlalchemy import func, select
 
 from course_supporter.billing import ledger
-from course_supporter.billing.costs import PREPARATION_STAGES
 from course_supporter.billing.errors import BillingConflictError
 from course_supporter.billing.journal import lock_account
 from course_supporter.billing.kinds import (
@@ -68,6 +74,7 @@ from course_supporter.billing.kinds import (
     ReservationState,
     RuleScope,
 )
+from course_supporter.billing.links import PREPARATION_STAGES
 from course_supporter.billing.payer import PayerResolution, resolve_payer
 from course_supporter.cost_estimate.core import fact_units, price_units, reserve_units
 from course_supporter.cost_estimate.settings import get_estimate_settings
@@ -121,17 +128,27 @@ def price_of(e_usd: Decimal) -> int:
     return units or 0
 
 
+def ceiling_units(ceiling_usd: Decimal) -> int:
+    """N: a money ceiling in units, ``ceil(ceiling x K)`` — no margin.
+
+    The cap of every reserve (:func:`reserve_request`) and the price of a
+    review whose estimate failed ("no more than N"). 0 while no rate is set.
+    """
+    k = units_per_usd()
+    if k is None:
+        return 0
+    return int((ceiling_usd * k).to_integral_value(rounding=ROUND_CEILING))
+
+
 def reserve_request(e_usd: Decimal, ceiling_usd: Decimal | None) -> int:
     """What a start asks to hold: ``min(2E, the ceiling)`` in units.
 
     The ledger holds that or the available units, whichever is less.
     """
-    k = units_per_usd()
-    wanted = reserve_units(e_usd, units_per_usd=k) or 0
-    if ceiling_usd is None or k is None:
+    wanted = reserve_units(e_usd, units_per_usd=units_per_usd()) or 0
+    if ceiling_usd is None:
         return wanted
-    ceiling = int((ceiling_usd * k).to_integral_value(rounding=ROUND_CEILING))
-    return min(wanted, ceiling)
+    return min(wanted, ceiling_units(ceiling_usd))
 
 
 def fact_of(usd: Decimal) -> int:
@@ -201,11 +218,13 @@ def threshold_applies(
 ) -> bool:
     """Does ``available >= P`` gate this action (module docstring)?
 
-    A review: only when a student pays for it. Any other action: only when
-    the author asked for it (``own_action``) and has no credit.
+    A review: unless an author with credit pays for it — a student for their
+    own, an author without credit under a payment rule (5a, item 2). Any other
+    action: only when the author asked for it (``own_action``) and has no
+    credit.
     """
     if action_kind is ActionKind.REVIEW:
-        return payer.kind is AccountKind.STUDENT
+        return not payer.credit_allowed
     return own_action and not payer.credit_allowed
 
 
@@ -256,9 +275,10 @@ async def quote(
 async def test_allowed(session: AsyncSession, payer: Payer) -> bool:
     """A test is free while its payer's balance (reserved included) is above 0.
 
-    An author paying under a rule is never waited for (operator 2026-11-15).
+    The same for an author paying under a rule (operator 2026-11-15, 5a, item 2);
+    an author with credit is never stopped.
     """
-    if payer.kind is AccountKind.AUTHOR:
+    if payer.credit_allowed:
         return True
     return (await ledger.balance(session, payer.account_id)).balance > 0
 

@@ -214,7 +214,18 @@ FAILED_REASON_CODE: Final = "processing_failed"
 """The code for a run that broke — the surface pairs it with "send it again"."""
 
 AWAITING_FUNDS_REASON_CODE: Final = "awaiting_funds"
-"""The code for a revision held before its first paid call."""
+"""The code for a revision held before its first paid call, for the student's
+own units."""
+
+AWAITING_AUTHOR_FUNDS_REASON_CODE: Final = "awaiting_author_funds"
+"""The code for a revision held for its AUTHOR's units (BIL-E2, 5a, item 2).
+
+The author pays for it under a payment rule and has no units left: the work
+is taken, its review starts once the author tops up. The same state
+``awaiting_funds``; the code lets the portal say whose units it waits for.
+Who pays is :func:`course_supporter.billing.held.waiting_for_author` — the
+continuation's own answer.
+"""
 
 AWAITING_CRITERIA_REASON_CODE: Final = "awaiting_criteria"
 """The code for a revision whose review waits for its task's criteria list.
@@ -226,7 +237,9 @@ gets its sentence in the portal's own small request.
 """
 
 
-def curated_presentation(submission: HomeworkSubmission) -> PortalPresentation:
+def curated_presentation(
+    submission: HomeworkSubmission, *, held_for_author: bool = False
+) -> PortalPresentation:
     """The one answer to "what do we say about this attempt?" (task 03).
 
     Computed here, once, and carried by all three portal responses, so the tree
@@ -242,7 +255,11 @@ def curated_presentation(submission: HomeworkSubmission) -> PortalPresentation:
       pass, so the article keyed on it keeps working;
     * ``failed`` — a new code, because a run that broke told the student
       nothing before: the surface pairs it with "send it again";
-    * ``awaiting_funds`` — a new code for a state that did not exist;
+    * ``awaiting_funds`` — a new code for a state that did not exist; when
+      the author pays for the review and it waits for the author's units
+      (``held_for_author``, from
+      :func:`course_supporter.billing.held.waiting_for_author`) —
+      ``awaiting_author_funds``;
     * ``awaiting_criteria`` — the code of the second hold, on the state
       ``in_progress`` (see :data:`AWAITING_CRITERIA_REASON_CODE`);
     * everything in flight, and everything reviewed — no code: the state is the
@@ -252,7 +269,12 @@ def curated_presentation(submission: HomeworkSubmission) -> PortalPresentation:
     if submission.status == HomeworkStatus.FAILED.value:
         return PortalPresentation(state=state, reason_code=FAILED_REASON_CODE)
     if submission.status == HomeworkStatus.AWAITING_FUNDS.value:
-        return PortalPresentation(state=state, reason_code=AWAITING_FUNDS_REASON_CODE)
+        code = (
+            AWAITING_AUTHOR_FUNDS_REASON_CODE
+            if held_for_author
+            else AWAITING_FUNDS_REASON_CODE
+        )
+        return PortalPresentation(state=state, reason_code=code)
     if submission.status == HomeworkStatus.AWAITING_CRITERIA.value:
         return PortalPresentation(
             state=state, reason_code=AWAITING_CRITERIA_REASON_CODE

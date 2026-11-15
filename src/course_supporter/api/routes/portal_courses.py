@@ -131,13 +131,17 @@ def _overlay_status(status: str) -> Literal["pending", "reviewed", "error"]:
     return "pending"
 
 
-def _build_overlay(attempts: list[HomeworkSubmission]) -> PortalSubmissionOverlay:
+def _build_overlay(
+    attempts: list[HomeworkSubmission],
+    held_for_author: frozenset[uuid.UUID] = frozenset(),
+) -> PortalSubmissionOverlay:
     """Overlay for ONE task from its attempts (newest-first).
 
     ``submission_status`` is by the latest attempt; ``last`` is that attempt's
     curated result; ``best`` is the highest-scored REVIEWED attempt with a
     non-null score (pending / null-score attempts never compete) — absent when
-    there is no usable score yet.
+    there is no usable score yet. ``held_for_author`` — the attempts that wait
+    for their author's units (:func:`course_supporter.billing.held.waiting_for_author`).
     """
     if not attempts:
         return PortalSubmissionOverlay(submission_status="none")
@@ -162,7 +166,9 @@ def _build_overlay(attempts: list[HomeworkSubmission]) -> PortalSubmissionOverla
         submission_status=_overlay_status(latest.status),
         # The same answer the attempts list gives for this very attempt: one
         # source, so the tree and the list cannot phrase it differently.
-        presentation=curated_presentation(latest),
+        presentation=curated_presentation(
+            latest, held_for_author=latest.id in held_for_author
+        ),
         last=last,
         best=best,
     )
@@ -247,6 +253,7 @@ def _project_document(
     doc: AuthoredDocument,
     overlays: dict[uuid.UUID, list[HomeworkSubmission]],
     bases: dict[uuid.UUID, PortalTaskBase | None],
+    held_for_author: frozenset[uuid.UUID] = frozenset(),
 ) -> PortalMaterialItem:
     """Project one document to the curated item, attaching a task overlay.
 
@@ -256,7 +263,9 @@ def _project_document(
     in the pre-fetched map), a non-project task, or a material.
     """
     is_task = doc.task_type is not None
-    overlay = _build_overlay(overlays.get(doc.id, [])) if is_task else None
+    overlay = (
+        _build_overlay(overlays.get(doc.id, []), held_for_author) if is_task else None
+    )
     return PortalMaterialItem(
         id=doc.id,
         kind="task" if is_task else "material",
@@ -286,6 +295,7 @@ def _project_node(
     published: set[uuid.UUID],
     *,
     course_language: str | None = None,
+    held_for_author: frozenset[uuid.UUID] = frozenset(),
 ) -> PortalMaterialTreeNode:
     """Recursively project a CourseNode subtree to the curated tree.
 
@@ -308,7 +318,7 @@ def _project_node(
     their cascade-deleted subtrees) are skipped.
     """
     documents = [
-        _project_document(doc, overlays, bases)
+        _project_document(doc, overlays, bases, held_for_author)
         for doc in sorted(
             (
                 d
@@ -322,7 +332,9 @@ def _project_node(
         )
     ]
     children = [
-        _project_node(child, overlays, bases, published)
+        _project_node(
+            child, overlays, bases, published, held_for_author=held_for_author
+        )
         for child in node.children
         if child.deleted_at is None
     ]
@@ -414,6 +426,18 @@ async def get_portal_course_materials(
     # that root node: the submission form reads it there to say what its
     # "course language" option actually offers (step Д).
     root = subtree[0]
+    # Which latest attempts wait for the author's units (BIL-E2, 5a, item 2): the
+    # payer is asked only for a held one.
+    from course_supporter.billing.held import waiting_for_author
+
+    held = await waiting_for_author(
+        session, [found[0] for found in overlays.values() if found]
+    )
     return _project_node(
-        root, overlays, bases, published, course_language=root.default_language
+        root,
+        overlays,
+        bases,
+        published,
+        course_language=root.default_language,
+        held_for_author=held,
     )

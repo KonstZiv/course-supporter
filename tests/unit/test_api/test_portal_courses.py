@@ -392,20 +392,22 @@ class TestPortalMaterialsTree:
         assert overlay["best"] is None
 
     @pytest.mark.parametrize(
-        ("status", "state", "reason_code"),
+        ("status", "by_author", "state", "reason_code"),
         [
-            ("rejected", "not_opened", None),
-            ("failed", "not_opened", "processing_failed"),
-            ("mismatch", "not_an_attempt", "mismatch"),
-            ("awaiting_funds", "awaiting_funds", "awaiting_funds"),
-            ("reviewing", "in_progress", None),
-            ("delivered", "reviewed", None),
+            ("rejected", False, "not_opened", None),
+            ("failed", False, "not_opened", "processing_failed"),
+            ("mismatch", False, "not_an_attempt", "mismatch"),
+            ("awaiting_funds", False, "awaiting_funds", "awaiting_funds"),
+            ("awaiting_funds", True, "awaiting_funds", "awaiting_author_funds"),
+            ("reviewing", False, "in_progress", None),
+            ("delivered", False, "reviewed", None),
         ],
     )
     async def test_the_tree_carries_the_servers_own_presentation(
         self,
         client: AsyncClient,
         status: str,
+        by_author: bool,
         state: str,
         reason_code: str | None,
     ) -> None:
@@ -414,13 +416,19 @@ class TestPortalMaterialsTree:
         The tree used to know only the coarse bucket, which is why "not an
         attempt" reached the student as "error". It now carries the same answer
         the attempts list carries for that very attempt — beside the old bucket,
-        which is untouched (``DD-SP-AS``).
+        which is untouched (``DD-SP-AS``). A held attempt the author pays for
+        waits for the author's units (BIL-E2): billing says which.
         """
         task = _doc(task_type="task")
         root = _node(documents=[task])
         attempt = _sub(authored_document_id=task.id, status=status)
+        held = frozenset({attempt.id}) if by_author else frozenset()
         get_by_id, enrolled, subtree, subs, bases = _gate_ok(root, [root], [attempt])
-        with get_by_id, enrolled, subtree, subs, bases:
+        waiting = patch(
+            "course_supporter.billing.held.waiting_for_author",
+            AsyncMock(return_value=held),
+        )
+        with get_by_id, enrolled, subtree, subs, bases, waiting:
             resp = await client.get(_materials_url(root.id))
 
         overlay = resp.json()["documents"][0]["overlay"]

@@ -8,7 +8,9 @@ Routes
   counts; without it, only a rule for the student does.
 - ``GET /billing/outlook`` — an author (the tenant's key, scope ``prep``):
   about how many days the units last at the last week's pace, a warning when
-  they run out soon, units that expire soon.
+  they run out soon, units that expire soon, and the students' reviews that
+  wait for the author's units (``held_reviews``: the author pays for them
+  under a payment rule and has too few — BIL-E2, 5a, item 2).
 
 Screens show units only, and pick their words by the codes (``low``,
 ``next_may_fail``, ``runs_out_soon``). The thresholds are settings
@@ -18,7 +20,7 @@ Screens show units only, and pick their words by the codes (``low``,
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -29,6 +31,7 @@ from course_supporter.api.deps import get_current_student, get_session
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.billing.accounts import get_or_create_author_account
+from course_supporter.billing.held import held_for_author
 from course_supporter.billing.outlook import (
     Expiring,
     author_outlook,
@@ -60,6 +63,19 @@ class StudentOutlookResponse(BaseModel):
     paid_by: Literal["self", "author"]
 
 
+class HeldReviewsOut(BaseModel):
+    """Students' reviews that wait for the author's units."""
+
+    count: int = Field(description="How many; 0 when none waits.")
+    oldest_at: datetime | None = Field(
+        description="When the oldest of them was submitted; null when none."
+    )
+    missing_units: int = Field(
+        description="The prices of the waiting reviews together, less the "
+        "available units; never below 0."
+    )
+
+
 class AuthorOutlookResponse(BaseModel):
     days_left: int | None = Field(
         description="About how many days the units last at the last week's "
@@ -67,6 +83,11 @@ class AuthorOutlookResponse(BaseModel):
     )
     warning: Literal["runs_out_soon"] | None
     expiring_soon: ExpiringSoon | None
+    held_reviews: HeldReviewsOut = Field(
+        description="Students' reviews the author pays for under a payment rule "
+        "that wait for the author's units; they start, oldest first, once the "
+        "units cover them."
+    )
 
 
 def _expiring(found: Expiring | None) -> ExpiringSoon | None:
@@ -108,9 +129,17 @@ async def get_author_outlook(
     """The author's reminders: days left at the last week's pace, units expiring."""
     account = await get_or_create_author_account(session, tenant_id=tenant.tenant_id)
     found = await author_outlook(session, account.id, settings=get_settings())
+    held = await held_for_author(
+        session, tenant_id=tenant.tenant_id, account_id=account.id
+    )
     await session.commit()
     return AuthorOutlookResponse(
         days_left=found.days_left,
         warning=found.warning,
         expiring_soon=_expiring(found.expiring_soon),
+        held_reviews=HeldReviewsOut(
+            count=held.count,
+            oldest_at=held.oldest_at,
+            missing_units=held.missing_units,
+        ),
     )

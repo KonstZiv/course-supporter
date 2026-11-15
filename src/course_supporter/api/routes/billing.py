@@ -38,6 +38,11 @@ Routes
 - ``GET /billing/statement?limit=&cursor=&from=&to=`` — the author's
   movements of units, the newest first, a page at a time (``invalid_cursor``
   422 for a cursor this server did not give).
+- ``GET /billing/spending?from=YYYY-MM-DD&to=YYYY-MM-DD`` — what the author's
+  actions cost them in units, by course and homework task
+  (:mod:`course_supporter.billing.spending`); the current UTC month by
+  default, both days included; ``invalid_period`` 422 when ``from`` is after
+  ``to``. Never a dollar.
 
 Every refusal of a route but the webhook carries its reason code
 (``_billing_shared``).
@@ -49,7 +54,7 @@ administrator's door is ``scripts/billing_admin.py``.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Final
 
 import structlog
@@ -70,6 +75,7 @@ from course_supporter.api.routes._billing_shared import (
     consent_required,
     open_checkout,
     packages_of,
+    refusal,
     require_payment,
     responses,
     statement_of,
@@ -83,12 +89,18 @@ from course_supporter.api.schemas import (
     BillingConsentRequest,
     BillingConsentResponse,
     BillingPackagesResponse,
+    BillingSpendingCourse,
+    BillingSpendingPeriod,
+    BillingSpendingResponse,
+    BillingSpendingTask,
+    BillingSpendingUnits,
     BillingStatementResponse,
     BillingTermsResponse,
 )
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.billing import charging
 from course_supporter.billing.accounts import (
     find_active_account,
     get_or_create_author_account,
@@ -97,8 +109,9 @@ from course_supporter.billing.consent import (
     author_terms_status,
     record_author_consent,
 )
+from course_supporter.billing.costs import UnitsSummary, default_month_bounds
 from course_supporter.billing.errors import BillingConflictError
-from course_supporter.billing.kinds import AccountKind
+from course_supporter.billing.kinds import AccountKind, ActionKind
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.port import InvalidWebhookError
 from course_supporter.billing.payments.registry import ProviderRegistry
@@ -106,6 +119,7 @@ from course_supporter.billing.payments.webhooks import (
     EventHandlingError,
     handle_events,
 )
+from course_supporter.billing.spending import Spending, author_spending
 from course_supporter.billing.statement import MAX_LIMIT
 from course_supporter.config import get_settings
 
@@ -333,4 +347,68 @@ async def get_author_statement(
     )
     return await statement_of(
         session, account, limit=limit, cursor=cursor, since=since, until=until
+    )
+
+
+def _units(units: UnitsSummary) -> BillingSpendingUnits:
+    return BillingSpendingUnits(
+        billed_units=units.billed_units, covered_units=units.covered_units
+    )
+
+
+@router.get("/billing/spending", responses=responses(Refusal.INVALID_PERIOD))
+async def get_author_spending(
+    tenant: PrepDep,
+    session: SessionDep,
+    from_date: Annotated[
+        date | None,
+        Query(alias="from", description="The first day, UTC (default: the 1st)."),
+    ] = None,
+    to_date: Annotated[
+        date | None,
+        Query(alias="to", description="The last day, UTC, included (default: today)."),
+    ] = None,
+) -> BillingSpendingResponse:
+    """What the author's actions cost them, in units, by course and task."""
+    default_from, default_to = default_month_bounds()
+    start, end = from_date or default_from, to_date or default_to
+    if start > end:
+        raise refusal(Refusal.INVALID_PERIOD, "The period starts after it ends.")
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
+    )
+    found = (
+        await author_spending(
+            session, account_id=account.id, from_date=start, to_date=end
+        )
+        if account is not None
+        else Spending(start, end, UnitsSummary(), [], UnitsSummary())
+    )
+    return BillingSpendingResponse(
+        period=BillingSpendingPeriod(from_date=start, to_date=end),
+        charging_enabled=charging.charging_enabled(),
+        totals=_units(found.totals),
+        courses=[
+            BillingSpendingCourse(
+                course_node_id=course.course_node_id,
+                title=course.title,
+                billed_units=course.units.billed_units,
+                covered_units=course.units.covered_units,
+                reviews_units=course.by_kind[ActionKind.REVIEW],
+                processing_units=course.by_kind[ActionKind.PROCESSING],
+                preparation_units=course.by_kind[ActionKind.TASK_PREPARATION],
+                tasks=[
+                    BillingSpendingTask(
+                        authored_document_id=task.authored_document_id,
+                        title=task.title,
+                        reviews=task.reviews,
+                        billed_units=task.units.billed_units,
+                        covered_units=task.units.covered_units,
+                    )
+                    for task in course.tasks
+                ],
+            )
+            for course in found.courses
+        ],
+        unlinked=_units(found.unlinked),
     )

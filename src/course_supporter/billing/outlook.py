@@ -187,7 +187,7 @@ async def _price_of_a_course_task(
     ``typical_submission.chars`` when the task has no history); ``None`` when
     the courses have no task answered by a file.
     """
-    from course_supporter.billing.quotes import review_quote
+    from course_supporter.billing.quotes import review_price
 
     task = (
         await session.execute(
@@ -205,10 +205,10 @@ async def _price_of_a_course_task(
     ).scalar_one_or_none()
     if task is None:
         return None
-    quote = await review_quote(
+    found = await review_price(
         session, task=task, tenant_id=tenant_id, student_id=student_id
     )
-    return float(quote.price_units) or None
+    return float(found.units) or None
 
 
 async def student_outlook(

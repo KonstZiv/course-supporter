@@ -60,9 +60,11 @@ Side = Literal["base", "sub"]
 ReadText = Callable[[Side, ManifestEntry], str | None]
 
 # Structural sentinel. EVERY delimiter line contains it, so escaping it in an
-# untrusted body (exact-match) makes it impossible for student content to forge
-# a boundary and break out of its slot. The escaped form does not itself
-# contain the sentinel, so escaping is idempotent and non-recursive.
+# untrusted body makes it impossible for student content to forge a boundary
+# and break out of its slot. The escaped form does not itself contain the
+# sentinel, but it ends with "@@": one pass of str.replace over
+# "@@MENTOR_CTX@@MENTOR_CTX@@" leaves "..._ESCAPED@@MENTOR_CTX@@", a sentinel
+# again. _escape therefore repeats the pass until none is left.
 _SENTINEL: Final[str] = "@@MENTOR_CTX@@"
 _SENTINEL_ESCAPED: Final[str] = "@@MENTOR_CTX_ESCAPED@@"
 _BODY_UNAVAILABLE: Final[str] = "(body unavailable -- binary or non-extractable)"
@@ -417,8 +419,16 @@ def _unified_diff(base_text: str, sub_text: str, path: str) -> str:
 
 
 def _escape(text: str) -> str:
-    """Neutralise the structural sentinel in untrusted content (exact-match)."""
-    return text.replace(_SENTINEL, _SENTINEL_ESCAPED)
+    """Neutralise the structural sentinel in untrusted content, completely.
+
+    Repeats the replacement until no sentinel is left (see the note at
+    ``_SENTINEL``). It ends: every pass removes at least one ``MENTOR_CTX@@``
+    and creates none. A text without the sentinel comes back unchanged, and a
+    lone sentinel becomes the escaped form exactly as before.
+    """
+    while _SENTINEL in text:
+        text = text.replace(_SENTINEL, _SENTINEL_ESCAPED)
+    return text
 
 
 def _inline(text: str) -> str:

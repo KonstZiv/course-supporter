@@ -17,6 +17,9 @@ Routes
   shown, once per revision, as a student does in the portal (operator
   2026-11-12): 201 with the new record, 200 with the earlier one, 409 when the
   revision is not the one in force. Channel ``api``.
+- ``GET /billing/packages`` — the packages on sale and whether the author
+  may buy now (``purchase``), as the portal's (the same function). Creates no
+  account.
 - ``POST /billing/checkout`` — an author (the tenant's key, scope ``prep``)
   opens a checkout of a package for the tenant's author account, which pays
   for processing and, under a payment rule, for the reviews of the tenant's
@@ -52,6 +55,7 @@ from course_supporter.api.routes._billing_shared import (
     Refusal,
     consent_required,
     open_checkout,
+    packages_of,
     require_payment,
     responses,
     terms_changed,
@@ -61,17 +65,22 @@ from course_supporter.api.schemas import (
     BillingCheckoutResponse,
     BillingConsentRequest,
     BillingConsentResponse,
+    BillingPackagesResponse,
     BillingTermsResponse,
 )
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
-from course_supporter.billing.accounts import get_or_create_author_account
+from course_supporter.billing.accounts import (
+    find_active_account,
+    get_or_create_author_account,
+)
 from course_supporter.billing.consent import (
     author_terms_status,
     record_author_consent,
 )
 from course_supporter.billing.errors import BillingConflictError
+from course_supporter.billing.kinds import AccountKind
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.port import InvalidWebhookError
 from course_supporter.billing.payments.registry import ProviderRegistry
@@ -208,6 +217,20 @@ async def post_author_billing_consent(
     return BillingConsentResponse(
         terms_version=record.terms_version, consented_at=record.consented_at
     )
+
+
+@router.get("/billing/packages")
+async def get_author_billing_packages(
+    tenant: PrepDep,
+    session: SessionDep,
+    registry: RegistryDep,
+    catalog: CatalogDep,
+) -> BillingPackagesResponse:
+    """The packages on sale, and whether the author may buy them now."""
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
+    )
+    return packages_of(catalog, registry, account)
 
 
 @router.post("/billing/checkout", responses=responses(*CHECKOUT_REFUSALS))

@@ -11,7 +11,9 @@ Routes
   already agreed to it, 409 when the revision is not the one in force (the
   page showed old terms; reload them).
 - ``GET /portal/billing/packages`` — the packages on sale: units and prices,
-  never a provider's id.
+  never a provider's id; and ``purchase`` — whether the student may buy now
+  (``open``, else the ``reason``: ``payment_unavailable`` |
+  ``purchase_not_open``). Creates no account.
 - ``POST /portal/billing/checkout`` — open a checkout of a package for the
   student's account: 503 when payment is unavailable (no provider switched
   on), 409 while the student has not agreed to the terms in force, 403 while
@@ -46,6 +48,7 @@ from course_supporter.api.routes._billing_shared import (
     Refusal,
     consent_required,
     open_checkout,
+    packages_of,
     require_payment,
     responses,
     terms_changed,
@@ -55,18 +58,20 @@ from course_supporter.api.schemas import (
     BillingCheckoutResponse,
     BillingConsentRequest,
     BillingConsentResponse,
-    BillingPackageResponse,
     BillingPackagesResponse,
     BillingTermsResponse,
 )
 from course_supporter.auth.context import StudentContext
-from course_supporter.billing.accounts import get_or_create_student_account
+from course_supporter.billing.accounts import (
+    find_active_account,
+    get_or_create_student_account,
+)
 from course_supporter.billing.consent import (
     record_student_consent,
     student_terms_status,
 )
 from course_supporter.billing.errors import BillingConflictError
-from course_supporter.billing.kinds import ConsentChannel
+from course_supporter.billing.kinds import AccountKind, ConsentChannel
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.registry import ProviderRegistry
 from course_supporter.config import get_settings
@@ -141,19 +146,21 @@ async def post_billing_consent(
     )
 
 
-@router.get("/portal/billing/packages", dependencies=[Depends(get_current_student)])
-async def get_billing_packages(catalog: CatalogDep) -> BillingPackagesResponse:
-    """The packages on sale: units and prices, never a provider's id."""
-    return BillingPackagesResponse(
-        packages=[
-            BillingPackageResponse(
-                id=package.id,
-                units=package.units,
-                prices_minor=dict(package.prices_minor),
-            )
-            for package in catalog.active()
-        ]
+@router.get("/portal/billing/packages")
+async def get_billing_packages(
+    student: StudentDep,
+    session: SessionDep,
+    registry: RegistryDep,
+    catalog: CatalogDep,
+) -> BillingPackagesResponse:
+    """The packages on sale, and whether the student may buy them now."""
+    account = await find_active_account(
+        session,
+        kind=AccountKind.STUDENT,
+        tenant_id=student.tenant_id,
+        student_id=student.student_id,
     )
+    return packages_of(catalog, registry, account)
 
 
 @router.post("/portal/billing/checkout", responses=responses(*CHECKOUT_REFUSALS))

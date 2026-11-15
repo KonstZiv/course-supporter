@@ -2724,12 +2724,26 @@ class BillingPackageResponse(BaseModel):
     )
 
 
+class BillingPurchaseState(BaseModel):
+    """Whether the holder asking may buy now, through the default provider."""
+
+    open: bool = Field(description="True when a checkout would be opened.")
+    reason: Literal["payment_unavailable", "purchase_not_open"] | None = Field(
+        description="Why it is closed; null when open. payment_unavailable: no "
+        "payment provider is switched on; purchase_not_open: the provider is in "
+        "test mode and the holder's account is not marked for test purchases "
+        "(the screen says the purchase is not open yet)."
+    )
+
+
 class BillingPackagesResponse(BaseModel):
-    """GET /portal/billing/packages: the packages on sale."""
+    """GET /portal/billing/packages, GET /billing/packages: the packages on
+    sale, and whether the holder asking may buy them now."""
 
     packages: list[BillingPackageResponse] = Field(
         description="In the catalog's order; empty while nothing is on sale."
     )
+    purchase: BillingPurchaseState
 
 
 class BillingCheckoutRequest(BaseModel):

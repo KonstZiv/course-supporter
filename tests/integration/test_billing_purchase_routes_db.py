@@ -360,3 +360,110 @@ class TestGuard:
         assert paid.status_code == 200
         [batch] = await _batches(session_factory, account_id)
         assert (batch.units, batch.provider) == (1000, FAKE)
+
+
+# ── Packages ───────────────────────────────────────────────────────────
+
+
+async def _accounts(
+    session_factory: async_sessionmaker[AsyncSession], world: World
+) -> list[BillingAccount]:
+    async with session_factory() as session:
+        rows = await session.execute(
+            select(BillingAccount).where(BillingAccount.tenant_id == world.tenant_id)
+        )
+        return list(rows.scalars())
+
+
+@pytest.mark.usefixtures("signed_in")
+class TestPackages:
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_the_packages_on_sale_without_providers_ids(self, who: str) -> None:
+        async with _client() as client:
+            response = await client.get(f"{who}/packages")
+        assert response.status_code == 200
+        assert response.json()["packages"] == [
+            {"id": "starter", "units": 1000, "prices_minor": {"EUR": 990}},
+            {"id": "large", "units": 5000, "prices_minor": {"EUR": 3990}},
+        ]
+        assert "fake_price" not in response.text
+        assert "prod_" not in response.text
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_no_provider_is_payment_unavailable(
+        self, world: World, who: str
+    ) -> None:
+        world.providers.clear()
+        async with _client() as client:
+            response = await client.get(f"{who}/packages")
+        assert response.json()["purchase"] == {
+            "open": False,
+            "reason": "payment_unavailable",
+        }
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_test_mode_and_no_account_yet_is_not_open_and_creates_none(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        who: str,
+    ) -> None:
+        async with _client() as client:
+            response = await client.get(f"{who}/packages")
+        assert response.json()["purchase"] == {
+            "open": False,
+            "reason": "purchase_not_open",
+        }
+        assert await _accounts(session_factory, world) == []
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_test_mode_and_an_unmarked_account_is_not_open(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        who: str,
+    ) -> None:
+        await _mark(session_factory, world, who, allowed=False)  # exists, unmarked
+        async with _client() as client:
+            response = await client.get(f"{who}/packages")
+        assert response.json()["purchase"]["reason"] == "purchase_not_open"
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_a_marked_account_is_open(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        who: str,
+    ) -> None:
+        await _mark(session_factory, world, who)
+        async with _client() as client:
+            response = await client.get(f"{who}/packages")
+        assert response.json()["purchase"] == {"open": True, "reason": None}
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_in_live_mode_it_is_open_to_anyone(
+        self, world: World, who: str
+    ) -> None:
+        world.providers[:] = [world.creem(LIVE_API_BASE)]
+        async with _client() as client:
+            response = await client.get(f"{who}/packages")
+        assert response.json()["purchase"] == {"open": True, "reason": None}
+
+    async def test_the_authors_packages_need_the_prep_scope(self, world: World) -> None:
+        app.dependency_overrides[get_current_tenant] = lambda: TenantContext(
+            tenant_id=world.tenant_id,
+            tenant_name="t",
+            scopes=["check"],
+            plan_id="basic",
+            key_prefix="cs_test",
+        )
+        async with _client() as client:
+            response = await client.get(f"{Who.AUTHOR}/packages")
+        assert response.status_code == 403
+
+
+async def test_the_packages_need_a_key_or_a_portal_session() -> None:
+    async with _client() as client:
+        portal = await client.get(f"{Who.STUDENT}/packages")
+        author = await client.get(f"{Who.AUTHOR}/packages")
+    assert (portal.status_code, author.status_code) == (401, 401)

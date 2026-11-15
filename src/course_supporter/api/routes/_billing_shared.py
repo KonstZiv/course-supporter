@@ -14,6 +14,12 @@ Refusals:
     provider's id, no error of its API). The providers' webhook is not a
     screen's route and keeps its bare statuses.
 
+Packages:
+    Both packages routes answer :func:`packages_of`: the catalog's packages
+    on sale and whether the holder asking may buy now, through the default
+    provider — decided by the very function the checkout obeys
+    (``billing.payments.checkout.purchase_closed``).
+
 Checkout:
     Both checkout routes open a checkout through the one service
     (:func:`course_supporter.billing.payments.checkout.start_checkout`);
@@ -28,7 +34,13 @@ from typing import Any, Final
 import structlog
 from fastapi import HTTPException
 
-from course_supporter.api.schemas import BillingCheckoutRequest, BillingCheckoutResponse
+from course_supporter.api.schemas import (
+    BillingCheckoutRequest,
+    BillingCheckoutResponse,
+    BillingPackageResponse,
+    BillingPackagesResponse,
+    BillingPurchaseState,
+)
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.checkout import (
     PackageNotOnSaleError,
@@ -36,6 +48,7 @@ from course_supporter.billing.payments.checkout import (
     ProviderNotSwitchedOnError,
     PurchaseClosed,
     PurchaseNotOpenError,
+    purchase_closed,
     start_checkout,
 )
 from course_supporter.billing.payments.port import PaymentProviderError
@@ -113,6 +126,28 @@ CHECKOUT_REFUSALS: Final = (
     Refusal.PROVIDER_UNAVAILABLE,
 )
 """What a checkout route refuses with."""
+
+
+def packages_of(
+    catalog: Catalog, registry: ProviderRegistry, account: BillingAccount | None
+) -> BillingPackagesResponse:
+    """The packages on sale (units and prices, never a provider's id) and
+    whether ``account`` — the holder's, None while they have none — may buy
+    through the default provider."""
+    closed = purchase_closed(registry.default(), account)
+    return BillingPackagesResponse(
+        packages=[
+            BillingPackageResponse(
+                id=package.id,
+                units=package.units,
+                prices_minor=dict(package.prices_minor),
+            )
+            for package in catalog.active()
+        ],
+        purchase=BillingPurchaseState(
+            open=closed is None, reason=None if closed is None else closed.value
+        ),
+    )
 
 
 def require_payment(registry: ProviderRegistry) -> None:

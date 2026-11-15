@@ -767,7 +767,8 @@ class TestPortalCheckout:
                     "units": 1000,
                     "prices_minor": {"EUR": 990, "USD": 1090},
                 }
-            ]
+            ],
+            "purchase": {"open": True, "reason": None},  # the account is marked
         }
         assert "fake_price_starter" not in response.text
 

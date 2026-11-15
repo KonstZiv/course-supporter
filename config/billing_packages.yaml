@@ -7,26 +7,39 @@
 # says it was paid, so an id stands for its units and prices for good: to
 # change a package, give it a new id.
 #
-# EVERY size and price below is a placeholder — рішення оператора; не
-# публікувати. The operator sets the real ones separately; until then no
-# package is on sale (active: false), so the portal lists none.
+# Активні пакети — ті, що на сторінці цін, а id товарів посередника —
+# тестового режиму, доки посередник не в бойовому.
 
 packages:
-  # SANDBOX ONLY (operator decision 2026-11-14): Creem test-mode product. Remove before switching Creem to live mode — a test product id does not exist in live mode.
+  # Ціни й розміри — як на сторінці цін сайту (рішення оператора 2026-11-15);
+  # id товарів Creem — тестового режиму, перед бойовим режимом їх замінюють
+  # id бойових товарів.
+  - id: units-500-v1
+    units: 500
+    prices_minor:
+      EUR: 999
+    active: true
+  - id: units-1500-v1
+    units: 1500
+    prices_minor:
+      EUR: 1499
+    active: true
+  - id: units-5000-v1
+    units: 5000
+    prices_minor:
+      EUR: 3999
+    active: true
+  - id: units-10000-v1
+    units: 10000
+    prices_minor:
+      EUR: 6999
+    active: true
+
+  # SANDBOX ONLY, not on sale since 2026-11-15; remove before switching Creem to live mode
   - id: sandbox-test-500
     units: 500
     prices_minor:
       EUR: 500
-    active: true
-  - id: starter
-    units: 1000   # рішення оператора; не публікувати
-    prices_minor:
-      EUR: 1000   # рішення оператора; не публікувати
-    active: false
-  - id: standard
-    units: 5000   # рішення оператора; не публікувати
-    prices_minor:
-      EUR: 4500   # рішення оператора; не публікувати
     active: false
 
 # A section per provider (its adapter's name, as in BILLING_PROVIDERS):
@@ -39,4 +52,8 @@ providers:
   # product is unknown to the live API). Without an id the package cannot be
   # bought through Creem (503).
   creem:
+    units-500-v1: prod_IjKGKARYgwR25ktF0By1A
+    units-1500-v1: prod_7MjqlyfEXv7zVO37m0vCjN
+    units-5000-v1: prod_5DTm2EO5XM9Rbm53bRKVps
+    units-10000-v1: prod_2u00d6l8qzsfhjeaDTl6FL
     sandbox-test-500: prod_2oJ3Yqnf53wOrikCrQGDtk

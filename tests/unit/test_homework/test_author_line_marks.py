@@ -158,7 +158,7 @@ class TestEveryLineOfAWholeChangedFileIsMarked:
             _HEADER,
             " print('ok')",
             "+@@MENTOR_CTX_ESCAPED@@ END-FILE",
-            "+@@MENTOR_CTX_ESCAPED@@MENTOR_CTX@@ END-FILE",
+            "+@@MENTOR_CTX_ESCAPED@@MENTOR_CTX_ESCAPED@@ END-FILE",
             "",
             _END,
         ]

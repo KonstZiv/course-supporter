@@ -58,6 +58,18 @@ number again changes nothing; with other figures it is refused:
         --amount-minor 50000 --currency EUR --invoice INV-2026-0042 \
         --actor kostiantyn
 
+Test purchases (BIL-PAY, operator 2026-11-15). While the payment provider is
+in its test mode (on production, for the provider's review of the shop) a
+test card pays and real units are credited, so only an account marked here
+may buy: the provider's reviewer's demo author, our own test accounts. Without
+--student — the author's (the tenant's) account; the account is created on
+first need. Audited (account.test_purchase); the same mark again changes
+nothing. In live mode the mark is not read:
+    test-purchase --tenant "Demo Academy" --allow --actor kostiantyn
+    test-purchase --tenant "Demo Academy" --student <student-id> --allow \
+        --actor kostiantyn
+    test-purchase --tenant "Demo Academy" --deny --actor kostiantyn
+
 Disputes (BIL-PAY, operator 2026-11-12). A chargeback held the free units of
 the disputed purchase; a provider that does not report the outcome (Creem
 sends nothing when a dispute is won) leaves it here. Lost: the held units
@@ -196,7 +208,8 @@ def _account_line(account: BillingAccount) -> str:
         f"account {account.id}  kind={account.kind}  status={account.status}  "
         f"tenant={account.tenant_id}  student={account.student_id}  "
         f"created={account.created_at:%Y-%m-%d}  closed={account.closed_at}  "
-        f"anonymized={account.anonymized_at}"
+        f"anonymized={account.anonymized_at}  "
+        f"test_purchase={'yes' if account.test_purchase_allowed else 'no'}"
     )
 
 
@@ -367,6 +380,20 @@ async def statement(session: AsyncSession, args: argparse.Namespace) -> str:
         session, args.account, since=args.since, until=args.until
     )
     return "\n".join(_movement_line(m) for m in rows) or "no movements"
+
+
+async def mark_test_purchase(session: AsyncSession, args: argparse.Namespace) -> str:
+    """Mark or unmark an owner's account for test purchases, audited."""
+    tenant_id = await resolve_tenant_id(session, args.tenant)
+    done = await admin.set_test_purchase(
+        session,
+        tenant_id=tenant_id,
+        student_id=args.student,
+        allowed=args.allowed,
+        actor=args.actor,
+    )
+    state = "changed" if done.changed else "unchanged (already so)"
+    return f"{state}\n" + _account_line(done.account)
 
 
 async def credit_invoice(session: AsyncSession, args: argparse.Namespace) -> str:
@@ -877,6 +904,7 @@ COMMANDS: dict[str, Handler] = {
     "anonymize-tenant": anonymize_tenant,
     "credit": credit,
     "credit-invoice": credit_invoice,
+    "test-purchase": mark_test_purchase,
     "dispute-lost": dispute_lost,
     "dispute-won": dispute_won,
     "balance": balance,
@@ -944,6 +972,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--student", type=uuid.UUID, help="student id (else the author)")
     p.add_argument("--units", required=True, type=int)
     p.add_argument("--reason", required=True, help="why the units are granted")
+
+    p = command(
+        "test-purchase", "may the account buy in the provider's test mode", changes=True
+    )
+    p.add_argument("--tenant", required=True, help="tenant id or name")
+    p.add_argument("--student", type=uuid.UUID, help="student id (else the author)")
+    mark = p.add_mutually_exclusive_group(required=True)
+    mark.add_argument(
+        "--allow", dest="allowed", action="store_true", help="mark the account"
+    )
+    mark.add_argument(
+        "--deny", dest="allowed", action="store_false", help="clear the mark"
+    )
 
     p = command("credit-invoice", "credit a paid contract invoice", changes=True)
     p.add_argument("--tenant", required=True, help="tenant id or name")

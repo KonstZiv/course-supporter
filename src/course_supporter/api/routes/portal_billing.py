@@ -11,11 +11,26 @@ Routes
   already agreed to it, 409 when the revision is not the one in force (the
   page showed old terms; reload them).
 - ``GET /portal/billing/packages`` — the packages on sale: units and prices,
-  never a provider's id.
+  never a provider's id; and ``purchase`` — whether the student may buy now
+  (``open``, else the ``reason``: ``payment_unavailable`` |
+  ``purchase_not_open``). Creates no account.
 - ``POST /portal/billing/checkout`` — open a checkout of a package for the
   student's account: 503 when payment is unavailable (no provider switched
-  on), 409 while the student has not agreed to the terms in force, 404 for a
-  package not on sale or a provider not switched on, else the link.
+  on), 409 while the student has not agreed to the terms in force, 403 while
+  the provider is in test mode and the account is not marked for test
+  purchases, 404 for a package not on sale or a provider not switched on,
+  else the link and the checkout's own number (``checkout_ref``), which is
+  also the last segment of the address the student comes back to:
+  ``{PORTAL_BASE_URL}/{tenant_id}/billing/checkouts/{checkout_ref}``.
+- ``GET /portal/billing/checkouts/{checkout_ref}`` — the state of the
+  student's checkout (pending | credited | failed); another's or an unknown
+  one is 404 ``checkout_not_found``.
+- ``GET /portal/billing/balance`` — where the student's units stand (the
+  difference is always 0 for a student). Units only.
+- ``GET /portal/billing/statement?limit=&cursor=&from=&to=`` — the student's
+  movements of units, the newest first, a page at a time.
+
+Every refusal carries its reason code (``_billing_shared``).
 
 Under the student's own portal session (``get_current_student``), not an
 administrator's. The student's billing account is created on the first
@@ -25,10 +40,11 @@ consent (``billing.accounts``). The logic is ``billing.consent`` and
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import (
@@ -38,30 +54,45 @@ from course_supporter.api.deps import (
     get_session,
 )
 from course_supporter.api.routes._billing_shared import (
-    CHECKOUT_RESPONSES,
+    CHECKOUT_REFUSALS,
+    Refusal,
+    balance_of,
+    checkout_state_of,
+    consent_required,
     open_checkout,
+    packages_of,
     require_payment,
+    responses,
+    statement_of,
+    terms_changed,
 )
 from course_supporter.api.schemas import (
+    BillingBalanceResponse,
     BillingCheckoutRequest,
     BillingCheckoutResponse,
+    BillingCheckoutStateResponse,
     BillingConsentRequest,
     BillingConsentResponse,
-    BillingPackageResponse,
     BillingPackagesResponse,
+    BillingStatementResponse,
     BillingTermsResponse,
 )
 from course_supporter.auth.context import StudentContext
-from course_supporter.billing.accounts import get_or_create_student_account
+from course_supporter.billing.accounts import (
+    find_active_account,
+    get_or_create_student_account,
+)
 from course_supporter.billing.consent import (
     record_student_consent,
     student_terms_status,
 )
 from course_supporter.billing.errors import BillingConflictError
-from course_supporter.billing.kinds import ConsentChannel
+from course_supporter.billing.kinds import AccountKind, ConsentChannel
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.registry import ProviderRegistry
+from course_supporter.billing.statement import MAX_LIMIT
 from course_supporter.config import get_settings
+from course_supporter.storage.orm import BillingAccount
 
 router = APIRouter(tags=["portal"])
 logger = structlog.get_logger()
@@ -95,7 +126,7 @@ async def get_billing_terms(
     status_code=201,
     responses={
         200: {"description": "Already agreed to this revision; the earlier record."},
-        409: {"description": "Not the revision in force."},
+        **responses(Refusal.TERMS_CHANGED),
     },
 )
 async def post_billing_consent(
@@ -117,10 +148,7 @@ async def post_billing_consent(
             channel=ConsentChannel.PORTAL,
         )
     except BillingConflictError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=f"The billing terms changed: the current revision is {current}.",
-        ) from exc
+        raise terms_changed(current) from exc
     await session.commit()
     if created:
         logger.info(
@@ -136,28 +164,24 @@ async def post_billing_consent(
     )
 
 
-@router.get("/portal/billing/packages", dependencies=[Depends(get_current_student)])
-async def get_billing_packages(catalog: CatalogDep) -> BillingPackagesResponse:
-    """The packages on sale: units and prices, never a provider's id."""
-    return BillingPackagesResponse(
-        packages=[
-            BillingPackageResponse(
-                id=package.id,
-                units=package.units,
-                prices_minor=dict(package.prices_minor),
-            )
-            for package in catalog.active()
-        ]
+@router.get("/portal/billing/packages")
+async def get_billing_packages(
+    student: StudentDep,
+    session: SessionDep,
+    registry: RegistryDep,
+    catalog: CatalogDep,
+) -> BillingPackagesResponse:
+    """The packages on sale, and whether the student may buy them now."""
+    account = await find_active_account(
+        session,
+        kind=AccountKind.STUDENT,
+        tenant_id=student.tenant_id,
+        student_id=student.student_id,
     )
+    return packages_of(catalog, registry, account)
 
 
-@router.post(
-    "/portal/billing/checkout",
-    responses={
-        **CHECKOUT_RESPONSES,
-        409: {"description": "The student has not agreed to the terms in force."},
-    },
-)
+@router.post("/portal/billing/checkout", responses=responses(*CHECKOUT_REFUSALS))
 async def post_billing_checkout(
     body: BillingCheckoutRequest,
     student: StudentDep,
@@ -176,11 +200,7 @@ async def post_billing_checkout(
         terms_version=current,
     )
     if terms.consent_required:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Agree to the billing terms first: the current revision is "
-            f"{current}.",
-        )
+        raise consent_required(current)
     account = await get_or_create_student_account(
         session, tenant_id=student.tenant_id, student_id=student.student_id
     )
@@ -188,9 +208,77 @@ async def post_billing_checkout(
     portal = settings.portal_base_url.rstrip("/")
     return await open_checkout(
         body,
+        session=session,
         registry=registry,
         catalog=catalog,
-        account_id=account.id,
+        account=account,
         language=student.preferred_language,
         return_page=f"{portal}/{student.tenant_id}/billing",
+    )
+
+
+@router.get(
+    "/portal/billing/checkouts/{checkout_ref}",
+    responses=responses(Refusal.CHECKOUT_NOT_FOUND),
+)
+async def get_billing_checkout(
+    checkout_ref: str, student: StudentDep, session: SessionDep
+) -> BillingCheckoutStateResponse:
+    """The state of the student's checkout by its number."""
+    account = await find_active_account(
+        session,
+        kind=AccountKind.STUDENT,
+        tenant_id=student.tenant_id,
+        student_id=student.student_id,
+    )
+    return await checkout_state_of(session, account, checkout_ref)
+
+
+async def _own_account(
+    session: AsyncSession, student: StudentContext
+) -> BillingAccount | None:
+    return await find_active_account(
+        session,
+        kind=AccountKind.STUDENT,
+        tenant_id=student.tenant_id,
+        student_id=student.student_id,
+    )
+
+
+@router.get("/portal/billing/balance")
+async def get_billing_balance(
+    student: StudentDep, session: SessionDep
+) -> BillingBalanceResponse:
+    """Where the student's units stand."""
+    return await balance_of(session, await _own_account(session, student))
+
+
+@router.get("/portal/billing/statement", responses=responses(Refusal.INVALID_CURSOR))
+async def get_billing_statement(
+    student: StudentDep,
+    session: SessionDep,
+    limit: Annotated[
+        int, Query(ge=1, le=MAX_LIMIT, description="Lines on the page.")
+    ] = 50,
+    cursor: Annotated[
+        str | None,
+        Query(max_length=256, description="next_cursor of the page before."),
+    ] = None,
+    since: Annotated[
+        datetime | None,
+        Query(alias="from", description="From (inclusive); without a zone, UTC."),
+    ] = None,
+    until: Annotated[
+        datetime | None,
+        Query(alias="to", description="To (exclusive); without a zone, UTC."),
+    ] = None,
+) -> BillingStatementResponse:
+    """The student's movements of units, the newest first."""
+    return await statement_of(
+        session,
+        await _own_account(session, student),
+        limit=limit,
+        cursor=cursor,
+        since=since,
+        until=until,
     )

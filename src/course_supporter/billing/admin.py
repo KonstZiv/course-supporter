@@ -27,6 +27,12 @@ Author settings:
     of benefit stamps ``benefit_started_at``; a new limit within monthly_limit
     keeps it. Computing what a limit leaves is BIL-B / BIL-E.
 
+Test purchases (BIL-PAY, operator 2026-11-15):
+    While a payment provider is in its test mode, only an account marked for
+    test purchases may buy (``billing.payments.checkout``).
+    :func:`set_test_purchase` marks or unmarks the owner's account — created
+    on first need, as a credit does — audited as ``account.test_purchase``.
+
 Disputes (BIL-PAY):
     A provider that does not report how a dispute ended (Creem) leaves it to
     the administrator: :func:`end_dispute` — lost, the held units leave the
@@ -55,6 +61,7 @@ from course_supporter.billing.errors import (
     BillingInvalidError,
     BillingNotFoundError,
 )
+from course_supporter.billing.journal import lock_account
 from course_supporter.billing.kinds import (
     AccountKind,
     AccountStatus,
@@ -240,6 +247,57 @@ async def owner_account(
     return await find_active_account(
         session, kind=AccountKind.AUTHOR, tenant_id=tenant_id
     )
+
+
+# ── Test purchases ─────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class MarkForTestPurchase:
+    """The owner's account and its mark after :func:`set_test_purchase`."""
+
+    account: BillingAccount
+    changed: bool
+    """False when the account was already so: nothing was written."""
+
+
+async def set_test_purchase(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    student_id: uuid.UUID | None = None,
+    allowed: bool,
+    actor: str,
+) -> MarkForTestPurchase:
+    """Mark (``allowed``) or unmark the owner's account for test purchases:
+    the author's (the tenant's), or the student's in the tenant. Created on
+    first need; audited (``account.test_purchase``); a no-op writes nothing.
+
+    Raises:
+        BillingInvalidError: no actor.
+        BillingNotFoundError: no such live tenant, or no such live student in it.
+    """
+    actor = audit.require_actor(actor)
+    found = await owner_account(
+        session, tenant_id=tenant_id, student_id=student_id, create=True
+    )
+    assert found is not None  # created on first need
+    account = await lock_account(session, found.id, active=True)
+    if account.test_purchase_allowed is allowed:
+        return MarkForTestPurchase(account, changed=False)
+    before = audit.account_snapshot(account)
+    account.test_purchase_allowed = allowed
+    await session.flush()
+    await audit.record(
+        session,
+        actor=actor,
+        action=AuditAction.ACCOUNT_TEST_PURCHASE,
+        entity="account",
+        entity_id=account.id,
+        before=before,
+        after=audit.account_snapshot(account),
+    )
+    return MarkForTestPurchase(account, changed=True)
 
 
 # ── Author settings ────────────────────────────────────────────────────

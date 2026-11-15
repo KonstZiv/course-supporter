@@ -107,6 +107,10 @@ class AuditAction(StrEnum):
     PAYMENT_RULE_CREATE = "payment_rule.create"
     PAYMENT_RULE_END = "payment_rule.end"
     ACCOUNT_ANONYMIZE = "account.anonymize"
+    ACCOUNT_TEST_PURCHASE = "account.test_purchase"
+    """The account may (or may no longer) buy while the payment provider is
+    in its test mode (BIL-PAY, operator 2026-11-15)."""
+
     BATCH_ADMIN_CREDIT = "batch.admin_credit"
     BATCH_INVOICE_CREDIT = "batch.invoice_credit"
     """A contract invoice paid (B2B), credited by the administrator."""

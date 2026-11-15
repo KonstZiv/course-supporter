@@ -27,8 +27,16 @@ from course_supporter.billing.payments.catalog import Catalog, Package
 from course_supporter.billing.payments.checkout import (
     CheckoutNotFoundError,
     PaymentUnavailableError,
+    PurchaseClosed,
+    PurchaseNotOpenError,
+    purchase_closed,
     return_urls,
     start_checkout,
+)
+from course_supporter.billing.payments.creem import (
+    LIVE_API_BASE,
+    TEST_API_BASE,
+    CreemProvider,
 )
 from course_supporter.billing.payments.fake import (
     FAKE,
@@ -55,10 +63,11 @@ from course_supporter.billing.payments.registry import (
     build_registry,
 )
 from course_supporter.config import Environment, Settings
-from course_supporter.storage.orm import BillingBatch
+from course_supporter.storage.orm import BillingAccount, BillingBatch
 
 SRC = Path(__file__).resolve().parents[2] / "src"
 ACCOUNT = uuid.uuid4()
+REF = uuid.uuid4()
 STARTER = Package(id="starter", units=1000, prices_minor={"EUR": 990}, active=True)
 RETIRED = Package(id="retired", units=10, prices_minor={"EUR": 100}, active=False)
 CATALOG = Catalog(packages=(STARTER, RETIRED), providers={FAKE: {"starter": "x"}})
@@ -67,10 +76,11 @@ CATALOG = Catalog(packages=(STARTER, RETIRED), providers={FAKE: {"starter": "x"}
 def _request(package: Package = STARTER) -> CheckoutRequest:
     return CheckoutRequest(
         account_id=ACCOUNT,
+        checkout_ref=REF,
         package=package,
         provider_item=None,
         language="ukr",
-        success_url="https://campus.example/t/billing?checkout=success",
+        success_url=f"https://campus.example/t/billing/checkouts/{REF}",
         cancel_url="https://campus.example/t/billing?checkout=cancelled",
     )
 
@@ -137,6 +147,7 @@ class TestFakeEvents:
         [event] = fake.parse_webhook(headers, body)
         assert isinstance(event, PurchaseCompleted)
         assert (event.account_id, event.package_id) == (ACCOUNT, "starter")
+        assert event.checkout_ref == REF
         assert (event.amount_paid_minor, event.currency) == (990, "EUR")
         assert event.transaction_id.startswith("fake_txn_")
         assert event.line_id.startswith("fake_line_")
@@ -353,13 +364,37 @@ def test_a_provider_cannot_take_a_reserved_or_bad_name(name: str) -> None:
 # ── Checkout service ───────────────────────────────────────────────────
 
 
+def _account(*, marked: bool = True) -> BillingAccount:
+    """An account as loaded: marked for test purchases unless told."""
+    return BillingAccount(id=ACCOUNT, kind="student", test_purchase_allowed=marked)
+
+
+class _Session:
+    """What the checkout service asks of a session: add a row, flush."""
+
+    def __init__(self) -> None:
+        self.added: list[Any] = []
+
+    def add(self, row: Any) -> None:
+        self.added.append(row)
+
+    async def flush(self) -> None:
+        return None
+
+
 async def _start(
-    registry: ProviderRegistry, package_id: str = "starter", provider: str | None = None
+    registry: ProviderRegistry,
+    package_id: str = "starter",
+    provider: str | None = None,
+    *,
+    account: BillingAccount | None = None,
+    session: _Session | None = None,
 ) -> Any:
     return await start_checkout(
+        session or _Session(),  # type: ignore[arg-type]
         registry=registry,
         catalog=CATALOG,
-        account_id=ACCOUNT,
+        account=account or _account(),
         package_id=package_id,
         provider_name=provider,
         language="ukr",
@@ -368,8 +403,8 @@ async def _start(
 
 
 async def test_a_checkout_through_the_default_provider() -> None:
-    fake = FakeProvider()
-    started = await _start(ProviderRegistry([fake]))
+    fake, session = FakeProvider(), _Session()
+    started = await _start(ProviderRegistry([fake]), session=session)
     assert started.provider == FAKE
     request = fake.checkouts[started.checkout_id]
     assert (request.account_id, request.package, request.provider_item) == (
@@ -378,10 +413,40 @@ async def test_a_checkout_through_the_default_provider() -> None:
         "x",
     )
     assert request.language == "ukr"
+    ref = started.checkout_ref
+    assert request.checkout_ref == ref
     assert (request.success_url, request.cancel_url) == return_urls(
-        "https://campus.example/t/billing"
+        "https://campus.example/t/billing", ref
     )
-    assert request.success_url.endswith("/t/billing?checkout=success")
+    # The number is in the path: a provider appends its own query parameters.
+    assert request.success_url == f"https://campus.example/t/billing/checkouts/{ref}"
+    assert "?" not in request.success_url
+    [row] = session.added
+    assert (row.id, row.account_id, row.package_id, row.provider) == (
+        ref,
+        ACCOUNT,
+        "starter",
+        FAKE,
+    )
+    assert (row.provider_checkout_id, row.batch_id) == (started.checkout_id, None)
+
+
+async def test_each_checkout_has_a_number_of_its_own() -> None:
+    fake = FakeProvider()
+    one = await _start(ProviderRegistry([fake]))
+    other = await _start(ProviderRegistry([fake]))
+    assert one.checkout_ref != other.checkout_ref
+
+
+async def test_a_refused_checkout_records_nothing() -> None:
+    session = _Session()
+    with pytest.raises(PurchaseNotOpenError):
+        await _start(
+            ProviderRegistry([FakeProvider()]),
+            account=_account(marked=False),
+            session=session,
+        )
+    assert session.added == []
 
 
 async def test_a_checkout_without_providers_is_unavailable() -> None:
@@ -411,6 +476,79 @@ async def test_a_provider_that_cannot_sell_makes_payment_unavailable() -> None:
 
     with pytest.raises(PaymentUnavailableError, match="no price"):
         await _start(ProviderRegistry([Unsellable()]))
+
+
+# ── Test mode (operator 2026-11-15) ────────────────────────────────────
+
+
+def _creem(api_base: str) -> CreemProvider:
+    return CreemProvider(api_key="k", webhook_secret="s", api_base=api_base)
+
+
+@pytest.mark.parametrize(
+    ("api_base", "test_mode"),
+    [
+        (TEST_API_BASE, True),
+        (LIVE_API_BASE, False),
+        (LIVE_API_BASE + "/", False),
+        ("https://test-api.creem.io/v1/", True),
+        ("https://creem.example/v1", True),  # anything not live: closed
+    ],
+)
+def test_creem_is_in_test_mode_unless_on_its_live_host(
+    api_base: str, test_mode: bool
+) -> None:
+    assert _creem(api_base).test_mode is test_mode
+
+
+def test_the_fake_is_always_in_test_mode() -> None:
+    assert FakeProvider().test_mode is True
+
+
+LIVE = _creem(LIVE_API_BASE)
+
+
+@pytest.mark.parametrize(
+    ("provider", "account", "closed"),
+    [
+        (None, None, PurchaseClosed.PAYMENT_UNAVAILABLE),
+        (None, _account(), PurchaseClosed.PAYMENT_UNAVAILABLE),
+        (FakeProvider(), None, PurchaseClosed.PURCHASE_NOT_OPEN),
+        (FakeProvider(), _account(marked=False), PurchaseClosed.PURCHASE_NOT_OPEN),
+        (FakeProvider(), _account(), None),
+        (LIVE, None, None),
+        (LIVE, _account(marked=False), None),
+        (LIVE, _account(), None),
+    ],
+    ids=[
+        "no provider, no account",
+        "no provider, a marked account",
+        "test mode, no account yet",
+        "test mode, not marked",
+        "test mode, marked",
+        "live, no account yet",
+        "live, not marked: the mark is not read",
+        "live, marked",
+    ],
+)
+def test_purchase_closed(
+    provider: Any, account: BillingAccount | None, closed: PurchaseClosed | None
+) -> None:
+    assert purchase_closed(provider, account) is closed
+
+
+async def test_an_unmarked_account_opens_no_checkout_in_test_mode() -> None:
+    fake = FakeProvider()
+    with pytest.raises(PurchaseNotOpenError, match="test mode"):
+        await _start(ProviderRegistry([fake]), account=_account(marked=False))
+    assert fake.checkouts == {}  # the provider was not asked
+
+
+async def test_the_guard_comes_before_the_package() -> None:
+    with pytest.raises(PurchaseNotOpenError):
+        await _start(
+            ProviderRegistry([FakeProvider()]), "nope", account=_account(marked=False)
+        )
 
 
 # ── Lock: the journal names no provider ────────────────────────────────

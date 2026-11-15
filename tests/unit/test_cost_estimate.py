@@ -218,18 +218,18 @@ class TestUnits:
         assert fact_units(usd, units_per_usd=Decimal(100)) == units
 
     def test_the_provisional_rate(self, settings: EstimateSettings) -> None:
-        """K = 1700 (BIL-CAL): the old path's median review, $0.058, is ≈ 100 units.
-
-        ≈ 100 is E x K without the margin (98.6); by the model the same E is
-        priced ceil(0.058 x 1.2 x 1700) = 119 and reserves ceil(2 x 0.058 x
-        1700) = 198.
+        """K = 900 (operator 2026-11-15, variant C of the K-decision table):
+        the median fact of a `task` review on the new path, $0.109 over 17 reviews
+        on production (read 2026-11-15) x 900 = 98.5 ≈ 100 units charged for a
+        typical review, as the pricing page says. P (with the margin) and the
+        reserve follow from E; E is to be calibrated before charging is
+        switched on (DD-BIL-CAL).
         """
-        e = Decimal("0.058")
+        fact = Decimal("0.1094")
         k = settings.units_per_usd
         assert k is not None
-        assert e * k == Decimal("98.6")
-        assert price_units(e, margin=settings.margin, units_per_usd=k) == 119
-        assert reserve_units(e, units_per_usd=k) == 198
+        assert (fact * k).quantize(Decimal("0.1")) == Decimal("98.5")
+        assert fact_units(fact, units_per_usd=k) == 98
 
     def test_no_rate_no_units(self) -> None:
         assert (
@@ -599,7 +599,7 @@ class TestSettings:
         self, settings: EstimateSettings
     ) -> None:
         assert settings.margin == Decimal("0.2")
-        assert settings.units_per_usd == Decimal(1700)
+        assert settings.units_per_usd == Decimal(900)
         assert settings.guard_minutes == 15
 
     def test_calibration_flags(self, settings: EstimateSettings) -> None:

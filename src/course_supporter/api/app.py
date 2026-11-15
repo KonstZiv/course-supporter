@@ -21,6 +21,12 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from course_supporter import boot
 from course_supporter.api.middleware import RequestLoggingMiddleware
 from course_supporter.api.routes.billing import router as billing_router
+from course_supporter.api.routes.billing_estimates import (
+    router as billing_estimates_router,
+)
+from course_supporter.api.routes.billing_outlook import (
+    router as billing_outlook_router,
+)
 from course_supporter.api.routes.config import router as config_router
 from course_supporter.api.routes.cost import router as cost_router
 from course_supporter.api.routes.criteria import router as criteria_router
@@ -56,6 +62,7 @@ from course_supporter.api.routes.test_objects import router as test_objects_rout
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.auth.scopes import rate_limiter
 from course_supporter.billing.payments.registry import payment_registry
+from course_supporter.billing.quotes import UnitsRefusedError
 from course_supporter.config import Settings, settings
 from course_supporter.logging_config import configure_logging
 from course_supporter.storage.database import async_session, engine
@@ -266,6 +273,16 @@ async def health() -> JSONResponse:
     )
 
 
+@app.exception_handler(UnitsRefusedError)
+async def insufficient_units_handler(
+    request: Request,
+    exc: UnitsRefusedError,
+) -> JSONResponse:
+    """402 for an action its payer cannot cover (BIL-E, B3): the reason code
+    beside the text, so a screen picks its words and offers a purchase."""
+    return JSONResponse(status_code=402, content=exc.body())
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(
     request: Request,
@@ -295,6 +312,8 @@ app.include_router(portal_auth_router, prefix="/api/v1")
 app.include_router(portal_config_router, prefix="/api/v1")
 app.include_router(portal_billing_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
+app.include_router(billing_estimates_router, prefix="/api/v1")
+app.include_router(billing_outlook_router, prefix="/api/v1")
 app.include_router(portal_submissions_router, prefix="/api/v1")
 app.include_router(portal_materials_router, prefix="/api/v1")
 app.include_router(portal_courses_router, prefix="/api/v1")

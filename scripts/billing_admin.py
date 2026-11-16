@@ -70,6 +70,18 @@ nothing. In live mode the mark is not read:
         --actor kostiantyn
     test-purchase --tenant "Demo Academy" --deny --actor kostiantyn
 
+Test purchases' units (BIL-TESTMARK, operator 2026-11-16). A purchase paid in
+the provider's test mode is marked as it is credited (billing_test_batches;
+every Creem purchase before the marks was marked by their migration). Before
+charging is switched on, one command takes the FREE units of every marked
+batch out — a test_voided movement per batch, audited (batch.test_void,
+before/after: free_units) — and prints what stayed reserved or held for a
+refund or a dispute (untouched; a later run takes what has become free).
+A second run changes nothing. --account limits it to one account; --dry-run
+prints the same and writes nothing (a READ ONLY transaction). show-account
+prints an account's test units:
+    void-test-batches --actor kostiantyn [--account <account-id>] [--dry-run]
+
 Disputes (BIL-PAY, operator 2026-11-12). A chargeback held the free units of
 the disputed purchase; a provider that does not report the outcome (Creem
 sends nothing when a dispute is won) leaves it here. Lost: the held units
@@ -153,7 +165,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from course_supporter.billing import accounts, admin, ledger
+from course_supporter.billing import accounts, admin, ledger, testmark
 from course_supporter.billing import costs as billing_costs
 from course_supporter.billing.errors import (
     BillingError,
@@ -276,6 +288,7 @@ MOVEMENT_WORDS: dict[MovementKind, str] = {
     MovementKind.REFUND_HOLD: "held for a refund or a dispute",
     MovementKind.REFUND_COMPLETED: "refunded: gone from the batch",
     MovementKind.REFUND_REJECTED: "free again: the refund or hold did not happen",
+    MovementKind.TEST_VOIDED: "taken out: the free units of a test purchase",
 }
 """What each kind of movement means, for a person reading a statement (BIL-E)."""
 
@@ -321,6 +334,15 @@ async def show_account(session: AsyncSession, args: argparse.Namespace) -> str:
             f"via {c.channel}"
             for c in view.consents
         )
+        marked = await testmark.marked_count(session, account_id)
+        if marked:
+            free = await testmark.free_test_units(session, account_id)
+            lines.append(
+                f"  test units={free}  (free units of {marked} batch(es) marked "
+                "as test purchases; void-test-batches takes them out)"
+            )
+        else:
+            lines.append("  test units=0  (no batch marked as a test purchase)")
     return "\n".join(lines)
 
 
@@ -467,6 +489,42 @@ async def credit_invoice(session: AsyncSession, args: argparse.Namespace) -> str
             batch.account_id, await ledger.balance(session, batch.account_id)
         )
     )
+
+
+def _void_lines(run: testmark.VoidRun) -> str:
+    """One line per marked batch, then the totals; no owner's id."""
+    lines = [
+        f"account {b.account_id} ({b.account_kind})  batch {b.batch_id}  "
+        f"voided={b.voided}  left reserved={b.reserved}  left held={b.held}"
+        for b in run.batches
+    ]
+    lines.append(
+        f"total: {len(run.batches)} marked batch(es) on {run.accounts} "
+        f"account(s)  voided={run.voided}  left reserved={run.reserved}  "
+        f"left held={run.held}"
+    )
+    if run.dry_run:
+        lines.append("dry run: nothing written")
+    return "\n".join(lines)
+
+
+async def void_test_batches(session: AsyncSession, args: argparse.Namespace) -> str:
+    """Take the free units of the batches marked as test purchases out."""
+    if args.dry_run:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+    if (
+        args.account is not None
+        and await session.get(BillingAccount, args.account) is None
+    ):
+        raise BillingNotFoundError(f"account {args.account} not found")
+    done = await testmark.void_test_batches(
+        session, actor=args.actor, account_id=args.account, dry_run=args.dry_run
+    )
+    if not done.batches:
+        return "no batch marked as a test purchase" + (
+            "\ndry run: nothing written" if done.dry_run else ""
+        )
+    return _void_lines(done)
 
 
 async def _end_dispute(
@@ -1150,6 +1208,7 @@ COMMANDS: dict[str, Handler] = {
     "refund-hold": refund_hold,
     "refund-release": refund_release,
     "test-purchase": mark_test_purchase,
+    "void-test-batches": void_test_batches,
     "dispute-lost": dispute_lost,
     "dispute-won": dispute_won,
     "balance": balance,
@@ -1229,6 +1288,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mark.add_argument(
         "--deny", dest="allowed", action="store_false", help="clear the mark"
+    )
+
+    p = command(
+        "void-test-batches",
+        "take the free units of test purchases out",
+        changes=True,
+    )
+    p.add_argument("--account", type=uuid.UUID, help="one account only")
+    p.add_argument(
+        "--dry-run", action="store_true", help="print what would go; write nothing"
     )
 
     p = command("credit-invoice", "credit a paid contract invoice", changes=True)

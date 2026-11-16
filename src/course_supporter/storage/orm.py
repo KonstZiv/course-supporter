@@ -4439,7 +4439,8 @@ class BillingAuditEntry(Base):
         comment="What was done, e.g. author_settings.update, payment_rule.create, "
         "payment_rule.end, account.anonymize, account.test_purchase, "
         "batch.admin_credit, batch.invoice_credit, dispute.lost, dispute.won, "
-        "refund.order_hold, refund.order_release.",
+        "refund.order_hold, refund.order_release, batch.test_void, "
+        "account.create.",
     )
     entity: Mapped[str] = mapped_column(
         String(32),
@@ -4476,11 +4477,12 @@ _MOVEMENT_KINDS = (
     "('credit', 'reserve', 'reserve_release', 'debit', 'difference_arisen', "
     "'difference_repaid', 'batch_expired', 'difference_annulled', "
     "'benefit_covered', 'platform_covered', 'refund_hold', 'refund_completed', "
-    "'refund_rejected')"
+    "'refund_rejected', 'test_voided')"
 )
 _MOVEMENTS_WITH_BATCH = (
     "('credit', 'reserve', 'reserve_release', 'debit', 'difference_repaid', "
-    "'batch_expired', 'refund_hold', 'refund_completed', 'refund_rejected')"
+    "'batch_expired', 'refund_hold', 'refund_completed', 'refund_rejected', "
+    "'test_voided')"
 )
 _MOVEMENTS_WITH_DIFFERENCE = (
     "('difference_arisen', 'difference_repaid', 'difference_annulled')"
@@ -4613,6 +4615,51 @@ class BillingBatch(Base):
     )
     actor: Mapped[str | None] = mapped_column(
         String(200), comment="Admin credit: who granted them (--actor)."
+    )
+
+
+class BillingTestBatch(Base):
+    """A batch marked as a test purchase (BIL-TESTMARK).
+
+    A purchase credited while the provider that signed its event was in its
+    test mode — a test card paid, yet real units arrived — is marked in the
+    same transaction as the credit (``origin = credit``); the migration that
+    brought the marks marked every Creem purchase before them (``backfill``).
+    A separate table, not a column: a batch is insert-only, and its mark is
+    written after it. Insert-only too (the BIL-A trigger refuses UPDATE);
+    DELETE only by the five-year destruction, with the batch. The
+    administrator takes the free units of marked batches out with one command
+    (``scripts/billing_admin.py void-test-batches``, movements
+    ``test_voided``).
+    """
+
+    __tablename__ = "billing_test_batches"
+    __table_args__ = (
+        CheckConstraint(
+            "marked_by IN ('credit', 'backfill')",
+            name="ck_billing_test_batches_marked_by",
+        ),
+        {
+            "comment": "Batches marked as test purchases (BIL-TESTMARK): paid in "
+            "a payment provider's test mode. Insert-only."
+        },
+    )
+
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_batches.id"),
+        primary_key=True,
+        comment="The batch marked; one mark per batch.",
+    )
+    marked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the mark was written: the credit's time, or the migration's.",
+    )
+    marked_by: Mapped[str] = mapped_column(
+        String(16),
+        comment="credit (marked with the credit: the provider was in its test "
+        "mode) | backfill (a Creem purchase marked by the migration that "
+        "brought the marks).",
     )
 
 
@@ -4992,7 +5039,7 @@ class BillingMovement(Base):
         comment="credit | reserve | reserve_release | debit | difference_arisen "
         "| difference_repaid | batch_expired | difference_annulled | "
         "benefit_covered | platform_covered | refund_hold | refund_completed | "
-        "refund_rejected.",
+        "refund_rejected | test_voided.",
     )
     units: Mapped[int] = mapped_column(
         Integer, comment="How many units; always positive, the kind says which way."

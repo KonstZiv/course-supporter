@@ -1,4 +1,4 @@
-"""The closed vocabularies of billing (BIL-A, BIL-B, BIL-PAY).
+"""The closed vocabularies of billing (BIL-A, BIL-B, BIL-PAY, BIL-TESTMARK).
 
 The values are the ones the ``billing_*`` tables' check constraints allow;
 a new value is a migration. The kind of action is the one of the shadow
@@ -24,6 +24,7 @@ __all__ = [
     "DifferenceState",
     "EventKind",
     "EventState",
+    "MarkOrigin",
     "MovementKind",
     "PayerSource",
     "RefundKind",
@@ -128,6 +129,10 @@ class AuditAction(StrEnum):
     REFUND_ORDER_RELEASE = "refund.order_release"
     """A hold by order released: the refund did not happen."""
 
+    BATCH_TEST_VOID = "batch.test_void"
+    """The free units of a batch marked as a test purchase taken out of it
+    (BIL-TESTMARK, ``scripts/billing_admin.py void-test-batches``)."""
+
 
 # ── The journal of units (BIL-B) ──
 
@@ -142,6 +147,18 @@ class BatchSource(StrEnum):
 
     ADMIN_CREDIT = "admin_credit"
     """Granted by the administrator; never refunded."""
+
+
+class MarkOrigin(StrEnum):
+    """How a batch came to be marked as a test purchase (BIL-TESTMARK)."""
+
+    CREDIT = "credit"
+    """Marked as it was credited: the provider that signed the purchase's
+    event was in its test mode."""
+
+    BACKFILL = "backfill"
+    """Marked by the migration that brought the marks: a Creem purchase made
+    before them (Creem never had live keys on production until then)."""
 
 
 class MovementKind(StrEnum):
@@ -189,6 +206,10 @@ class MovementKind(StrEnum):
     REFUND_REJECTED = "refund_rejected"
     """Refund rejected: the held units are free again."""
 
+    TEST_VOIDED = "test_voided"
+    """Free units of a batch marked as a test purchase taken out of it by the
+    administrator (BIL-TESTMARK) — out of the batch."""
+
 
 OUTFLOW_KINDS: frozenset[MovementKind] = frozenset(
     {
@@ -196,6 +217,7 @@ OUTFLOW_KINDS: frozenset[MovementKind] = frozenset(
         MovementKind.DIFFERENCE_REPAID,
         MovementKind.BATCH_EXPIRED,
         MovementKind.REFUND_COMPLETED,
+        MovementKind.TEST_VOIDED,
     }
 )
 """The kinds that take units OUT of a batch: its remaining units are its

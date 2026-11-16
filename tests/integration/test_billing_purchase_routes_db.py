@@ -70,6 +70,7 @@ from course_supporter.storage.orm import (
     BillingProviderEvent,
     BillingRefund,
     BillingReservation,
+    BillingTestBatch,
     Student,
     Tenant,
 )
@@ -201,6 +202,13 @@ async def world(
                 or_(
                     BillingMovement.account_id.in_(accounts),
                     BillingMovement.beneficiary_account_id.in_(accounts),
+                )
+            )
+        )
+        await session.execute(
+            delete(BillingTestBatch).where(
+                BillingTestBatch.batch_id.in_(
+                    select(BillingBatch.id).where(BillingBatch.account_id.in_(accounts))
                 )
             )
         )

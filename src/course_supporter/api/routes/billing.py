@@ -186,6 +186,7 @@ async def receive_webhook(
             events=events,
             body_sha256=hashlib.sha256(body).hexdigest(),
             catalog=catalog,
+            test_mode=adapter.test_mode,
         )
     except EventHandlingError:
         return JSONResponse(

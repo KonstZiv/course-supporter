@@ -3,8 +3,9 @@
 Every change made through :mod:`.admin`, :mod:`.accounts`, an
 administrator's credit of units (:func:`.ledger.credit_admin`), a contract
 invoice credited by the administrator (:mod:`.payments.invoice`), the end
-of a dispute (:func:`.admin.end_dispute`) or the mark of an account for test
-purchases (:func:`.admin.set_test_purchase`) writes one
+of a dispute (:func:`.admin.end_dispute`), the mark of an account for test
+purchases (:func:`.admin.set_test_purchase`) or the void of a test purchase's
+free units (:func:`.testmark.void_test_batches`) writes one
 entry in the same transaction as the change: who (the administrator's ``--actor``),
 when, what, which row, the row before and after. The table refuses UPDATE (a
 trigger), so an entry, once written, stays as written.

@@ -41,9 +41,10 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, Final, Literal
 
 import structlog
 from sqlalchemy import func, select
@@ -55,10 +56,12 @@ from course_supporter.agents.key_explainer import (
     KeyExplainerAgent,
 )
 from course_supporter.billing.estimates import preparation_e_usd
+from course_supporter.billing.quotes import INSUFFICIENT_UNITS
 from course_supporter.call_outcome import FundsDecision
 from course_supporter.cost_estimate.hooks import shadow_task_preparation
 from course_supporter.funds_port import (
     FundsPort,
+    FundsRefusalReason,
     SubmissionOutcome,
     VersionWorkContext,
     VersionWorkKind,
@@ -85,6 +88,32 @@ logger = structlog.get_logger(__name__)
 
 _KEY_MOVED = "the key or the task text changed before the explanations were written"
 """Failure reason when the version's axes no longer describe anything current."""
+
+FUNDS_REFUSED: Final = "funds refused: "
+"""The start of the failure reason of a version the funds port refused (step 3)."""
+
+FailureCode = Literal["insufficient_units"]
+
+
+def funds_refused_reason(reason: FundsRefusalReason | None) -> str:
+    """The failure reason written when the funds port refuses the work (step 3)."""
+    return f"{FUNDS_REFUSED}{reason}"
+
+
+FAILURE_CODES: Final[Mapping[str, FailureCode]] = {
+    funds_refused_reason(FundsRefusalReason.INSUFFICIENT_FUNDS): INSUFFICIENT_UNITS,
+}
+"""A failure reason this work writes → the code the author's screen reacts to
+(BIL-E3): a version closed by the funds port for want of units is
+``insufficient_units``, the code of every refusal for want of units
+(``billing.quotes.INSUFFICIENT_UNITS``). Any other failure has no code."""
+
+
+def failure_code_of(failure_reason: str | None) -> FailureCode | None:
+    """The code of a version's failure reason (:data:`FAILURE_CODES`), or None."""
+    if failure_reason is None:
+        return None
+    return FAILURE_CODES.get(failure_reason)
 
 
 @through_seam()
@@ -157,7 +186,7 @@ async def arq_explain_key(
             context, KEY_EXPLANATION_CEILING_USD
         )
         if answer.decision is FundsDecision.REFUSED:
-            reason = f"funds refused: {answer.refusal_reason}"
+            reason = funds_refused_reason(answer.refusal_reason)
             await repo.mark_failed(version.id, reason)
             await session.commit()
             log.info("key_explanation.refused", reason=reason)

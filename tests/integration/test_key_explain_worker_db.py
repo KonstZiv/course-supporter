@@ -90,7 +90,11 @@ from course_supporter.storage.orm import (
 )
 from course_supporter.storage.task_reference_repository import TaskReferenceRepository
 from course_supporter.storage.test_object_repository import TestObjectRepository
-from course_supporter.workers.key_explain import arq_explain_key
+from course_supporter.workers.key_explain import (
+    arq_explain_key,
+    failure_code_of,
+    funds_refused_reason,
+)
 from tests._helpers.course_node_factory import make_root_course_node
 from tests._helpers.priced import priced_exact
 
@@ -477,6 +481,9 @@ class TestTheWorkThatSpendsNothing:
         assert state == ReferenceState.FAILED.value
         assert reason is not None
         assert FundsDecision.REFUSED.value in reason or "refused" in reason
+        # BIL-E3: the reason is the one the route reads its code from.
+        assert reason == funds_refused_reason(FundsRefusalReason.INSUFFICIENT_FUNDS)
+        assert failure_code_of(reason) == "insufficient_units"
         assert router.calls == 0, "the model was never reached"
         assert await _stage_rows(session_factory, seeded["job_id"]) == []
 

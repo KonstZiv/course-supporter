@@ -20,10 +20,10 @@ from typing import Any
 import pytest
 from structlog.testing import capture_logs
 
+from course_supporter.criteria_kinds import RepeatReason
 from course_supporter.homework import project_submission as mod
 from course_supporter.homework.criteria_verdicts import (
     RepeatItem,
-    RepeatReason,
     SubmittedWork,
     items_to_ask_again,
     read_answer,

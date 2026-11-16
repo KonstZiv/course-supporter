@@ -40,13 +40,12 @@ from course_supporter.agents.review_explainer import (
     ReviewExplainerAgent,
     ShownLink,
 )
-from course_supporter.criteria_kinds import VerdictValue
+from course_supporter.criteria_kinds import RepeatReason, VerdictValue
 from course_supporter.homework.criteria_form import Criterion
 from course_supporter.homework.criteria_verdicts import (
     EvaluationAnswer,
     QuotePlace,
     RepeatItem,
-    RepeatReason,
 )
 from course_supporter.homework.path_config import ModelStage, load_path_config
 from course_supporter.homework.path_stages import (

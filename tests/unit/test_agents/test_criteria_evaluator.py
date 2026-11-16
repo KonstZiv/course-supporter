@@ -38,11 +38,11 @@ from course_supporter.agents.criteria_evaluator import (
     EvaluationInput,
     render_context,
 )
+from course_supporter.criteria_kinds import RepeatReason
 from course_supporter.homework.criteria_form import Criterion
 from course_supporter.homework.criteria_verdicts import (
     EvaluationAnswer,
     RepeatItem,
-    RepeatReason,
 )
 from course_supporter.llm.error_categories import (
     ErrorCategory,

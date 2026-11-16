@@ -36,11 +36,11 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.criteria_kinds import CriteriaLayer, VerdictValue
+from course_supporter.criteria_kinds import CriteriaLayer, RepeatReason, VerdictValue
 from course_supporter.homework import criteria_evaluation
 from course_supporter.homework.criteria_form import Criterion, criteria_to_document
 from course_supporter.homework.criteria_list_service import CriteriaInForce
-from course_supporter.homework.criteria_verdicts import RepeatItem, RepeatReason
+from course_supporter.homework.criteria_verdicts import RepeatItem
 from course_supporter.homework.doors import DoorReading
 from course_supporter.homework.judged_list import judged_layer
 from course_supporter.homework.mentor_context import mark_authors_lines
@@ -429,6 +429,9 @@ class TestTheEvaluationOfAProject:
             False,
             True,
         )
+        # The project's stage keeps the reason on the row too.
+        assert p1.repeat_reason == RepeatReason.QUOTE_FROM_BASE
+        assert rows["c1"].repeat_reason is None
         assert (rows["c2"].verdict, rows["c2"].quote_from_base) == (
             VerdictValue.NOT_MET,
             True,
@@ -464,6 +467,8 @@ class TestTheEvaluationOfAProject:
             8,
         )
         assert (p1.retried, p1.quote_from_base) == (True, False)
+        # Mended on the repeat; the row still names why it was asked.
+        assert p1.repeat_reason == RepeatReason.QUOTE_FROM_BASE
 
 
 @pytest.mark.usefixtures("authors_list")

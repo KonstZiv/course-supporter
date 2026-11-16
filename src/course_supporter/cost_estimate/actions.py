@@ -32,7 +32,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import ROUND_CEILING, Decimal
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 from course_supporter.cost_estimate.core import (
     ActionEstimate,
@@ -307,6 +307,30 @@ class MaterialFactors:
             }.items()
             if v is not None
         }
+
+
+REQUIRED_FACTORS: Final[Mapping[str, tuple[str, ...]]] = {
+    "audio": ("duration_sec",),
+    "video": ("duration_sec",),
+    "presentation": ("slides", "text_chars"),
+    "text": ("text_chars",),
+    "web": ("text_chars",),
+    "code": ("files", "text_chars"),
+}
+"""The factors without which :func:`estimate_processing` cannot price a kind.
+
+Every other factor of :class:`MaterialFactors` may be unknown: it then counts
+as 0. The estimate route names the missing ones to the author (BIL-E3).
+"""
+
+
+def missing_factors(kind: str, factors: MaterialFactors) -> list[str]:
+    """The :data:`REQUIRED_FACTORS` of ``kind`` that ``factors`` leaves unknown."""
+    return [
+        name
+        for name in REQUIRED_FACTORS.get(kind, ())
+        if getattr(factors, name) is None
+    ]
 
 
 def _need(value: Any, name: str, kind: str) -> Any:

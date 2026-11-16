@@ -1111,6 +1111,15 @@ class ReferenceViewResponse(BaseModel):
     failure_reason: str | None = Field(
         default=None, description="Why generation gave up, when ``failed``."
     )
+    failure_code: Literal["insufficient_units"] | None = Field(
+        default=None,
+        description=(
+            "The code of the failure the screen reacts to: ``insufficient_units`` "
+            "when the version was closed because the author's units could not "
+            "cover it (the funds port refused); null for any other failure and "
+            "when not ``failed``."
+        ),
+    )
     pass_threshold: int | None = Field(
         default=None,
         description=(

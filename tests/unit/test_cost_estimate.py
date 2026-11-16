@@ -11,17 +11,19 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import pytest
 
 from course_supporter.cost_estimate.actions import (
+    REQUIRED_FACTORS,
     Catalog,
     MaterialFactors,
     estimate_processing,
     estimate_review,
     estimate_task_preparation,
     first_fitting_rung,
+    missing_factors,
 )
 from course_supporter.cost_estimate.core import (
     ActionKind,
@@ -536,6 +538,61 @@ class TestProcessing:
                 catalog=catalog,
                 at=MONDAY_NOON,
             )
+
+    @pytest.mark.parametrize(
+        ("kind", "full"),
+        [
+            ("audio", {"duration_sec": 600.0}),
+            ("video", {"duration_sec": 600.0}),
+            ("presentation", {"slides": 12, "text_chars": 4000}),
+            ("text", {"text_chars": 9000}),
+            ("web", {"text_chars": 9000}),
+            ("code", {"files": 3, "text_chars": 9000}),
+        ],
+    )
+    def test_the_required_factors_are_what_the_estimate_needs(
+        self,
+        kind: str,
+        full: dict[str, Any],
+        settings: EstimateSettings,
+        catalog: Catalog,
+        ladders: dict[str, StageConfig],
+    ) -> None:
+        """BIL-E3 lock: ``REQUIRED_FACTORS`` is exactly what ``_need`` asks for —
+        the full set prices, dropping any one of them is an EstimateError
+        naming it, and ``missing_factors`` names it too."""
+
+        def run(factors: MaterialFactors) -> None:
+            estimate_processing(
+                kind=kind,
+                factors=factors,
+                ladders=ladders,
+                settings=settings,
+                catalog=catalog,
+                at=MONDAY_NOON,
+            )
+
+        assert set(full) == set(REQUIRED_FACTORS[kind])
+        run(MaterialFactors(**full))
+        assert missing_factors(kind, MaterialFactors(**full)) == []
+        for name in REQUIRED_FACTORS[kind]:
+            short = MaterialFactors(**{k: v for k, v in full.items() if k != name})
+            with pytest.raises(EstimateError, match=name):
+                run(short)
+            assert missing_factors(kind, short) == [name]
+
+    def test_the_required_factors_are_fields_of_the_estimate_request(self) -> None:
+        """The route names a missing factor by its field in the request body."""
+        from typing import get_args
+
+        from course_supporter.api.routes.billing_estimates import (
+            ProcessingEstimateRequest,
+        )
+
+        kinds = get_args(ProcessingEstimateRequest.model_fields["kind"].annotation)
+        assert set(kinds) == set(REQUIRED_FACTORS)
+        for names in REQUIRED_FACTORS.values():
+            assert set(names) <= set(ProcessingEstimateRequest.model_fields)
 
     def test_every_processing_step_is_a_ladder_stage(
         self, settings: EstimateSettings, ladders: dict[str, StageConfig]

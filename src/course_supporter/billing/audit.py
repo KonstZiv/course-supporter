@@ -1,13 +1,21 @@
-"""The audit log of administrative changes to billing data (BIL-A).
+"""The audit log of changes to billing data (BIL-A).
 
-Every change made through :mod:`.admin`, :mod:`.accounts`, an
-administrator's credit of units (:func:`.ledger.credit_admin`), a contract
-invoice credited by the administrator (:mod:`.payments.invoice`), the end
-of a dispute (:func:`.admin.end_dispute`) or the mark of an account for test
-purchases (:func:`.admin.set_test_purchase`) writes one
-entry in the same transaction as the change: who (the administrator's ``--actor``),
-when, what, which row, the row before and after. The table refuses UPDATE (a
-trigger), so an entry, once written, stays as written.
+What writes one entry, in the same transaction as the change:
+
+* the administrator's changes through :mod:`.admin` — author settings,
+  payment rules (set, ended), the mark of an account for test purchases
+  (:func:`.admin.set_test_purchase`), the end of a dispute
+  (:func:`.admin.end_dispute`), a hold of a refund by order and its release;
+* an administrator's credit of units (:func:`.ledger.credit_admin`) and a
+  contract invoice credited by the administrator (:mod:`.payments.invoice`);
+* :mod:`.accounts` — the anonymization of an account, and the CREATION of an
+  account (``account.create``, BIL-E3): one entry per account, written by the
+  call that inserted the row, whatever action needed it first.
+
+Each entry says who (the administrator's ``--actor``; for an account created
+by a user's or the system's action, :data:`SYSTEM_ACTOR` — never an owner's
+id), when, what, which row, the row before and after. The table refuses UPDATE
+(a trigger), so an entry, once written, stays as written.
 
 A snapshot is the row as JSON — ids as text, instants in ISO 8601. The
 snapshot of an ACCOUNT deliberately leaves out its owner (``tenant_id``,
@@ -19,7 +27,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +41,12 @@ from course_supporter.storage.orm import (
     BillingPaymentRule,
     BillingRefund,
 )
+
+SYSTEM_ACTOR: Final = "system"
+"""The actor of an entry written for a user's or the system's action — a
+student's or an author's consent or checkout, the start of a paid action — as
+opposed to the administrator's ``--actor`` (BIL-E3). It names no owner: the log
+outlives the anonymization of the account."""
 
 
 def _instant(value: datetime | None) -> str | None:

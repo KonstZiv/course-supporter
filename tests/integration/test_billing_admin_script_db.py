@@ -103,9 +103,17 @@ def test_set_benefit_writes_the_settings_and_the_audit(tenant: Tenant) -> None:
             "monthly_limit",
             300,
         )
-        [entry] = session.scalars(
-            select(BillingAuditEntry).where(BillingAuditEntry.entity_id == account.id)
+        created, entry = session.scalars(
+            select(BillingAuditEntry)
+            .where(BillingAuditEntry.entity_id == account.id)
+            .order_by(BillingAuditEntry.created_at, BillingAuditEntry.id)
         ).all()
+        # BIL-E3: the change created the account first, audited by its --actor.
+        assert (created.actor, created.action, created.before) == (
+            "kostiantyn",
+            "account.create",
+            None,
+        )
         assert (entry.actor, entry.action, entry.before) == (
             "kostiantyn",
             "author_settings.update",

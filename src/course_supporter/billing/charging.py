@@ -75,7 +75,13 @@ from course_supporter.billing.kinds import (
     RuleScope,
 )
 from course_supporter.billing.links import PREPARATION_STAGES
-from course_supporter.billing.payer import PayerResolution, resolve_payer
+from course_supporter.billing.payer import (
+    PayerLookup,
+    PayerResolution,
+    default_kind,
+    find_payer,
+    resolve_payer,
+)
 from course_supporter.cost_estimate.core import fact_units, price_units, reserve_units
 from course_supporter.cost_estimate.settings import get_estimate_settings
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
@@ -180,6 +186,30 @@ class Payer:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PayerView:
+    """The payer of one action as a read sees it (:func:`find_payer_of`).
+
+    Nothing is created for it (BIL-E3): ``account_id`` is ``None`` while the
+    default payer has no account yet, and such a payer reads as an empty
+    account — nothing available, no credit.
+    """
+
+    lookup: PayerLookup
+    kind: AccountKind
+    credit_allowed: bool
+
+    @property
+    def account_id(self) -> uuid.UUID | None:
+        """The paying account; None before it exists."""
+        return self.lookup.payer_account_id
+
+    @property
+    def for_someone_else(self) -> bool:
+        """An author paying for a student's review under a payment rule."""
+        return self.lookup.payer_account_id != self.lookup.beneficiary_account_id
+
+
 async def credit_allowed(session: AsyncSession, account: BillingAccount) -> bool:
     """May the account run into a difference (an author with credit)?"""
     if account.kind != AccountKind.AUTHOR.value:
@@ -196,7 +226,11 @@ async def payer_of(
     course_node_id: uuid.UUID | None,
     student_id: uuid.UUID | None,
 ) -> Payer:
-    """Who pays (:func:`.payer.resolve_payer`), with the account's kind and credit."""
+    """Who pays (:func:`.payer.resolve_payer`), with the account's kind and credit.
+
+    For an action that changes state: the account is created on first need. A
+    read asks :func:`find_payer_of`.
+    """
     resolution = await resolve_payer(
         session,
         action_kind=action_kind,
@@ -213,8 +247,44 @@ async def payer_of(
     )
 
 
+async def find_payer_of(
+    session: AsyncSession,
+    *,
+    action_kind: ActionKind,
+    tenant_id: uuid.UUID,
+    course_node_id: uuid.UUID | None,
+    student_id: uuid.UUID | None,
+) -> PayerView:
+    """:func:`payer_of` for a read (:func:`.payer.find_payer`): creates nothing."""
+    lookup = await find_payer(
+        session,
+        action_kind=action_kind,
+        tenant_id=tenant_id,
+        course_node_id=course_node_id,
+        student_id=student_id,
+    )
+    if lookup.payer_account_id is None:
+        return PayerView(lookup, default_kind(action_kind), credit_allowed=False)
+    account = await session.get(BillingAccount, lookup.payer_account_id)
+    assert account is not None  # find_payer returns existing accounts or None
+    return PayerView(
+        lookup,
+        AccountKind(account.kind),
+        credit_allowed=await credit_allowed(session, account),
+    )
+
+
+async def available_units(
+    session: AsyncSession, account_id: uuid.UUID | None, *, now: datetime | None = None
+) -> int:
+    """What the account can spend now; 0 for an account not created yet."""
+    if account_id is None:
+        return 0
+    return (await ledger.balance(session, account_id, now=now)).available
+
+
 def threshold_applies(
-    action_kind: ActionKind, payer: Payer, *, own_action: bool
+    action_kind: ActionKind, payer: Payer | PayerView, *, own_action: bool
 ) -> bool:
     """Does ``available >= P`` gate this action (module docstring)?
 
@@ -240,14 +310,14 @@ class Quote:
     enough: bool
     missing_units: int
     threshold: bool
-    payer: Payer
+    payer: Payer | PayerView
 
 
 async def quote(
     session: AsyncSession,
     *,
     action_kind: ActionKind,
-    payer: Payer,
+    payer: Payer | PayerView,
     price_units: int,
     own_action: bool = False,
     lock: bool = False,
@@ -255,11 +325,14 @@ async def quote(
     """P against the payer's available units; ``enough`` where no threshold applies.
 
     ``lock`` takes the account's lock first, so a start that follows in the
-    same transaction reserves from what was checked.
+    same transaction reserves from what was checked; a start resolves its payer
+    with :func:`payer_of`, so the account exists. A read (:class:`PayerView`)
+    of a payer without an account sees 0 available.
     """
     if lock:
+        assert payer.account_id is not None  # a start's payer has its account
         await lock_account(session, payer.account_id)
-    available = (await ledger.balance(session, payer.account_id)).available
+    available = await available_units(session, payer.account_id)
     threshold = threshold_applies(action_kind, payer, own_action=own_action)
     enough = not threshold or available >= price_units
     return Quote(
@@ -272,14 +345,17 @@ async def quote(
     )
 
 
-async def test_allowed(session: AsyncSession, payer: Payer) -> bool:
+async def test_allowed(session: AsyncSession, payer: Payer | PayerView) -> bool:
     """A test is free while its payer's balance (reserved included) is above 0.
 
     The same for an author paying under a rule (operator 2026-11-15, 5a, item 2);
-    an author with credit is never stopped.
+    an author with credit is never stopped. A payer without an account yet has
+    a balance of 0.
     """
     if payer.credit_allowed:
         return True
+    if payer.account_id is None:
+        return False
     return (await ledger.balance(session, payer.account_id)).balance > 0
 
 

@@ -60,6 +60,10 @@ from course_supporter.funds_port import (
     VersionWorkContext,
 )
 from course_supporter.homework.reference_key import answers_digest
+from course_supporter.homework.reference_service import (
+    failure_code_of,
+    funds_refused_reason,
+)
 from course_supporter.homework.task_text import stitch_task_text
 from course_supporter.homework.test_object import (
     DraftBody,
@@ -477,6 +481,9 @@ class TestTheWorkThatSpendsNothing:
         assert state == ReferenceState.FAILED.value
         assert reason is not None
         assert FundsDecision.REFUSED.value in reason or "refused" in reason
+        # BIL-E3: the reason is the one the route reads its code from.
+        assert reason == funds_refused_reason(FundsRefusalReason.INSUFFICIENT_FUNDS)
+        assert failure_code_of(reason) == "insufficient_units"
         assert router.calls == 0, "the model was never reached"
         assert await _stage_rows(session_factory, seeded["job_id"]) == []
 

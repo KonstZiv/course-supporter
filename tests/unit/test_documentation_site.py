@@ -8,6 +8,10 @@ test green. The codes are the set the README lock reads
 reaches both locks. Only the Markdown is read — no build, no database — so this
 lock runs wherever the tests run, CI included.
 
+The refusals of a student's reply to a remark (task 12a, K3) are held the same
+way, by their lower-case codes: the errors page lists each with a row that
+leads to its anchor on the API page.
+
 The two refusals of a student's comment (hotfix 6) are held the same way: the
 errors page lists them, and the API page — where a school's platform reads
 about the comment — has a section for each. So are the refusals of the
@@ -45,6 +49,7 @@ from course_supporter.homework.criteria_edit_service import (
     CriteriaRefusalCode,
     CriteriaStatus,
 )
+from course_supporter.homework.reply_core import ReplyRefusal
 from course_supporter.homework.submission_core import (
     STUDENT_NOTE_REJECTED,
     STUDENT_NOTE_TOO_LONG,
@@ -68,6 +73,12 @@ _ROW_REASON = re.compile(r"^\| \[?`([a-z][a-z0-9_]+)`", re.MULTILINE)
 _ROW_LINKED_TO_AUTHORS_API = re.compile(
     r"^\| \[`([A-Z][A-Z0-9_]+)`\]\(\.\./authors/api\.md#\1\)", re.MULTILINE
 )
+# A row whose lower-case code links to its own anchor on the API page.
+_ROW_LINKED_TO_API = re.compile(
+    r"^\| \[`([a-z][a-z0-9_]+)`\]\(\.\./api/index\.md#\1\)", re.MULTILINE
+)
+# A lower-case anchor at the end of a heading (the codes of a reply).
+_LOWER_ANCHOR = re.compile(r"\{#([a-z][a-z0-9_]+)\}[ \t]*$", re.MULTILINE)
 # An anchor the page declares (attr_list): at the end of a heading, or of a
 # table cell. Anywhere else the braces are text, not an anchor.
 _ANCHOR = re.compile(r"\{#([A-Z][A-Z0-9_]+)\}(?=[ \t]*(?:\||$))", re.MULTILINE)
@@ -176,3 +187,22 @@ class TestTheSiteNamesTheFailureOfATextTasksReview:
         assert REVIEW_PARTS_MISSING in _front_matter(text)["error_codes"]
         assert rows, "the page has rows of lower-case reasons"
         assert REVIEW_PARTS_MISSING in rows, f"no row on the errors page: {rows}"
+
+
+class TestTheSiteNamesEveryCodeOfAReply:
+    _CODES = frozenset(code.value for code in ReplyRefusal)
+
+    def test_the_errors_page_lists_them_with_a_linked_row_each(self) -> None:
+        text = _ERRORS.read_text(encoding="utf-8")
+
+        assert len(self._CODES) == 7, "the vocabulary under test is the whole one"
+        missing = self._CODES - set(_front_matter(text)["error_codes"])
+        assert not missing, f"not in error_codes: {sorted(missing)}"
+        missing = self._CODES - set(_ROW_LINKED_TO_API.findall(text))
+        assert not missing, f"no linked row on the errors page: {sorted(missing)}"
+
+    def test_the_api_page_has_an_anchor_for_each(self) -> None:
+        anchors = set(_LOWER_ANCHOR.findall(_API.read_text(encoding="utf-8")))
+
+        missing = self._CODES - anchors
+        assert not missing, f"no anchor on the API page: {sorted(missing)}"

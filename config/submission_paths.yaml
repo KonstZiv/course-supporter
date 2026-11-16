@@ -15,9 +15,14 @@
 # at startup, after the checks pass, so an edit takes effect on the next start.
 #
 # Submission states: first | repeat_without_replies | repeat_with_replies.
-# `repeat_with_replies` is described but unreachable until student replies
-# exist as records (task 12); until then both repeat states list the same
-# stages — a prepared place, not a duplicate.
+# `repeat_with_replies` is reached only by a type with `replies_enabled: true`
+# whose student's last review has replies no review has answered yet (task
+# 12a, K3, homework/path_selection.py). `replies_enabled` (absent means false)
+# is the one switch of the replies: the comment routes, the reply screen in
+# the doors, this state and the rule of the same work all read it. It is off
+# for every type until the answers (K4) and the portal (K5) come with it;
+# until then both repeat states list the same stages — a prepared place, not
+# a duplicate.
 
 stages:
   # Model safety check of the student's submission. Starting content is a copy
@@ -366,6 +371,9 @@ task_types:
   short_task:
     served_by: new_path
     test_mode: true
+    # Students' replies to the remarks of a review (task 12a): off until the
+    # answers (K4) and the portal (K5) are switched on with them.
+    replies_enabled: false
     paths:
       first:
         [safety, attempt_classifier, criteria_evaluation, course_link_lookup, review_explanation]
@@ -377,6 +385,8 @@ task_types:
   task:
     served_by: new_path
     test_mode: true
+    # As on short_task.
+    replies_enabled: false
     paths:
       first:
         [safety, attempt_classifier, criteria_evaluation, course_link_lookup, review_explanation]

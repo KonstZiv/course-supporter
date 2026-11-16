@@ -38,6 +38,7 @@ from course_supporter.homework.path_config import (
     SubmissionState,
     get_path_config,
 )
+from course_supporter.homework.remark_comments import pending_replies
 from course_supporter.storage.homework_repository import HomeworkRepository
 
 if TYPE_CHECKING:
@@ -68,26 +69,51 @@ async def resolve_submission_state(
     *,
     student_id: uuid.UUID,
     authored_document_id: uuid.UUID,
+    submission_id: uuid.UUID | None = None,
+    task_type: AssignmentType | None = None,
+    config: PathConfig | None = None,
 ) -> SubmissionState:
     """Where this submission stands, as far as choosing a path goes.
 
-    Two of the three states are reachable. ``REPEAT_WITHOUT_REPLIES`` when the
-    student has already had a review for this task
-    (:meth:`~course_supporter.storage.homework_repository.HomeworkRepository.has_reviewed_revision`),
-    ``FIRST`` otherwise.
+    ``FIRST`` until the student has had a review for this task
+    (:meth:`~course_supporter.storage.homework_repository.HomeworkRepository.has_reviewed_revision`);
+    after it, a repeat — ``REPEAT_WITH_REPLIES`` when the submission has
+    replies of the student to answer
+    (:func:`~course_supporter.homework.remark_comments.pending_replies`: the
+    type takes replies, and the student's last review of the same version of
+    the task has replies no review answered yet; task 12a, K3), and
+    ``REPEAT_WITHOUT_REPLIES`` otherwise.
 
-    ``REPEAT_WITH_REPLIES`` is never returned, and that is a decision rather
-    than an omission: replies do not exist as records until task 12, so nothing
-    in today's data could tell a submission that carries them from one that does
-    not. A student's free-text note is not a reply. Inventing the signal would
-    put a path into production that nobody could verify.
+    The replies are asked about only for a submission that exists —
+    ``submission_id`` and ``task_type`` both given, as the body gives them; a
+    caller that names no submission (the price quote, ``billing/quotes.py``)
+    is answered without them. A type that takes no replies — every type in
+    production until they are switched on with their answers (K4) and the
+    portal (K5) — never reaches the third state, and its submissions ask
+    nothing more of the database than before. A student's free-text note is
+    not a reply.
     """
     repo = HomeworkRepository(session)
     repeat = await repo.has_reviewed_revision(
         student_id=student_id,
         authored_document_id=authored_document_id,
     )
-    return SubmissionState.REPEAT_WITHOUT_REPLIES if repeat else SubmissionState.FIRST
+    if not repeat:
+        return SubmissionState.FIRST
+    if (
+        submission_id is not None
+        and task_type is not None
+        and await pending_replies(
+            session,
+            submission_id=submission_id,
+            student_id=student_id,
+            authored_document_id=authored_document_id,
+            task_type=task_type,
+            config=config,
+        )
+    ):
+        return SubmissionState.REPEAT_WITH_REPLIES
+    return SubmissionState.REPEAT_WITHOUT_REPLIES
 
 
 async def choose_path(
@@ -97,12 +123,14 @@ async def choose_path(
     student_id: uuid.UUID,
     authored_document_id: uuid.UUID,
     config: PathConfig | None = None,
+    submission_id: uuid.UUID | None = None,
 ) -> PathChoice | None:
     """Choose the path for one submission, or ``None`` for today's Mentor.
 
     ``config`` defaults to the process-wide configuration the boot validated
     (:func:`~course_supporter.homework.path_config.get_path_config`); tests pass
-    their own.
+    their own. ``submission_id`` names the submission the path is for: only
+    then can its state be the one with replies (:func:`resolve_submission_state`).
 
     The switch is read first: a type served by today's Mentor asks the database
     nothing, so a submission on that type costs exactly what it cost before this
@@ -121,6 +149,9 @@ async def choose_path(
         session,
         student_id=student_id,
         authored_document_id=authored_document_id,
+        submission_id=submission_id,
+        task_type=task_type,
+        config=cfg,
     )
     key = PathKey(task_type, state)
     choice = PathChoice(key=key, stages=tuple(declared.paths[state]))

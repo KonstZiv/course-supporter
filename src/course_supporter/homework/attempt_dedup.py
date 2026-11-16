@@ -33,6 +33,13 @@ The same work, judged alike:
     a type with no version (not on the new path, or no model stage), no list
     in force, any key different — is an ordinary review.
 
+    And the same work is no copy while the student has replies to answer
+    (task 12a, K3; :func:`~course_supporter.homework.remark_comments.pending_replies`
+    — one definition with the submission's state and the reply screen): the
+    student wrote to the last review, and its copy would answer nothing they
+    wrote. A type that takes no replies has none to answer, and its rule is
+    the rule above.
+
 The version of a criteria list:
     Nothing new: the ADDRESS every verdict row carries — ``criteria_layer`` +
     ``criteria_source_id`` (task 08, decision 21; ``judged_list.py`` reads a
@@ -133,6 +140,7 @@ from course_supporter.homework.path_config import (
     ServedBy,
     get_path_config,
 )
+from course_supporter.homework.remark_comments import pending_replies
 from course_supporter.homework.review_assembler import assemble_review
 from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
@@ -358,6 +366,22 @@ async def _find(
         or row.task_type is None
         or not attempt_snapshotter_for(row.task_type).dedup_enabled
     ):
+        return None
+    if await pending_replies(
+        session,
+        submission_id=submission_id,
+        student_id=row.student_id,
+        authored_document_id=row.authored_document_id,
+        task_type=AssignmentType(row.task_type),
+        config=config,
+    ):
+        # The student wrote to the last review, and a copy of it answers
+        # nothing they wrote (task 12a, K3): the work is reviewed as usual.
+        # TODO(12a K4): a copy and a prepared answer when every reply is
+        # off-topic or hostile — the refinement of the owner's decision of
+        # 2026-11-16, made once the topic port has a real adapter (the
+        # measurement of 2026-11-17).
+        logger.info("attempt_dedup_replies_pending", submission_id=str(submission_id))
         return None
     version = evaluator_version(AssignmentType(row.task_type), config)
     if version is None:

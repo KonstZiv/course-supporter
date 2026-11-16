@@ -745,10 +745,117 @@ class TestAuthorEstimate:
             "enough",
             "missing_units",
             "charging_enabled",
+            "unpriced_reason",
+            "missing_features",
         }
         assert body["price_units"] > 0
         assert (body["enough"], body["missing_units"]) == (False, body["price_units"])
+        assert (body["unpriced_reason"], body["missing_features"]) == (None, None)
         assert credit.json()["enough"] is True
+
+    @pytest.mark.parametrize(
+        ("payload", "missing"),
+        [
+            ({"kind": "audio"}, ["duration_sec"]),
+            ({"kind": "audio", "text_chars": 900}, ["duration_sec"]),
+            ({"kind": "video", "slides": 3}, ["duration_sec"]),
+            ({"kind": "presentation"}, ["slides", "text_chars"]),
+            ({"kind": "presentation", "slides": 12}, ["text_chars"]),
+            ({"kind": "presentation", "text_chars": 4000}, ["slides"]),
+            ({"kind": "text", "duration_sec": 60}, ["text_chars"]),
+            ({"kind": "web"}, ["text_chars"]),
+            ({"kind": "code", "text_chars": 9000}, ["files"]),
+            ({"kind": "code", "files": 3}, ["text_chars"]),
+            ({"kind": "code"}, ["files", "text_chars"]),
+        ],
+    )
+    async def test_a_body_without_a_needed_feature_is_not_priced(
+        self, world: World, payload: dict[str, Any], missing: list[str]
+    ) -> None:
+        """BIL-E3, part A: no price rather than a price of 0 — and which fields
+        of the body the kind needs; nothing is refused in advance."""
+        async with _client() as client:
+            response = await client.post(
+                f"/api/v1/nodes/{world.course_id}/documents/estimate", json=payload
+            )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body == {
+            "price_units": None,
+            "available_units": 0,
+            "enough": True,
+            "missing_units": None,
+            "charging_enabled": True,
+            "unpriced_reason": "missing_features",
+            "missing_features": missing,
+        }
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"kind": "audio", "duration_sec": 600},
+            {"kind": "video", "duration_sec": 600},
+            {"kind": "presentation", "slides": 12, "text_chars": 4000},
+            {"kind": "text", "text_chars": 20_000},
+            {"kind": "web", "text_chars": 20_000},
+            {"kind": "code", "files": 3, "text_chars": 9000},
+        ],
+    )
+    async def test_a_full_body_is_priced_as_before(
+        self, world: World, payload: dict[str, Any]
+    ) -> None:
+        async with _client() as client:
+            response = await client.post(
+                f"/api/v1/nodes/{world.course_id}/documents/estimate", json=payload
+            )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["price_units"] > 0
+        assert (body["enough"], body["missing_units"]) == (False, body["price_units"])
+        assert (body["unpriced_reason"], body["missing_features"]) == (None, None)
+
+    async def test_a_failed_processing_estimate_is_estimate_failed(
+        self, world: World, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.api.routes import billing_estimates
+
+        monkeypatch.setattr(billing_estimates, "processing_e_usd", lambda **_: None)
+        async with _client() as client:
+            response = await client.post(
+                f"/api/v1/nodes/{world.course_id}/documents/estimate",
+                json={"kind": "text", "text_chars": 20_000},
+            )
+        body = response.json()
+        assert (body["price_units"], body["missing_units"], body["enough"]) == (
+            None,
+            None,
+            True,
+        )
+        assert (body["unpriced_reason"], body["missing_features"]) == (
+            "estimate_failed",
+            None,
+        )
+
+    async def test_key_explanations_without_an_estimate_are_estimate_failed(
+        self, world: World, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from course_supporter.api.routes import billing_estimates
+
+        monkeypatch.setattr(billing_estimates, "preparation_e_usd", lambda **_: None)
+        async with _client() as client:
+            response = await client.post(
+                f"/api/v1/documents/{world.test_id}/reference/estimate"
+            )
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "price_units": None,
+            "available_units": 0,
+            "enough": True,
+            "missing_units": None,
+            "charging_enabled": True,
+            "unpriced_reason": "estimate_failed",
+            "missing_features": None,
+        }
 
     async def test_key_explanations_of_a_foreign_task_are_404(
         self, world: World
@@ -765,7 +872,9 @@ class TestAuthorEstimate:
                 f"/api/v1/documents/{world.test_id}/reference/estimate"
             )
         assert response.status_code == 200, response.text
-        assert response.json()["price_units"] > 0
+        body = response.json()
+        assert body["price_units"] > 0
+        assert (body["unpriced_reason"], body["missing_features"]) == (None, None)
 
 
 # ── C: reminders ──────────────────────────────────────────────────────

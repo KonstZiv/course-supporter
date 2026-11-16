@@ -14,7 +14,12 @@ Routes
 
 Each answers with the price in units, what is available, whether it is
 enough and how much is missing, and whether charging is on
-(:mod:`course_supporter.billing.quotes`). The refusal of a submission for want
+(:mod:`course_supporter.billing.quotes`). An author's action that cannot be
+priced (BIL-E3) answers ``price_units`` and ``missing_units`` null, ``enough``
+true, and why: ``unpriced_reason`` ``missing_features`` — the body lacks a
+feature the kind of material needs (``missing_features`` names the fields) —
+or ``estimate_failed``. The action is not refused in advance: its start checks
+the threshold on its real features. The refusal of a submission for want
 of units is 402 ``{"detail": {"code": "insufficient_units", "details":
 {price_units, available_units, missing_units}}}``
 (:func:`course_supporter.billing.quotes.require_enough`).
@@ -43,7 +48,7 @@ from course_supporter.auth.scopes import require_scope
 from course_supporter.billing.estimates import preparation_e_usd, processing_e_usd
 from course_supporter.billing.kinds import ActionKind
 from course_supporter.billing.quotes import Quote, author_quote, review_quote
-from course_supporter.cost_estimate.actions import MaterialFactors
+from course_supporter.cost_estimate.actions import REQUIRED_FACTORS, MaterialFactors
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -59,21 +64,41 @@ PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
 
 _NOT_FOUND = "Not found."
 
+UnpricedReason = Literal["missing_features", "estimate_failed"]
+
 
 class AuthorEstimateResponse(BaseModel):
     """The price of an author's action and whether it may start now."""
 
-    price_units: int = Field(description="P: the price shown, in units.")
+    price_units: int | None = Field(
+        description="P: the price shown, in units; null when it cannot be "
+        "priced (unpriced_reason says why)."
+    )
     available_units: int | None = Field(
         description="What the paying account can spend now."
     )
     enough: bool = Field(
         description="May the action start now: available >= P, or no threshold "
-        "applies (credit allowed), or charging is off."
+        "applies (credit allowed), or charging is off. True when there is no "
+        "price: the start checks the threshold on the material's real features."
     )
-    missing_units: int | None = Field(description="P - available when not enough.")
+    missing_units: int | None = Field(
+        description="P - available when not enough; null when there is no price."
+    )
     charging_enabled: bool = Field(
         description="BILLING_CHARGING_ENABLED: while false nothing is refused."
+    )
+    unpriced_reason: UnpricedReason | None = Field(
+        default=None,
+        description="Why there is no price: missing_features — the body lacks a "
+        "feature this kind of material needs (listed in missing_features); "
+        "estimate_failed — the estimate itself failed. Null when priced.",
+    )
+    missing_features: list[str] | None = Field(
+        default=None,
+        description="The body's fields the kind needs and lacks, by their names "
+        "in the request (duration_sec, slides, text_chars, files); null unless "
+        "unpriced_reason is missing_features.",
     )
 
 
@@ -110,7 +135,13 @@ class ReviewEstimateResponse(BaseModel):
 
 
 class ProcessingEstimateRequest(BaseModel):
-    """What the client knows of a material before it is processed."""
+    """What the client knows of a material before it is processed.
+
+    The features a kind needs to be priced: audio and video — ``duration_sec``;
+    presentation — ``slides`` and ``text_chars``; text and web —
+    ``text_chars``; code — ``files`` and ``text_chars``
+    (``cost_estimate.actions.REQUIRED_FACTORS``).
+    """
 
     kind: Literal["text", "web", "code", "audio", "video", "presentation"]
     duration_sec: float | None = Field(default=None, ge=0)
@@ -132,14 +163,27 @@ def _review_response(quote: Quote) -> ReviewEstimateResponse:
     )
 
 
-def _author_response(quote: Quote) -> AuthorEstimateResponse:
+def _author_response(
+    quote: Quote, missing: list[str] | None = None
+) -> AuthorEstimateResponse:
+    """The answer; without a price, why — the missing features, else a failure."""
+    reason: UnpricedReason | None = None
+    if quote.price_units is None:
+        reason = "missing_features" if missing else "estimate_failed"
     return AuthorEstimateResponse(
         price_units=quote.price_units,
         available_units=quote.available_units,
         enough=quote.enough,
         missing_units=quote.missing_units,
         charging_enabled=quote.charging_enabled,
+        unpriced_reason=reason,
+        missing_features=missing if reason == "missing_features" else None,
     )
+
+
+def _missing_features(body: ProcessingEstimateRequest) -> list[str]:
+    """The body's fields the kind of material needs and lacks, in its names."""
+    return [name for name in REQUIRED_FACTORS[body.kind] if getattr(body, name) is None]
 
 
 async def read_for_quote(
@@ -290,9 +334,11 @@ async def estimate_processing(
 
     Priced by the estimate's own function (``estimate_processing``) on what the
     client sends; the real price is fixed in the worker, when the material is
-    read. Missing features the material needs give a price of 0.
+    read. A body without a feature the kind needs is not priced:
+    ``unpriced_reason`` ``missing_features`` names the fields (BIL-E3).
     """
     root_id = await _course_root_of_node(session, tenant.tenant_id, node_id)
+    missing = _missing_features(body)
     factors = MaterialFactors(
         duration_sec=body.duration_sec,
         slides=body.slides,
@@ -305,10 +351,10 @@ async def estimate_processing(
         action_kind=ActionKind.PROCESSING,
         tenant_id=tenant.tenant_id,
         course_node_id=root_id,
-        e_usd=processing_e_usd(kind=body.kind, factors=factors),
+        e_usd=None if missing else processing_e_usd(kind=body.kind, factors=factors),
     )
     await session.commit()
-    return _author_response(quote)
+    return _author_response(quote, missing)
 
 
 @router.post(

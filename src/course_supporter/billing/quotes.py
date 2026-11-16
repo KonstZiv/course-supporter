@@ -466,7 +466,10 @@ async def author_quote(
     """What an author's processing or task preparation costs, and may it start.
 
     The threshold of the author's own action: an author with credit is never
-    stopped. ``e_usd=None`` (no estimate) prices nothing (S2).
+    stopped. ``e_usd=None`` (no estimate): no price — ``price_units`` and
+    ``missing_units`` are ``None`` and ``enough`` is true; the action is not
+    refused in advance, its start checks the threshold on its real features
+    (BIL-E3; the route says why there is no price).
     """
     enabled = charging.charging_enabled()
     payer = await charging.payer_of(
@@ -476,7 +479,10 @@ async def author_quote(
         course_node_id=course_node_id,
         student_id=None,
     )
-    price = charging.price_of(e_usd) if e_usd is not None else 0
+    if e_usd is None:
+        available = (await ledger.balance(session, payer.account_id)).available
+        return Quote(None, available, True, None, enabled)
+    price = charging.price_of(e_usd)
     found = await charging.quote(
         session,
         action_kind=action_kind,

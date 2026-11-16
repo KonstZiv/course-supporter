@@ -26,7 +26,12 @@ One event, one transaction:
          ``checkout_ref``), so the screen asking the checkout's state finds
          it credited; a purchase that names no checkout, or not its own, is
          credited all the same. No test-mode guard here: what was paid is
-         credited.
+         credited. But a purchase credited while the provider that signed the
+         event is in its test mode (``test_mode``, the adapter's
+         :attr:`~.port.PaymentProvider.test_mode`) is MARKED as a test
+         purchase in the same transaction (:func:`..testmark.mark`,
+         BIL-TESTMARK): its units are taken out by one administrator's
+         command before charging is switched on. In live mode, no mark.
        * :class:`~.port.RefundApproved` / :class:`~.port.RefundRejected` —
          :func:`.refunds.refund_approve` / :func:`.refunds.refund_reject` of
          the provider's adjustment. An approval of an adjustment the journal
@@ -66,9 +71,9 @@ import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.billing import ledger, refunds
+from course_supporter.billing import ledger, refunds, testmark
 from course_supporter.billing.errors import BillingError, BillingNotFoundError
-from course_supporter.billing.kinds import AccountStatus, EventState
+from course_supporter.billing.kinds import AccountStatus, EventState, MarkOrigin
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.checkout import link_purchase
 from course_supporter.billing.payments.port import (
@@ -111,9 +116,13 @@ async def handle_events(
     events: Sequence[ProviderEvent],
     body_sha256: str,
     catalog: Catalog,
+    test_mode: bool,
     now: datetime | None = None,
 ) -> list[Handled]:
     """Handle each event in a transaction of its own (module docstring).
+
+    ``test_mode``: the provider that checked the events' signature is in its
+    test mode — a purchase is then marked as a test purchase.
 
     Commits and rolls back ``session`` itself: give it a session with nothing
     to keep.
@@ -131,6 +140,7 @@ async def handle_events(
                 event=event,
                 body_sha256=body_sha256,
                 catalog=catalog,
+                test_mode=test_mode,
                 now=at,
             )
             await session.commit()
@@ -177,6 +187,7 @@ async def _handle(
     event: ProviderEvent,
     body_sha256: str,
     catalog: Catalog,
+    test_mode: bool,
     now: datetime,
 ) -> Handled:
     await _lock(session, provider, event.event_id)
@@ -184,7 +195,12 @@ async def _handle(
     if row is not None and row.state != EventState.FAILED.value:
         return Handled(event.event_id, EventState(row.state), repeated=True)
     state, error = await _act(
-        session, provider=provider, event=event, catalog=catalog, now=now
+        session,
+        provider=provider,
+        event=event,
+        catalog=catalog,
+        test_mode=test_mode,
+        now=now,
     )
     await _write(
         session,
@@ -205,12 +221,15 @@ async def _act(
     provider: str,
     event: ProviderEvent,
     catalog: Catalog,
+    test_mode: bool,
     now: datetime,
 ) -> tuple[EventState, str | None]:
     """The journal's action; the event's state and, when it failed, why."""
     match event:
         case PurchaseCompleted():
-            return await _credit(session, provider, event, catalog, now)
+            return await _credit(
+                session, provider, event, catalog, test_mode=test_mode, now=now
+            )
         case RefundApproved():
             await _approve(session, provider, event, now)
             return EventState.PROCESSED, None
@@ -300,6 +319,8 @@ async def _credit(
     provider: str,
     event: PurchaseCompleted,
     catalog: Catalog,
+    *,
+    test_mode: bool,
     now: datetime,
 ) -> tuple[EventState, str | None]:
     account = (
@@ -338,6 +359,18 @@ async def _credit(
         provider_line_id=event.line_id,
         now=now,
     )
+    if test_mode and credit.created:
+        await testmark.mark(
+            session, batch_id=credit.batch.id, origin=MarkOrigin.CREDIT, now=now
+        )
+        log.info(
+            "billing_test_purchase_marked",
+            provider=provider,
+            event_id=event.event_id,
+            account_id=str(account.id),
+            batch_id=str(credit.batch.id),
+            units=credit.batch.units,
+        )
     await link_purchase(session, provider=provider, event=event, batch=credit.batch)
     return EventState.PROCESSED, None
 

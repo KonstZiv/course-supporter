@@ -66,6 +66,8 @@ async def _run(*argv: str) -> str:
             "--invoice",
             "INV-1",
         ],
+        ["void-test-batches"],
+        ["void-test-batches", "--dry-run"],
     ],
 )
 def test_every_change_needs_an_actor(argv: list[str]) -> None:
@@ -456,3 +458,17 @@ def test_every_kind_of_movement_has_words_in_the_statement() -> None:
 def test_run_periodic_knows_the_resume_of_held_reviews() -> None:
     args = _args("run-periodic", "--task", "billing_resume_funded", "--dry-run")
     assert (args.task, args.dry_run) == ("billing_resume_funded", True)
+
+
+def test_void_test_batches_takes_an_account_and_a_dry_run() -> None:
+    args = _args(
+        "void-test-batches",
+        "--actor",
+        "kostiantyn",
+        "--account",
+        str(TENANT),
+        "--dry-run",
+    )
+    assert (args.actor, args.account, args.dry_run) == ("kostiantyn", TENANT, True)
+    plain = _args("void-test-batches", "--actor", "kostiantyn")
+    assert (plain.account, plain.dry_run) == (None, False)

@@ -26,7 +26,7 @@ from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from course_supporter.billing import ledger
+from course_supporter.billing import ledger, testmark
 from course_supporter.billing.accounts import (
     anonymize_student_accounts,
     anonymize_tenant_accounts,
@@ -40,6 +40,7 @@ from course_supporter.billing.journal import add_months
 from course_supporter.billing.kinds import (
     ActionKind,
     ConsentChannel,
+    MarkOrigin,
     PayerSource,
     RuleScope,
 )
@@ -65,6 +66,7 @@ from course_supporter.storage.orm import (
     BillingProviderEvent,
     BillingRefund,
     BillingReservation,
+    BillingTestBatch,
     Student,
     Tenant,
 )
@@ -253,6 +255,15 @@ class Scene:
                 )
                 or 0
             )
+            out["billing_test_batches"] = int(
+                await s.scalar(
+                    select(func.count())
+                    .select_from(BillingTestBatch)
+                    .join(BillingBatch, BillingBatch.id == BillingTestBatch.batch_id)
+                    .where(BillingBatch.account_id == account_id)
+                )
+                or 0
+            )
             return out
 
         return await self.do(count)
@@ -292,6 +303,9 @@ class Scene:
                         BillingMovement.beneficiary_account_id.in_(ids),
                     )
                 )
+            )
+            await s.execute(
+                delete(BillingTestBatch).where(BillingTestBatch.batch_id.in_(batch_ids))
             )
             for model, column in ACCOUNT_ROWS:
                 if model is BillingPaymentRule:
@@ -582,6 +596,7 @@ ALL_GONE = {
     "billing_payment_rules": 0,
     "billing_accounts": 0,
     "billing_audit_log": 0,
+    "billing_test_batches": 0,
 }
 
 
@@ -596,6 +611,11 @@ class TestPurge:
         at = add_months(scene.now, -12 * anonymized_years_ago - months)
         before = at - timedelta(days=30)
         batch = await scene.buy(account, 100, at=before)
+        await scene.do(  # a test purchase (BIL-TESTMARK)
+            lambda s: testmark.mark(
+                s, batch_id=batch, origin=MarkOrigin.CREDIT, now=before
+            )
+        )
         await scene.do(  # the checkout the purchase answered
             lambda s: _add(
                 s,
@@ -652,6 +672,7 @@ class TestPurge:
             "billing_checkouts",
             "billing_batches",
             "billing_consents",
+            "billing_test_batches",
         ):
             assert rows[table], table  # the scene holds every kind of row
         assert rows["billing_audit_log"] == 2  # account.create, account.anonymize

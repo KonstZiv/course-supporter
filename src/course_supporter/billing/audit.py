@@ -6,8 +6,10 @@ What writes one entry, in the same transaction as the change:
   payment rules (set, ended), the mark of an account for test purchases
   (:func:`.admin.set_test_purchase`), the end of a dispute
   (:func:`.admin.end_dispute`), a hold of a refund by order and its release;
-* an administrator's credit of units (:func:`.ledger.credit_admin`) and a
-  contract invoice credited by the administrator (:mod:`.payments.invoice`);
+* an administrator's credit of units (:func:`.ledger.credit_admin`), a
+  contract invoice credited by the administrator (:mod:`.payments.invoice`)
+  and the void of a test purchase's free units
+  (:func:`.testmark.void_test_batches`, BIL-TESTMARK);
 * :mod:`.accounts` — the anonymization of an account, and the CREATION of an
   account (``account.create``, BIL-E3): one entry per account, written by the
   call that inserted the row, whatever action needed it first.

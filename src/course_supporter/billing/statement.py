@@ -153,6 +153,8 @@ class StatementLineKind(StrEnum):
     DIFFERENCE_ARISEN = "difference_arisen"
     DIFFERENCE_REPAID = "difference_repaid"
     DIFFERENCE_ANNULLED = "difference_annulled"
+    TEST_VOIDED = "test_voided"
+    """The free units of a test purchase taken out (BIL-TESTMARK)."""
 
 
 def balance_effect(movement: MovementKind) -> int:
@@ -211,6 +213,7 @@ LINES: Final[Mapping[tuple[MovementKind, Qualifier], StatementLineKind]] = {
     (MovementKind.DIFFERENCE_ARISEN, None): StatementLineKind.DIFFERENCE_ARISEN,
     (MovementKind.DIFFERENCE_REPAID, None): StatementLineKind.DIFFERENCE_REPAID,
     (MovementKind.DIFFERENCE_ANNULLED, None): StatementLineKind.DIFFERENCE_ANNULLED,
+    (MovementKind.TEST_VOIDED, None): StatementLineKind.TEST_VOIDED,
 }
 """Every movement the statement shows, as which line (module docstring)."""
 

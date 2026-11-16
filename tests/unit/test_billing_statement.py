@@ -85,6 +85,7 @@ def test_the_line_kinds_are_the_screens_keys() -> None:
         "difference_arisen",
         "difference_repaid",
         "difference_annulled",
+        "test_voided",
     }
 
 
@@ -95,6 +96,7 @@ def test_the_line_kinds_are_the_screens_keys() -> None:
         ("credit", "admin_credit", None, StatementLineKind.ADMIN_CREDIT, True, 7),
         ("debit", None, None, StatementLineKind.CHARGE, True, -7),
         ("batch_expired", "purchase", None, StatementLineKind.EXPIRED, True, -7),
+        ("test_voided", "purchase", None, StatementLineKind.TEST_VOIDED, True, -7),
         (
             "difference_repaid",
             "purchase",

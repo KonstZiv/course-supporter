@@ -256,3 +256,6 @@ data/calibration/runs/
 # Canonical refactoring-vision lives one level up (workspace root), NOT in this
 # repo. Ignore the path so a stray twin folder cannot regrow here (DD-AV-T).
 /refactoring-vision/
+
+# Redis snapshot written by a local redis-server started in the repo root.
+dump.rdb

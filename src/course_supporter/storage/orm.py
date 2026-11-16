@@ -53,6 +53,13 @@ from course_supporter.feedback_kinds import (
 from course_supporter.llm.finish_reason import FinishReason
 from course_supporter.models.source import MaterialState
 from course_supporter.reference_kinds import ReferenceKind, ReferenceState
+from course_supporter.remark_kinds import (
+    COMMENT_MAX_CHARS,
+    CommentAuthor,
+    CommentKind,
+    CommentTopic,
+    RemarkState,
+)
 from course_supporter.storage.cascade import (
     ScrubCallable,
     scrub_authored_document,
@@ -2305,6 +2312,13 @@ _MET = VerdictValue.MET.value
 _NOT_MET = VerdictValue.NOT_MET.value
 _CRITERION = VerdictItemKind.CRITERION.value
 _POINT = VerdictItemKind.POINT.value
+# What a remark's state says of the item NOW (task 12a): "fixed" — met, the
+# other three — not met. The half of the state the verdict row itself shows.
+_FIXED = RemarkState.FIXED.value
+_NOT_MET_NOW = ", ".join(
+    f"'{state.value}'"
+    for state in (RemarkState.NEW, RemarkState.OPEN, RemarkState.BROKEN)
+)
 
 
 class SubmissionCriterionVerdict(Base):
@@ -2341,6 +2355,13 @@ class SubmissionCriterionVerdict(Base):
     No soft-delete and no cascade, as on ``student_feedback``: the rows go with
     a hard delete of their submission (``ON DELETE CASCADE``), and the reads
     filter on the live submission. Every read is scoped by ``tenant_id``.
+
+    **The state of the remark** (task 12a): ``remark_state`` says how the
+    item's remark stands against the student's previous completed attempt at
+    the same version of the task (:class:`RemarkState`), computed from the
+    verdicts; NULL where there is nothing to compare. A state agrees with the
+    row's own verdict: "fixed" stands on a "met", the other three on a "not
+    met".
     """
 
     __tablename__ = "submission_criterion_verdicts"
@@ -2408,6 +2429,17 @@ class SubmissionCriterionVerdict(Base):
         CheckConstraint(
             f"NOT quote_not_found OR verdict = '{_NOT_MET}' OR safeguard_fired",
             name="ck_submission_criterion_verdicts_unfound_quote_not_met",
+        ),
+        CheckConstraint(
+            _nullable_in("remark_state", RemarkState),
+            name="ck_submission_criterion_verdicts_remark_state",
+        ),
+        # Implications again: a state of an unknown word breaks the rule above
+        # alone, and a NULL state passes.
+        CheckConstraint(
+            f"(remark_state <> '{_FIXED}' OR verdict = '{_MET}') "
+            f"AND (remark_state NOT IN ({_NOT_MET_NOW}) OR verdict = '{_NOT_MET}')",
+            name="ck_submission_criterion_verdicts_remark_state_matches_verdict",
         ),
         # Not the converse: a row retried before the column has no reason.
         CheckConstraint(
@@ -2545,6 +2577,18 @@ class SubmissionCriterionVerdict(Base):
         nullable=True,
         comment="The earlier submission whose verdict the safeguard kept. NO "
         "foreign key: a trace that outlives a hard delete of that submission.",
+    )
+    remark_state: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        comment="State of the item's remark between attempts (RemarkState), "
+        "computed from the verdicts and written by task 12a: 'new' — not met "
+        "now, and in the previous completed attempt at the same task version "
+        "it was not unmet; 'open' — not met then and not met now; 'fixed' — "
+        "not met then, met now; 'broken' — met then, not met now. NULL — "
+        "nothing to compare with (the first attempt, another task version), "
+        "or the item was met then and is met now; also on every row written "
+        "before task 12a computes it.",
     )
     quote_from_base: Mapped[bool] = mapped_column(
         Boolean,
@@ -2702,6 +2746,218 @@ class SubmissionCourseLinkCandidates(Base):
 
     def __repr__(self) -> str:
         return f"SubmissionCourseLinkCandidates(submission_id={self.submission_id!r})"
+
+
+# ──────────────────────────────────────────────
+# Comments on remarks — mentor-rebuild task 12a
+# ──────────────────────────────────────────────
+
+_MENTOR = CommentAuthor.MENTOR.value
+_STUDENT = CommentAuthor.STUDENT.value
+_ANSWER = CommentKind.ANSWER.value
+
+
+class RemarkComment(Base):
+    """One comment on one remark of a review, the student's or the Mentor's (12a).
+
+    After a review the student may answer a remark — a question, an objection,
+    a comment — and the next check answers every reply. Each of them is a row
+    here. A comment names the one it replies to (``parent_id``), so a branch is
+    a chain of rows from a row without a parent. The remark is addressed by
+    the review's submission and the item it is on (``submission_id`` +
+    ``item_id``); the student's work at one version of the task by
+    ``student_id`` + ``authored_document_id`` + ``task_version``, as on
+    ``homework_submissions``. A student's comment the Mentor has answered names
+    the attempt whose review holds the answer (``answered_in_submission_id``);
+    the unanswered ones have an index of their own.
+
+    Not ``student_feedback``: the touches "helped / did not help" stay there,
+    unchanged.
+
+    The database holds the rules a row must keep whoever writes it: the
+    vocabularies, an "answer" by the Mentor alone, a text that is not empty
+    and not longer than :data:`COMMENT_MAX_CHARS` (the student's own, shorter
+    limit is the code's), a confidence from 0 to 1, no topic and no answering
+    attempt on the Mentor's comment, the shape of the item's identifier.
+
+    No soft-delete and no cascade declaration, as on ``student_feedback`` and
+    the verdicts: the rows go with a hard delete of their student or their
+    submission (``ON DELETE CASCADE``), a reply with its parent, and the reads
+    filter on the live submission and the live student. Every read is scoped
+    by ``tenant_id``. Task 12a, K1 lands the table; nothing writes or reads it
+    yet.
+    """
+
+    __tablename__ = "remark_comments"
+    __table_args__ = (
+        CheckConstraint(
+            _one_of("author", CommentAuthor), name="ck_remark_comments_author"
+        ),
+        CheckConstraint(_one_of("kind", CommentKind), name="ck_remark_comments_kind"),
+        # The rules across columns are implications, as on the verdicts: a row
+        # of an unknown author or kind then breaks its vocabulary's rule alone.
+        CheckConstraint(
+            f"kind <> '{_ANSWER}' OR author = '{_MENTOR}'",
+            name="ck_remark_comments_answer_by_mentor",
+        ),
+        CheckConstraint(
+            "body ~ '[^[:space:]]'", name="ck_remark_comments_body_not_empty"
+        ),
+        CheckConstraint(
+            f"char_length(body) <= {COMMENT_MAX_CHARS}",
+            name="ck_remark_comments_body_length",
+        ),
+        CheckConstraint(
+            _nullable_in("topic", CommentTopic), name="ck_remark_comments_topic"
+        ),
+        CheckConstraint(
+            "topic_confidence IS NULL OR (topic_confidence BETWEEN 0 AND 1)",
+            name="ck_remark_comments_topic_confidence",
+        ),
+        CheckConstraint(
+            f"author <> '{_MENTOR}' OR (topic IS NULL AND topic_confidence IS NULL "
+            "AND hostile_category IS NULL)",
+            name="ck_remark_comments_topic_of_student",
+        ),
+        CheckConstraint(
+            f"author <> '{_MENTOR}' OR answered_in_submission_id IS NULL",
+            name="ck_remark_comments_answered_of_student",
+        ),
+        CheckConstraint(
+            f"item_id ~ '{CRITERION_ID_PATTERN}' OR item_id ~ '{POINT_ID_PATTERN}'",
+            name="ck_remark_comments_item_id_shape",
+        ),
+        # The comments on a review, remark by remark.
+        Index("ix_remark_comments_submission_item", "submission_id", "item_id"),
+        # The comments of a student's work at one version of a task.
+        Index(
+            "ix_remark_comments_student_task_version",
+            "student_id",
+            "authored_document_id",
+            "task_version",
+        ),
+        # The student's comments still waiting for the Mentor's answer.
+        Index(
+            "ix_remark_comments_unanswered",
+            "student_id",
+            "authored_document_id",
+            "task_version",
+            postgresql_where=text(
+                f"author = '{_STUDENT}' AND answered_in_submission_id IS NULL"
+            ),
+        ),
+        {
+            "comment": "Comments on the remarks of a review (mentor-rebuild task "
+            "12a): the student's replies — a question, an objection, a comment "
+            "— and the Mentor's answers to them. One row per comment; a row "
+            "without a parent starts a branch. Written by task 12a."
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, default=_uuid7, comment="Identifier of the comment."
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → Tenant. Every read and write of comments is scoped by it.",
+    )
+    # No standalone index: ix_remark_comments_student_task_version starts with
+    # this column.
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id", ondelete="CASCADE"),
+        comment="FK → Student whose work the comment is on: the author of a "
+        "student's comment, the student a Mentor's comment answers. With "
+        "authored_document_id and task_version, the student's work at one "
+        "version of a task. Goes with the student (ON DELETE CASCADE).",
+    )
+    authored_document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("authored_documents.id", ondelete="RESTRICT"),
+        comment="FK → AuthoredDocument (the task), as on homework_submissions. "
+        "RESTRICT, as there: comments are student history, not a derivative "
+        "of the task.",
+    )
+    task_version: Mapped[str] = mapped_column(
+        Text,
+        comment="Version of the task the branch lives in: the same value as "
+        "homework_submissions.task_version of its submissions.",
+    )
+    # No standalone index: ix_remark_comments_submission_item starts with it.
+    submission_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("homework_submissions.id", ondelete="CASCADE"),
+        comment="FK → HomeworkSubmission whose review the comment belongs to: "
+        "for a student's comment, the attempt whose review it replies to; for "
+        "the Mentor's, the attempt in whose review it is given. Goes with that "
+        "submission (ON DELETE CASCADE).",
+    )
+    item_id: Mapped[str] = mapped_column(
+        String(32),
+        comment="The criterion ('c3') or the mandatory point ('c3.p2') whose "
+        "remark the comment is on: the item_id of the submission's verdict on "
+        "it.",
+    )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("remark_comments.id", ondelete="CASCADE"),
+        nullable=True,
+        comment="FK → the comment this one replies to. NULL — the comment "
+        "starts a branch. Goes with its parent (ON DELETE CASCADE).",
+    )
+    author: Mapped[str] = mapped_column(
+        String(16),
+        comment="Who wrote it (CommentAuthor): 'student' or 'mentor'.",
+    )
+    kind: Mapped[str] = mapped_column(
+        String(16),
+        comment="What it is (CommentKind): 'question', 'objection' or "
+        "'comment'; 'answer' — the Mentor's alone.",
+    )
+    body: Mapped[str] = mapped_column(
+        Text,
+        comment="The text, as written: not empty, at most 4000 characters (the "
+        "student's own, shorter limit is held by the code).",
+    )
+    topic: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        comment="Whether the student's comment keeps to its remark "
+        "(CommentTopic): 'on_topic', 'off_topic' or 'hostile'; written by task "
+        "12a once judged. NULL — not judged yet, and always on the Mentor's "
+        "comment.",
+    )
+    topic_confidence: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        comment="How sure the judgment of topic is, from 0 to 1; written by "
+        "task 12a with topic. NULL — not judged, and always on the Mentor's "
+        "comment.",
+    )
+    hostile_category: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        comment="Short code of the category of a hostile attempt; written by "
+        "task 12a, which sets its values (no list is held yet). NULL — no such "
+        "attempt or not judged, and always on the Mentor's comment.",
+    )
+    answered_in_submission_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("homework_submissions.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="For a student's comment: FK → the attempt in whose review the "
+        "Mentor answered it; written by task 12a with the answer. NULL — not "
+        "answered yet, and always on the Mentor's comment; becomes NULL when "
+        "that submission is deleted (ON DELETE SET NULL).",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        comment="When the comment was written.",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"RemarkComment(submission_id={self.submission_id!r}, "
+            f"item_id={self.item_id!r}, author={self.author!r}, "
+            f"kind={self.kind!r})"
+        )
 
 
 # ──────────────────────────────────────────────

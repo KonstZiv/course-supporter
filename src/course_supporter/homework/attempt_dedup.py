@@ -58,7 +58,10 @@ What the submission gets:
     review: the copy was written by the source's evaluator. The body then
     finishes it as it finishes any reviewed revision: ``reviewing``,
     ``completed``, the webhook, ``delivered``; the portal reads the stored
-    review as it reads any.
+    review as it reads any. The copy also carries what the doors of the source
+    did not open — ``not_opened`` and ``recovered_encoding`` of its
+    ``safety_result``: the work is the same, so the student sees the same files
+    named as not read; nothing of the source's safety verdict is copied.
 
 Once:
     The copy and the receipt are flushed into the body's transaction, which
@@ -193,6 +196,7 @@ class UnchangedAttempt:
         review: Its review, read as a version-1 structure.
         score: Its score.
         evaluator_version: The version of the evaluator that wrote the review.
+        door_reading: The source attempt's "not_opened" and "recovered_encoding".
     """
 
     submission_id: uuid.UUID
@@ -200,6 +204,7 @@ class UnchangedAttempt:
     review: ReviewStructureV1
     score: int | None
     evaluator_version: str
+    door_reading: dict[str, Any]
 
 
 async def repeat_unchanged_review(
@@ -248,6 +253,8 @@ async def repeat_unchanged_review(
         evaluator_version=source.evaluator_version,
         receipt=receipt,
     )
+    if source.door_reading:
+        await hw_repo.store_safety_result(submission_id, dict(source.door_reading))
     logger.info(
         "attempt_review_repeated",
         submission_id=str(submission_id),
@@ -389,7 +396,19 @@ async def _find(
         review=review,
         score=source.score,
         evaluator_version=_evaluator_version_of(source.attempt_receipt),
+        door_reading=_door_reading_of(source.safety_result),
     )
+
+
+def _door_reading_of(safety_result: object) -> dict[str, Any]:
+    """Door readings of the source: not_opened and recovered_encoding only."""
+    if not isinstance(safety_result, dict):
+        return {}
+    reading: dict[str, Any] = {}
+    for key in ("not_opened", "recovered_encoding"):
+        if key in safety_result:
+            reading[key] = safety_result[key]
+    return reading
 
 
 def _evaluator_version_of(receipt: dict[str, Any] | None) -> str:

@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant
 from course_supporter.auth.context import TenantContext
+from course_supporter.funds_port import FundsRefusalReason
 from course_supporter.jobs import JobType
 from course_supporter.storage.content_hash import compute_content_hash
 from course_supporter.storage.database import get_session
@@ -43,6 +44,10 @@ from course_supporter.storage.orm import (
     TaskReferenceOverride,
     Tenant,
 )
+from course_supporter.storage.task_reference_repository import (
+    TaskReferenceRepository,
+)
+from course_supporter.workers.key_explain import funds_refused_reason
 from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = pytest.mark.requires_db
@@ -292,6 +297,7 @@ class TestTheKeyRoundTrip:
             "carried_over": False,
             "language": "ukr",
             "failure_reason": None,
+            "failure_code": None,
             "pass_threshold": None,
             "doubts": {},
         }
@@ -329,6 +335,71 @@ class TestTheKeyRoundTrip:
 
         assert resp.status_code == 200
         assert resp.json()["explanations"] == {"1": "бо так"}
+
+
+class TestTheFailureCode:
+    """BIL-E3, part B: a version the funds port closed carries a code the screen
+    reacts to; the reason stays as written, and any other failure has no code."""
+
+    async def _fail_the_version(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        document_id: uuid.UUID,
+        reason: str,
+    ) -> None:
+        async with session_factory() as session:
+            version = (
+                await session.execute(
+                    select(TaskReference).where(
+                        TaskReference.authored_document_id == document_id
+                    )
+                )
+            ).scalar_one()
+            await TaskReferenceRepository(session).mark_failed(version.id, reason)
+            await session.commit()
+
+    async def test_a_version_refused_for_want_of_units_says_insufficient_units(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        ac, _ = client
+        await ac.put(_write(world["test_task"]), json={"answers": _KEY})
+        await self._fail_the_version(
+            session_factory,
+            world["test_task"],
+            funds_refused_reason(FundsRefusalReason.INSUFFICIENT_FUNDS),
+        )
+
+        body = (await ac.get(_read(world["test_task"]))).json()
+
+        assert body["status"] == "failed"
+        assert body["failure_reason"] == "funds refused: insufficient_funds"
+        assert body["failure_code"] == "insufficient_units"
+
+    @pytest.mark.parametrize(
+        "reason",
+        [
+            "generation failed: the ladder ran out",
+            "the key or the task text changed before the explanations were written",
+        ],
+    )
+    async def test_any_other_failure_has_no_code(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        reason: str,
+    ) -> None:
+        ac, _ = client
+        await ac.put(_write(world["test_task"]), json={"answers": _KEY})
+        await self._fail_the_version(session_factory, world["test_task"], reason)
+
+        body = (await ac.get(_read(world["test_task"]))).json()
+
+        assert (body["status"], body["failure_reason"]) == ("failed", reason)
+        assert body["failure_code"] is None
 
 
 class TestThePassMark:

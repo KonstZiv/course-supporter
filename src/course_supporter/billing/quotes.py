@@ -4,7 +4,10 @@ Purpose:
     The estimate routes and the gates of the submission routes ask the same
     question — what will this action cost its payer, and may it start — and
     get the answer from here. The price is :func:`.charging.price_of`, the one
-    function of the threshold; the payer is :func:`.payer.resolve_payer`.
+    function of the threshold; the payer is :func:`.payer.find_payer` — a
+    quote is a read and creates no account (BIL-E3): a payer without one reads
+    as an empty account. The account comes with the first action that changes
+    state (for a review, the start of its run).
 
     * :func:`review_quote` — a student's review of a task: from the file the
       student is about to send (basis ``file``: the doors read it as the path
@@ -52,7 +55,7 @@ import structlog
 from sqlalchemy import Integer, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.billing import charging, ledger
+from course_supporter.billing import charging
 from course_supporter.billing.estimates import CEILING_WARNING, review_e_usd
 from course_supporter.billing.kinds import ActionKind
 from course_supporter.homework.path_config import (
@@ -408,7 +411,7 @@ async def review_quote(
     config = config if config is not None else get_path_config()
     task_type = AssignmentType(task.task_type or "")
     enabled = charging.charging_enabled() and not in_test_mode(task_type, config)
-    payer = await charging.payer_of(
+    payer = await charging.find_payer_of(
         session,
         action_kind=ActionKind.REVIEW,
         tenant_id=tenant_id,
@@ -419,7 +422,7 @@ async def review_quote(
     basis: Basis = "file" if sent else "typical"
     if payer.for_someone_else:
         return Quote(None, None, True, None, enabled, basis, "author")
-    available = (await ledger.balance(session, payer.account_id)).available
+    available = await charging.available_units(session, payer.account_id)
     if task_type is AssignmentType.TEST:
         price = 0
         enough = await charging.test_allowed(session, payer)
@@ -472,7 +475,7 @@ async def author_quote(
     (BIL-E3; the route says why there is no price).
     """
     enabled = charging.charging_enabled()
-    payer = await charging.payer_of(
+    payer = await charging.find_payer_of(
         session,
         action_kind=action_kind,
         tenant_id=tenant_id,
@@ -480,7 +483,7 @@ async def author_quote(
         student_id=None,
     )
     if e_usd is None:
-        available = (await ledger.balance(session, payer.account_id)).available
+        available = await charging.available_units(session, payer.account_id)
         return Quote(None, available, True, None, enabled)
     price = charging.price_of(e_usd)
     found = await charging.quote(

@@ -12,6 +12,10 @@ Routes
   wait for the author's units (``held_reviews``: the author pays for them
   under a payment rule and has too few — BIL-E2, 5a, item 2).
 
+Both are reads and create no account (BIL-E3): without one, the answer is
+that of an empty account — nothing expiring, no reviews held, the reminders
+of an account with no units and no history.
+
 Screens show units only, and pick their words by the codes (``low``,
 ``next_may_fail``, ``runs_out_soon``). The thresholds are settings
 (``BILLING_REMINDER_*``, ``BILLING_EXPIRY_NOTICE_DAYS``).
@@ -37,9 +41,11 @@ from course_supporter.api.deps import get_current_student, get_session
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.billing import charging
-from course_supporter.billing.accounts import get_or_create_author_account
-from course_supporter.billing.held import held_for_author
+from course_supporter.billing.accounts import find_active_account
+from course_supporter.billing.held import HeldReviews, held_for_author
+from course_supporter.billing.kinds import AccountKind
 from course_supporter.billing.outlook import (
+    AuthorOutlook,
     Expiring,
     author_outlook,
     student_outlook,
@@ -129,7 +135,6 @@ async def get_student_outlook(
         settings=get_settings(),
         course_id=course_id,
     )
-    await session.commit()  # accounts are created lazily on the way
     return StudentOutlookResponse(
         reviews_left=found.reviews_left,
         warning=found.warning,
@@ -144,12 +149,15 @@ async def get_author_outlook(
     tenant: PrepDep, session: SessionDep
 ) -> AuthorOutlookResponse:
     """The author's reminders: days left at the last week's pace, units expiring."""
-    account = await get_or_create_author_account(session, tenant_id=tenant.tenant_id)
-    found = await author_outlook(session, account.id, settings=get_settings())
-    held = await held_for_author(
-        session, tenant_id=tenant.tenant_id, account_id=account.id
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant.tenant_id
     )
-    await session.commit()
+    found, held = AuthorOutlook(None, None, None), HeldReviews.none()
+    if account is not None:  # without one: an empty account (no rule names it)
+        found = await author_outlook(session, account.id, settings=get_settings())
+        held = await held_for_author(
+            session, tenant_id=tenant.tenant_id, account_id=account.id
+        )
     return AuthorOutlookResponse(
         days_left=found.days_left,
         warning=found.warning,

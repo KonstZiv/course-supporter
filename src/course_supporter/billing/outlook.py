@@ -2,7 +2,9 @@
 
 Purpose:
     The numbers behind the reminders of the portal and of the author's app
-    (operator 2026-11-15). Read-only; every threshold is a setting.
+    (operator 2026-11-15). Read-only — no account is created on the way
+    (BIL-E3): an owner without one reads as an empty account. Every threshold
+    is a setting.
 
     * :func:`student_outlook` — about how many reviews the student's units
       cover: ``floor(available / the average charge of their latest
@@ -220,28 +222,32 @@ async def student_outlook(
     course_id: uuid.UUID | None = None,
     now: datetime | None = None,
 ) -> StudentOutlook:
-    """The student's reminders (module docstring)."""
-    payer = await charging.payer_of(
+    """The student's reminders (module docstring); creates no account."""
+    payer = await charging.find_payer_of(
         session,
         action_kind=ActionKind.REVIEW,
         tenant_id=tenant_id,
         course_node_id=course_id,
         student_id=student_id,
     )
-    own = payer.resolution.beneficiary_account_id
-    soon = await expiring_soon(
-        session, own, within_days=settings.billing_expiry_notice_days, now=now
+    own = payer.lookup.beneficiary_account_id
+    soon = (
+        await expiring_soon(
+            session, own, within_days=settings.billing_expiry_notice_days, now=now
+        )
+        if own is not None
+        else None
     )
     if payer.kind is AccountKind.AUTHOR:
         return StudentOutlook(None, None, soon, "author")
-    cost = await _average_review_charge(session, own)
+    cost = await _average_review_charge(session, own) if own is not None else None
     if cost is None:
         cost = await _typical_review_price(
             session, tenant_id=tenant_id, student_id=student_id, course_id=course_id
         )
     if not cost:
         return StudentOutlook(None, None, soon, "self")
-    left = int((await ledger.balance(session, own, now=now)).available // cost)
+    left = int(await charging.available_units(session, own, now=now) // cost)
     warning: StudentWarning | None = None
     if left < 1:
         warning = "next_may_fail"

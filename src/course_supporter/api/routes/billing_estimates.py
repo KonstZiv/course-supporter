@@ -12,6 +12,9 @@ Routes
 - ``POST /documents/{document_id}/reference/estimate`` — an author (scope
   ``prep``): the price of the explanations of a test's key.
 
+They are reads: nothing is stored and no account is created (BIL-E3) — a
+payer without one reads as an empty account.
+
 Each answers with the price in units, what is available, whether it is
 enough and how much is missing, and whether charging is on
 (:mod:`course_supporter.billing.quotes`). An author's action that cannot be
@@ -304,7 +307,6 @@ async def estimate_portal_review(
         # A file the price does not read (a test's answers, a project): it was
         # still sent, so the basis says so.
         quote = replace(quote, basis="file")
-    await session.commit()  # accounts are created lazily on the way
     return _review_response(quote)
 
 
@@ -353,7 +355,6 @@ async def estimate_processing(
         course_node_id=root_id,
         e_usd=None if missing else processing_e_usd(kind=body.kind, factors=factors),
     )
-    await session.commit()
     return _author_response(quote, missing)
 
 
@@ -382,5 +383,4 @@ async def estimate_key_explanation(
         course_node_id=root_id,
         e_usd=preparation_e_usd(kind="key_explanation", task_chars=chars),
     )
-    await session.commit()
     return _author_response(quote)

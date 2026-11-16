@@ -21,8 +21,9 @@ Purpose:
     * :func:`held_for_author` — the held reviews an author pays for: how
       many, since when, how many units are missing.
 
-Read-only, but accounts are created lazily on the way
-(:func:`.payer.resolve_payer`): a caller that wants them kept commits.
+Read-only: the payer is read with :func:`.charging.find_payer_of` and no
+account is created on the way (BIL-E3) — the portal's lists, the author's
+outlook and the continuation only read.
 """
 
 from __future__ import annotations
@@ -56,13 +57,16 @@ async def payer_of_held(
     session: AsyncSession,
     submission: HomeworkSubmission,
     task: AuthoredDocument | None = None,
-) -> charging.Payer | None:
-    """Who pays for the review of ``submission`` now; ``None`` without its task."""
+) -> charging.PayerView | None:
+    """Who pays for the review of ``submission`` now; ``None`` without its task.
+
+    Read without creating an account (:func:`.charging.find_payer_of`).
+    """
     if task is None:
         task = await session.get(AuthoredDocument, submission.authored_document_id)
     if task is None:
         return None
-    return await charging.payer_of(
+    return await charging.find_payer_of(
         session,
         action_kind=ActionKind.REVIEW,
         tenant_id=submission.tenant_id,

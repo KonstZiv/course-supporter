@@ -106,6 +106,11 @@ class AuditAction(StrEnum):
     AUTHOR_SETTINGS_UPDATE = "author_settings.update"
     PAYMENT_RULE_CREATE = "payment_rule.create"
     PAYMENT_RULE_END = "payment_rule.end"
+    ACCOUNT_CREATE = "account.create"
+    """An account came into being, at the first action that changes state
+    (BIL-E3): consent, a checkout, the administrator's change or credit, the
+    start of a paid action. Written only by the call that inserted the row."""
+
     ACCOUNT_ANONYMIZE = "account.anonymize"
     ACCOUNT_TEST_PURCHASE = "account.test_purchase"
     """The account may (or may no longer) buy while the payment provider is

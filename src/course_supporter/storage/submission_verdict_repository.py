@@ -39,6 +39,7 @@ from sqlalchemy.orm import aliased
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
+    RepeatReason,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -70,6 +71,13 @@ class VerdictRecord:
             ``None`` for a document, whose lines are an artefact of extraction.
         missing: The model's sentence on what is missing.
         retried: The item was asked about once more.
+        repeat_reason: Why the item was asked about once more — the reason
+            the repeated request named, decided on the model's first answer
+            (``homework/criteria_verdicts.py``, ``_repeat_reason``), whatever
+            the repeat then settled. ``None`` — the item was not asked about
+            again; always so for a criterion derived from its points. Kept
+            for the database alone (the cost of repeats by reason): no review,
+            webhook or API reads it.
         quote_not_found: The model said "met" and no quote bore it out after
             the repeat — the repeat's quote did not stand either, or the
             repeat took back a "met" whose quote was too short but in the
@@ -97,6 +105,7 @@ class VerdictRecord:
     quote_lines: tuple[int, int] | None = None
     missing: str | None = None
     retried: bool = False
+    repeat_reason: RepeatReason | None = None
     quote_not_found: bool = False
     quote_from_base: bool = False
     safeguard_submission_id: uuid.UUID | None = None
@@ -325,6 +334,7 @@ def _row(
         quote_line_end=record.quote_line_end,
         missing=record.missing,
         retried=record.retried,
+        repeat_reason=record.repeat_reason.value if record.repeat_reason else None,
         quote_not_found=record.quote_not_found,
         quote_from_base=record.quote_from_base,
         safeguard_fired=record.safeguard_submission_id is not None,

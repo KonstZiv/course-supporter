@@ -39,6 +39,7 @@ from course_supporter.criteria_kinds import (
     CRITERION_ID_PATTERN,
     POINT_ID_PATTERN,
     CriteriaLayer,
+    RepeatReason,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -2331,6 +2332,12 @@ class SubmissionCriterionVerdict(Base):
     ``safeguard_submission_id``). A criterion checked by mandatory points has no
     model verdict of its own: the code derives it from its points.
 
+    **The trace of a repeat.** ``retried`` says the item was asked about once
+    more; ``repeat_reason`` says why (:class:`RepeatReason`), so the share and
+    the cost of repeats — with the stage's rows in ``external_service_calls``
+    — are counted from the database by reason, item, list and model. A reason
+    only on a retried row; a retried row written before the column has none.
+
     No soft-delete and no cascade, as on ``student_feedback``: the rows go with
     a hard delete of their submission (``ON DELETE CASCADE``), and the reads
     filter on the live submission. Every read is scoped by ``tenant_id``.
@@ -2401,6 +2408,12 @@ class SubmissionCriterionVerdict(Base):
         CheckConstraint(
             f"NOT quote_not_found OR verdict = '{_NOT_MET}' OR safeguard_fired",
             name="ck_submission_criterion_verdicts_unfound_quote_not_met",
+        ),
+        # Not the converse: a row retried before the column has no reason.
+        CheckConstraint(
+            f"({_nullable_in('repeat_reason', RepeatReason)}) "
+            "AND (repeat_reason IS NULL OR retried)",
+            name="ck_submission_criterion_verdicts_repeat_reason",
         ),
         Index(
             "uq_submission_criterion_verdicts_submission_item",
@@ -2502,6 +2515,15 @@ class SubmissionCriterionVerdict(Base):
         "verdict unable to stand for any reason: a 'met' without a quote, or "
         "with one of several lines, too long, too short or not found in the "
         "work; a 'not_met' without a sentence.",
+    )
+    repeat_reason: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+        comment="Why the item was asked about once more (RepeatReason), as the "
+        "repeated request named it: homework/criteria_verdicts.py::"
+        "_repeat_reason on the model's first answer. NULL when the item was "
+        "not asked again, and on rows written before revision "
+        "verdict_repeat_reason even when retried is true.",
     )
     quote_not_found: Mapped[bool] = mapped_column(
         Boolean,

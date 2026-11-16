@@ -28,6 +28,7 @@ import pytest
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
+    RepeatReason,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -37,7 +38,6 @@ from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.homework.criteria_verdicts import (
     EvaluationAnswer,
     RepeatItem,
-    RepeatReason,
     SubmittedWork,
     WorkFile,
     is_passed,
@@ -203,6 +203,7 @@ class TestUnchangedLinesOfAChangedFile:
             model_verdict=MET,
             quote="return handle.read()",
             retried=True,
+            repeat_reason=RepeatReason.QUOTE_FROM_BASE,
             quote_from_base=True,
         )
         # Not unconfirmed: the "must" fails the work and counts for nothing.
@@ -224,6 +225,7 @@ class TestUnchangedLinesOfAChangedFile:
             model_verdict=NOT_MET,
             missing=_MISSING,
             retried=True,
+            repeat_reason=RepeatReason.QUOTE_FROM_BASE,
             quote_from_base=True,
         )
 

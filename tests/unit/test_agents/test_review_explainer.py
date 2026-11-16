@@ -45,12 +45,11 @@ from course_supporter.agents.review_explainer import (
     render_context,
 )
 from course_supporter.agents.wire_schema import wire_schema
-from course_supporter.criteria_kinds import CriteriaLayer, VerdictValue
+from course_supporter.criteria_kinds import CriteriaLayer, RepeatReason, VerdictValue
 from course_supporter.homework.criteria_form import Criterion
 from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.homework.criteria_verdicts import (
     QuotePlace,
-    RepeatReason,
     SubmittedWork,
     WorkFile,
     items_to_ask_again,

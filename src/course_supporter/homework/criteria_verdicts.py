@@ -18,9 +18,10 @@ Interface:
     otherwise.
     :class:`WorkFile`, :class:`SubmittedWork`, :class:`QuotePlace` — the work,
     and where in it a quote stands.
-    :func:`items_to_ask_again`, :class:`RepeatItem`, :class:`RepeatReason` —
-    the verdicts that cannot stand as given, each with its reason: the stage
-    asks once more about these alone.
+    :func:`items_to_ask_again`, :class:`RepeatItem` — the verdicts that
+    cannot stand as given, each with its reason
+    (:class:`~course_supporter.criteria_kinds.RepeatReason`): the stage asks
+    once more about these alone, and the row of each keeps its reason.
     :class:`EarlierVerdict` — what the resubmission safeguard reads of a
     verdict on an earlier submission.
     :func:`settle_verdicts` — the verdict rows to store.
@@ -122,7 +123,6 @@ import uuid
 from collections import Counter
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
 from itertools import count
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol
@@ -131,6 +131,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
+    RepeatReason,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -511,20 +512,6 @@ class SubmittedWork:
         return None
 
 
-class RepeatReason(StrEnum):
-    """Why a verdict cannot stand as given and is asked about once more."""
-
-    NO_QUOTE = "no_quote"
-    QUOTE_NOT_ONE_LINE = "quote_not_one_line"
-    QUOTE_TOO_LONG = "quote_too_long"
-    QUOTE_TOO_SHORT = "quote_too_short"
-    """Too short to prove anything: counted as a quote not found (9.4)."""
-    QUOTE_NOT_FOUND = "quote_not_found"
-    QUOTE_FROM_BASE = "quote_from_base"
-    """The quote is the author's: in a file of the project's base (K3)."""
-    NO_SENTENCE = "no_sentence"
-
-
 # What the repeated request tells the model about each item: one defect, said
 # so that the model can mend it. English, as every instruction to a model is.
 _REPEAT_FEEDBACK: Final[Mapping[RepeatReason, str]] = MappingProxyType(
@@ -683,6 +670,13 @@ def settle_verdicts(
     points are, and unconfirmed when each is met or unconfirmed — after the
     safeguard, so a kept point counts.
 
+    The row of an item asked about again keeps why it was asked
+    (:attr:`VerdictRecord.repeat_reason`): ``_repeat_reason`` of its first
+    verdict on ``work`` — what :func:`items_to_ask_again` named in the
+    repeated request — whatever the repeat settled, a row the safeguard kept
+    included. Every other row, and a criterion derived from its points, has
+    none.
+
     Args:
         criteria: The list in force the answers were given against.
         answer: The model's first answer, checked by :func:`read_answer`.
@@ -713,11 +707,15 @@ def settle_verdicts(
         item_id: str, kind: VerdictItemKind, weight: WeightCategory | None
     ) -> VerdictRecord:
         settled = _word_to_settle(first[item_id], again.get(item_id), work)
+        retried = item_id in again
         return _judged(
             settled,
             kind=kind,
             weight=weight,
-            retried=item_id in again,
+            retried=retried,
+            # The reason the repeated request named: the same pure rule over
+            # the same first answer and work that items_to_ask_again read.
+            repeat_reason=_repeat_reason(first[item_id], work) if retried else None,
             from_base=_from_base(first[item_id], settled, work),
             criteria=criteria,
             work=work,
@@ -841,6 +839,7 @@ def _judged(
     kind: VerdictItemKind,
     weight: WeightCategory | None,
     retried: bool,
+    repeat_reason: RepeatReason | None,
     from_base: bool,
     criteria: CriteriaInForce,
     work: SubmittedWork,
@@ -866,6 +865,7 @@ def _judged(
                 quote_file=standing.file,
                 quote_lines=standing.lines,
                 retried=retried,
+                repeat_reason=repeat_reason,
             )
     kept = _kept_by_safeguard(item.id, criteria=criteria, work=work, earlier=earlier)
     if kept is not None:
@@ -884,6 +884,7 @@ def _judged(
             quote_lines=kept_place.lines,
             missing=missing,
             retried=retried,
+            repeat_reason=repeat_reason,
             quote_not_found=unconfirmed,
             quote_from_base=from_base,
             safeguard_submission_id=before.submission_id,
@@ -907,6 +908,7 @@ def _judged(
         quote_lines=None if place is None else place.lines,
         missing=missing,
         retried=retried,
+        repeat_reason=repeat_reason,
         quote_not_found=unconfirmed,
         quote_from_base=from_base,
     )

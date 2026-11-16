@@ -48,6 +48,7 @@ from course_supporter.agents.criteria_evaluator import (
 from course_supporter.agents.review_explainer import ExplanationInput, render_context
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
+    RepeatReason,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -65,7 +66,6 @@ from course_supporter.homework.criteria_list_service import (
 from course_supporter.homework.criteria_verdicts import (
     MAX_QUOTE_CHARS,
     RepeatItem,
-    RepeatReason,
     WorkFile,
     is_passed,
     score_percent,
@@ -492,6 +492,40 @@ class TestTheRepeat:
         (note,) = again["render"]["repeat"]
         assert note["id"] == "c1"
         assert note["problem"] == RepeatItem("c1", reason).feedback
+
+    async def test_the_row_keeps_the_reason_the_repeat_named(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        """The trace of a repeat: each asked item's row says why it was asked."""
+        router = _Router(
+            _answer(
+                _met("c1", "def fib(n): pass"),
+                _met("c2.p1", _P1_QUOTE),
+                _not_met("c2.p2", None),
+            ),
+            # The repeat mends both: the rows still name the first answer's
+            # defects, as the request did.
+            _answer(_met("c1", _C1_QUOTE), _not_met("c2.p2")),
+        )
+
+        await _evaluate(db_session, router, submission)
+
+        rows = await _rows(db_session, submission)
+        assert (rows["c1"].verdict, rows["c1"].retried) == (VerdictValue.MET, True)
+        assert rows["c1"].repeat_reason == RepeatReason.QUOTE_NOT_FOUND
+        assert rows["c2.p2"].retried is True
+        assert rows["c2.p2"].repeat_reason == RepeatReason.NO_SENTENCE
+        assert (rows["c2.p1"].retried, rows["c2.p1"].repeat_reason) == (False, None)
+        assert (rows["c2"].retried, rows["c2"].repeat_reason) == (False, None)
+        # The reason on the row is the one the repeated request gave the model.
+        _, again = router.requests
+        assert {note["id"]: note["problem"] for note in again["render"]["repeat"]} == {
+            row.item_id: RepeatItem(
+                row.item_id, RepeatReason(row.repeat_reason)
+            ).feedback
+            for row in rows.values()
+            if row.repeat_reason is not None
+        }
 
     async def test_when_the_fallback_answered_the_repeat_goes_to_it_alone(
         self, db_session: AsyncSession, submission: HomeworkSubmission

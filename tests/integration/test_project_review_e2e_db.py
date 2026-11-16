@@ -66,7 +66,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.api.tasks import arq_process_homework
 from course_supporter.config import get_settings
-from course_supporter.criteria_kinds import CriteriaLayer, VerdictValue
+from course_supporter.criteria_kinds import CriteriaLayer, RepeatReason, VerdictValue
 from course_supporter.funds_port import (
     FUNDS_PORT_ACTION,
     FundsAnswer,
@@ -80,7 +80,7 @@ from course_supporter.homework.attempt_dedup import (
 )
 from course_supporter.homework.criteria_form import Criterion, criteria_to_document
 from course_supporter.homework.criteria_list_service import CriteriaInForce
-from course_supporter.homework.criteria_verdicts import RepeatItem, RepeatReason
+from course_supporter.homework.criteria_verdicts import RepeatItem
 from course_supporter.homework.evaluator_version import (
     EVALUATOR_VERSION_RECEIPT_KEY,
     evaluator_version,

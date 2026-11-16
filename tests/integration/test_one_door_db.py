@@ -737,10 +737,8 @@ class TestAQuoteOfTheBaseIsNotTheStudents:
     ) -> None:
         from dataclasses import replace
 
-        from course_supporter.homework.criteria_verdicts import (
-            RepeatItem,
-            RepeatReason,
-        )
+        from course_supporter.criteria_kinds import RepeatReason
+        from course_supporter.homework.criteria_verdicts import RepeatItem
         from course_supporter.normalizer import manifest_to_jsonb, normalize_archive
         from course_supporter.storage.orm import ProjectBase
         from course_supporter.storage.submission_verdict_repository import (

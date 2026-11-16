@@ -47,6 +47,7 @@ from tests._helpers.recorded_project import (
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
+    RepeatReason,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -56,7 +57,6 @@ from course_supporter.homework.criteria_form import Criterion
 from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.homework.criteria_verdicts import (
     EvaluationAnswer,
-    RepeatReason,
     SubmittedWork,
     WorkFile,
     items_to_ask_again,

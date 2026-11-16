@@ -23,6 +23,7 @@ import pytest
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
+    RepeatReason,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -37,7 +38,6 @@ from course_supporter.homework.criteria_verdicts import (
     PassDecision,
     QuotePlace,
     RepeatItem,
-    RepeatReason,
     SubmittedWork,
     WorkFile,
     is_passed,
@@ -591,6 +591,7 @@ class TestRepeat:
             model_verdict=MET,
             quote=_SHORT,
             retried=True,
+            repeat_reason=RepeatReason.QUOTE_TOO_SHORT,
             quote_not_found=True,
         )
         assert settled["c2.p1"] == VerdictRecord(
@@ -601,6 +602,7 @@ class TestRepeat:
             model_verdict=NOT_MET,
             missing="The work does not do this.",
             retried=True,
+            repeat_reason=RepeatReason.QUOTE_NOT_FOUND,
         )
 
     def test_answers_that_miss_an_item_are_refused(self) -> None:
@@ -746,17 +748,25 @@ class TestDefectOfOneVerdict:
         )
 
     @pytest.mark.parametrize(
-        ("quote", "stored"),
+        ("quote", "stored", "reason"),
         [
-            (None, None),
-            ("def fibonacci(n):\n    if n < 2:", "def fibonacci(n):\n    if n < 2:"),
-            ("x" * (MAX_QUOTE_CHARS + 1), "x" * (MAX_QUOTE_CHARS + 1)),
-            (_ABSENT, _ABSENT),
+            (None, None, RepeatReason.NO_QUOTE),
+            (
+                "def fibonacci(n):\n    if n < 2:",
+                "def fibonacci(n):\n    if n < 2:",
+                RepeatReason.QUOTE_NOT_ONE_LINE,
+            ),
+            (
+                "x" * (MAX_QUOTE_CHARS + 1),
+                "x" * (MAX_QUOTE_CHARS + 1),
+                RepeatReason.QUOTE_TOO_LONG,
+            ),
+            (_ABSENT, _ABSENT, RepeatReason.QUOTE_NOT_FOUND),
         ],
         ids=["no-quote", "two-lines", "too-long", "not-found"],
     )
     def test_a_met_that_still_does_not_stand_reads_not_met_flagged(
-        self, quote: str | None, stored: str | None
+        self, quote: str | None, stored: str | None, reason: RepeatReason
     ) -> None:
         defective = {"id": "c1", "verdict": "met", "quote": quote, "missing": None}
         repeat = _answer(defective)
@@ -769,6 +779,7 @@ class TestDefectOfOneVerdict:
             model_verdict=MET,
             quote=stored,
             retried=True,
+            repeat_reason=reason,
             quote_not_found=True,
         )
 
@@ -784,6 +795,7 @@ class TestDefectOfOneVerdict:
             verdict=NOT_MET,
             model_verdict=NOT_MET,
             retried=True,
+            repeat_reason=RepeatReason.NO_SENTENCE,
         )
 
     def test_the_safeguard_keeps_a_met_whose_quote_did_not_stand(self) -> None:
@@ -1028,6 +1040,146 @@ class TestSafeguard:
         assert settled["c2.p1"].safeguard_submission_id == _EARLIER_SUBMISSION
 
 
+# A project's work: the student's file, and a line of the author's base the
+# student's file does not have (project chain K3).
+_BASE_WORK = SubmittedWork(
+    [WorkFile("app.py", "def doubled(n):\n    return n * 2\n", True)],
+    base=[WorkFile("app.py", "def the_authors_helper():\n", True)],
+)
+
+
+class TestTheRowKeepsTheRepeatReason:
+    """The reason the repeated request named stays on the item's row.
+
+    Decided on the first answer by the same rule that composed the request
+    (``_repeat_reason``), whatever the repeat then settled; ``None`` on every
+    other row. The trace of a repeat in the database (product owner,
+    2026-11-16): its share and cost by reason.
+    """
+
+    @pytest.mark.parametrize(
+        ("said", "work", "mended", "reason"),
+        [
+            pytest.param(
+                {"id": "c1", "verdict": "met", "quote": None, "missing": None},
+                _WORK,
+                _met("c1", "def fibonacci(n):"),
+                RepeatReason.NO_QUOTE,
+                id="no-quote",
+            ),
+            pytest.param(
+                _met("c1", "def fibonacci(n):\n    if n < 2:"),
+                _WORK,
+                _met("c1", "def fibonacci(n):"),
+                RepeatReason.QUOTE_NOT_ONE_LINE,
+                id="two-lines",
+            ),
+            pytest.param(
+                _met("c1", _LONG_LINE),
+                _WORK,
+                _met("c1", "def fibonacci(n):"),
+                RepeatReason.QUOTE_TOO_LONG,
+                id="too-long",
+            ),
+            pytest.param(
+                _met("c1", _SHORT),
+                _WORK,
+                _met("c1", "def fibonacci(n):"),
+                RepeatReason.QUOTE_TOO_SHORT,
+                id="too-short",
+            ),
+            pytest.param(
+                _met("c1", _ABSENT),
+                _WORK,
+                _met("c1", "def fibonacci(n):"),
+                RepeatReason.QUOTE_NOT_FOUND,
+                id="not-found",
+            ),
+            pytest.param(
+                _met("c1", "def the_authors_helper():"),
+                _BASE_WORK,
+                _met("c1", "def doubled(n):"),
+                RepeatReason.QUOTE_FROM_BASE,
+                id="from-base",
+            ),
+            pytest.param(
+                {"id": "c1", "verdict": "not_met", "quote": None, "missing": None},
+                _WORK,
+                _not_met("c1", "No memoisation."),
+                RepeatReason.NO_SENTENCE,
+                id="no-sentence",
+            ),
+        ],
+    )
+    def test_each_reason_reaches_the_row_of_its_item(
+        self,
+        said: dict[str, Any],
+        work: SubmittedWork,
+        mended: dict[str, Any],
+        reason: RepeatReason,
+    ) -> None:
+        first = _answer(said, _not_met("c3"))
+        # The premise: the repeated request names this reason for c1 alone.
+        assert items_to_ask_again(first, work) == (RepeatItem("c1", reason),)
+
+        settled = _settle(first, _answer(mended), criteria=_ONE, work=work)
+
+        # The repeat mended the verdict; the row still says why it was asked.
+        assert settled["c1"].verdict == mended["verdict"]
+        assert (settled["c1"].retried, settled["c1"].repeat_reason) == (True, reason)
+        assert (settled["c3"].retried, settled["c3"].repeat_reason) == (False, None)
+
+    def test_the_rows_reasons_are_the_requests(self) -> None:
+        first = TestRepeat._FIRST
+        asked = items_to_ask_again(first, _WORK)
+        repeat = _answer(
+            _met("c2.p1", "return fibonacci(n - 1)"),
+            _met("c2.p2", "if n < 2: return n"),
+        )
+
+        settled = _settle(first, repeat)
+
+        assert {
+            item_id: row.repeat_reason
+            for item_id, row in settled.items()
+            if row.repeat_reason is not None
+        } == {item.id: item.reason for item in asked}
+        assert asked == (
+            RepeatItem("c2.p1", RepeatReason.QUOTE_NOT_FOUND),
+            RepeatItem("c2.p2", RepeatReason.QUOTE_TOO_SHORT),
+        )
+
+    def test_an_item_not_asked_again_has_none(self) -> None:
+        # Without a repeat — even a verdict that could not stand: the row says
+        # why an item WAS asked again, never why it might have been.
+        settled = _settle(_one(_met("c1", _ABSENT)), criteria=_ONE)
+        assert (settled["c1"].retried, settled["c1"].repeat_reason) == (False, None)
+        assert all(row.repeat_reason is None for row in _settle(_CASE_A).values())
+
+    def test_a_criterion_derived_from_its_points_has_none(self) -> None:
+        first = TestRepeat._FIRST
+        repeat = _answer(_met("c2.p1", _ABSENT), _met("c2.p2", _SHORT))
+
+        settled = _settle(first, repeat)
+
+        assert settled["c2.p1"].repeat_reason is RepeatReason.QUOTE_NOT_FOUND
+        assert settled["c2.p2"].repeat_reason is RepeatReason.QUOTE_TOO_SHORT
+        # Unconfirmed from its points, never asked about itself.
+        assert settled["c2"].quote_not_found is True
+        assert (settled["c2"].retried, settled["c2"].repeat_reason) == (False, None)
+
+    def test_a_row_the_safeguard_kept_carries_its_reason(self) -> None:
+        defective = _met("c1", _ABSENT)
+        earlier = {"c1": _Earlier(quote="def fibonacci(n):")}
+
+        c1 = _settle(
+            _one(defective), _answer(defective), criteria=_ONE, earlier=earlier
+        )["c1"]
+
+        assert (c1.verdict, c1.safeguard_submission_id) == (MET, _EARLIER_SUBMISSION)
+        assert (c1.retried, c1.repeat_reason) == (True, RepeatReason.QUOTE_NOT_FOUND)
+
+
 class TestSameInputSameResult:
     """Lock 9: the same machine input gives the same rows and the same score."""
 
@@ -1198,6 +1350,7 @@ class TestUnconfirmed:
             model_verdict=MET,
             quote=_VENV,
             retried=True,
+            repeat_reason=RepeatReason.QUOTE_TOO_SHORT,
             quote_not_found=True,
         )
         # Its criterion is unconfirmed too: its one point is.
@@ -1228,6 +1381,7 @@ class TestUnconfirmed:
             model_verdict=MET,
             quote=_SHORT,
             retried=True,
+            repeat_reason=RepeatReason.QUOTE_TOO_SHORT,
             quote_not_found=True,
         )
         assert is_passed(records, layer=AUTHOR) is True
@@ -1367,6 +1521,7 @@ class TestARealNotMet:
             model_verdict=NOT_MET,
             missing="No memoisation in the work.",
             retried=True,
+            repeat_reason=RepeatReason.QUOTE_NOT_FOUND,
         )
         assert is_passed(records, layer=AUTHOR) is False
         # 2 (c3) of 5 -> 40.
@@ -1391,6 +1546,7 @@ class TestARealNotMet:
             model_verdict=NOT_MET,
             missing="No base case.",
             retried=True,
+            repeat_reason=RepeatReason.QUOTE_TOO_SHORT,
         )
         assert is_passed(records, layer=AUTHOR) is False
         # 2 (c3) of 5 -> 40.

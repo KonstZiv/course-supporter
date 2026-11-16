@@ -343,6 +343,11 @@ def test_the_prompt_is_the_one_on_main(path: str, digest: str) -> None:
     assert hashlib.sha256(data).hexdigest() == digest, path
 
 
+# Added since, on purpose, for a stage of its own; pinned where it was added
+# (task 12a, K4: ``tests/unit/test_prompts/test_reply_prompts.py``).
+_ADDED_SINCE = frozenset({"prompts/criteria_evaluation/v1_with_replies.md"})
+
+
 @pytest.mark.parametrize(
     "folder", ["criteria_evaluation", "criteria_evaluation_project"]
 )
@@ -353,5 +358,7 @@ def test_no_evaluation_prompt_was_added(folder: str) -> None:
         if p.is_file()
     }
     assert files == {
-        path for path in _UNTOUCHED if path.startswith(f"prompts/{folder}/")
+        path
+        for path in {*_UNTOUCHED, *_ADDED_SINCE}
+        if path.startswith(f"prompts/{folder}/")
     }

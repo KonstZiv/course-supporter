@@ -45,3 +45,6 @@ verdict.rule.author_musts_unmet: The author's mandatory criteria are not met, so
 verdict.rule.author_musts_below_threshold: You met all of the author's mandatory criteria, but scored {score} out of 100, below the threshold of {threshold} for tasks with the author's mandatory criteria, so the work has not passed.
 verdict.rule.no_author_musts_passed: The author has not approved mandatory criteria for this task. For such tasks the pass threshold is {threshold} out of 100; your score is {score}, so the work has passed.
 verdict.rule.no_author_musts_failed: The author has not approved mandatory criteria for this task. For such tasks the pass threshold is {threshold} out of 100; your score is {score}, so the work has not passed.
+reply.work_only: We grade only the work itself — the solution files, not what is written beside them.
+reply.hostile.fallback: A creative move! We grade only the work itself — the solution files, not what is written beside them. To improve your result, work on your solution following the remarks of this review.
+reply.off_topic.wrap_up: "We could talk about this for a long time, but there is work waiting for us, and the time is better spent on the course “{course}”. For your money I am ready to chat forever, but an ordinary chatbot will do it cheaper — and with me it is better to study “{course}”."

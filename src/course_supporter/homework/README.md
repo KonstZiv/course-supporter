@@ -1738,3 +1738,63 @@ Stage 1 або нормалізації проєкту, до Stage 2). Пода�
 Замки — `tests/integration/test_same_work_one_rule_db.py` (наскрізно через маршрут порталу),
 `tests/unit/test_homework/test_same_work_rule.py`, `tests/unit/test_api/test_portal_submit.py` і
 `tests/unit/test_api/test_homework_submit.py` (обидва входи).
+
+## Репліки студента — сімнадцята частина (задача 12а, К4)
+
+### 17. Репліки на шляху `repeat_with_replies` — `student_replies.py`, `reply_humor.py`, `reply_source.py`, `replies_measure.py`
+
+**Принцип (власник продукту, 16.11).** На оцінку впливає лише робота — файли з розв'язком.
+Репліка — твердження студента, не доказ: вона може спрямувати увагу на місце в роботі, а вердикт
+«виконано» й далі стоїть на цитаті з файлів студента (правило цитати `criteria_verdicts.py` —
+без змін).
+
+**Стадії.** Ті самі виконавці під іншими іменами, як у проєкту: `criteria_evaluation_with_replies`
+і `review_explanation_with_replies` (`path_stages.py`), власні промпти
+`prompts/criteria_evaluation/v1_with_replies.md` і `prompts/review_explanation/v3_with_replies.md`
+(копії каліброваних із позначеними блоками `{# ── 12a K4 … ── #}`), драбини й стелі — базових
+стадій (не калібровано — калібрує живий вимір 12а). Перемикання — за назвою стадії всередині
+`criteria_evaluation.evaluate_criteria` і `review_explanation.explain_verdicts`; решта шляхів і
+промптів — байт у байт ті самі (замок — `tests/unit/test_prompts/test_reply_prompts.py`).
+
+**Що бачить кожна модель** (`student_replies.py`, чисті функції):
+
+| Модель | Бачить |
+|---|---|
+| оцінки | репліки без відповіді, `on_topic`, не ворожі: `item_id`, вид, текст; найновіші в межах 12 000 символів |
+| пояснення | усі гілки за часом з «у відповідь на»; ворожа репліка — лише категорією, **ніколи текстом**; найновіші в межах 24 000 символів; репліку, на яку треба відповісти зараз, бюджет не відкидає |
+
+**Як відповідає** кожна репліка без відповіді:
+
+| Репліка | Хто відповідає |
+|---|---|
+| по темі | модель |
+| поза темою, круги 1–2 | модель: коротко й назад до роботи |
+| поза темою, круг 3 | модель згортає розмову з назвою курсу (`course` — назва кореня курсу) |
+| поза темою, круг 4+ | розмовник (`reply.off_topic.wrap_up`), модель не бачить і не питають |
+| ворожа | модель: жарт про спробу у стилі, який обрав код (`reply_humor.choose_style` — SHA-256 ідентифікатора коментаря); перевірка `verdict_explanation.joke_faults` — ≤ 400 символів, жодних 20 символів підряд із репліки, речення `reply.work_only` дослівно; не пройшла — `reply.hostile.fallback` |
+
+Круги рахуються в гілці: усі репліки студента `off_topic` до цієї включно, з відповіддю чи ні;
+ворожа репліка — не круг. Вихід пояснення — `ExplanationWithReplies` (свій вигляд на дроті, щоб
+схема каліброваної стадії не змінилась): `replies: [{comment_id, answer}]`, рівно одна відповідь
+на кожну репліку з `to_answer`, інакше структурний повтор. Пояснення зберігається в каліброваному
+вигляді (`without_replies`), відповіді — у `ReplySource.keep_answers`.
+
+**Джерело реплік** (`reply_source.py`). До таблиці коментарів К1 — `NotWiredReplySource`: реплік
+немає, рецензія пишеться як без них, у журналі `reply_source_not_wired`. Фаза 2 К4 підключає
+таблицю за тим самим протоколом.
+
+**Стилі жартів** — `config/reply_humor_styles.yaml` (ідентифікатор, опис для моделі, приклад);
+затверджує оператор. **Заготовки** — `reply.work_only`, `reply.hostile.fallback`,
+`reply.off_topic.wrap_up` у розмовнику (`{course}` підставляє стадія).
+
+**Стенд виміру** (`replies_measure.py`, `scripts/measure_replies.py`): записаний вхід реальної
+подачі (`scripts/record_evaluation_input.py`, `scripts/record_explanation_input.py`) + синтетичні
+репліки `data/calibration/replies/synthetic_replies_uk.yaml` → по одному запиту на перший щабель:
+оцінка без реплік, з репліками, лише з ворожими; пояснення з репліками (і `--style-sweep` — по
+стилю). Пише вердикти й кожну їх зміну з цитатою (чи вона в роботі), відповіді на всі репліки,
+`jokes.md` для оператора, ціну кожного виклику проти стель. Бази не торкається; вхід і вихід —
+лише локально, поза репозиторієм. `--dry-run` нічого не надсилає.
+
+Замки — `tests/unit/test_homework/test_student_replies.py`, `test_reply_humor.py`,
+`test_reply_answers.py`, `test_replies_measure.py`, `tests/unit/test_prompts/test_reply_prompts.py`,
+`tests/integration/test_reply_stages_db.py`.

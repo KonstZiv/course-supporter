@@ -37,6 +37,16 @@ Steps:
        the author's lines marked, when the marked text fits the project's
        input budget, and without a mark when it does not (chain K5).
 
+The student's replies (task 12a, K4):
+    On ``criteria_evaluation_with_replies`` alone — the switch by the stage's
+    name, as the project's — the request also shows the student's replies
+    that await an answer, on the topic and not hostile
+    (:func:`~course_supporter.homework.student_replies.replies_for_evaluation`),
+    read from :class:`~course_supporter.homework.reply_source.ReplySource`.
+    Nothing after the answer changes: a "met" still stands on a quote of the
+    student's files, so a reply can move a verdict only by pointing to a line
+    the work has.
+
 Failure:
     No list is not a failure (step 1). A ladder that gives no answer — on
     either request — raises ``LadderExhaustedError`` to the body, which holds
@@ -80,9 +90,12 @@ from course_supporter.homework.mentor_context import mark_authors_lines
 from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_continuation import resume_awaiting_criteria
 from course_supporter.homework.path_stages import (
+    CRITERIA_EVALUATION_WITH_REPLIES,
     PROJECT_CRITERIA_EVALUATION,
     StageOutcome,
 )
+from course_supporter.homework.reply_source import default_reply_source
+from course_supporter.homework.student_replies import replies_for_evaluation
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.homework.text_budget import project_path_budget_chars
 from course_supporter.language import display_name
@@ -98,6 +111,8 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from course_supporter.homework.path_stages import StageContext
+    from course_supporter.homework.reply_source import ReplySource
+    from course_supporter.homework.student_replies import EvaluationReply
     from course_supporter.llm.stage_router import StageExecution
     from course_supporter.storage.orm import HomeworkSubmission
 
@@ -117,6 +132,7 @@ async def evaluate_criteria(
     *,
     execution: StageExecution,
     criteria_source: CriteriaSource | None = None,
+    reply_source: ReplySource | None = None,
 ) -> StageOutcome:
     """Give the submission its verdicts on the criteria in force.
 
@@ -128,6 +144,9 @@ async def evaluate_criteria(
         criteria_source: Where the list comes from; ``None`` — the production
             service, which composes the list on a miss in sessions of its own
             (``context.session_factory``).
+        reply_source: Where the student's replies come from, on the stage
+            with replies alone; ``None`` — the production source
+            (:func:`~course_supporter.homework.reply_source.default_reply_source`).
 
     Returns:
         ``ok`` with the verdicts written; ``freezes`` when there is no list.
@@ -177,6 +196,7 @@ async def evaluate_criteria(
         criteria=listed.criteria,
         submission_text=_marked(context) if project else context.submission_text,
         language=await course_language(context.session, submission),
+        replies=await _replies_shown(context, reply_source, log=log),
     )
     agent = CriteriaEvaluatorAgent(context.router)
 
@@ -219,6 +239,24 @@ async def evaluate_criteria(
     )
     _log_settled(log, records, first)
     return StageOutcome.ok()
+
+
+async def _replies_shown(
+    context: StageContext, source: ReplySource | None, *, log: Any
+) -> tuple[EvaluationReply, ...] | None:
+    """The student's replies the request shows: on the stage with replies alone.
+
+    ``None`` on every other stage, whose request has no slot for them and
+    stays byte for byte what it was (task 12a, K4).
+    """
+    if context.stage_name != CRITERIA_EVALUATION_WITH_REPLIES:
+        return None
+    reader = source if source is not None else default_reply_source()
+    shown = replies_for_evaluation(
+        await reader.threads(context.session, context.submission)
+    )
+    log.info("criteria_evaluation_replies_shown", replies=len(shown))
+    return shown
 
 
 def _marked(context: StageContext) -> str:

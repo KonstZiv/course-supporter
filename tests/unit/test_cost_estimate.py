@@ -662,12 +662,20 @@ class TestSettings:
     def test_calibration_flags(self, settings: EstimateSettings) -> None:
         """Stage 2 calibration (READING-2026-11-07.md): review stages and
         criteria_decomposition have calibrated=True. key_explanation, the
-        stages of the `project` path (no live data: it is not switched yet)
-        and processing stages remain uncalibrated."""
+        stages of the `project` path (no live data: it is not switched yet),
+        the stages with the student's replies (task 12a, K4: no live data
+        until its measurement) and processing stages remain uncalibrated."""
         project = {"project_criteria_evaluation", "project_review_explanation"}
-        assert set(settings.review) >= project
-        assert not any(settings.review[name].calibrated for name in project)
-        assert all(s.calibrated for n, s in settings.review.items() if n not in project)
+        replies = {
+            "criteria_evaluation_with_replies",
+            "review_explanation_with_replies",
+        }
+        uncalibrated = project | replies
+        assert set(settings.review) >= uncalibrated
+        assert not any(settings.review[name].calibrated for name in uncalibrated)
+        assert all(
+            s.calibrated for n, s in settings.review.items() if n not in uncalibrated
+        )
         assert settings.task_preparation["criteria_decomposition"].calibrated
         assert not settings.task_preparation["key_explanation"].calibrated
         assert not any(s.calibrated for s in settings.processing.steps.values())

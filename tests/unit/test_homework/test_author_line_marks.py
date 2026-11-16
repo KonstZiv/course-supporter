@@ -34,10 +34,10 @@ from tests._helpers.recorded_project import (
     read_recorded_project,
 )
 
+from course_supporter.criteria_kinds import RepeatReason
 from course_supporter.homework import mentor_context
 from course_supporter.homework.criteria_verdicts import (
     QuotePlace,
-    RepeatReason,
     SubmittedWork,
     WorkFile,
     items_to_ask_again,

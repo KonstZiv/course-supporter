@@ -567,7 +567,10 @@ curl -X DELETE -H "X-API-Key: $PREP_KEY" \
 ```
 
 Ціну пояснень у юнітах до запиту (BIL-E) показує четвертий маршрут — лише читання, нічого не
-пише: `price_units`, `available_units`, `enough`, `missing_units`, `charging_enabled`.
+пише й рахунку не створює: `price_units`, `available_units`, `enough`, `missing_units`,
+`charging_enabled`, `unpriced_reason`, `missing_features`. Коли ціну порахувати не вдалося,
+`price_units` і `missing_units` — `null`, `enough` — `true`, `unpriced_reason` — `estimate_failed`
+(BIL-E3; деталі — `billing/README.md`).
 
 ```bash
 curl -X POST -H "X-API-Key: $PREP_KEY" \
@@ -576,7 +579,11 @@ curl -X POST -H "X-API-Key: $PREP_KEY" \
 
 Усі три відповідають однаковим тілом: `status` (`awaiting_key` / `generating` / `ready` /
 `failed`), `version`, `answers`, `explanations`, `carried_over`, `language`, `failure_reason`, а з
-задачі 07 — ще `pass_threshold` і `doubts`. Поріг заліку (1–100, відсоток правильних відповідей)
+задачі 07 — ще `pass_threshold` і `doubts`. З BIL-E3 — `failure_code`: `insufficient_units`, коли
+версію закрито відмовою порту коштів (юнітів автора не вистачило; `failure_reason` тоді —
+`funds refused: insufficient_funds`), інакше `null`. Пару «причина → код» тримає
+`workers/key_explain.py` (`funds_refused_reason`, `FAILURE_CODES`): воркер пише причину, маршрут
+бере код звідти ж, рядок причини ніде не повторено. Поріг заліку (1–100, відсоток правильних відповідей)
 належить правленому шару: замінюється разом із ключем, тож запит без нього поріг знімає; у трійку
 не входить, тож його зміна нічого не породжує.
 Читання завдання без ключа — **200** зі станом `awaiting_key`, не 404: відсутність ключа є станом

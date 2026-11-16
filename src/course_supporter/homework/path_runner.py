@@ -732,10 +732,13 @@ async def _open_the_doors(
     in the files, their names and the student's comment -- the same reading
     today's Mentor carries to Stage 2 and the trace.
 
-    One refusal is the new path's own (project chain K6): a project with no
+    Two refusals are the new path's own (project chain K6): a project with no
     new or changed text file against its base -- nothing of the student's to
     review -- is refused here, before the first paid step, with the code
-    ``no_changes``. Today's Mentor does not refuse it.
+    ``no_changes``; when the student did add or change files but the doors
+    could read none of them (binary files, an encoding not established, a
+    document that would not open), with the code ``no_readable_changes`` and
+    the list of those files. Today's Mentor refuses neither.
 
     Returns ``(temp file, reading, language)``; a ``None`` reading means the
     doors refused and already wrote why.
@@ -746,7 +749,9 @@ async def _open_the_doors(
     )
     from course_supporter.homework.project_submission import (
         NO_CHANGES,
+        NO_READABLE_CHANGES,
         persist_no_changes,
+        persist_no_readable_changes,
         process_project_submission,
     )
     from course_supporter.security.exceptions import SecurityRejectedError
@@ -802,8 +807,16 @@ async def _open_the_doors(
             # reserve and the first model stage (safety). Stored as the door's
             # oversize refusal is, so it is no attempt either. Here and not in
             # the project door itself: that door is today's Mentor's too.
-            await persist_no_changes(session, hw_repo, submission.id)
-            log.warning("path_door_refused", category=NO_CHANGES)
+            # Changes there were, but none the doors could read: a refusal of
+            # its own, naming those files, not "no changes".
+            if project.unread_changes:
+                await persist_no_readable_changes(
+                    session, hw_repo, submission.id, project.unread_changes
+                )
+                log.warning("path_door_refused", category=NO_READABLE_CHANGES)
+            else:
+                await persist_no_changes(session, hw_repo, submission.id)
+                log.warning("path_door_refused", category=NO_CHANGES)
             return file_path, None, languages.review
         return (
             file_path,

@@ -21,7 +21,10 @@ from course_supporter.api.schemas import (
     PortalRejection,
     PortalVerdict,
 )
-from course_supporter.homework.project_submission import NO_CHANGES
+from course_supporter.homework.project_submission import (
+    NO_CHANGES,
+    NO_READABLE_CHANGES,
+)
 from course_supporter.homework.test_scoring import Correctness, correctness
 from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
@@ -137,10 +140,10 @@ def curated_verdict(
 
 
 # The normalizer categories the read-path phrases (DD-6-Z, partial): the
-# oversize refusal (step E) and the new path's refusal of a project without a
-# change of the student's (project chain K6).
+# oversize refusal (step E) and the new path's refusals of a project without a
+# change of the student's and without one the doors could read (chain K6).
 _NORMALIZER_CODED: Final[frozenset[str]] = frozenset(
-    {ErrorCategory.OVER_BUDGET.value, NO_CHANGES}
+    {ErrorCategory.OVER_BUDGET.value, NO_CHANGES, NO_READABLE_CHANGES}
 )
 
 
@@ -312,10 +315,12 @@ def curated_rejection(
 
     * Normalizer — ``safety_result`` with ``source='normalizer'`` carries a
       category only for the project branch's oversize refusal (step E) and
-      for the new path's refusal of a project without a change of the
-      student's (``no_changes``, project chain K6); both are phrased. The
-      oversize refusal's ``details`` is the character pair rather than a
-      filename; ``no_changes`` has none.
+      for the new path's refusals of a project without a change of the
+      student's (``no_changes``, project chain K6) and of one whose new and
+      changed files could none be read (``no_readable_changes``); all three
+      are phrased. The oversize refusal's ``details`` is the character pair
+      rather than a filename; the other two have none -- the files of
+      ``no_readable_changes`` come by :func:`curated_not_opened`.
 
     Anything else (the remaining normalizer rejections, ``DD-6-Z``) returns
     ``None`` and the interface falls back to its status phrase — the same
@@ -353,8 +358,9 @@ def curated_rejection(
         # specifics worth showing, so it gets a code instead of the bare
         # status phrase. Its ``details`` is the pair of numbers the refusal is
         # about, not a filename -- the sentence that wraps them lives in the
-        # portal dictionary. ``no_changes`` (chain K6) is a code with no
-        # specifics. The other normalizer reasons still return None: their
+        # portal dictionary. ``no_changes`` and ``no_readable_changes``
+        # (chain K6) are codes with no specifics here: the latter's files are
+        # in ``not_opened``. The other normalizer reasons still return None: their
         # text is library vocabulary and DD-6-D keeps it off the wire.
         details = safety.get("details")
         return PortalRejection(
@@ -387,7 +393,9 @@ def curated_not_opened(
 
     Read from ``safety_result``, where Stage 1 recorded them alongside the
     verdict. A student whose archive was reviewed still needs to know that
-    three of their files were not part of that review.
+    three of their files were not part of that review. The new path's refusal
+    of a project whose changes could none be read (``no_readable_changes``)
+    stores its files there in the same shape, and they come back here.
     """
     safety = submission.safety_result
     if not isinstance(safety, dict):

@@ -104,6 +104,14 @@ class DoorReading:
             :data:`~course_supporter.homework.mentor_context.H_C_WHOLE_MAX_BYTES`,
             the context's own threshold (project chain K6). Read by
             :attr:`student_files_text` alone; empty for every other type.
+        unread_changes: A project's new and changed files against the base
+            that the doors did not read, each with its reason -- a file the
+            screen set aside (as in :attr:`not_opened`) and every binary file
+            (``forbidden_type``), by path. Says why :attr:`files` is empty
+            when the student did change something: the new path refuses such
+            a project with its own code (``no_readable_changes``) rather than
+            as one without a change. Filled by the project door alone; today's
+            Mentor does not read it; empty for every other type.
     """
 
     text: str
@@ -113,6 +121,7 @@ class DoorReading:
     files: tuple[WorkFile, ...] = ()
     base_files: tuple[WorkFile, ...] = ()
     shown_as_diff: frozenset[str] = frozenset()
+    unread_changes: tuple[NotOpenedEntry, ...] = ()
 
     @property
     def safety_text(self) -> str:

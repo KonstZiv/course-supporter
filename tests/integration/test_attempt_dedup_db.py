@@ -56,6 +56,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
+from course_supporter.api.routes._portal_shared import curated_not_opened
 from course_supporter.api.tasks import arq_process_homework
 from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.funds_port import SubmissionOutcome
@@ -1391,3 +1392,120 @@ class TestEvaluatorLockGNoEvaluatorNoSource:
         assert calls == [SAFETY, CRITERIA_EVALUATION, REVIEW_EXPLANATION]
         _assert_reviewed_anew(again)
         assert again.fingerprint == source.fingerprint is not None
+
+
+async def _set_safety_result(
+    session_factory: async_sessionmaker[AsyncSession],
+    submission_id: uuid.UUID,
+    safety_result: dict[str, Any] | None,
+) -> None:
+    async with session_factory() as session:
+        await session.execute(
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == submission_id)
+            .values(safety_result=safety_result)
+        )
+        await session.commit()
+
+
+class TestDoorReadingCarriedToCopy:
+    """The copy carries what the doors of the source did not open."""
+
+    async def test_source_with_doors_reading_copies_only_door_reading(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        source_doors = {
+            "is_safe": True,
+            "violations": [],
+            "not_opened": [
+                {
+                    "arcname": "sales.csv",
+                    "reason": "charset_violation",
+                    "size": 120,
+                }
+            ],
+            "recovered_encoding": "utf-8",
+        }
+        first = await _first_review(session_factory, task_world, tmp_path)
+        await _set_safety_result(session_factory, first.id, source_doors)
+
+        again, calls = await _the_same_work_again(session_factory, task_world, tmp_path)
+
+        assert calls == []
+        assert again.status == "delivered"
+        assert again.safety_result == {
+            "not_opened": [
+                {
+                    "arcname": "sales.csv",
+                    "reason": "charset_violation",
+                    "size": 120,
+                }
+            ],
+            "recovered_encoding": "utf-8",
+        }
+
+    async def test_source_with_null_safety_result_leaves_copy_safety_result_null(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        first = await _first_review(session_factory, task_world, tmp_path)
+        await _set_safety_result(session_factory, first.id, None)
+
+        again, calls = await _the_same_work_again(session_factory, task_world, tmp_path)
+
+        assert calls == []
+        assert again.status == "delivered"
+        assert again.safety_result is None
+
+    async def test_source_safety_result_without_doors_leaves_copy_safety_result_null(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        first = await _first_review(session_factory, task_world, tmp_path)
+        await _set_safety_result(
+            session_factory,
+            first.id,
+            {"is_safe": True, "violations": [], "source": "stage2"},
+        )
+
+        again, calls = await _the_same_work_again(session_factory, task_world, tmp_path)
+
+        assert calls == []
+        assert again.status == "delivered"
+        assert again.safety_result is None
+
+    async def test_curated_not_opened_of_copy_matches_source(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        source_doors = {
+            "is_safe": True,
+            "violations": [],
+            "not_opened": [
+                {
+                    "arcname": "sales.csv",
+                    "reason": "charset_violation",
+                    "size": 120,
+                }
+            ],
+            "recovered_encoding": "utf-8",
+        }
+        first = await _first_review(session_factory, task_world, tmp_path)
+        await _set_safety_result(session_factory, first.id, source_doors)
+        source = await _row(session_factory, first.id)
+
+        again, calls = await _the_same_work_again(session_factory, task_world, tmp_path)
+
+        assert calls == []
+        assert again.status == "delivered"
+        assert curated_not_opened(again) == curated_not_opened(source)
+        assert len(curated_not_opened(again)) == 1

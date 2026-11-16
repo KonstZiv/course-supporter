@@ -1,7 +1,7 @@
 """BIL-TESTMARK: batches marked as test purchases; their units voided.
 
 Revision ID: biltestmark_test_batches
-Revises: bile_charging_order_hold
+Revises: verdict_repeat_reason
 Create Date: 2026-11-16
 
 While the payment provider (Creem) is in its test mode a test card pays and a
@@ -47,7 +47,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "biltestmark_test_batches"
-down_revision: str | Sequence[str] | None = "bile_charging_order_hold"
+down_revision: str | Sequence[str] | None = "verdict_repeat_reason"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

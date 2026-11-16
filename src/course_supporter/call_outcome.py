@@ -18,6 +18,9 @@ Interface:
     ``CallOutcome.SKIPPED`` rows.
     :class:`FundsDecision` — the funds port's answer, set only on the funds-port
     row (mentor-rebuild task 02) and ``NULL`` on every other row.
+    :class:`RequestKind` — which request of a stage an attempt row is: the
+    first, an item repeat, a structural retry or an infrastructure retry;
+    written by the ladder router on attempt rows only (2026-11-16).
 
 Extending:
     A new value is a new enum member AND a migration widening the matching
@@ -104,3 +107,30 @@ class FundsDecision(StrEnum):
 
     ALLOWED = "allowed"
     REFUSED = "refused"
+
+
+class RequestKind(StrEnum):
+    """Which request of a stage one attempt row of the ladder router is.
+
+    Every attempt of a stage carries the stage's name as ``action``; this is
+    what tells the requests of one stage apart, so the cost of each kind of
+    repeat is counted from the register (2026-11-16).
+
+    * ``FIRST`` — the stage's own request on a rung, its first attempt there.
+    * ``ITEM_REPEAT`` — the evaluation stage asking once more about the items
+      whose verdict could not stand (``criteria_evaluation.py``, ``ask_again``),
+      its first attempt.
+    * ``STRUCTURAL_RETRY`` — the same request again after the stage's validator
+      refused the answer, with the refusal appended.
+    * ``INFRA_RETRY`` — the same request again after an infrastructure error
+      (timeout, 429, 5xx) on the same rung.
+
+    ``NULL`` on trace rows, on rows of no model call (funds port, review
+    metrics, course links, speech-to-text) and on rows written before the
+    column existed.
+    """
+
+    FIRST = "first"
+    ITEM_REPEAT = "item_repeat"
+    STRUCTURAL_RETRY = "structural_retry"
+    INFRA_RETRY = "infra_retry"

@@ -285,6 +285,7 @@ class _RouterDouble:
         response_schema: dict[str, Any] | None = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
+        repeat_on_rung: int | None = None,
         **render_context: Any,
     ) -> StageResult:
         self.calls.append(stage_name)
@@ -1609,6 +1610,8 @@ class TestTheRecorderReadsWhatTheStageRead:
             json.dumps(router.rendered[CRITERIA_EVALUATION], ensure_ascii=False)
         )
         assert recorded.variables == stage_read
+        # The stage wrote its verdicts: the list is read by their address.
+        assert recorded.criteria_from == record_evaluation_input.FROM_VERDICT_ROWS
 
         stage = _shipped().stages[CRITERIA_EVALUATION]
         assert isinstance(stage, ModelStage)
@@ -1616,7 +1619,10 @@ class TestTheRecorderReadsWhatTheStageRead:
         provider, request = await record_evaluation_input.first_rung_request(
             recorded.variables, stage, registry
         )
-        same_input = hash_attempt_input(request, provider=provider)
+        # The row production writes today: the deterministic stage's seed
+        # and temperature, in its own columns and in its hash.
+        sent = request.model_copy(update={"seed": 20261113, "temperature": 0.0})
+        same_input = hash_attempt_input(sent, provider=provider)
         async with session_factory() as session:
             session.add(
                 ExternalServiceCall(
@@ -1628,6 +1634,10 @@ class TestTheRecorderReadsWhatTheStageRead:
                     success=True,
                     outcome="success",
                     input_hash=same_input,
+                    request_kind="first",
+                    seed=sent.seed,
+                    temperature=sent.temperature,
+                    rung_index=1,
                 )
             )
             await session.commit()
@@ -1643,6 +1653,7 @@ class TestTheRecorderReadsWhatTheStageRead:
             prompt_hash="p",
             rows=rows,
             recorded=recorded,
+            seed_supported=record_evaluation_input.seed_supported(provider, request),
         )
 
         # The double's row (no hash) and the row of the same input.

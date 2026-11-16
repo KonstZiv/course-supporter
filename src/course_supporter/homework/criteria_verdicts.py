@@ -122,7 +122,7 @@ import unicodedata
 import uuid
 from collections import Counter
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import count
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol
@@ -640,6 +640,8 @@ def settle_verdicts(
     work: SubmittedWork,
     earlier: Mapping[str, EarlierVerdict],
     place_unmet: bool = False,
+    first_call_id: uuid.UUID | None = None,
+    repeat_call_id: uuid.UUID | None = None,
 ) -> tuple[VerdictRecord, ...]:
     """The verdict rows of a submission, from the model's answers.
 
@@ -675,7 +677,12 @@ def settle_verdicts(
     verdict on ``work`` — what :func:`items_to_ask_again` named in the
     repeated request — whatever the repeat settled, a row the safeguard kept
     included. Every other row, and a criterion derived from its points, has
-    none.
+    none. It keeps the model's first word as well
+    (:attr:`VerdictRecord.first_model_verdict`), and every row the model
+    judged names the call its settled word came from
+    (:attr:`VerdictRecord.answered_by_call_id`): the repeat's when
+    :func:`_word_to_settle` chose the repeat's word, the first answer's
+    otherwise. Traces for the database alone: no rule reads them.
 
     Args:
         criteria: The list in force the answers were given against.
@@ -688,6 +695,10 @@ def settle_verdicts(
         place_unmet: Keep where a "not met"'s problem stands — the project's
             evaluation, whose prompt asks for that line; ``False`` for every
             other stage, whose rows stay what they were.
+        first_call_id: The register row of the call that gave ``answer``;
+            ``None`` when none was written.
+        repeat_call_id: The register row of the call that gave ``repeat``;
+            ``None`` without a repeat or a row.
 
     Returns:
         One record per criterion and per mandatory point, in the list's
@@ -708,7 +719,7 @@ def settle_verdicts(
     ) -> VerdictRecord:
         settled = _word_to_settle(first[item_id], again.get(item_id), work)
         retried = item_id in again
-        return _judged(
+        record = _judged(
             settled,
             kind=kind,
             weight=weight,
@@ -721,6 +732,14 @@ def settle_verdicts(
             work=work,
             earlier=earlier,
             place_unmet=place_unmet,
+        )
+        # Traces, not rules: added after settling, so they cannot change it.
+        return replace(
+            record,
+            first_model_verdict=first[item_id].verdict if retried else None,
+            answered_by_call_id=(
+                first_call_id if settled is first[item_id] else repeat_call_id
+            ),
         )
 
     records: list[VerdictRecord] = []

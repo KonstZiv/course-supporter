@@ -64,13 +64,14 @@ class _FakeStageRouter:
         response_schema: dict[str, Any] | None = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
+        repeat_on_rung: int | None = None,
         **render_context: Any,
     ) -> Any:
         self.last_stage = stage
         self.last_stage_name = stage_name
         self.last_stop_on_output_ceiling = stop_on_output_ceiling
         self.last_kwargs = render_context
-        del contents, expects_json, money_ceiling_usd
+        del contents, expects_json, money_ceiling_usd, repeat_on_rung
         if self.exception_on_call is not None:
             raise self.exception_on_call
         if response_validator is not None:

@@ -332,6 +332,70 @@ class TestPersist:
         assert call.kwargs["row_unit_in"] == 7
 
 
+class TestPersistReturnsTheRowsId:
+    """2026-11-16: the id of the row written, so a verdict can name its call."""
+
+    @staticmethod
+    def _factory(session: AsyncMock) -> MagicMock:
+        factory = AsyncMock()
+        factory.__aenter__ = AsyncMock(return_value=session)
+        factory.__aexit__ = AsyncMock(return_value=None)
+        return MagicMock(return_value=factory)
+
+    async def test_the_id_of_the_row_written(self) -> None:
+        from course_supporter.service_logging import _persist
+
+        session = AsyncMock()
+        session.add = MagicMock()
+        row_id = uuid.uuid4()
+        set_job_from_arq(uuid.uuid4())
+        with patch("course_supporter.storage.orm.ExternalServiceCall") as mock_esc:
+            mock_esc.return_value.id = row_id
+            written = await _persist(
+                self._factory(session),
+                action="criteria_evaluation",
+                strategy="default",
+                provider="dashscope",
+                model_id="qwen3.7-max",
+            )
+
+        assert written == row_id
+        session.commit.assert_awaited_once()
+
+    async def test_none_when_the_write_fails(self) -> None:
+        from sqlalchemy.exc import OperationalError
+
+        from course_supporter.service_logging import _persist
+
+        session = AsyncMock()
+        session.add = MagicMock()
+        session.flush.side_effect = OperationalError("INSERT", {}, Exception("down"))
+        set_job_from_arq(uuid.uuid4())
+        written = await _persist(
+            self._factory(session),
+            action="criteria_evaluation",
+            strategy="default",
+            provider="dashscope",
+            model_id="qwen3.7-max",
+        )
+
+        assert written is None
+
+    async def test_none_outside_a_job(self) -> None:
+        from course_supporter.service_logging import _persist
+
+        assert get_current_job_id() is None
+        written = await _persist(
+            self._factory(AsyncMock()),
+            action="criteria_evaluation",
+            strategy="default",
+            provider="dashscope",
+            model_id="qwen3.7-max",
+        )
+
+        assert written is None
+
+
 class TestPersistGuardsMissingJobId:
     """_persist must skip + log an ERROR when job_id ContextVar is None.
 

@@ -256,7 +256,9 @@ def first_rung(stage: ModelStage, prompt_ref: str) -> StageConfig:
     """The stage as the path runs it, cut to its first rung, with ``prompt_ref``.
 
     The translation of ``homework/path_stages.py::_execution``: an unpinned
-    rung takes the stage's output ceiling.
+    rung takes the stage's output ceiling, and a deterministic stage sends
+    its seed — the evaluation stages are measured as the path sends them
+    (task 12a, K4; the explanation stages are not deterministic).
     """
     rung = stage.ladder[0]
     return StageConfig(
@@ -273,6 +275,7 @@ def first_rung(stage: ModelStage, prompt_ref: str) -> StageConfig:
         ],
         input_budget_ratio=stage.input_budget_ratio,
         record_output=stage.record_output,
+        deterministic=stage.deterministic,
     )
 
 
@@ -366,6 +369,37 @@ async def send_once(
         RuntimeError: Nothing was captured — the router refused to send the
             request (only raised when there is no provider to blame).
     """
+    return await send_rendered_once(
+        render_context(shown),
+        prompt_ref,
+        stage=stage,
+        stage_name=STAGE_NAME,
+        response_schema=RESPONSE_SCHEMA,
+        registry=registry,
+        provider=provider,
+        prompt_base_path=prompt_base_path,
+    )
+
+
+async def send_rendered_once(
+    variables: Mapping[str, Any],
+    prompt_ref: str,
+    *,
+    stage: ModelStage,
+    stage_name: str,
+    response_schema: dict[str, Any],
+    registry: ModelRegistryConfig,
+    provider: LLMProvider | None,
+    prompt_base_path: Path | None = None,
+) -> Sent:
+    """:func:`send_once` for any model stage: its prompt's variables as given.
+
+    The measurement of the path with the student's replies sends both of its
+    stages this way (``homework/replies_measure.py``).
+
+    Raises:
+        RuntimeError: As :func:`send_once`.
+    """
     config = first_rung(stage, prompt_ref)
     entry = config.ladder[0]
     spy = _Spy(provider)
@@ -378,7 +412,7 @@ async def send_once(
     )
     execution = StageExecution(
         stage=config,
-        stage_name=STAGE_NAME,
+        stage_name=stage_name,
         stop_on_output_ceiling=True,
         money_ceiling_usd=stage.ceilings.money_usd,
     )
@@ -387,8 +421,8 @@ async def send_once(
         await execution.run(
             router,
             expects_json=True,
-            response_schema=RESPONSE_SCHEMA,
-            **render_context(shown),
+            response_schema=response_schema,
+            **variables,
         )
     except LadderExhaustedError as exhausted:
         failure = str(exhausted)
@@ -460,39 +494,46 @@ class Measured:
         }
 
 
+def price_of(
+    sent: Sent, *, registry: ModelRegistryConfig
+) -> tuple[Decimal | None, str | None, str | None]:
+    """The price of ``sent`` by the registry: cost, its kind, its tariff window.
+
+    ``(None, None, None)`` for a request that was not sent.
+    """
+    request, response = sent.request, sent.response
+    if request is None or sent.started_at is None:
+        return None, None, None
+    priced = price_token_call(
+        registry.models.get(request.model),
+        catalog_version=registry.catalog_version,
+        started_at=sent.started_at,
+        usage=(
+            TokenUsage(
+                tokens_in=response.tokens_in,
+                tokens_in_cached=response.tokens_in_cached,
+                tokens_out=response.tokens_out,
+            )
+            if response is not None
+            else None
+        ),
+        failure=sent.raised,
+        input_estimate=estimate_request_input_tokens(request),
+        output_estimate=(
+            estimate_tokens(response.content) if response is not None else None
+        ),
+    )
+    window = None if priced.tariff_window is None else priced.tariff_window.value
+    return priced.cost_usd, priced.cost_kind.value, window
+
+
 def measured(
     sent: Sent, facts: ExplanationFacts, *, registry: ModelRegistryConfig
 ) -> Measured:
     """Price ``sent`` by the registry and check its answer against ``facts``."""
     request, response = sent.request, sent.response
     model = request.model if request is not None else ""
-    if request is None or sent.started_at is None:
-        cost_usd: Decimal | None = None
-        cost_kind: str | None = None
-        window: str | None = None
-    else:
-        priced = price_token_call(
-            registry.models.get(model),
-            catalog_version=registry.catalog_version,
-            started_at=sent.started_at,
-            usage=(
-                TokenUsage(
-                    tokens_in=response.tokens_in,
-                    tokens_in_cached=response.tokens_in_cached,
-                    tokens_out=response.tokens_out,
-                )
-                if response is not None
-                else None
-            ),
-            failure=sent.raised,
-            input_estimate=estimate_request_input_tokens(request),
-            output_estimate=(
-                estimate_tokens(response.content) if response is not None else None
-            ),
-        )
-        cost_usd = priced.cost_usd
-        cost_kind = priced.cost_kind.value
-        window = None if priced.tariff_window is None else priced.tariff_window.value
+    cost_usd, cost_kind, window = price_of(sent, registry=registry)
     content = response.content if response is not None else None
     return Measured(
         label=Path(sent.prompt_ref).stem,

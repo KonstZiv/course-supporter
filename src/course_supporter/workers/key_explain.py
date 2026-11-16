@@ -65,7 +65,10 @@ from course_supporter.funds_port import (
     build_funds_port,
 )
 from course_supporter.homework.reference_key import AnswerKey, answers_digest
-from course_supporter.homework.reference_service import ReadOnlyQueue
+from course_supporter.homework.reference_service import (
+    ReadOnlyQueue,
+    funds_refused_reason,
+)
 from course_supporter.homework.test_object import render_for_prompt
 from course_supporter.homework.test_object_service import TestObjectService
 from course_supporter.jobs.execution_seam import through_seam
@@ -157,7 +160,7 @@ async def arq_explain_key(
             context, KEY_EXPLANATION_CEILING_USD
         )
         if answer.decision is FundsDecision.REFUSED:
-            reason = f"funds refused: {answer.refusal_reason}"
+            reason = funds_refused_reason(answer.refusal_reason)
             await repo.mark_failed(version.id, reason)
             await session.commit()
             log.info("key_explanation.refused", reason=reason)

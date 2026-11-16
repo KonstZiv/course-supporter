@@ -675,7 +675,7 @@ class TestPurge:
             "billing_test_batches",
         ):
             assert rows[table], table  # the scene holds every kind of row
-        assert rows["billing_audit_log"] == 1  # account.anonymize
+        assert rows["billing_audit_log"] == 2  # account.create, account.anonymize
 
         done = await run(scene, BILLING_PURGE)
 

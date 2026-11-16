@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Final
 import structlog
 from sqlalchemy import select
 
-from course_supporter.billing import charging, ledger
+from course_supporter.billing import charging
 from course_supporter.billing.held import payer_of_held, price_of_held
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.orm import (
@@ -74,7 +74,7 @@ async def can_pay(session: AsyncSession, submission: HomeworkSubmission) -> bool
         return True
     if task.task_type == AssignmentType.TEST.value:
         return await charging.test_allowed(session, payer)
-    available = (await ledger.balance(session, payer.account_id)).available
+    available = await charging.available_units(session, payer.account_id)
     return available >= await price_of_held(session, submission, task)
 
 

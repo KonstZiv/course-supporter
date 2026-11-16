@@ -8,7 +8,8 @@ BIL-E2, BIL-TESTMARK; рішення оператора — у docstring кож�
 
 | Модуль | Що робить |
 |---|---|
-| `payer.py` | **Єдине** місце, що вирішує, хто платить: правило для студента → правило курсу → «сам» |
+| `accounts.py` | Рахунки: створення першою дією, що змінює стан (запис `account.create`), знеособлення |
+| `payer.py` | **Єдине** місце, що вирішує, хто платить: правило для студента → правило курсу → «сам»; `resolve_payer` для дії, `find_payer` для читання |
 | `ledger.py`, `journal.py` | Журнал: купівля, резерв, списання факту, звільнення, різниця |
 | `charging.py` | Ціна P, поріг, резерв, факт — усе в юнітах; перемикач `BILLING_CHARGING_ENABLED` |
 | `funds.py` | Порт коштів журналу (`LedgerFundsPort`) і ворота обробки та підготовки |
@@ -48,6 +49,22 @@ BIL-E2, BIL-TESTMARK; рішення оператора — у docstring кож�
 
 Поки перемикач вимкнений, `build_funds_port` дає `AlwaysEnoughFundsPort`: нічого не резервується й не
 утримується.
+
+## Коли з'являється рахунок (`accounts.py`, BIL-E3)
+
+Рахунок створює **перша дія, що змінює стан**: згода, оформлення купівлі, позначка, налаштування,
+правило чи нарахування адміністратора, старт платної дії (`resolve_payer` / `charging.payer_of`).
+У тій самій транзакції пишеться один запис `billing_audit_log`: `action = "account.create"`,
+`entity = "account"`, `before = null`, `after = audit.account_snapshot` (без власника); `actor` —
+`--actor` адміністратора, для дії користувача чи системи — `audit.SYSTEM_ACTOR = "system"`. Запис
+пише лише виклик, чия вставка повернула рядок (`RETURNING`): дві одночасні перші дії дають один
+рахунок і один запис.
+
+**Читання рахунку не створює:** GET маршрути білінгу, маршрути оцінки, нагадування, списки порталу
+з утриманими перевірками й команда `get-settings` читають через `accounts.find_active_account` і
+`payer.find_payer` / `charging.find_payer_of`. Без рахунку відповідь — як для порожнього: усі складники
+залишку 0, виписка порожня, `expiring_soon = null`, `consent_required = true`, нагадування — за
+правилами порожнього рахунку, `purchase` — як для непозначеного.
 
 ## Утримана перевірка (`held.py`, `resume_funded.py`)
 
@@ -96,10 +113,10 @@ uv run python scripts/billing_admin.py show-account --account <id>   # рядо�
 | Маршрут | Хто | Що |
 |---|---|---|
 | `POST /portal/tasks/{id}/estimate` | студент | ціна перевірки: `price_units`, `available_units`, `enough`, `missing_units`, `charging_enabled`, `basis`, `paid_by` |
-| `POST /nodes/{id}/documents/estimate` | автор (`prep`) | ціна обробки матеріалу |
-| `POST /documents/{id}/reference/estimate` | автор (`prep`) | ціна пояснень ключа тесту |
-| `GET /portal/billing/outlook` | студент | `reviews_left`, `warning`, `expiring_soon`, `paid_by` |
-| `GET /billing/outlook` | автор (`prep`) | `days_left`, `warning`, `expiring_soon`, `held_reviews` |
+| `POST /nodes/{id}/documents/estimate` | автор (`prep`) | ціна обробки матеріалу: `price_units`, `available_units`, `enough`, `missing_units`, `charging_enabled`, `unpriced_reason`, `missing_features` |
+| `POST /documents/{id}/reference/estimate` | автор (`prep`) | ціна пояснень ключа тесту (ті самі поля) |
+| `GET /portal/billing/outlook` | студент | `reviews_left`, `warning`, `expiring_soon`, `paid_by`, `charging_enabled` |
+| `GET /billing/outlook` | автор (`prep`) | `days_left`, `warning`, `expiring_soon`, `held_reviews`, `charging_enabled` |
 | `GET /billing/spending?from=&to=` | автор (`prep`) | витрати в юнітах по курсах і завданнях |
 
 **Оцінка перевірки студента.** `basis`: `typical` (типовий розмір роботи), `file` (надісланий файл),
@@ -107,6 +124,19 @@ uv run python scripts/billing_admin.py show-account --account <id>   # рядо�
 оплачує автор (`paid_by = "author"`): `price_units`, `available_units`, `missing_units` = `null`,
 `enough = true` — подачу приймаємо завжди, чи почнеться перевірка, вирішує прогін. Відмова дверей —
 422 `{"detail": {"code", "details"}}`, як і подача.
+
+**Оцінка дії автора без ціни** (BIL-E3). Коли E порахувати не можна, `price_units` і `missing_units` —
+`null`, `enough = true` (заздалегідь не відхиляємо: поріг за справжніми ознаками перевіряє старт
+роботи), а `unpriced_reason` каже чому: `missing_features` — у тілі бракує ознаки, потрібної виду
+матеріалу (`missing_features` — назви полів тіла: audio/video — `duration_sec`; presentation —
+`slides`, `text_chars`; text/web — `text_chars`; code — `files`, `text_chars`; таблиця —
+`cost_estimate.actions.REQUIRED_FACTORS`), або `estimate_failed` — збій самої оцінки. З ціною обидва
+поля `null`.
+
+**`charging_enabled`** у нагадуваннях — те саме значення й джерело, що в `GET /billing/spending` і
+в оцінках автора (`charging.charging_enabled()`); решта полів від нього не залежить — що показувати,
+поки списання вимкнене, вирішує екран. (Оцінка перевірки студента додає до перемикача ще тестовий
+режим шляху завдання.)
 
 **`held_reviews`** у `GET /billing/outlook`: `{count, oldest_at, missing_units}` — перевірки студентів
 цього орендаря, які автор оплачує за правилом і які чекають його юнітів; `missing_units` = сума P

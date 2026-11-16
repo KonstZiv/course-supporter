@@ -27,6 +27,12 @@ Author settings:
     of benefit stamps ``benefit_started_at``; a new limit within monthly_limit
     keeps it. Computing what a limit leaves is BIL-B / BIL-E.
 
+Accounts (BIL-E3):
+    A read (:func:`get_author_settings`, :func:`find_accounts`,
+    :func:`owner_account` without ``create``) creates no account. A change
+    creates the owner's account on first need, audited as ``account.create``
+    by the administrator's ``actor`` before the change's own entry.
+
 Test purchases (BIL-PAY, operator 2026-11-15):
     While a payment provider is in its test mode, only an account marked for
     test purchases may buy (``billing.payments.checkout``).
@@ -91,7 +97,8 @@ from course_supporter.storage.orm import (
 class AuthorSettingsView:
     """The settings of an author account; the defaults when none were set."""
 
-    account_id: uuid.UUID
+    account_id: uuid.UUID | None
+    """None while the tenant has no author account yet (the defaults apply)."""
     benefit: Benefit
     monthly_limit_units: int | None
     benefit_started_at: datetime | None
@@ -113,7 +120,7 @@ class AccountView:
 
 
 def _settings_view(
-    account_id: uuid.UUID, row: BillingAuthorSettings | None
+    account_id: uuid.UUID | None, row: BillingAuthorSettings | None
 ) -> AuthorSettingsView:
     if row is None:
         return AuthorSettingsView(
@@ -213,14 +220,18 @@ async def owner_account(
     tenant_id: uuid.UUID,
     student_id: uuid.UUID | None = None,
     create: bool,
+    actor: str | None = None,
 ) -> BillingAccount | None:
     """The live owner's active account: the author's, or the student's in the
-    tenant. With ``create`` it is created on first need; without, None when
-    there is none yet.
+    tenant. With ``create`` (a change) it is created on first need, audited
+    by ``actor`` (``account.create``); without (a read), None when there is
+    none yet.
 
     Raises:
         BillingNotFoundError: no such live tenant, or no such live student in it.
+        BillingInvalidError: ``create`` without an actor.
     """
+    creator = audit.require_actor(actor or "") if create else None
     await _live_tenant(session, tenant_id)
     if student_id is not None:
         student = await session.get(Student, student_id)
@@ -232,9 +243,9 @@ async def owner_account(
             raise BillingNotFoundError(
                 f"student {student_id} not found in tenant {tenant_id}"
             )
-        if create:
+        if creator is not None:
             return await get_or_create_student_account(
-                session, tenant_id=tenant_id, student_id=student_id
+                session, tenant_id=tenant_id, student_id=student_id, actor=creator
             )
         return await find_active_account(
             session,
@@ -242,8 +253,10 @@ async def owner_account(
             tenant_id=tenant_id,
             student_id=student_id,
         )
-    if create:
-        return await get_or_create_author_account(session, tenant_id=tenant_id)
+    if creator is not None:
+        return await get_or_create_author_account(
+            session, tenant_id=tenant_id, actor=creator
+        )
     return await find_active_account(
         session, kind=AccountKind.AUTHOR, tenant_id=tenant_id
     )
@@ -279,7 +292,7 @@ async def set_test_purchase(
     """
     actor = audit.require_actor(actor)
     found = await owner_account(
-        session, tenant_id=tenant_id, student_id=student_id, create=True
+        session, tenant_id=tenant_id, student_id=student_id, create=True, actor=actor
     )
     assert found is not None  # created on first need
     account = await lock_account(session, found.id, active=True)
@@ -306,9 +319,14 @@ async def set_test_purchase(
 async def get_author_settings(
     session: AsyncSession, tenant_id: uuid.UUID
 ) -> AuthorSettingsView:
-    """The settings of the tenant's author account (created on first need)."""
+    """The settings of the tenant's author account; a read, it creates none:
+    without an account, the defaults with ``account_id`` None (BIL-E3)."""
     await _live_tenant(session, tenant_id)
-    account = await get_or_create_author_account(session, tenant_id=tenant_id)
+    account = await find_active_account(
+        session, kind=AccountKind.AUTHOR, tenant_id=tenant_id
+    )
+    if account is None:
+        return _settings_view(None, None)
     row = await session.get(BillingAuthorSettings, account.id)
     return _settings_view(account.id, row)
 
@@ -340,7 +358,8 @@ async def update_author_settings(
     credit_allowed: bool | None = None,
     now: datetime | None = None,
 ) -> AuthorSettingsView:
-    """Change what is given; leave the rest. Audited; a no-op writes nothing.
+    """Change what is given; leave the rest. Audited; a no-op writes nothing
+    but the account it may have created (``account.create``).
 
     Raises:
         BillingNotFoundError: no such live tenant.
@@ -349,7 +368,9 @@ async def update_author_settings(
     """
     actor = audit.require_actor(actor)
     await _live_tenant(session, tenant_id)
-    account = await get_or_create_author_account(session, tenant_id=tenant_id)
+    account = await get_or_create_author_account(
+        session, tenant_id=tenant_id, actor=actor
+    )
     row = await session.get(BillingAuthorSettings, account.id)
     before = audit.settings_snapshot(row) if row is not None else None
     draft = row if row is not None else _default_settings(account.id)
@@ -447,10 +468,16 @@ async def _check_target(
 
 
 async def _rule_payer(
-    session: AsyncSession, tenant_id: uuid.UUID, payer_account_id: uuid.UUID | None
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    payer_account_id: uuid.UUID | None,
+    *,
+    actor: str,
 ) -> BillingAccount:
     if payer_account_id is None:
-        return await get_or_create_author_account(session, tenant_id=tenant_id)
+        return await get_or_create_author_account(
+            session, tenant_id=tenant_id, actor=actor
+        )
     payer = await session.get(BillingAccount, payer_account_id)
     if (
         payer is None
@@ -494,7 +521,7 @@ async def create_payment_rule(
         course_node_id=course_node_id,
         student_id=student_id,
     )
-    payer = await _rule_payer(session, tenant_id, payer_account_id)
+    payer = await _rule_payer(session, tenant_id, payer_account_id, actor=actor)
     target = (
         BillingPaymentRule.course_node_id == course_node_id
         if scope is RuleScope.COURSE

@@ -288,7 +288,8 @@ class TestDeletion:
             select(func.count()).where(BillingConsent.account_id == account.id)
         )
         assert consents == 1
-        [entry] = await _audit(db_session, account.id)
+        created, entry = await _audit(db_session, account.id)
+        assert (created.action, created.actor) == ("account.create", "system")
         assert entry.action == "account.anonymize"
         assert entry.before is not None and entry.after is not None
         assert "student_id" not in entry.before  # the log keeps no owner
@@ -762,7 +763,21 @@ class TestAuthorSettings:
             None,
             False,
         )
-        assert await db_session.get(BillingAuthorSettings, view.account_id) is None
+        # BIL-E3: a read creates no account — the defaults, without one.
+        assert view.account_id is None
+        assert (
+            await find_active_account(
+                db_session, kind=AccountKind.AUTHOR, tenant_id=world.tenant_id
+            )
+            is None
+        )
+        made = await admin.update_author_settings(
+            db_session, world.tenant_id, actor=ACTOR, credit_allowed=False
+        )
+        assert made.account_id is not None
+        assert await db_session.get(BillingAuthorSettings, made.account_id) is None
+        again = await admin.get_author_settings(db_session, world.tenant_id)
+        assert (again.account_id, again.benefit) == (made.account_id, Benefit.NONE)
 
     async def test_monthly_limit_then_unlimited_then_none(
         self, db_session: AsyncSession, world: World
@@ -793,7 +808,9 @@ class TestAuthorSettings:
         )
         assert view.benefit_started_at is None
 
-        entries = await _audit(db_session, view.account_id)
+        assert view.account_id is not None
+        created, *entries = await _audit(db_session, view.account_id)
+        assert (created.action, created.actor) == ("account.create", ACTOR)
         assert [e.action for e in entries] == ["author_settings.update"] * 4
         assert entries[0].before is None
         assert entries[0].after is not None
@@ -806,7 +823,10 @@ class TestAuthorSettings:
         view = await admin.update_author_settings(
             db_session, world.tenant_id, actor=ACTOR, credit_allowed=False
         )
-        assert await _audit(db_session, view.account_id) == []  # nothing changed
+        assert view.account_id is not None
+        # Nothing changed in the settings; the account it created is audited.
+        [created] = await _audit(db_session, view.account_id)
+        assert (created.action, created.actor) == ("account.create", ACTOR)
         view = await admin.update_author_settings(
             db_session, world.tenant_id, actor=ACTOR, credit_allowed=True
         )
@@ -814,7 +834,8 @@ class TestAuthorSettings:
         view = await admin.update_author_settings(
             db_session, world.tenant_id, actor=ACTOR, credit_allowed=True
         )
-        [entry] = await _audit(db_session, view.account_id)
+        assert view.account_id is not None
+        _, entry = await _audit(db_session, view.account_id)
         assert entry.before is None
         assert entry.after is not None and entry.after["credit_allowed"] is True
 

@@ -258,7 +258,8 @@ def _settings_line(view: admin.AuthorSettingsView) -> str:
     units = view.monthly_limit_units
     limit = f" ({units} units/month)" if units is not None else ""
     return (
-        f"author account {view.account_id}  benefit={view.benefit.value}{limit}  "
+        f"author account {view.account_id or 'none yet'}  "
+        f"benefit={view.benefit.value}{limit}  "
         f"since={view.benefit_started_at}  credit_allowed={view.credit_allowed}"
     )
 
@@ -407,7 +408,11 @@ async def credit(session: AsyncSession, args: argparse.Namespace) -> str:
     """Credit units to an owner's account: a batch of its own, audited."""
     tenant_id = await resolve_tenant_id(session, args.tenant)
     account = await admin.owner_account(
-        session, tenant_id=tenant_id, student_id=args.student, create=True
+        session,
+        tenant_id=tenant_id,
+        student_id=args.student,
+        create=True,
+        actor=args.actor,
     )
     assert account is not None  # created on first need
     done = await ledger.credit_admin(

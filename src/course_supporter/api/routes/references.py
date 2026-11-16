@@ -43,6 +43,7 @@ from course_supporter.homework.reference_service import (
     ReferenceRefusedError,
     ReferenceService,
     ReferenceView,
+    failure_code_of,
 )
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
@@ -224,6 +225,7 @@ def _response(view: ReferenceView) -> ReferenceViewResponse:
         carried_over=view.carried_over,
         language=view.language,
         failure_reason=view.failure_reason,
+        failure_code=failure_code_of(view.failure_reason),
         pass_threshold=view.pass_threshold,
         doubts=view.doubts,
     )

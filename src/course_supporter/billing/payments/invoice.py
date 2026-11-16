@@ -62,7 +62,9 @@ async def credit_invoice(
         raise BillingInvalidError(
             f"an invoice number is 1 to {MAX_ID_LENGTH} characters"
         )
-    account = await admin.owner_account(session, tenant_id=tenant_id, create=True)
+    account = await admin.owner_account(
+        session, tenant_id=tenant_id, create=True, actor=actor
+    )
     assert account is not None  # created on first need
     done = await ledger.credit_purchase(
         session,

@@ -7,12 +7,18 @@ executors and the funds port are spies: what is under test is what happens
 before them.
 
 * lock v -- a project whose door reads no new or changed text file of the
-  student's (nothing changed, files only deleted, a binary file alone changed)
-  is refused before anything is paid for: ``rejected`` with the category
-  ``no_changes``, no stage executor called, no reserve asked for, no attempt
-  recorded -- the same record as the door's oversize refusal -- and the
-  portal's answer carries ``rejection.code = "no_changes"``;
-* lock g -- a project with a changed file walks its stages as before.
+  student's (nothing changed, files only deleted) is refused before anything
+  is paid for: ``rejected`` with the category ``no_changes``, no stage
+  executor called, no reserve asked for, no attempt recorded -- the same
+  record as the door's oversize refusal -- and the portal's answer carries
+  ``rejection.code = "no_changes"``;
+* lock r -- a project whose new or changed files the door could read none of
+  (an encoding not established, a binary file alone changed, a project
+  without a base holding binary files alone) is refused at the same point
+  with ``no_readable_changes`` and those files in ``safety_result.not_opened``,
+  which the portal answers with the code and the list;
+* lock g -- a project with a changed file walks its stages as before, a file
+  beside it it could not read or not.
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -48,6 +54,7 @@ from course_supporter.homework.path_config import (
 from course_supporter.homework.path_stages import StageContext, StageOutcome
 from course_supporter.homework.project_submission import (
     NO_CHANGES,
+    NO_READABLE_CHANGES,
     _submission_snapshot_key,
 )
 from course_supporter.normalizer import manifest_to_jsonb, normalize_archive
@@ -166,7 +173,9 @@ async def submit(
     """Seed a project task with a ready base, and one submission of ``files``."""
     made: list[tuple[dict[str, uuid.UUID], list[str]]] = []
 
-    async def _make(files: dict[str, bytes]) -> dict[str, uuid.UUID]:
+    async def _make(
+        files: dict[str, bytes], *, with_base: bool = True
+    ) -> dict[str, uuid.UUID]:
         s = get_settings()
         prefix = f"homework/k6/{uuid.uuid4().hex}"
         raw_key = f"{prefix}/proj.zip"
@@ -191,17 +200,20 @@ async def submit(
             )
             session.add(doc)
             await session.flush()
-            project_base = ProjectBase(
-                authored_document_id=doc.id,
-                version=1,
-                archive_key="k/v1/original.zip",
-                snapshot_key=base_key,
-                snapshot_hash=base.snapshot_hash,
-                manifest=manifest_to_jsonb(base.manifest),
-                state="ready",
-            )
-            session.add(project_base)
-            await session.flush()
+            base_id: uuid.UUID | None = None
+            if with_base:
+                project_base = ProjectBase(
+                    authored_document_id=doc.id,
+                    version=1,
+                    archive_key="k/v1/original.zip",
+                    snapshot_key=base_key,
+                    snapshot_hash=base.snapshot_hash,
+                    manifest=manifest_to_jsonb(base.manifest),
+                    state="ready",
+                )
+                session.add(project_base)
+                await session.flush()
+                base_id = project_base.id
             student = Student(
                 tenant_id=tenant.id, external_id=f"s-{uuid.uuid4().hex[:6]}"
             )
@@ -218,7 +230,7 @@ async def submit(
                 original_filename="proj.zip",
                 status="received",
                 response_language="ukr",
-                base_id=project_base.id,
+                base_id=base_id,
             )
             session.add(submission)
             await session.flush()
@@ -325,7 +337,6 @@ async def _run(
 _UNCHANGED: dict[str, dict[str, bytes]] = {
     "nothing_changed": dict(_BASE),
     "files_only_deleted": {"app.py": _APP},
-    "a_binary_alone_changed": {**_BASE, "logo.png": _LOGO + b"\x00\x01"},
 }
 
 
@@ -391,6 +402,75 @@ class TestAProjectWithoutAChange:
             assert detail.rejection.code == category
 
 
+_NOT_UTF8 = b"# " + "Розв'язок\n".encode("cp1251")
+_CHANGED_LOGO = _LOGO + b"\x00\x01"
+# (files, with a base, what the portal lists: path, reason, size)
+_UNREADABLE: dict[str, tuple[dict[str, bytes], bool, list[tuple[str, str, int]]]] = {
+    "a_py_in_an_encoding_not_established": (
+        {**_BASE, "app.py": _APP + _NOT_UTF8},
+        True,
+        [("app.py", "charset_violation", len(_APP + _NOT_UTF8))],
+    ),
+    "a_binary_alone_changed": (
+        {**_BASE, "logo.png": _CHANGED_LOGO},
+        True,
+        [("logo.png", "forbidden_type", len(_CHANGED_LOGO))],
+    ),
+    "no_base_binary_files_alone": (
+        {"logo.png": _LOGO, "icons/a.png": _CHANGED_LOGO},
+        False,
+        [
+            ("icons/a.png", "forbidden_type", len(_CHANGED_LOGO)),
+            ("logo.png", "forbidden_type", len(_LOGO)),
+        ],
+    ),
+}
+
+
+class TestAProjectChangedWithoutAFileItCouldRead:
+    """Lock r."""
+
+    @pytest.mark.parametrize(
+        ("files", "with_base", "listed"), _UNREADABLE.values(), ids=_UNREADABLE.keys()
+    )
+    async def test_is_refused_with_its_own_code_and_the_files(
+        self,
+        submit: Callable[..., Awaitable[dict[str, uuid.UUID]]],
+        session_factory: async_sessionmaker[AsyncSession],
+        s3_client: S3Client,
+        files: dict[str, bytes],
+        with_base: bool,
+        listed: list[tuple[str, str, int]],
+    ) -> None:
+        ids = await submit(files, with_base=with_base)
+
+        run, submission = await _run(ids, session_factory, s3_client)
+
+        assert (submission.base_id is not None) is with_base
+        assert submission.status == "rejected"
+        assert submission.safety_result is not None
+        assert submission.safety_result["source"] == "normalizer"
+        assert submission.safety_result["category"] == NO_READABLE_CHANGES
+        assert submission.safety_result["not_opened"] == [
+            {"arcname": path, "reason": reason, "size": size}
+            for path, reason, size in listed
+        ]
+        assert submission.error_message is not None
+        assert submission.error_message.startswith(f"{NO_READABLE_CHANGES}: ")
+        # Nothing paid for: no stage, no reserve -- and no attempt either.
+        assert run.stages == []
+        assert run.port.reserved == []
+        assert submission.attempt_no is None
+        assert submission.attempt_receipt is None
+        # What the portal answers about it: the code, and the files.
+        detail = _to_detail(submission)
+        assert detail.rejection is not None
+        assert detail.rejection.code == "no_readable_changes"
+        assert detail.rejection.details is None
+        assert detail.presentation.reason_code == "no_readable_changes"
+        assert [(e.path, e.reason, e.size) for e in detail.not_opened] == listed
+
+
 class TestAProjectWithAChange:
     """Lock g: its stages go as before."""
 
@@ -409,3 +489,20 @@ class TestAProjectWithAChange:
         assert run.files == [("app.py",), ("app.py",)]
         assert len(run.port.reserved) == 1
         assert submission.attempt_no == 1
+
+    async def test_walks_its_stages_beside_a_file_it_could_not_read(
+        self,
+        submit: Callable[[dict[str, bytes]], Awaitable[dict[str, uuid.UUID]]],
+        session_factory: async_sessionmaker[AsyncSession],
+        s3_client: S3Client,
+    ) -> None:
+        ids = await submit(
+            {**_BASE, "app.py": _APP + b"# mine\n", "utils.py": _UTILS + _NOT_UTF8}
+        )
+
+        run, submission = await _run(ids, session_factory, s3_client)
+
+        assert submission.status in {"completed", "delivered"}, submission.error_message
+        assert run.stages == _STAGES
+        assert run.files == [("app.py",), ("app.py",)]
+        assert len(run.port.reserved) == 1

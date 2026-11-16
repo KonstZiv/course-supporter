@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
+    RepeatReason,
     VerdictItemKind,
     VerdictValue,
     WeightCategory,
@@ -134,6 +135,7 @@ def _met_criterion(submission: HomeworkSubmission, **overrides: Any) -> dict[str
         "quote_line_end": 3,
         "missing": None,
         "retried": False,
+        "repeat_reason": None,
         "quote_not_found": False,
         "safeguard_fired": False,
         "safeguard_submission_id": None,
@@ -250,6 +252,9 @@ class TestTheDatabaseHoldsTheVerdictRules:
                 },
             ),
             ("unfound_quote_not_met", {"quote_not_found": True}),
+            ("repeat_reason", {"retried": True, "repeat_reason": "too_lazy"}),
+            # A reason only on a retried row.
+            ("repeat_reason", {"repeat_reason": RepeatReason.QUOTE_NOT_FOUND.value}),
         ],
     )
     async def test_a_row_breaking_a_rule_is_refused_by_that_rule(
@@ -263,6 +268,27 @@ class TestTheDatabaseHoldsTheVerdictRules:
 
         with pytest.raises(IntegrityError, match=name):
             await _write(db_session, _met_criterion(submission, **overrides))
+
+    async def test_every_repeat_reason_is_admitted_on_a_retried_row(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        """The CHECK built from RepeatReason admits each member — the two agree."""
+        for number, reason in enumerate(RepeatReason, start=1):
+            await _write(
+                db_session,
+                _met_criterion(
+                    submission,
+                    item_id=f"c{number}",
+                    retried=True,
+                    repeat_reason=reason.value,
+                ),
+            )
+
+    async def test_a_retried_row_without_a_reason_is_admitted(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        """A row retried before the column was added has no reason, and stands."""
+        await _write(db_session, _met_criterion(submission, retried=True))
 
     async def test_a_derived_criterion_needs_no_quote(
         self, db_session: AsyncSession, submission: HomeworkSubmission

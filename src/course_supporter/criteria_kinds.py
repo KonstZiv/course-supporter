@@ -8,7 +8,10 @@ Purpose:
     ``homework/``. These vocabularies live here, below both, for that reason
     alone: the criteria form (``homework/criteria_form.py``) and the criteria
     list service (``homework/criteria_list_service.py``) import them from here,
-    and so does ``storage/orm.py``.
+    and so does ``storage/orm.py``. :class:`RepeatReason` lives here for the
+    same reason: the evaluation's rules decide it
+    (``homework/criteria_verdicts.py``), and the verdict row keeps it
+    (``storage/submission_verdict_repository.py``, ``storage/orm.py``).
 
 Interface:
     :class:`CriteriaLayer` — whose list a criterion comes from.
@@ -16,6 +19,9 @@ Interface:
     :class:`VerdictValue` — what a verdict says.
     :class:`VerdictItemKind` — what a verdict is about: a criterion or one of
     its mandatory points.
+    :class:`RepeatReason` — why a verdict was asked about once more; the
+    verdict row keeps it, so the share and the cost of repeats can be counted
+    from the database by reason.
     :data:`CRITERION_ID_PATTERN`, :data:`POINT_ID_PATTERN` — the shape of their
     identifiers.
 
@@ -85,6 +91,32 @@ class VerdictItemKind(StrEnum):
 
     CRITERION = "criterion"
     POINT = "point"
+
+
+class RepeatReason(StrEnum):
+    """Why a verdict cannot stand as given and is asked about once more (09b).
+
+    ``homework/criteria_verdicts.py`` decides it (``_repeat_reason``) on the
+    model's first answer, and names it to the model in the repeated request;
+    the item's verdict row keeps it (``repeat_reason`` of
+    ``submission_criterion_verdicts``) — the trace of a repeat, which the
+    stage's register rows (``external_service_calls``) price.
+    """
+
+    NO_QUOTE = "no_quote"
+    """A "met" without a quote."""
+    QUOTE_NOT_ONE_LINE = "quote_not_one_line"
+    """A "met" whose quote spans several lines."""
+    QUOTE_TOO_LONG = "quote_too_long"
+    """A "met" whose quote is longer than ``MAX_QUOTE_CHARS`` characters."""
+    QUOTE_TOO_SHORT = "quote_too_short"
+    """Too short to prove anything: counted as a quote not found (9.4)."""
+    QUOTE_NOT_FOUND = "quote_not_found"
+    """A "met" whose quote is not in the work word for word."""
+    QUOTE_FROM_BASE = "quote_from_base"
+    """The quote is the author's: in a file of the project's base (K3)."""
+    NO_SENTENCE = "no_sentence"
+    """A "not met" without a sentence on what is missing."""
 
 
 CRITERION_ID_PATTERN: Final = r"^c[1-9][0-9]*$"

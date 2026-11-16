@@ -28,8 +28,11 @@ worker hit, 1A). Deterministic, zero LLM. It:
    student's files are, so a quote of the author's code can be told apart
    from the student's (chain K3); and names the changed files the context
    shows as a diff, which the new path's safety check reads by the student's
-   lines alone (chain K6). Today's Mentor reads none of it: the text, the
-   safety text and its review are what they were.
+   lines alone (chain K6); and names the new and changed files it could not
+   read (binary, an encoding not established, a document not opened), so the
+   new path can tell a project changed without a file it could read from one
+   without a change (``no_readable_changes``). Today's Mentor reads none of
+   it: the text, the safety text and its review are what they were.
 
 The context is the H2-budgeted trusted/untrusted delta assembly: a
 system-computed trusted block (base tree + two-level delta + F2 metrics +
@@ -313,6 +316,7 @@ async def process_project_submission(
         files=files,
         base_files=base_files,
         shown_as_diff=_shown_as_diff(delta, snapshot.manifest),
+        unread_changes=_unread_changes(delta, snapshot.manifest, screen.not_opened),
     )
 
 
@@ -338,6 +342,31 @@ def _student_work(
         if text is not None:
             files.append(WorkFile(path, text, entry.cls is not EntryClass.DOCUMENT))
     return tuple(files)
+
+
+def _unread_changes(
+    delta: Delta, sub_manifest: Manifest, not_opened: Sequence[NotOpenedEntry]
+) -> tuple[NotOpenedEntry, ...]:
+    """The student's new and changed files the doors did not read, and why.
+
+    The other half of :func:`_student_work`: a file new or changed against
+    the base that has no text -- one the screen set aside (named in
+    ``not_opened`` with its reason) or a binary file, which the screen never
+    opens and names nowhere; it is named here with ``forbidden_type``, the
+    reason an archive's member of a type not read is named for. Size from the
+    manifest. A file excluded from the snapshot is not in the delta, so it is
+    not here either. In order of path.
+    """
+    changes = {*delta.changed, *delta.new}
+    unread = [entry for entry in not_opened if entry.arcname in changes]
+    unread.extend(
+        NotOpenedEntry(
+            arcname=entry.path, reason=ErrorCategory.FORBIDDEN_TYPE, size=entry.size
+        )
+        for entry in sub_manifest.included
+        if entry.path in changes and entry.cls is EntryClass.BINARY
+    )
+    return tuple(sorted(unread, key=lambda entry: entry.arcname))
 
 
 def _shown_as_diff(delta: Delta, sub_manifest: Manifest) -> frozenset[str]:
@@ -496,10 +525,26 @@ NO_CHANGES: Final = "no_changes"
 
 Project chain K6: on the new path a project whose reading has no new or
 changed text file against the author's base (:attr:`DoorReading.files` empty
--- the student changed nothing, only deleted files, or changed binary files
-alone) is refused before anything is paid for. Stored where the oversize
+-- the student changed nothing or only deleted files) is refused before
+anything is paid for. A project whose new or changed files were all left
+unread is refused with :data:`NO_READABLE_CHANGES` instead. Stored where the oversize
 refusal is (:func:`persist_no_changes`), and read back by the portal as its
 reason code (``api/routes/_portal_shared.py::curated_rejection``).
+"""
+
+
+NO_READABLE_CHANGES: Final = "no_readable_changes"
+"""The category of a project whose changes the doors could not read at all.
+
+On the new path a project whose reading has no new or changed text file
+(:attr:`DoorReading.files` empty) while the student did add or change files
+(:attr:`DoorReading.unread_changes` not empty -- binary files, an encoding
+not established, a document that would not open; without a base, every file
+is new) is refused before anything is paid for, as one without a change is,
+but not told it has none. Stored by :func:`persist_no_readable_changes` with
+the files and their reasons, and read back by the portal as its reason code
+(``api/routes/_portal_shared.py::curated_rejection``) and its list of what
+was not opened (``curated_not_opened``).
 """
 
 
@@ -525,6 +570,33 @@ async def persist_no_changes(
     )
 
 
+async def persist_no_readable_changes(
+    session: AsyncSession,
+    hw_repo: HomeworkRepository,
+    sid: uuid.UUID,
+    unread: Sequence[NotOpenedEntry],
+) -> None:
+    """Refuse a project whose changes could not be read, naming each file.
+
+    The record of :func:`persist_no_changes` with the category
+    :data:`NO_READABLE_CHANGES`, and beside it ``not_opened`` -- the files
+    (:attr:`DoorReading.unread_changes`) in the shape Stage 1 stores what it
+    did not open, so the portal lists them as it lists any other
+    (``curated_not_opened``) and the database keeps why the project was
+    refused. No ``details``: the list is the specifics. Called by the new
+    path's door alone (``homework/path_runner.py::_open_the_doors``).
+    """
+    await _persist_rejection(
+        session,
+        hw_repo,
+        sid,
+        f"{NO_READABLE_CHANGES}: none of {len(unread)} new or changed "
+        "file(s) against the base could be read",
+        category=NO_READABLE_CHANGES,
+        not_opened=unread,
+    )
+
+
 def _grouped(n: int) -> str:
     """Thousands-separated number for the curated ``details`` string.
 
@@ -542,6 +614,7 @@ async def _persist_rejection(
     *,
     category: str | None = None,
     details: str | None = None,
+    not_opened: Sequence[NotOpenedEntry] = (),
 ) -> None:
     """Fail-closed persistence: safety result + submission rejected + commit.
 
@@ -554,13 +627,19 @@ async def _persist_rejection(
     rejections above still pass neither -- their reasons carry library
     vocabulary and have no phrase in the portal dictionary yet, so the debt is
     closed only for the categories that do: the oversize refusal and the new
-    path's refusal of a project without a change (:data:`NO_CHANGES`).
+    path's refusals of a project without a change (:data:`NO_CHANGES`) and
+    without a change it could read (:data:`NO_READABLE_CHANGES`).
+
+    ``not_opened`` is stored as Stage 1 stores what it did not open, one
+    ``{arcname, reason, size}`` per file, and only when there is any.
     """
     safety: dict[str, Any] = {"source": "normalizer", "reason": reason}
     if category is not None:
         safety["category"] = category
     if details is not None:
         safety["details"] = details
+    if not_opened:
+        safety["not_opened"] = [entry.model_dump(mode="json") for entry in not_opened]
     await hw_repo.store_safety_result(sid, safety)
     await hw_repo.update_status(sid, "rejected", error_message=reason)
     await session.commit()

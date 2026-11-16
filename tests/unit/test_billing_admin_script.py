@@ -230,6 +230,7 @@ async def test_credit_calls_the_services() -> None:
         "tenant_id": TENANT,
         "student_id": student,
         "create": True,
+        "actor": "k",  # BIL-E3: a created account is audited by the --actor
     }
     assert service.await_args.kwargs == {
         "account_id": account.id,

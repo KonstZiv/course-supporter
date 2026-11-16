@@ -33,7 +33,9 @@ the review to the place that teaches it (task 10, K6, lock a — the course is
 the real one, its search the real finder); and, since the owner's decision of
 2026-11-13, a failed criterion whose only places score below the threshold —
 production's two places of 0.14 — which the review does not link, beside one
-whose place scores 0.6, which it does (task 10, lock g).
+whose place scores 0.6, which it does (task 10, lock g); and, since task
+12a, a second attempt at a versioned task whose review says what was fixed,
+what is still open and what broke since the first.
 
 Requires ``docker compose up -d``; run with ``--run-db``.
 """
@@ -518,12 +520,13 @@ def _ctx(
     tmp_path: Path,
     *,
     arq: Any = None,
+    work: str = _WORK,
 ) -> dict[str, Any]:
     answers = tmp_path / "answers.py"
 
     def _download(_key: str) -> Path:
         # The body deletes its download on the way out; each run gets its own.
-        answers.write_text(_WORK, encoding="utf-8")
+        answers.write_text(work, encoding="utf-8")
         return answers
 
     s3 = MagicMock()
@@ -552,8 +555,12 @@ async def _run(
     port: _PortDouble | None = None,
     arq: Any = None,
     config: PathConfig | None = None,
+    work: str = _WORK,
 ) -> None:
-    """The ARQ task through the seam, on the shipped file unless told otherwise."""
+    """The ARQ task through the seam, on the shipped file unless told otherwise.
+
+    The doors read ``work`` as the submitted file.
+    """
     config = config or _shipped()
     with (
         patch(
@@ -575,7 +582,7 @@ async def _run(
         patch("course_supporter.homework.webhook.deliver_webhook", new=webhook),
     ):
         await arq_process_homework(
-            _ctx(session_factory, router, tmp_path, arq=arq),
+            _ctx(session_factory, router, tmp_path, arq=arq, work=work),
             str(job_id),
             str(submission_id),
         )
@@ -907,6 +914,195 @@ class TestASecondSubmissionKeepsWhatTheFirstEarned:
         assert structure.verdict.passed is False
         [payload] = _reviewed(webhook)
         assert payload.review.score == 50
+
+
+# Task 12a, K2: five criteria, weights 3 / 2 / 2 / 1 / 1 — of 9.
+_FIVE = (
+    _criterion("c1", "must"),
+    _criterion("c2", "should"),
+    _criterion("c3", "should"),
+    _criterion("c4", "may"),
+    _criterion("c5", "may"),
+)
+
+# The second attempt's work: a docstring now (c3), the doubling by addition —
+# the line "return n * 2" that c5 stood on is gone, so no safeguard keeps it.
+_CHANGED_WORK = '"""Doubles n."""\ndef solve(n):\n    return n + n\n'
+
+
+def _said(cid: str, attempt: int) -> dict[str, Any]:
+    """A remark of the given attempt's explanation, told apart by its words."""
+    return {
+        "id": cid,
+        "what": f"Спроба {attempt}: {cid} у роботі не видно.",
+        "why": f"Спроба {attempt}: без {cid} завдання не виконано.",
+        "todo": f"Спроба {attempt}: додайте {cid}.",
+        "links": [],
+    }
+
+
+def _shown(said: dict[str, Any]) -> Remark:
+    return Remark(what=said["what"], why=said["why"], todo=said["todo"])
+
+
+async def _versioned_task(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: dict[str, Any],
+    criteria: tuple[Criterion, ...],
+) -> dict[str, Any]:
+    """Another task of the world's course: with a version, and its ready list.
+
+    The world's own task has no ``content_hash``, so its attempts carry no
+    ``task_version`` and are never compared; this one's are. The submissions
+    land in the world's list, which its teardown deletes.
+    """
+    version = "a" * 64
+    async with session_factory() as session:
+        doc = AuthoredDocument(
+            course_node_id=world["node_id"],
+            course_root_id=world["node_id"],
+            source_type="text",
+            source_url=f"https://example.com/{uuid.uuid4().hex}",
+            task_type="task",
+            language="ukr",
+            content_hash=version,
+        )
+        session.add(doc)
+        await session.flush()
+        lists = TaskCriteriaListRepository(session)
+        claimed = await lists.claim(
+            authored_document_id=doc.id,
+            source_content_hash=version,
+            source_task_type="task",
+            form_version=2,
+        )
+        assert claimed is not None
+        assert await lists.mark_ready(
+            claimed.id,
+            claimed_at=claimed.claimed_at,
+            criteria=criteria_to_document(criteria),
+            contradictions=[],
+            concepts_in_input=False,
+            dropped_concept_count=0,
+            input_fingerprint="f" * 64,
+        )
+        await session.commit()
+    return {
+        **world,
+        "doc_id": doc.id,
+        "in_force": CriteriaInForce(
+            criteria=criteria, layer=CriteriaLayer.MODEL, source_id=claimed.id
+        ),
+    }
+
+
+class TestASecondAttemptSaysWhatWasFixedAndWhatBroke:
+    """Task 12a, K2 through the body: the remarks in the sections of their states.
+
+    Attempt 1: c3 and c4 not met. Attempt 2, the work changed: c3 met, c4
+    still not, c5 — met before — not met now. Its review: c3 fixed, worded by
+    attempt 1's remark; c4 open and c5 broken, by attempt 2's.
+    """
+
+    async def test_c3_is_fixed_c4_open_and_c5_broken(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        task = await _versioned_task(session_factory, world, _FIVE)
+        router = _RouterDouble(session_factory)
+        source = _ListSource(task["in_force"])
+
+        # ── Attempt 1: c1, c2, c5 met — (3 + 2 + 1) of 9 = 66 % ──
+        router.content[CRITERIA_EVALUATION] = _evaluation(
+            _verdict("c1", "met", quote="def solve(n):"),
+            _verdict("c2", "met", quote="return n * 2"),
+            _verdict("c3", "not_met", missing="Немає докстрінга."),
+            _verdict("c4", "not_met", missing="Немає тестів."),
+            _verdict("c5", "met", quote="return n * 2"),
+        )
+        router.content[REVIEW_EXPLANATION] = json.dumps(
+            {
+                "passed": False,
+                "why": _WHY,
+                "remarks": [_said("c3", 1), _said("c4", 1)],
+                "mentor_voice": None,
+            },
+            ensure_ascii=False,
+        )
+        first_id, first_job = await _submit(session_factory, task)
+        await _run(
+            session_factory,
+            router,
+            source,
+            _webhook(),
+            tmp_path,
+            submission_id=first_id,
+            job_id=first_job,
+        )
+
+        first = await _submission(session_factory, first_id)
+        assert (first.status, first.score, first.attempt_no) == ("delivered", 66, 1)
+        # A first attempt: nothing to compare with, every remark new.
+        before = ReviewStructureV1.model_validate(first.review_result)
+        assert before.new_remarks == [_shown(_said("c3", 1)), _shown(_said("c4", 1))]
+        assert before.fixed == before.open == before.broken == []
+
+        # ── Attempt 2: c1, c2, c3 met — (3 + 2 + 2) of 9 = 77 % ──
+        router.content[CRITERIA_EVALUATION] = _evaluation(
+            _verdict("c1", "met", quote="def solve(n):"),
+            _verdict("c2", "met", quote="return n + n"),
+            _verdict("c3", "met", quote='"""Doubles n."""'),
+            _verdict("c4", "not_met", missing="Немає тестів."),
+            _verdict("c5", "not_met", missing="Множення на два зникло."),
+        )
+        router.content[REVIEW_EXPLANATION] = json.dumps(
+            {
+                "passed": False,
+                "why": _WHY,
+                "remarks": [_said("c5", 2), _said("c4", 2)],
+                "mentor_voice": None,
+            },
+            ensure_ascii=False,
+        )
+        webhook = _webhook()
+        second_id, second_job = await _submit(session_factory, task)
+        await _run(
+            session_factory,
+            router,
+            source,
+            webhook,
+            tmp_path,
+            submission_id=second_id,
+            job_id=second_job,
+            work=_CHANGED_WORK,
+        )
+
+        second = await _submission(session_factory, second_id)
+        assert (second.status, second.score, second.attempt_no) == ("delivered", 77, 2)
+        assert second.task_version == first.task_version
+        # The safeguard did not keep c5: its line is not in the work.
+        assert (await _rows(session_factory, second_id))["c5"]["verdict"] == "not_met"
+
+        after = ReviewStructureV1.model_validate(second.review_result)
+        assert after.fixed == [_shown(_said("c3", 1))]
+        assert after.new_remarks == []
+        assert after.open == [_shown(_said("c4", 2))]
+        assert after.broken == [_shown(_said("c5", 2))]
+        assert second.review_markdown == assemble_review(after)
+        assert [
+            line
+            for line in (second.review_markdown or "").splitlines()
+            if line.startswith("## ")
+        ] == [
+            "## Не зараховано",
+            "## Виправлено",
+            "## Лишилося відкритим",
+            "## Зламалося",
+        ]
+        [payload] = _reviewed(webhook)
+        assert payload.structure == after
 
 
 class TestASubmissionWithoutAListWaitsForOne:

@@ -546,5 +546,10 @@ class TestTheQuoteRuleOfK3Stands:
 
 
 def test_nothing_switched_the_rules_version() -> None:
-    """Lock i: the text reviews do not change, so the version does not."""
-    assert criteria_verdicts.VERDICT_RULES_VERSION == 6
+    """Lock i: the text reviews do not change, so the version does not.
+
+    K5 left it at 6; a later change of what a review says raises it on its
+    own (7 — the states of the remarks between attempts, task 12a), so the
+    lock reads "not below" as the other two do.
+    """
+    assert criteria_verdicts.VERDICT_RULES_VERSION >= 6

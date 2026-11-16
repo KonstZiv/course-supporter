@@ -29,7 +29,11 @@ Interface:
     and the pass, from rows; :func:`pass_decision`, :class:`PassDecision` —
     the pass with the branch of the rule that decided it, for the review's
     phrase; :data:`PASS_THRESHOLD_AUTHOR_MUSTS`,
-    :data:`PASS_THRESHOLD_NO_AUTHOR_MUSTS` — its two thresholds.
+    :data:`PASS_THRESHOLD_NO_AUTHOR_MUSTS` — its two thresholds;
+    :func:`is_credited` — whether the score counts a row as met.
+    :class:`RemarkState`, :func:`credited_items`, :func:`remark_states` —
+    where the remark on each item stands since the student's earlier
+    attempt (task 12a).
 
 The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
 9.8, 9.10; the item-level repeat, ratified 2026-10-02; the whole line and
@@ -101,6 +105,15 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
   "met" and an item fallen for the base's quote do not — their quote was
   failed evidence, not a place. The text types' stage does not ask: their
   "not met" keeps no quote, as before.
+* The state of a remark between attempts (task 12a; the product owner's
+  decision of 2026-11-16: the code counts it from the verdicts, never the
+  model). An item is compared, by its id, with its row on the student's
+  earlier attempt at the same version of the task; "credited" is the
+  score's own rule — met, or unconfirmed (:func:`is_credited`). Not
+  credited now: "new" when there is nothing to compare with or the earlier
+  attempt had no such item, "open" when it was not credited then either,
+  "broken" when it was. Credited now: "fixed" when it was not credited
+  then, no state otherwise.
 
 Replacing:
     The stage depends on the functions above and on their value types; a new
@@ -110,7 +123,9 @@ Replacing:
     single verdict stand is ``_repeat_reason`` alone, which of the model's
     words an item is settled on is ``_word_to_settle`` alone, the safeguard's
     condition is ``_kept_by_safeguard`` alone, where a "not met"'s problem
-    stands is ``_problem_place`` alone. A change of any of these rules raises
+    stands is ``_problem_place`` alone, what the score counts as met is
+    :func:`is_credited` alone, the state of a remark between attempts is
+    ``_STATES`` alone. A change of any of these rules raises
     :data:`VERDICT_RULES_VERSION` — as does any other change of code that
     changes what a review says.
 """
@@ -123,6 +138,7 @@ import uuid
 from collections import Counter
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from itertools import count
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol
@@ -165,7 +181,8 @@ quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 # і пороги 70 / 80 (2026-11-12)  # noqa: RUF003
 # поріг збігу посилань на курс 0,3 (2026-11-13)
 # відтворюваність: зерно для deterministic-стадій (2026-11-13)
-VERDICT_RULES_VERSION: Final[int] = 6
+# стани зауважень між спробами: розділи рецензії (2026-11-16)
+VERDICT_RULES_VERSION: Final[int] = 7
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -178,7 +195,10 @@ quote of the base's code is not the student's; 4 — the pass rule of
 2026-11-12: the author's "must" criteria and the thresholds 70 / 80; 5 — the
 course-link score threshold of 2026-11-13 (``MIN_COURSE_LINK_SCORE``); 6 — the
 reproducibility seed of the deterministic stages, which changes what the
-verdict stages answer (2026-11-13, ``llm/reproducibility.py``). It enters
+verdict stages answer (2026-11-13, ``llm/reproducibility.py``); 7 — the
+states of the remarks between attempts (task 12a, 2026-11-16): the builder
+lays the remarks out in the sections "fixed", "new", "open" and "broken"
+instead of all in "new" (:func:`remark_states`). It enters
 the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,
@@ -975,12 +995,35 @@ class ScoredItem(Protocol):
     def quote_not_found(self) -> bool: ...
 
 
+def is_credited(item: ScoredItem) -> bool:
+    """Whether the score counts ``item`` as met: met, or unconfirmed.
+
+    An unconfirmed item counts as met: the model said "done" and the check
+    could not bear it out, which is no evidence the work lacks it — a score
+    that took its weight off would read a fault of the check as the
+    student's. The Mentor session's own choice of 2026-11-07, beside the
+    operator's on the pass (:func:`pass_decision`); undone by dropping
+    ``or _unconfirmed(item)`` here alone. The states of the remarks between
+    attempts read "credited" by this rule too (:func:`remark_states`, task
+    12a), so they move with the score.
+
+    A criterion or a point alike: a point is credited on the same terms.
+    """
+    return item.verdict == VerdictValue.MET or _unconfirmed(item)
+
+
 class _Outcome(NamedTuple):
-    """One criterion as the score and the pass read it."""
+    """One criterion as the score and the pass read it.
+
+    ``credited`` is the score's rule (:func:`is_credited`); ``met`` and
+    ``unconfirmed`` are what the pass reads. The two agree today, and stay
+    two decisions (:func:`score_percent`, :func:`pass_decision`).
+    """
 
     weight: WeightCategory
     met: bool
     unconfirmed: bool
+    credited: bool
 
 
 def _criteria_outcomes(items: Iterable[ScoredItem]) -> list[_Outcome]:
@@ -997,6 +1040,7 @@ def _criteria_outcomes(items: Iterable[ScoredItem]) -> list[_Outcome]:
                 weight=WeightCategory(item.weight),
                 met=item.verdict == VerdictValue.MET,
                 unconfirmed=_unconfirmed(item),
+                credited=is_credited(item),
             )
         )
     return outcomes
@@ -1006,8 +1050,9 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
     """The share of the met criteria's weights, in whole percent, rounded down.
 
     Rounded down so a score never overstates and 100 means everything is met
-    — or unconfirmed (below) — (``PRE-FLIGHT.md`` 9.10); the portal reads 100
-    as "correct". Points do not count on their own — their criterion does.
+    — or unconfirmed (:func:`is_credited`) — (``PRE-FLIGHT.md`` 9.10); the
+    portal reads 100 as "correct". Points do not count on their own — their
+    criterion does.
 
     Raises:
         ValueError: There is no criterion among ``items``, or one has no
@@ -1027,13 +1072,8 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
     for outcome in _criteria_outcomes(items):
         number = WEIGHT_NUMBERS[outcome.weight]
         total += number
-        # An unconfirmed criterion counts as met: the model said "done" and
-        # the check could not bear it out, which is no evidence the work
-        # lacks it — a score that took its weight off would read a fault of
-        # the check as the student's. The Mentor session's own choice of
-        # 2026-11-07, beside the operator's on the pass (is_passed); undone
-        # by dropping ``or outcome.unconfirmed`` here alone.
-        if outcome.met or outcome.unconfirmed:
+        # Met or unconfirmed: the rule and its reason are is_credited's.
+        if outcome.credited:
             met += number
     if total == 0:
         msg = "verdicts without a criterion have no score"
@@ -1143,3 +1183,87 @@ def is_passed(items: Iterable[ScoredItem], *, layer: CriteriaLayer) -> bool:
     here; the webhook and the portal read the verdict the builder stored.
     """
     return pass_decision(items, layer=layer).passed
+
+
+class RemarkState(StrEnum):
+    """Where the remark on an item stands since the earlier attempt (task 12a).
+
+    The review shows it as the section the remark is in
+    (``models/review_structure.py``, ``SECTION_ORDER``); an item with no
+    state — credited now, and credited before or never compared — has none.
+    """
+
+    NEW = "new"
+    """Not credited, and nothing to compare with — the first attempt, one at
+    another version of the task — or the earlier attempt had no such item."""
+    OPEN = "open"
+    """Not credited, and not credited on the earlier attempt either."""
+    FIXED = "fixed"
+    """Credited, and not credited on the earlier attempt."""
+    BROKEN = "broken"
+    """Not credited, and credited on the earlier attempt."""
+
+
+# The table of the product owner's decision of 2026-11-16, row for row: by
+# (credited on the earlier attempt — None when it had no such item or there is
+# none to compare with — and credited now), the item's state.
+_STATES: Final[Mapping[tuple[bool | None, bool], RemarkState | None]] = (
+    MappingProxyType(
+        {
+            (None, False): RemarkState.NEW,
+            (None, True): None,
+            (False, False): RemarkState.OPEN,
+            (False, True): RemarkState.FIXED,
+            (True, False): RemarkState.BROKEN,
+            (True, True): None,
+        }
+    )
+)
+
+
+def credited_items(rows: Iterable[ScoredItem]) -> dict[str, bool]:
+    """By item id, whether each row is credited (:func:`is_credited`).
+
+    What :func:`remark_states` reads of the earlier attempt's rows: criteria
+    and points alike.
+    """
+    return {row.item_id: is_credited(row) for row in rows}
+
+
+def remark_states(
+    earlier: Mapping[str, bool] | None, rows: Iterable[ScoredItem]
+) -> dict[str, RemarkState | None]:
+    """The state of each item of ``rows`` since the earlier attempt (task 12a).
+
+    Items are matched by their id alone: an author's edit keeps the ids of
+    the criteria it keeps (task 08), whatever the address of the list.
+
+    Args:
+        earlier: By item id, whether the earlier attempt credited it
+            (:func:`credited_items`); ``None`` when there is nothing to
+            compare with — a first attempt, or none earlier at the same
+            version of the task.
+        rows: The submission's verdict rows, criteria and points alike.
+
+    Returns:
+        By the item id of each row, its state, or ``None`` when it has none.
+        An item only the earlier attempt had has no row now and is not here.
+
+    >>> def row(item_id, verdict):
+    ...     return VerdictRecord(
+    ...         item_id, VerdictItemKind.CRITERION, "should", verdict, verdict
+    ...     )
+    >>> remark_states(
+    ...     {"c1": False, "c2": True, "c3": False},
+    ...     [row("c1", "not_met"), row("c2", "not_met"), row("c3", "met"),
+    ...      row("c4", "not_met")],
+    ... )  # doctest: +NORMALIZE_WHITESPACE
+    {'c1': <RemarkState.OPEN: 'open'>, 'c2': <RemarkState.BROKEN: 'broken'>,
+     'c3': <RemarkState.FIXED: 'fixed'>, 'c4': <RemarkState.NEW: 'new'>}
+    """
+    return {
+        row.item_id: _STATES[
+            (None if earlier is None else earlier.get(row.item_id), is_credited(row))
+        ]
+        for row in rows
+    }

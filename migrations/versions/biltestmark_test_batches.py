@@ -22,6 +22,8 @@ are taken out by one administrator's command before charging is switched on.
   a batch (``ck_billing_movements_batch``); the column comment of ``kind``.
 * ``billing_audit_log.action`` — comment only: gains ``batch.test_void`` and
   ``account.create`` (the latter added without a migration by BIL-E3).
+  ``billing_audit_log.actor`` — comment only: an ``account.create`` entry may
+  name ``system`` instead of an administrator (BIL-E3).
   ``entity`` already names ``account`` and ``batch``: unchanged.
 * The backfill: every batch already there with ``source = 'purchase'`` and
   ``provider = 'creem'`` is marked ``backfill``. The ground (the operator's
@@ -100,6 +102,12 @@ _ACTION_NEW = (
     "account.create."
 )
 
+_ACTOR_OLD = "Who made the change (the administrator's --actor)."
+_ACTOR_NEW = (
+    "Who made the change: the administrator's --actor, or system for an "
+    "account created by a user's or the system's action (account.create)."
+)
+
 
 def _movement_checks(kinds: str, with_batch: str) -> None:
     op.drop_constraint("ck_billing_movements_kind", "billing_movements", type_="check")
@@ -111,6 +119,17 @@ def _movement_checks(kinds: str, with_batch: str) -> None:
         "ck_billing_movements_batch",
         "billing_movements",
         f"(kind IN {with_batch}) = (batch_id IS NOT NULL)",
+    )
+
+
+def _actor_comment(comment: str, existing: str) -> None:
+    op.alter_column(
+        "billing_audit_log",
+        "actor",
+        existing_type=sa.String(200),
+        existing_nullable=False,
+        comment=comment,
+        existing_comment=existing,
     )
 
 
@@ -172,6 +191,7 @@ def upgrade() -> None:
     )
     _movement_checks(_MOVEMENT_KINDS_NEW, _MOVEMENTS_WITH_BATCH_NEW)
     _comments(_KIND_COMMENT_NEW, _KIND_COMMENT_OLD, _ACTION_NEW, _ACTION_OLD)
+    _actor_comment(_ACTOR_NEW, _ACTOR_OLD)
     # The backfill (module docstring): every Creem purchase so far was a test.
     op.execute(
         "INSERT INTO billing_test_batches (batch_id, marked_at, marked_by) "
@@ -194,6 +214,7 @@ def downgrade() -> None:
             "exist; the schema below biltestmark_test_batches has no place for "
             "them — refusing to downgrade"
         )
+    _actor_comment(_ACTOR_OLD, _ACTOR_NEW)
     _comments(_KIND_COMMENT_OLD, _KIND_COMMENT_NEW, _ACTION_OLD, _ACTION_NEW)
     _movement_checks(_MOVEMENT_KINDS_OLD, _MOVEMENTS_WITH_BATCH_OLD)
     op.drop_table(_TABLE)

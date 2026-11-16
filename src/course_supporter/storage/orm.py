@@ -4427,7 +4427,9 @@ class BillingAuditEntry(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
     actor: Mapped[str] = mapped_column(
-        String(200), comment="Who made the change (the administrator's --actor)."
+        String(200),
+        comment="Who made the change: the administrator's --actor, or system for "
+        "an account created by a user's or the system's action (account.create).",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

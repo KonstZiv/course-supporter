@@ -36,7 +36,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from httpx import ASGITransport, AsyncClient, Response
 from scripts import billing_admin
-from sqlalchemy import create_engine, delete, inspect, or_, select, text
+from sqlalchemy import Table, create_engine, delete, inspect, or_, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -627,6 +627,7 @@ class TestTable:
 
     async def test_comments_are_the_orms(self, db_session: AsyncSession) -> None:
         orm = BillingTestBatch.__table__
+        assert isinstance(orm, Table)  # a mapped class's table, narrowed for typing
         rows = (
             await db_session.execute(
                 text(
@@ -637,7 +638,8 @@ class TestTable:
                 )
             )
         ).all()
-        assert dict(rows) == {c.name: c.comment for c in orm.c}
+        live: dict[str, str | None] = {name: comment for name, comment in rows}
+        assert live == {c.name: c.comment for c in orm.c}
         comment = await db_session.scalar(
             text("SELECT obj_description(CAST('billing_test_batches' AS regclass))")
         )

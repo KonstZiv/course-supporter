@@ -15,6 +15,12 @@ Routes
 Screens show units only, and pick their words by the codes (``low``,
 ``next_may_fail``, ``runs_out_soon``). The thresholds are settings
 (``BILLING_REMINDER_*``, ``BILLING_EXPIRY_NOTICE_DAYS``).
+
+Both carry ``charging_enabled`` — the switch ``BILLING_CHARGING_ENABLED``
+(:func:`course_supporter.billing.charging.charging_enabled`), the value and the
+source of ``GET /billing/spending`` and of the estimate routes (BIL-E3). The
+other fields do not depend on it: what to show while charging is off is the
+screen's decision.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from course_supporter.api.deps import get_current_student, get_session
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.auth.scopes import require_scope
+from course_supporter.billing import charging
 from course_supporter.billing.accounts import get_or_create_author_account
 from course_supporter.billing.held import held_for_author
 from course_supporter.billing.outlook import (
@@ -44,6 +51,13 @@ router = APIRouter(tags=["billing"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StudentDep = Annotated[StudentContext, Depends(get_current_student)]
 PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
+
+
+_CHARGING_ENABLED = (
+    "BILLING_CHARGING_ENABLED, as in GET /billing/spending and the estimate "
+    "routes: while false nothing is charged or refused; the other fields are "
+    "computed the same either way."
+)
 
 
 class ExpiringSoon(BaseModel):
@@ -61,6 +75,7 @@ class StudentOutlookResponse(BaseModel):
     warning: Literal["low", "next_may_fail"] | None
     expiring_soon: ExpiringSoon | None
     paid_by: Literal["self", "author"]
+    charging_enabled: bool = Field(description=_CHARGING_ENABLED)
 
 
 class HeldReviewsOut(BaseModel):
@@ -88,6 +103,7 @@ class AuthorOutlookResponse(BaseModel):
         "that wait for the author's units; they start, oldest first, once the "
         "units cover them."
     )
+    charging_enabled: bool = Field(description=_CHARGING_ENABLED)
 
 
 def _expiring(found: Expiring | None) -> ExpiringSoon | None:
@@ -119,6 +135,7 @@ async def get_student_outlook(
         warning=found.warning,
         expiring_soon=_expiring(found.expiring_soon),
         paid_by=found.paid_by,
+        charging_enabled=charging.charging_enabled(),
     )
 
 
@@ -142,4 +159,5 @@ async def get_author_outlook(
             oldest_at=held.oldest_at,
             missing_units=held.missing_units,
         ),
+        charging_enabled=charging.charging_enabled(),
     )

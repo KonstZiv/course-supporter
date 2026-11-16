@@ -971,6 +971,7 @@ class TestStudentOutlook:
             "warning": None,
             "expiring_soon": None,
             "paid_by": "author",
+            "charging_enabled": True,
         }
 
     async def test_units_expiring_within_14_days(
@@ -1014,9 +1015,48 @@ class TestAuthorOutlook:
             "warning": None,
             "expiring_soon": None,
             "held_reviews": {"count": 0, "oldest_at": None, "missing_units": 0},
+            "charging_enabled": True,
         }
         assert (ok["days_left"], ok["warning"]) == (43, None)  # 860 / (140/7)
         assert (low["days_left"], low["warning"]) == (1, "runs_out_soon")  # 160/120
+
+
+@pytest.mark.usefixtures("signed_in")
+@pytest.mark.parametrize(
+    "url", ["/api/v1/portal/billing/outlook", "/api/v1/billing/outlook"]
+)
+async def test_the_outlooks_say_whether_charging_is_on(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+) -> None:
+    """BIL-E3, part C: ``charging_enabled`` is the switch, as in
+    ``GET /billing/spending``; every other field is the same either way."""
+    await buy(session_factory, world.student, 500)
+    await buy(session_factory, world.author, 1000)
+    await charged_reviews(session_factory, world.student, world.student, [100])
+    await charged_reviews(session_factory, world.author, world.student, [140])
+    seen: dict[bool, dict[str, Any]] = {}
+    async with _client() as client:
+        for enabled in (False, True):
+            monkeypatch.setattr(
+                charging, "charging_enabled", lambda settings=None, on=enabled: on
+            )
+            response = await client.get(url)
+            assert response.status_code == 200, response.text
+            seen[enabled] = response.json()
+            spending = (await client.get("/api/v1/billing/spending")).json()
+            assert seen[enabled]["charging_enabled"] is spending["charging_enabled"]
+
+    assert (seen[False]["charging_enabled"], seen[True]["charging_enabled"]) == (
+        False,
+        True,
+    )
+    off = {k: v for k, v in seen[False].items() if k != "charging_enabled"}
+    on = {k: v for k, v in seen[True].items() if k != "charging_enabled"}
+    assert off == on, "the reminders do not depend on the switch"
+    assert off.get("reviews_left", off.get("days_left")) is not None
 
 
 @pytest.mark.usefixtures("signed_in")

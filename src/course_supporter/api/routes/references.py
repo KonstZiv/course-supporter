@@ -43,12 +43,12 @@ from course_supporter.homework.reference_service import (
     ReferenceRefusedError,
     ReferenceService,
     ReferenceView,
+    failure_code_of,
 )
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
 from course_supporter.storage.course_node_repository import CourseNodeRepository
-from course_supporter.workers.key_explain import failure_code_of
 
 logger = structlog.get_logger()
 

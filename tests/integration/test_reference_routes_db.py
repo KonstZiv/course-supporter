@@ -31,6 +31,7 @@ from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant
 from course_supporter.auth.context import TenantContext
 from course_supporter.funds_port import FundsRefusalReason
+from course_supporter.homework.reference_service import funds_refused_reason
 from course_supporter.jobs import JobType
 from course_supporter.storage.content_hash import compute_content_hash
 from course_supporter.storage.database import get_session
@@ -47,7 +48,6 @@ from course_supporter.storage.orm import (
 from course_supporter.storage.task_reference_repository import (
     TaskReferenceRepository,
 )
-from course_supporter.workers.key_explain import funds_refused_reason
 from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = pytest.mark.requires_db

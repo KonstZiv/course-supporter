@@ -70,13 +70,16 @@ A test written in the system (task 07b):
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import ClassVar, Final, Protocol
+from typing import ClassVar, Final, Literal, Protocol
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.billing.quotes import INSUFFICIENT_UNITS
+from course_supporter.funds_port import FundsRefusalReason
 from course_supporter.homework.reference_key import (
     AnswerKey,
     QuestionNumbers,
@@ -195,6 +198,37 @@ class GenerationInProgressError(Exception):
             f"{self.code}: another job of task {authored_document_id} is in flight"
         )
         self.authored_document_id = authored_document_id
+
+
+FUNDS_REFUSED: Final = "funds refused: "
+"""The start of the failure reason of a version the funds port refused
+(``workers/key_explain.py``, step 3)."""
+
+FailureCode = Literal["insufficient_units"]
+
+
+def funds_refused_reason(reason: FundsRefusalReason | None) -> str:
+    """The failure reason the key-explanation work writes when the funds port
+    refuses it (``workers/key_explain.py``, step 3)."""
+    return f"{FUNDS_REFUSED}{reason}"
+
+
+FAILURE_CODES: Final[Mapping[str, FailureCode]] = {
+    funds_refused_reason(FundsRefusalReason.INSUFFICIENT_FUNDS): INSUFFICIENT_UNITS,
+}
+"""A failure reason the key-explanation work writes → the code the author's
+screen reacts to (BIL-E3): a version closed by the funds port for want of units
+is ``insufficient_units``, the code of every refusal for want of units
+(``billing.quotes.INSUFFICIENT_UNITS``). Any other failure has no code. Kept
+here, beside :class:`ReferenceView`, so the worker writes the reason and the
+route reads its code from one place without the API importing a worker."""
+
+
+def failure_code_of(failure_reason: str | None) -> FailureCode | None:
+    """The code of a version's failure reason (:data:`FAILURE_CODES`), or None."""
+    if failure_reason is None:
+        return None
+    return FAILURE_CODES.get(failure_reason)
 
 
 @dataclass(frozen=True, slots=True)

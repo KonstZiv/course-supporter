@@ -60,6 +60,10 @@ from course_supporter.funds_port import (
     VersionWorkContext,
 )
 from course_supporter.homework.reference_key import answers_digest
+from course_supporter.homework.reference_service import (
+    failure_code_of,
+    funds_refused_reason,
+)
 from course_supporter.homework.task_text import stitch_task_text
 from course_supporter.homework.test_object import (
     DraftBody,
@@ -90,11 +94,7 @@ from course_supporter.storage.orm import (
 )
 from course_supporter.storage.task_reference_repository import TaskReferenceRepository
 from course_supporter.storage.test_object_repository import TestObjectRepository
-from course_supporter.workers.key_explain import (
-    arq_explain_key,
-    failure_code_of,
-    funds_refused_reason,
-)
+from course_supporter.workers.key_explain import arq_explain_key
 from tests._helpers.course_node_factory import make_root_course_node
 from tests._helpers.priced import priced_exact
 

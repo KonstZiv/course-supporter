@@ -3,8 +3,8 @@
 The pair is fixed here: the worker writes ``funds refused: insufficient_funds``
 when the funds port refuses the work for want of units, and the reference route
 answers its ``failure_code`` with ``insufficient_units`` — both from the one
-function and the one table of ``workers/key_explain.py``, never a copy of the
-text. Any other failure reason has no code.
+function and the one table of ``homework/reference_service.py``, never a copy
+of the text. Any other failure reason has no code.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import pytest
 
 from course_supporter.billing.quotes import INSUFFICIENT_UNITS
 from course_supporter.funds_port import FundsRefusalReason
-from course_supporter.workers.key_explain import (
+from course_supporter.homework.reference_service import (
     FAILURE_CODES,
     failure_code_of,
     funds_refused_reason,

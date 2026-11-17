@@ -33,7 +33,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from course_supporter.call_outcome import CallOutcome, FundsDecision, SkipReason
+from course_supporter.call_outcome import (
+    CallOutcome,
+    FundsDecision,
+    RequestKind,
+    SkipReason,
+)
 from course_supporter.cost_kinds import CostKind, TariffWindow
 from course_supporter.criteria_kinds import (
     CRITERION_ID_PATTERN,
@@ -1270,6 +1275,13 @@ class ExternalServiceCall(Base):
             "OR (unit_in IS NOT NULL AND unit_in_cached BETWEEN 0 AND unit_in)",
             name="ck_esc_cached_within_input",
         ),
+        # ── 2026-11-16: the traces that make a cheaper evaluation comparable ──
+        CheckConstraint(
+            _nullable_in("request_kind", RequestKind), name="ck_esc_request_kind"
+        ),
+        CheckConstraint(
+            "rung_index IS NULL OR rung_index >= 1", name="ck_esc_rung_index"
+        ),
         {"comment": "Audit log of all external API calls (LLM, transcription, etc.)"},
     )
 
@@ -1481,6 +1493,35 @@ class ExternalServiceCall(Base):
         comment="The submission path the estimate belongs to, as "
         "'<task type>/<submission state>' (PathKey text, e.g. 'task/first')."
         + _FUNDS_ROW_COMMENT,
+    )
+    # 2026-11-16: what an attempt of the ladder router was, as columns. Before,
+    # the seed and the temperature reached a log line alone
+    # (``stage_router_reproducibility``), and a repeat read like a first call.
+    request_kind: Mapped[str | None] = mapped_column(
+        String(16),
+        comment="Which request of the stage this attempt is (RequestKind): "
+        "first / item_repeat / structural_retry / infra_retry. Written by the "
+        "ladder router on attempt rows. NULL on trace rows, on rows of no model "
+        "call and on rows written before revision esc_request_traces.",
+    )
+    seed: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="The seed the request was sent with, as the provider got it. "
+        "NULL = no seed was sent, the row is not an attempt of the ladder "
+        "router, or it was written before revision esc_request_traces.",
+    )
+    temperature: Mapped[float | None] = mapped_column(
+        Float,
+        comment="The temperature the request was sent with. NULL = none was "
+        "set, the row is not an attempt of the ladder router, or it was "
+        "written before revision esc_request_traces.",
+    )
+    rung_index: Mapped[int | None] = mapped_column(
+        SmallInteger,
+        comment="Position of the row's rung on the stage's ladder, from 1; an "
+        "item repeat keeps the position of the rung it is sent to. On attempt "
+        "and trace rows of the ladder router. NULL = outside a ladder, or "
+        "written before revision esc_request_traces.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -2333,10 +2374,19 @@ class SubmissionCriterionVerdict(Base):
     model verdict of its own: the code derives it from its points.
 
     **The trace of a repeat.** ``retried`` says the item was asked about once
-    more; ``repeat_reason`` says why (:class:`RepeatReason`), so the share and
-    the cost of repeats — with the stage's rows in ``external_service_calls``
-    — are counted from the database by reason, item, list and model. A reason
-    only on a retried row; a retried row written before the column has none.
+    more; ``repeat_reason`` says why (:class:`RepeatReason`);
+    ``first_model_verdict`` keeps what the model said the first time, so the
+    share of repeats that changed a verdict is counted from these rows by
+    reason, item and list. ``answered_by_call_id`` names the register row
+    (``external_service_calls``) of the call whose answer the verdict stands
+    on: its provider, model, seed, temperature and rung, and through its job
+    the stage's other rows. What repeats cost is counted in the register
+    alone, by ``request_kind`` (``item_repeat``, ``structural_retry``,
+    ``infra_retry``), provider and model: one repeated request asks about
+    every item that could not stand, so its price belongs to the request, not
+    to one item or one reason. All three only on rows written since revision
+    esc_request_traces; a reason only on a retried row, and a retried row
+    written before revision verdict_repeat_reason has none.
 
     No soft-delete and no cascade, as on ``student_feedback``: the rows go with
     a hard delete of their submission (``ON DELETE CASCADE``), and the reads
@@ -2414,6 +2464,13 @@ class SubmissionCriterionVerdict(Base):
             f"({_nullable_in('repeat_reason', RepeatReason)}) "
             "AND (repeat_reason IS NULL OR retried)",
             name="ck_submission_criterion_verdicts_repeat_reason",
+        ),
+        # A first answer only on a retried row; a retried row written before
+        # the column has none, as for repeat_reason.
+        CheckConstraint(
+            f"({_nullable_in('first_model_verdict', VerdictValue)}) "
+            "AND (first_model_verdict IS NULL OR retried)",
+            name="ck_submission_criterion_verdicts_first_model_verdict",
         ),
         Index(
             "uq_submission_criterion_verdicts_submission_item",
@@ -2525,6 +2582,29 @@ class SubmissionCriterionVerdict(Base):
         "not asked again, and on rows written before revision "
         "verdict_repeat_reason even when retried is true.",
     )
+    first_model_verdict: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+        comment="What the model said about the item in its first answer "
+        "(VerdictValue), on a retried row alone; model_verdict is its word "
+        "after the repeat. NULL when the item was not asked again, and on rows "
+        "written before revision esc_request_traces.",
+    )
+    # No index: the register's rows are never deleted, and a read goes from
+    # the verdict to its call, by the call's primary key.
+    answered_by_call_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey(
+            "external_service_calls.id",
+            ondelete="SET NULL",
+            name="fk_submission_criterion_verdicts_answered_by_call_id",
+        ),
+        nullable=True,
+        comment="FK → ExternalServiceCall: the attempt whose answer the verdict "
+        "stands on — of a retried item, the one homework/criteria_verdicts.py::"
+        "_word_to_settle chose. NULL for a criterion derived from its points, "
+        "when the call's row was not written, and on rows written before "
+        "revision esc_request_traces.",
+    )
     quote_not_found: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
@@ -2550,9 +2630,11 @@ class SubmissionCriterionVerdict(Base):
         Boolean,
         default=False,
         server_default=text("false"),
-        comment="The quote stands on the project's base, not on the student's "
-        "own work (task 13, reserved for the project path). Nothing writes or "
-        "reads it yet.",
+        comment="The item fell for a quote of the project's base, the author's "
+        "code, not the student's own (project chain K3): 'not_met', never "
+        "unconfirmed. Written from homework/criteria_verdicts.py by "
+        "storage/submission_verdict_repository.py; read by the explanation "
+        "stage. Always false outside the project path.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

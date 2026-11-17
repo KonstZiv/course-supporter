@@ -181,6 +181,7 @@ async def evaluate_criteria(
     agent = CriteriaEvaluatorAgent(context.router)
 
     first = await agent.evaluate(shown, execution=execution)
+    again: Evaluated | None = None
     repeat: EvaluationAnswer | None = None
     to_repeat = items_to_ask_again(first.answer, work)
     if to_repeat:
@@ -209,6 +210,8 @@ async def evaluate_criteria(
         work=work,
         earlier=earlier,
         place_unmet=project,
+        first_call_id=first.call_id,
+        repeat_call_id=again.call_id if again is not None else None,
     )
     await verdicts.replace_for_submission(
         tenant_id=submission.tenant_id,
@@ -282,12 +285,18 @@ def _on_the_rung(execution: StageExecution, evaluated: Evaluated) -> StageExecut
     after the first request lives inside the router's walk and does not cross
     to a second one. The ceiling was counted with the repeat inside it
     (``PRE-FLIGHT.md`` 9.6), so it bounds the repeat with room to spare.
+
+    The execution is marked as an item repeat on that rung's position
+    (``repeat_on_rung``): the register then tells the repeat from the first
+    request and keeps the rung's place on the whole ladder. What is sent is
+    the same.
     """
-    for rung in execution.stage.ladder:
+    for position, rung in enumerate(execution.stage.ladder, start=1):
         if (rung.provider, rung.model) == (evaluated.provider, evaluated.model):
             return replace(
                 execution,
                 stage=execution.stage.model_copy(update={"ladder": [rung]}),
+                repeat_on_rung=position,
             )
     msg = (
         f"the rung that answered ({evaluated.provider}/{evaluated.model}) is not "

@@ -4,9 +4,14 @@ Reads, never writes (2026-11-13). For one submission it assembles the prompt
 variables of the stage's FIRST request (not the repeat about the verdicts that
 could not stand) from the same sources, through the same code, as the stage:
 
-* the criteria list in force — only a STORED one
-  (``criteria_list_service.load_in_force``). None stored: the script stops; it
-  composes nothing and calls no model;
+* the criteria list the submission's verdicts were judged against — by the
+  address its verdict rows carry (``criteria_layer`` + ``criteria_source_id``,
+  ``judged_list.read_judged_list``), as the explanation's rebuild reads it
+  (``homework/explanation_input_rebuild.py``): an author's edit since the run
+  does not move it. A submission without verdict rows (the stage never wrote
+  them) takes the list in force now, as before — only a STORED one
+  (``criteria_list_service.load_in_force``); the output says which it was.
+  Neither: the script stops; it composes nothing and calls no model;
 * the task's title, description and text (``task_context.load_task_context``);
 * the work as the doors read it — the same functions the body calls
   (``path_runner.door_languages``, ``doors.screen_student_note``,
@@ -27,14 +32,27 @@ Usage::
 
 ``--out`` is the JSON ``scripts/measure_determinism.py --input`` takes.
 
-``--check-hash`` also builds the request the router would send on the stage's
-first rung WITHOUT the seed (``deterministic: false`` — what production sent
-before 2026-11-13), takes its ``input_hash`` and compares it with the register
-rows of that rung for this submission (``external_service_calls`` of the
-submission's jobs, ``action = criteria_evaluation``). ``matched: true`` — the
-recorded input is the input production sent. The result is printed and
-written beside ``--out`` as ``<name>.check.json``, with each row's hash and
-prompt hash, so a mismatch shows whether the prompt or the input moved.
+``--check-hash`` also builds the request the router sends on the stage's
+first rung and compares its ``input_hash`` with the register rows of that rung
+for this submission (``external_service_calls`` of the submission's jobs,
+``action = criteria_evaluation``). The seed and the temperature are part of
+that hash, so each row is compared with the request built with the seed and
+the temperature production sent for THAT row (:func:`sent_with`):
+
+* a row written since revision ``esc_request_traces`` (its ``request_kind`` is
+  set) says them itself — its ``seed`` and ``temperature`` columns;
+* an older row is dated. Before :data:`SEED_SENT_SINCE` — the merge of the
+  router's seed (``llm/reproducibility.py``) into main, 2026-11-13 20:23:21
+  UTC — no seed; from then on the stage's fixed seed, where the rung's
+  connector takes one (``LLMProvider.seed_supported``). The temperature is 0
+  on both sides: the request's own default before, set explicitly after. The
+  deploy was by hand, after the merge: a row of the hours between can have
+  gone without a seed, and its rule is printed beside it.
+
+``matched: true`` — the recorded input is the input production sent. The
+result is printed and written beside ``--out`` as ``<name>.check.json``, with
+each row's hash, the rule its seed came from and its prompt hash, so a
+mismatch shows whether the prompt, the input or the seed moved.
 
 Exit codes: 0 — written; 2 — refused (the reason is printed), nothing written.
 """
@@ -48,8 +66,9 @@ import sys
 import uuid
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,9 +79,13 @@ from course_supporter.agents.criteria_evaluator import (
     render_context,
 )
 from course_supporter.homework.criteria_evaluation import course_language
-from course_supporter.homework.criteria_list_service import load_in_force
+from course_supporter.homework.criteria_list_service import (
+    CriteriaInForce,
+    load_in_force,
+)
 from course_supporter.homework.criteria_verdicts import judged_items
 from course_supporter.homework.doors import screen_student_note
+from course_supporter.homework.judged_list import judged_layer, read_judged_list
 from course_supporter.homework.path_config import ModelStage
 from course_supporter.homework.path_runner import door_languages, read_text_work
 from course_supporter.homework.path_stages import router_stage_config
@@ -75,17 +98,39 @@ from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.llm.providers import PROVIDER_REGISTRY
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.registry import ModelRegistryConfig
+from course_supporter.llm.reproducibility import (
+    DETERMINISTIC_TEMPERATURE,
+    REPRODUCIBILITY_SEED,
+)
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 from course_supporter.llm.stage_router import StageRouter
 from course_supporter.models.source import AssignmentType
 from course_supporter.security.exceptions import SecurityRejectedError
-from course_supporter.storage.orm import ExternalServiceCall, HomeworkSubmission, Job
+from course_supporter.storage.orm import (
+    ExternalServiceCall,
+    HomeworkSubmission,
+    Job,
+    SubmissionCriterionVerdict,
+)
 from course_supporter.storage.s3 import S3Client
+from course_supporter.storage.submission_verdict_repository import (
+    SubmissionVerdictRepository,
+)
 
 STAGE = "criteria_evaluation"
 SERVED_TYPES = frozenset({AssignmentType.TASK.value, AssignmentType.SHORT_TASK.value})
 # The subject type of a submission's jobs (``jobs/job_type.py``).
 SUBMISSION_SUBJECT = "homework_submission"
+# When the router began to send the stage's seed: the merge of
+# ``llm/reproducibility.py`` into main (PR 661). See the module docstring.
+SEED_SENT_SINCE: Final = datetime(2026, 11, 13, 20, 23, 21, tzinfo=UTC)
+# Where a list came from (``Recorded.criteria_from``).
+FROM_VERDICT_ROWS = "verdict_rows"
+FROM_IN_FORCE = "in_force"
+# The rule a row's seed and temperature came from (``RegisterRow.sent_rule``).
+RULE_COLUMNS = "columns"
+RULE_BEFORE_SEED = "dated_before_seed"
+RULE_SINCE_SEED = "dated_since_seed"
 
 
 class RecordRefusedError(Exception):
@@ -103,17 +148,30 @@ class Recorded:
     # name of the downloaded file — a temporary name that differs per download,
     # so the text (and the hash) cannot match production's then.
     filename_was_temporary: bool
+    # FROM_VERDICT_ROWS — the list the verdicts were judged against;
+    # FROM_IN_FORCE — the submission has no verdict rows, the list in force now.
+    criteria_from: str = FROM_VERDICT_ROWS
 
 
 @dataclass(frozen=True)
 class RegisterRow:
-    """An attempt row of the first rung, as the check reads it."""
+    """An attempt row of the first rung, as the check reads it.
+
+    ``request_kind``, ``seed`` and ``temperature`` are the row's own columns
+    (``None`` on a row written before they existed); ``sent_rule``,
+    ``rebuilt_hash`` and ``matched`` are filled by :func:`compare`.
+    """
 
     id: str
     created_at: str
     outcome: str | None
     input_hash: str | None
     prompt_hash: str | None
+    request_kind: str | None = None
+    seed: int | None = None
+    temperature: float | None = None
+    sent_rule: str = ""
+    rebuilt_hash: str = ""
     matched: bool = False
 
 
@@ -124,11 +182,19 @@ class HashCheck:
     stage: str
     provider: str
     model: str
-    input_hash: str
     prompt_hash: str
     matched: bool
     rows: list[RegisterRow] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SentWith:
+    """The seed and the temperature one row's request was sent with."""
+
+    seed: int | None
+    temperature: float
+    rule: str
 
 
 async def record(
@@ -138,7 +204,8 @@ async def record(
 
     Raises:
         RecordRefusedError: No such submission, a type the stage does not
-            serve, no stored criteria list, or the doors refuse the work.
+            serve, no list (neither by the verdict rows' address nor stored in
+            force), or the doors refuse the work.
     """
     submission = await session.get(HomeworkSubmission, submission_id)
     if submission is None:
@@ -154,13 +221,18 @@ async def record(
         )
         raise RecordRefusedError(msg)
 
-    # Before anything is downloaded: a stored list or nothing. The stage would
+    # Before anything is downloaded: the list the verdicts were judged
+    # against, else a stored list in force, else nothing. The stage would
     # compose one on a miss (a model call); this script never does.
-    listed = await load_in_force(session, submission.authored_document_id)
+    listed = await judged_criteria(session, submission)
+    criteria_from = FROM_VERDICT_ROWS
+    if listed is None:
+        listed = await load_in_force(session, submission.authored_document_id)
+        criteria_from = FROM_IN_FORCE
     if listed is None:
         msg = (
-            "no stored criteria list in force for the task's current version; "
-            "nothing is composed and no model is called"
+            "no verdict rows and no stored criteria list in force for the "
+            "task's current version; nothing is composed and no model is called"
         )
         raise RecordRefusedError(msg)
 
@@ -206,6 +278,42 @@ async def record(
         criteria_layer=listed.layer.value,
         criteria_source_id=str(listed.source_id),
         filename_was_temporary=not submission.original_filename,
+        criteria_from=criteria_from,
+    )
+
+
+async def verdict_rows(
+    session: AsyncSession, submission: HomeworkSubmission
+) -> list[SubmissionCriterionVerdict]:
+    """The submission's verdict rows, as the stage wrote them."""
+    return await SubmissionVerdictRepository(session).list_for_submission(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
+
+
+async def judged_criteria(
+    session: AsyncSession, submission: HomeworkSubmission
+) -> CriteriaInForce | None:
+    """The list the submission's verdicts were judged against, by their address.
+
+    ``None`` — the submission has no verdict rows. The same read the
+    explanation's rebuild makes (``judged_list.read_judged_list``), so the
+    list is the one the stage was handed, whatever is in force now.
+
+    Raises:
+        RecordRefusedError: The rows name more than one list, or a list that
+            is not this task's.
+    """
+    rows = await verdict_rows(session, submission)
+    if not rows:
+        return None
+    try:
+        criteria = await read_judged_list(session, submission, rows)
+        layer = judged_layer(rows)
+    except ValueError as exc:
+        raise RecordRefusedError(str(exc)) from exc
+    return CriteriaInForce(
+        criteria=criteria, layer=layer, source_id=rows[0].criteria_source_id
     )
 
 
@@ -256,7 +364,8 @@ async def first_rung_request(
 
     The real router builds it (prompt, schema mode, output pin) and the rung's
     real connector class answers what it can send — the seed it would take is
-    left out only by ``deterministic: false``. The request is kept, not sent.
+    left out only by ``deterministic: false``; :func:`compare` puts each row's
+    own seed and temperature back. The request is kept, not sent.
     """
     config = router_stage_config(stage)
     first = config.ladder[0]
@@ -279,7 +388,8 @@ async def register_rows(
     """The attempt rows of ``provider``/``model`` on the stage, oldest first.
 
     Attempt rows only: a trace row (skipped or abandoned rung) has
-    ``success`` NULL and carries no input hash.
+    ``success`` NULL and carries no input hash. Each with the seed and the
+    temperature it records, when it records them.
     """
     jobs = select(Job.id).where(
         Job.subject_type == SUBMISSION_SUBJECT, Job.subject_id == submission_id
@@ -303,9 +413,42 @@ async def register_rows(
             outcome=row.outcome,
             input_hash=row.input_hash,
             prompt_hash=row.prompt_hash,
+            request_kind=row.request_kind,
+            seed=row.seed,
+            temperature=row.temperature,
         )
         for row in result.scalars()
     ]
+
+
+def seed_supported(provider: str, request: LLMRequest) -> bool:
+    """Whether the rung's production connector sends a seed with ``request``."""
+    return _connector(provider, request.model).seed_supported(request)
+
+
+def sent_with(row: RegisterRow, *, seed_supported: bool) -> SentWith:
+    """The seed and the temperature production sent with ``row``'s request.
+
+    The rule of the module docstring: the row's own columns when it has them
+    (``request_kind`` set: written since revision ``esc_request_traces``),
+    otherwise by the row's date against :data:`SEED_SENT_SINCE`.
+    """
+    if row.request_kind is not None:
+        # Never NULL on an attempt row of the router; the request's default
+        # is what a request without one would carry.
+        temperature = (
+            row.temperature
+            if row.temperature is not None
+            else float(LLMRequest.model_fields["temperature"].default)
+        )
+        return SentWith(row.seed, temperature, RULE_COLUMNS)
+    if datetime.fromisoformat(row.created_at) < SEED_SENT_SINCE:
+        return SentWith(None, DETERMINISTIC_TEMPERATURE, RULE_BEFORE_SEED)
+    return SentWith(
+        REPRODUCIBILITY_SEED if seed_supported else None,
+        DETERMINISTIC_TEMPERATURE,
+        RULE_SINCE_SEED,
+    )
 
 
 def compare(
@@ -315,10 +458,31 @@ def compare(
     prompt_hash: str,
     rows: Sequence[RegisterRow],
     recorded: Recorded,
+    seed_supported: bool,
 ) -> HashCheck:
-    """Mark each row whose ``input_hash`` is the recorded request's."""
-    input_hash = hash_attempt_input(request, provider=provider)
-    marked = [replace(row, matched=row.input_hash == input_hash) for row in rows]
+    """Mark each row whose ``input_hash`` is the recorded request's.
+
+    The request is hashed once per row, with the seed and the temperature that
+    row was sent with (:func:`sent_with`): the same input under another seed
+    is another hash.
+    """
+    marked: list[RegisterRow] = []
+    for row in rows:
+        sent = sent_with(row, seed_supported=seed_supported)
+        rebuilt = hash_attempt_input(
+            request.model_copy(
+                update={"seed": sent.seed, "temperature": sent.temperature}
+            ),
+            provider=provider,
+        )
+        marked.append(
+            replace(
+                row,
+                sent_rule=sent.rule,
+                rebuilt_hash=rebuilt,
+                matched=row.input_hash == rebuilt,
+            )
+        )
     notes: list[str] = []
     if not marked:
         notes.append("no attempt row of the first rung for this submission")
@@ -329,11 +493,15 @@ def compare(
             "the submission has no original file name: the doors named the work "
             "by a temporary name, so its text cannot match production's"
         )
+    if recorded.criteria_from == FROM_IN_FORCE:
+        notes.append(
+            "the submission has no verdict rows: the list is the one in force "
+            "now, which may not be the one the stage was handed"
+        )
     return HashCheck(
         stage=STAGE,
         provider=provider,
         model=request.model,
-        input_hash=input_hash,
         prompt_hash=prompt_hash,
         matched=any(row.matched for row in marked),
         rows=marked,
@@ -387,9 +555,14 @@ async def _run(args: argparse.Namespace) -> int:
                     sys.stderr.write(f"refused: {refusal}\n")
                     return 2
             write_input(recorded, args.out)
+            source = (
+                "the list the submission's verdicts were judged against"
+                if recorded.criteria_from == FROM_VERDICT_ROWS
+                else "the list in force now: the submission has no verdict rows"
+            )
             sys.stdout.write(
                 f"written {args.out} (criteria: {recorded.criteria_layer} "
-                f"{recorded.criteria_source_id})\n"
+                f"{recorded.criteria_source_id}, {source})\n"
             )
             if not args.check_hash:
                 return 0
@@ -410,6 +583,7 @@ async def _run(args: argparse.Namespace) -> int:
                 prompt_hash=load_prompt(stage.prompt_ref).content_hash(),
                 rows=rows,
                 recorded=recorded,
+                seed_supported=seed_supported(provider, request),
             )
     finally:
         await engine.dispose()

@@ -10,6 +10,7 @@ needing fixtures.
 from course_supporter.storage.orm import (
     APIKey,
     AuthoredDocument,
+    Base,
     CourseNode,
     DocumentSegment,
     DocumentSummary,
@@ -17,7 +18,10 @@ from course_supporter.storage.orm import (
     NodeSummaryFinal,
     NodeSummaryFinalPreviousSnapshot,
     NodeSummaryRaw,
+    RemarkComment,
     Student,
+    StudentFeedback,
+    SubmissionCriterionVerdict,
     TaskCriteria,
     TaskCriteriaList,
     TaskCriteriaOverride,
@@ -76,6 +80,22 @@ class TestCascadeDeclarations:
 
     def test_student_cascades(self) -> None:
         assert Student.__cascades_soft_delete_to__ == [HomeworkSubmission]
+
+    def test_student_data_without_soft_delete_is_in_no_declaration(self) -> None:
+        # Task 12a, K1: remark comments are a student's data as the feedback
+        # and the verdicts are — no deleted_at, so no soft-delete cascade
+        # walks into them. A hard delete of their student or submission takes
+        # them by foreign key (ON DELETE CASCADE, locked on the database by
+        # tests/integration/test_remark_comment_schema_db.py), and their
+        # readers filter on the live student and submission.
+        declared = {
+            child
+            for mapper in Base.registry.mappers
+            for child in getattr(mapper.class_, "__cascades_soft_delete_to__", [])
+        }
+        for leaf in (StudentFeedback, SubmissionCriterionVerdict, RemarkComment):
+            assert "deleted_at" not in leaf.__table__.c, leaf.__name__
+            assert leaf not in declared, leaf.__name__
 
     def test_terminal_types_have_no_descendants(self) -> None:
         # Leaves of the cascade graph: declarations either absent or empty.

@@ -74,10 +74,12 @@ class _World:
         *,
         task_type: str = "task",
         in_force: CriteriaInForce | None = _IN_FORCE,
+        judged: CriteriaInForce | None = None,
         original_filename: str | None = _FILENAME,
     ) -> None:
         self.submission = SimpleNamespace(
             id=uuid.uuid4(),
+            tenant_id=uuid.uuid4(),
             authored_document_id=uuid.uuid4(),
             course_node_id=uuid.uuid4(),
             student_note=None,
@@ -86,6 +88,7 @@ class _World:
         )
         self.task_type = task_type
         self.in_force = in_force
+        self.judged = judged
         self.download = tmp_path / "download-1a2b.py"
         self.session = MagicMock()
         self.session.get = AsyncMock(return_value=self.submission)
@@ -108,6 +111,9 @@ class _World:
         async def load_in_force(_session: Any, _doc: uuid.UUID) -> Any:
             return self.in_force
 
+        async def judged_criteria(_session: Any, _submission: Any) -> Any:
+            return self.judged
+
         async def load_task_context(
             _session: Any, _doc: uuid.UUID
         ) -> tuple[str, str, str]:
@@ -118,6 +124,7 @@ class _World:
 
         monkeypatch.setattr(script, "door_languages", door_languages)
         monkeypatch.setattr(script, "load_in_force", load_in_force)
+        monkeypatch.setattr(script, "judged_criteria", judged_criteria)
         monkeypatch.setattr(script, "load_task_context", load_task_context)
         monkeypatch.setattr(script, "course_language", course_language)
 
@@ -161,6 +168,59 @@ class TestTheRecordedInput:
             str(_IN_FORCE.source_id),
         )
         assert recorded.filename_was_temporary is False
+        # The world's submission has no verdict rows: the list in force.
+        assert recorded.criteria_from == script.FROM_IN_FORCE
+
+    async def test_the_list_the_verdicts_were_judged_against_comes_first(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An author's edit since the run put another list in force; the
+        # verdict rows still name the one the stage was handed.
+        judged = CriteriaInForce(
+            criteria=_CRITERIA, layer=CriteriaLayer.AUTHOR, source_id=uuid.uuid4()
+        )
+        edited = CriteriaInForce(
+            criteria=(_criterion("c1", "must"),),
+            layer=CriteriaLayer.AUTHOR,
+            source_id=uuid.uuid4(),
+        )
+        world = _World(tmp_path, in_force=edited, judged=judged)
+        world.install(monkeypatch)
+
+        recorded = await world.record()
+
+        assert recorded.variables == _expected_variables()
+        assert (recorded.criteria_layer, recorded.criteria_source_id) == (
+            "author",
+            str(judged.source_id),
+        )
+        assert recorded.criteria_from == script.FROM_VERDICT_ROWS
+
+
+class TestTheJudgedList:
+    """``judged_criteria``: by the address of the rows, as the explanation's."""
+
+    async def test_no_rows_no_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def no_rows(_session: Any, _submission: Any) -> list[Any]:
+            return []
+
+        monkeypatch.setattr(script, "verdict_rows", no_rows)
+
+        assert await script.judged_criteria(MagicMock(), MagicMock()) is None
+
+    async def test_rows_of_two_lists_are_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def two_lists(_session: Any, _submission: Any) -> list[Any]:
+            return [
+                SimpleNamespace(criteria_layer="model", criteria_source_id=uuid.uuid4())
+                for _ in range(2)
+            ]
+
+        monkeypatch.setattr(script, "verdict_rows", two_lists)
+
+        with pytest.raises(script.RecordRefusedError, match="2 lists"):
+            await script.judged_criteria(MagicMock(), MagicMock())
 
     async def test_the_file_is_what_measure_determinism_reads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -227,7 +287,7 @@ class TestRefusals:
         world = _World(tmp_path, in_force=None)
         world.install(monkeypatch)
 
-        with pytest.raises(script.RecordRefusedError, match="no stored criteria"):
+        with pytest.raises(script.RecordRefusedError, match="no verdict rows"):
             await world.record()
         world.s3.download_file.assert_not_awaited()
 
@@ -306,42 +366,153 @@ class TestTheFirstRungsRequest:
         assert by_mode["seed"]["input_hash"] != by_mode["no_seed"]["input_hash"]
 
 
-def _row(input_hash: str | None, prompt_hash: str = "p") -> script.RegisterRow:
+def _row(
+    input_hash: str | None,
+    prompt_hash: str = "p",
+    *,
+    created_at: str = "2026-11-12T00:00:00+00:00",
+    **columns: Any,
+) -> script.RegisterRow:
     return script.RegisterRow(
         id=str(uuid.uuid4()),
-        created_at="2026-11-13T00:00:00+00:00",
+        created_at=created_at,
         outcome="success",
         input_hash=input_hash,
         prompt_hash=prompt_hash,
+        **columns,
     )
 
 
+_SEED = 20261113
+
+
+class TestWhatEachRowWasSentWith:
+    """The rule of the module docstring, row by row."""
+
+    def test_a_row_with_its_columns_says_it_itself(self) -> None:
+        row = _row(
+            "h",
+            created_at="2026-11-01T00:00:00+00:00",
+            request_kind="first",
+            seed=7,
+            temperature=0.3,
+        )
+
+        sent = script.sent_with(row, seed_supported=False)
+
+        assert (sent.seed, sent.temperature, sent.rule) == (7, 0.3, "columns")
+
+    def test_a_row_with_columns_and_no_seed_sent_none(self) -> None:
+        row = _row("h", request_kind="first", seed=None, temperature=0.0)
+
+        sent = script.sent_with(row, seed_supported=True)
+
+        assert (sent.seed, sent.temperature) == (None, 0.0)
+
+    @pytest.mark.parametrize(
+        ("created_at", "supported", "expected"),
+        [
+            ("2026-11-13T20:23:20+00:00", True, (None, "dated_before_seed")),
+            ("2026-11-13T20:23:21+00:00", True, (_SEED, "dated_since_seed")),
+            ("2026-11-14T00:00:00+01:00", True, (_SEED, "dated_since_seed")),
+            ("2026-11-15T00:00:00+00:00", False, (None, "dated_since_seed")),
+        ],
+        ids=["a-second-before", "at-the-merge", "after-in-another-zone", "no-seed"],
+    )
+    def test_an_older_row_is_dated(
+        self,
+        created_at: str,
+        supported: bool,
+        expected: tuple[int | None, str],
+    ) -> None:
+        sent = script.sent_with(
+            _row("h", created_at=created_at), seed_supported=supported
+        )
+
+        assert (sent.seed, sent.rule) == expected
+        assert sent.temperature == 0.0
+
+
 class TestTheComparison:
-    def _recorded(self, *, temporary: bool = False) -> script.Recorded:
+    def _recorded(
+        self, *, temporary: bool = False, criteria_from: str = "verdict_rows"
+    ) -> script.Recorded:
         return script.Recorded(
             variables={},
             criteria_layer="model",
             criteria_source_id="s",
             filename_was_temporary=temporary,
+            criteria_from=criteria_from,
         )
 
     def _request(self) -> LLMRequest:
         return LLMRequest(prompt="p", model="qwen3.7-max")
 
+    def _hash(self, **update: Any) -> str:
+        return hash_attempt_input(
+            self._request().model_copy(update=update), provider="dashscope"
+        )
+
     def test_a_row_with_the_same_hash_is_matched(self) -> None:
-        mine = hash_attempt_input(self._request(), provider="dashscope")
+        mine = self._hash()
         check = script.compare(
             self._request(),
             provider="dashscope",
             prompt_hash="p",
             rows=[_row("other"), _row(mine)],
             recorded=self._recorded(),
+            seed_supported=True,
         )
 
         assert check.matched is True
         assert [row.matched for row in check.rows] == [False, True]
-        assert check.input_hash == mine
+        assert check.rows[1].rebuilt_hash == mine
         assert check.notes == []
+
+    def test_each_row_is_hashed_with_its_own_seed(self) -> None:
+        # The same input before the seed, since it, and from the columns.
+        before = _row(self._hash())
+        since = _row(
+            self._hash(seed=_SEED, temperature=0.0),
+            created_at="2026-11-14T00:00:00+00:00",
+        )
+        columns = _row(
+            self._hash(seed=_SEED, temperature=0.0),
+            created_at="2026-11-17T00:00:00+00:00",
+            request_kind="first",
+            seed=_SEED,
+            temperature=0.0,
+        )
+
+        check = script.compare(
+            self._request(),
+            provider="dashscope",
+            prompt_hash="p",
+            rows=[before, since, columns],
+            recorded=self._recorded(),
+            seed_supported=True,
+        )
+
+        assert [row.matched for row in check.rows] == [True, True, True]
+        assert [row.sent_rule for row in check.rows] == [
+            "dated_before_seed",
+            "dated_since_seed",
+            "columns",
+        ]
+
+    def test_an_unseeded_hash_does_not_match_a_seeded_row(self) -> None:
+        check = script.compare(
+            self._request(),
+            provider="dashscope",
+            prompt_hash="p",
+            rows=[
+                _row(self._hash(), request_kind="first", seed=_SEED, temperature=0.0)
+            ],
+            recorded=self._recorded(),
+            seed_supported=True,
+        )
+
+        assert check.matched is False
 
     def test_no_row_with_it_is_not(self) -> None:
         check = script.compare(
@@ -350,6 +521,7 @@ class TestTheComparison:
             prompt_hash="p",
             rows=[_row("other"), _row(None)],
             recorded=self._recorded(),
+            seed_supported=True,
         )
 
         assert check.matched is False
@@ -360,7 +532,8 @@ class TestTheComparison:
             provider="dashscope",
             prompt_hash="p",
             rows=[],
-            recorded=self._recorded(temporary=True),
+            recorded=self._recorded(temporary=True, criteria_from="in_force"),
+            seed_supported=True,
         )
         moved = script.compare(
             self._request(),
@@ -368,12 +541,26 @@ class TestTheComparison:
             prompt_hash="today",
             rows=[_row("other", prompt_hash="then")],
             recorded=self._recorded(),
+            seed_supported=True,
         )
 
         assert empty.matched is False
         assert any("no attempt row" in n for n in empty.notes)
         assert any("temporary name" in n for n in empty.notes)
+        assert any("no verdict rows" in n for n in empty.notes)
         assert any("prompt moved" in n for n in moved.notes)
+
+
+def test_the_first_rungs_connector_takes_the_seed() -> None:
+    request = LLMRequest(prompt="p", model="qwen3.7-max")
+
+    assert script.seed_supported("dashscope", request) is True
+    assert (
+        script.seed_supported(
+            "deepseek", request.model_copy(update={"model": "deepseek-flash"})
+        )
+        is False
+    )
 
 
 def test_the_check_is_written_beside_the_input() -> None:

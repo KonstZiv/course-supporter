@@ -47,6 +47,7 @@ from course_supporter.criteria_kinds import (
     VerdictValue,
     WeightCategory,
 )
+from course_supporter.remark_kinds import RemarkState
 from course_supporter.storage.homework_repository import ATTEMPT_STATUSES
 from course_supporter.storage.orm import (
     HomeworkSubmission,
@@ -107,6 +108,11 @@ class VerdictRecord:
             ``criteria_verdicts._word_to_settle`` chose; ``None`` for a
             criterion derived from its points, or when the call's row was not
             written. For the database alone, as ``first_model_verdict``.
+        remark_state: Where the item's remark stands since the student's
+            earlier attempt at the same version of the task (task 12a,
+            ``homework/criteria_verdicts.py``, ``with_remark_states``);
+            ``None`` — no state. The review's builder lays its remarks out by
+            it.
     """
 
     item_id: str
@@ -125,6 +131,7 @@ class VerdictRecord:
     safeguard_submission_id: uuid.UUID | None = None
     first_model_verdict: VerdictValue | None = None
     answered_by_call_id: uuid.UUID | None = None
+    remark_state: RemarkState | None = None
 
     @property
     def quote_line_start(self) -> int | None:
@@ -432,4 +439,5 @@ def _row(
             record.first_model_verdict.value if record.first_model_verdict else None
         ),
         answered_by_call_id=record.answered_by_call_id,
+        remark_state=record.remark_state.value if record.remark_state else None,
     )

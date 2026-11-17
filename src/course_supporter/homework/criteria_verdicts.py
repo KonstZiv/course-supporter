@@ -31,9 +31,10 @@ Interface:
     phrase; :data:`PASS_THRESHOLD_AUTHOR_MUSTS`,
     :data:`PASS_THRESHOLD_NO_AUTHOR_MUSTS` — its two thresholds;
     :func:`is_credited` — whether the score counts a row as met.
-    :class:`RemarkState`, :func:`credited_items`, :func:`remark_states` —
-    where the remark on each item stands since the student's earlier
-    attempt (task 12a).
+    :func:`credited_items`, :func:`remark_states` — where the remark on each
+    item stands since the student's earlier attempt (task 12a), in the words
+    of :class:`~course_supporter.remark_kinds.RemarkState`;
+    :func:`with_remark_states` — the rows to store, each with its state.
 
 The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
 9.8, 9.10; the item-level repeat, ratified 2026-10-02; the whole line and
@@ -138,7 +139,6 @@ import uuid
 from collections import Counter
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from enum import StrEnum
 from itertools import count
 from types import MappingProxyType
 from typing import Final, NamedTuple, Protocol
@@ -160,6 +160,7 @@ from course_supporter.homework.criteria_form import (
 from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.llm.error_categories import StructuralRetryError
 from course_supporter.models.review_structure import PassBasis
+from course_supporter.remark_kinds import RemarkState
 from course_supporter.storage.submission_verdict_repository import VerdictRecord
 
 MAX_QUOTE_CHARS: Final = 200
@@ -1204,25 +1205,6 @@ def is_passed(items: Iterable[ScoredItem], *, layer: CriteriaLayer) -> bool:
     return pass_decision(items, layer=layer).passed
 
 
-class RemarkState(StrEnum):
-    """Where the remark on an item stands since the earlier attempt (task 12a).
-
-    The review shows it as the section the remark is in
-    (``models/review_structure.py``, ``SECTION_ORDER``); an item with no
-    state — credited now, and credited before or never compared — has none.
-    """
-
-    NEW = "new"
-    """Not credited, and nothing to compare with — the first attempt, one at
-    another version of the task — or the earlier attempt had no such item."""
-    OPEN = "open"
-    """Not credited, and not credited on the earlier attempt either."""
-    FIXED = "fixed"
-    """Credited, and not credited on the earlier attempt."""
-    BROKEN = "broken"
-    """Not credited, and credited on the earlier attempt."""
-
-
 # The table of the product owner's decision of 2026-11-16, row for row: by
 # (credited on the earlier attempt — None when it had no such item or there is
 # none to compare with — and credited now), the item's state.
@@ -1286,3 +1268,28 @@ def remark_states(
         ]
         for row in rows
     }
+
+
+def with_remark_states(
+    records: Sequence[VerdictRecord], earlier: Iterable[ScoredItem] | None
+) -> tuple[VerdictRecord, ...]:
+    """The records to store, each with its remark's state (task 12a).
+
+    What the evaluation stage writes: the states of :func:`remark_states`
+    against the earlier attempt's rows
+    (``SubmissionVerdictRepository.earlier_attempt``), put on the records it
+    settled — after the settling, so a state cannot change a verdict. The
+    same settled records against the same earlier rows give the same states,
+    so a stage run again writes them again as they were.
+
+    Args:
+        records: The settled records (:func:`settle_verdicts`).
+        earlier: The earlier attempt's rows; ``None`` when there is nothing
+            to compare with.
+    """
+    states = remark_states(
+        None if earlier is None else credited_items(earlier), records
+    )
+    return tuple(
+        replace(record, remark_state=states[record.item_id]) for record in records
+    )

@@ -25,7 +25,6 @@ from course_supporter.criteria_kinds import (
 )
 from course_supporter.homework import text_result
 from course_supporter.homework.criteria_form import Criterion
-from course_supporter.homework.criteria_verdicts import RemarkState
 from course_supporter.homework.review_assembler import assemble_review
 from course_supporter.homework.text_result import (
     REVIEW_PARTS_MISSING,
@@ -43,6 +42,7 @@ from course_supporter.models.review_structure import (
     Remark,
     Verdict,
 )
+from course_supporter.remark_kinds import RemarkState
 from course_supporter.storage.submission_verdict_repository import VerdictRecord
 
 

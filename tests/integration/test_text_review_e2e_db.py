@@ -623,6 +623,7 @@ _ROW_FIELDS = (
     "retried",
     "quote_not_found",
     "safeguard_fired",
+    "remark_state",
 )
 
 
@@ -1083,8 +1084,17 @@ class TestASecondAttemptSaysWhatWasFixedAndWhatBroke:
         second = await _submission(session_factory, second_id)
         assert (second.status, second.score, second.attempt_no) == ("delivered", 77, 2)
         assert second.task_version == first.task_version
-        # The safeguard did not keep c5: its line is not in the work.
-        assert (await _rows(session_factory, second_id))["c5"]["verdict"] == "not_met"
+        # The safeguard did not keep c5: its line is not in the work. The
+        # stage wrote each row's state with it; the review is laid out by them.
+        rows = await _rows(session_factory, second_id)
+        assert rows["c5"]["verdict"] == "not_met"
+        assert {item: row["remark_state"] for item, row in rows.items()} == {
+            "c1": None,
+            "c2": None,
+            "c3": "fixed",
+            "c4": "open",
+            "c5": "broken",
+        }
 
         after = ReviewStructureV1.model_validate(second.review_result)
         assert after.fixed == [_shown(_said("c3", 1))]

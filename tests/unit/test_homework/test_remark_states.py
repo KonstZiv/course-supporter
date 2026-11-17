@@ -10,6 +10,8 @@ sections in ``test_text_result.py``, and the whole walk in
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from course_supporter.criteria_kinds import (
@@ -19,12 +21,13 @@ from course_supporter.criteria_kinds import (
 )
 from course_supporter.homework import criteria_verdicts
 from course_supporter.homework.criteria_verdicts import (
-    RemarkState,
     credited_items,
     is_credited,
     remark_states,
     score_percent,
+    with_remark_states,
 )
+from course_supporter.remark_kinds import RemarkState
 from course_supporter.storage.submission_verdict_repository import VerdictRecord
 
 MET, NOT_MET = VerdictValue.MET, VerdictValue.NOT_MET
@@ -175,8 +178,43 @@ class TestCreditedIsTheScoresRule:
         ) == {"c2.p1": True, "c2.p2": False, "c2.p3": True}
 
 
+class TestTheRecordsToStore:
+    """What the evaluation stage writes: each record with its state."""
+
+    def test_each_record_gets_its_items_state_and_nothing_else_moves(self) -> None:
+        settled = (_met("c1"), _not_met("c2"), _met("c2.p1"), _not_met("c3"))
+        earlier = [_not_met("c1"), _not_met("c2"), _met("c2.p1"), _met("c3")]
+
+        stored = with_remark_states(settled, earlier)
+
+        assert [record.remark_state for record in stored] == [
+            RemarkState.FIXED,
+            RemarkState.OPEN,
+            None,
+            RemarkState.BROKEN,
+        ]
+        assert [replace(record, remark_state=None) for record in stored] == list(
+            settled
+        )
+
+    def test_nothing_to_compare_with_writes_only_new(self) -> None:
+        stored = with_remark_states((_met("c1"), _not_met("c2")), None)
+
+        assert [record.remark_state for record in stored] == [None, RemarkState.NEW]
+
+    def test_the_same_records_and_rows_give_the_same_states(self) -> None:
+        """A stage run again writes its states again as they were."""
+        settled = (_met("c1"), _not_met("c2"))
+        earlier = [_not_met("c1"), _met("c2")]
+
+        assert with_remark_states(settled, earlier) == with_remark_states(
+            settled, earlier
+        )
+
+
 def test_the_states_are_the_four_words_of_the_table() -> None:
-    """The values a stored state is written in (phase 2 of task 12a)."""
+    """The words a stored state is written in (``remark_kinds``, the column's
+    CHECK): the table's four, no other."""
     assert [state.value for state in RemarkState] == [
         "new",
         "open",

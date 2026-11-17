@@ -78,11 +78,13 @@ The sections of the remarks (task 12a, K2):
     own state places it. With nothing to compare with — a first attempt —
     every remark is new, as before the states.
 
-    The builder lays the review out by the states it is handed
-    (``states``), whatever their source. Today it counts them itself, from
-    the two attempts' rows
-    (:meth:`~course_supporter.storage.submission_verdict_repository.SubmissionVerdictRepository.earlier_attempt`),
-    and logs them (``text_review_remark_states``).
+    The states are the verdict rows' own (``remark_state``): the evaluation
+    stage counts and writes them with the rows
+    (:func:`~course_supporter.homework.criteria_verdicts.with_remark_states`),
+    and the builder reads them — a row written before the states has none,
+    and its remark is new. The earlier attempt
+    (:meth:`~course_supporter.storage.submission_verdict_repository.SubmissionVerdictRepository.earlier_attempt`)
+    is read here only for the words of a fixed criterion.
 
 Language:
     The explanation's own: the language its texts are written in, as the
@@ -107,8 +109,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
 
-import structlog
-
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
     VerdictItemKind,
@@ -122,11 +122,8 @@ from course_supporter.homework.course_link_delivery import (
 from course_supporter.homework.course_links import FoundCourseLinks
 from course_supporter.homework.criteria_form import WEIGHT_NUMBERS, Criterion
 from course_supporter.homework.criteria_verdicts import (
-    RemarkState,
     ScoredItem,
-    credited_items,
     pass_decision,
-    remark_states,
 )
 from course_supporter.homework.judged_list import judged_layer, read_judged_list
 from course_supporter.homework.result_builders import (
@@ -148,6 +145,7 @@ from course_supporter.models.review_structure import (
     ReviewStructureV1,
     Verdict,
 )
+from course_supporter.remark_kinds import RemarkState
 from course_supporter.review_metrics import (
     Claim,
     ReviewMetrics,
@@ -156,7 +154,6 @@ from course_supporter.review_metrics import (
 from course_supporter.service_logging import record_review_metrics
 from course_supporter.storage.repositories import HomeworkCostRepository
 from course_supporter.storage.submission_verdict_repository import (
-    EarlierAttempt,
     SubmissionVerdictRepository,
 )
 
@@ -178,7 +175,6 @@ __all__ = [
     "problem_positions",
 ]
 
-logger = structlog.get_logger(__name__)
 
 REVIEW_PARTS_MISSING: Final = "review_parts_missing"
 """The code a text task's submission fails with when its review has no parts.
@@ -408,20 +404,25 @@ async def _fixed_words(
     rows: Sequence[SubmissionCriterionVerdict],
     *,
     states: Mapping[str, RemarkState | None],
-    earlier: EarlierAttempt | None,
 ) -> FixedWords | None:
     """The words of the fixed criteria, read only when a criterion is fixed.
 
-    The earlier attempt's explanation, when there is one to read, and the
-    criteria the rows were judged against
+    The explanation of the earlier attempt the stage compared with
+    (``SubmissionVerdictRepository.earlier_attempt``, the same read), when
+    there is one, and the criteria the rows were judged against
     (:func:`~course_supporter.homework.judged_list.read_judged_list`) for a
-    fixed criterion that explanation has no remark on.
+    fixed criterion that explanation has no remark on — or when an attempt
+    reviewed since the stage ran is the earlier one now and has none.
     """
     if RemarkState.FIXED not in states.values():
         return None
+    stored = SubmissionVerdictRepository(session)
+    earlier = await stored.earlier_attempt(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
     remarks: tuple[CriterionRemark, ...] = ()
     if earlier is not None:
-        explained = await SubmissionVerdictRepository(session).get_explanation(
+        explained = await stored.get_explanation(
             tenant_id=submission.tenant_id, submission_id=earlier.submission_id
         )
         if explained is not None:
@@ -493,21 +494,11 @@ class TextResultBuilder:
         links = await settle_course_links(
             context.session, context.session_factory, submission, answer, rows
         )
-        earlier = await stored.earlier_attempt(
-            tenant_id=submission.tenant_id, submission_id=submission.id
-        )
-        # The states, counted from the two attempts' rows (task 12a).
-        states = remark_states(
-            None if earlier is None else credited_items(earlier.rows), rows
-        )
-        logger.info(
-            "text_review_remark_states",
-            submission_id=str(submission.id),
-            earlier_submission_id=(
-                None if earlier is None else str(earlier.submission_id)
-            ),
-            states={item: state.value for item, state in states.items() if state},
-        )
+        # The states the evaluation stage wrote with the rows (task 12a).
+        states = {
+            row.item_id: RemarkState(row.remark_state) if row.remark_state else None
+            for row in rows
+        }
         structure, score = build_text_review(
             rows=rows,
             layer=judged_layer(rows),
@@ -519,7 +510,7 @@ class TextResultBuilder:
             },
             states=states,
             fixed_words=await _fixed_words(
-                context.session, submission, rows, states=states, earlier=earlier
+                context.session, submission, rows, states=states
             ),
         )
         return BuiltResult(

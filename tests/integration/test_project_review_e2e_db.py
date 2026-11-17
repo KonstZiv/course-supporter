@@ -1051,6 +1051,54 @@ class TestTheSameWorkAgain:
         assert payload.review.score == 50
 
 
+class TestTheSameWorkAgainstAnEditedList:
+    """Run 2b: the same archive after the author edited the project's list.
+
+    The list is part of the key of the same work for a project as for a text
+    task (project chain K8): the evaluation read the list in force, so a copy
+    of a review judged against another list would answer by criteria the
+    author no longer asks for.
+    """
+
+    async def test_the_same_work_is_reviewed_anew_against_the_new_list(
+        self, walk: _Walk, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        first = await walk.run(PROJECT)
+        assert first.submission.status == "delivered"
+        reworded = _CRITERIA[0].model_copy(update={"text": "Criterion c1, reworded"})
+        edited = (reworded, *_CRITERIA[1:])
+        async with session_factory() as session:
+            edit = await TaskCriteriaOverrideRepository(session).replace(
+                authored_document_id=walk.world["doc_id"],
+                source_content_hash=_TASK_HASH,
+                source_task_type="project",
+                criteria=criteria_to_document(edited),
+            )
+            await session.commit()
+        walk.world["in_force"] = CriteriaInForce(
+            criteria=edited, layer=CriteriaLayer.AUTHOR, source_id=edit.id
+        )
+
+        second = await walk.run(PROJECT)
+
+        # The same work, and still no copy: the evaluation was asked again and
+        # its verdicts stand on the list in force now.
+        receipt = second.submission.attempt_receipt
+        assert receipt is not None
+        assert (
+            receipt["fingerprint"]
+            == (first.submission.attempt_receipt or {})["fingerprint"]
+        )
+        assert DEDUP_RECEIPT_KEY not in receipt
+        assert PROJECT_CRITERIA_EVALUATION in walk.router.calls
+        assert second.structure.unchanged_from_attempt is None
+        assert {
+            (row.criteria_layer, row.criteria_source_id)
+            for row in (await _rows(session_factory, second.submission.id)).values()
+        } == {(CriteriaLayer.AUTHOR, edit.id)}
+        assert second.submission.status == "delivered"
+
+
 class TestAChangedWorkAgain:
     """Run 3: another line of the changed file — a new, full review."""
 

@@ -920,7 +920,10 @@ class TestLockVEachKeyAtTheRepository:
         session_factory: async_sessionmaker[AsyncSession],
         task_world: dict[str, Any],
     ) -> None:
-        """A project's key: an attempt judged against no list still matches."""
+        """No list given, the key is the rest: an attempt judged against no
+        list still matches. No type passes none since project chain K8 (a
+        project is judged against a list too); the repository keeps the
+        branch for a type that is not."""
         source = await _reviewed_attempt(
             session_factory,
             task_world,

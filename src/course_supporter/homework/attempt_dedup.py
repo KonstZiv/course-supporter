@@ -33,12 +33,21 @@ The same work, judged alike:
     a type with no version (not on the new path, or no model stage), no list
     in force, any key different — is an ordinary review.
 
-    And the same work is no copy while the student has replies to answer
-    (task 12a, K3; :func:`~course_supporter.homework.remark_comments.pending_replies`
-    — one definition with the submission's state and the reply screen): the
-    student wrote to the last review, and its copy would answer nothing they
-    wrote. A type that takes no replies has none to answer, and its rule is
-    the rule above.
+    And the same work is no copy while the student has a reply about the work
+    to answer (task 12a, K3;
+    :func:`~course_supporter.homework.remark_comments.pending_replies` — one
+    definition with the submission's state and the reply screen): the copy
+    would answer nothing they wrote. When EVERY reply to answer was judged by
+    the reply screen as off the topic or hostile, the work is the copy all
+    the same — there is nothing in the replies for a paid check to read —
+    and each reply gets the phrasebook's answer without a model: a hostile
+    one ``reply.hostile.fallback``, one off the topic ``reply.off_topic.wrap_up``
+    with the course's name (the product owner's decision of 2026-11-16, its
+    fourth item; task 12a, K4;
+    :func:`~course_supporter.homework.reply_source.answer_without_the_model`).
+    One reply about the work, or one the screen could not judge, and the work
+    is reviewed in full on ``repeat_with_replies``. A type that takes no
+    replies has none to answer, and its rule is the rule above.
 
 The version of a criteria list:
     Nothing new: the ADDRESS every verdict row carries — ``criteria_layer`` +
@@ -58,11 +67,15 @@ The version of a criteria list:
 
 What the submission gets:
     The earlier attempt's review — its structure, with
-    ``unchanged_from_attempt`` set to that attempt's number, the markdown
+    ``unchanged_from_attempt`` set to that attempt's number and without the
+    earlier review's section of replies (those answered the replies of the
+    attempt before it; task 12a, K4), the markdown
     assembled from it by the one assembler (the earlier text, opened by the
     phrase ``review.unchanged``), and its score — and ``dedup_of``, the same
     number, in its attempt receipt, beside the ``evaluator_version`` of that
-    review: the copy was written by the source's evaluator. The body then
+    review: the copy was written by the source's evaluator. The phrasebook's
+    answers to the replies beside the work, if any, are kept with the copy,
+    in the same transaction, as the explanation stage keeps its own. The body then
     finishes it as it finishes any reviewed revision: ``reviewing``,
     ``completed``, the webhook, ``delivered``; the portal reads the stored
     review as it reads any. The copy also carries what the doors of the source
@@ -140,7 +153,11 @@ from course_supporter.homework.path_config import (
     ServedBy,
     get_path_config,
 )
-from course_supporter.homework.remark_comments import pending_replies
+from course_supporter.homework.remark_comments import CommentRecord, pending_replies
+from course_supporter.homework.reply_source import (
+    answer_without_the_model,
+    beside_the_work,
+)
 from course_supporter.homework.review_assembler import assemble_review
 from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
@@ -205,6 +222,9 @@ class UnchangedAttempt:
         score: Its score.
         evaluator_version: The version of the evaluator that wrote the review.
         door_reading: The source attempt's "not_opened" and "recovered_encoding".
+        replies: The student's replies to answer, every one judged off the
+            topic or hostile: the copy answers them with the phrasebook's
+            words (task 12a, K4). Empty for a student with none.
     """
 
     submission_id: uuid.UUID
@@ -213,6 +233,7 @@ class UnchangedAttempt:
     score: int | None
     evaluator_version: str
     door_reading: dict[str, Any]
+    replies: tuple[CommentRecord, ...] = ()
 
 
 async def repeat_unchanged_review(
@@ -246,7 +267,7 @@ async def repeat_unchanged_review(
         return None
 
     review = source.review.model_copy(
-        update={"unchanged_from_attempt": source.attempt_no}
+        update={"unchanged_from_attempt": source.attempt_no, "replies": []}
     )
     hw_repo = HomeworkRepository(session)
     await hw_repo.store_review_result(
@@ -263,6 +284,14 @@ async def repeat_unchanged_review(
     )
     if source.door_reading:
         await hw_repo.store_safety_result(submission_id, dict(source.door_reading))
+    if source.replies:
+        submission = await hw_repo.get_by_id(submission_id)
+        if submission is None:
+            msg = f"HomeworkSubmission {submission_id} not found"
+            raise ValueError(msg)
+        await answer_without_the_model(
+            session, submission, source.replies, language=review.language
+        )
     logger.info(
         "attempt_review_repeated",
         submission_id=str(submission_id),
@@ -367,7 +396,7 @@ async def _find(
         or not attempt_snapshotter_for(row.task_type).dedup_enabled
     ):
         return None
-    if await pending_replies(
+    replies = await pending_replies(
         session,
         tenant_id=row.tenant_id,
         submission_id=submission_id,
@@ -375,13 +404,12 @@ async def _find(
         authored_document_id=row.authored_document_id,
         task_type=AssignmentType(row.task_type),
         config=config,
-    ):
-        # The student wrote to the last review, and a copy of it answers
-        # nothing they wrote (task 12a, K3): the work is reviewed as usual.
-        # TODO(12a K4): a copy and a prepared answer when every reply is
-        # off-topic or hostile — the refinement of the owner's decision of
-        # 2026-11-16, made once the topic port has a real adapter (the
-        # measurement of 2026-11-17).
+    )
+    if replies and not beside_the_work(replies):
+        # A reply about the work, or one the screen could not judge: a copy
+        # would answer nothing the student wrote (task 12a, K3), and the work
+        # is reviewed as usual. Every reply off the topic or hostile: the copy
+        # all the same, with the phrasebook's answers (K4; the module).
         logger.info("attempt_dedup_replies_pending", submission_id=str(submission_id))
         return None
     version = evaluator_version(AssignmentType(row.task_type), config)
@@ -422,6 +450,7 @@ async def _find(
         score=source.score,
         evaluator_version=_evaluator_version_of(source.attempt_receipt),
         door_reading=_door_reading_of(source.safety_result),
+        replies=tuple(replies),
     )
 
 

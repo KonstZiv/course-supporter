@@ -40,6 +40,7 @@ from course_supporter.models.review_structure import (
     PassRule,
     Reference,
     Remark,
+    Reply,
     Verdict,
 )
 from course_supporter.remark_kinds import RemarkState
@@ -290,6 +291,49 @@ class TestTheRestOfTheReview:
 
     def test_the_refusal_code_is_a_short_key(self) -> None:
         assert REVIEW_PARTS_MISSING == "review_parts_missing"
+
+
+class TestTheSectionOfReplies:
+    """Task 12a, K4: the section is added, and nothing else moves."""
+
+    _REPLIES = (
+        Reply(kind="question", said="Чому c1?", answer="Бо так написано."),
+        Reply(kind="comment", said="(не наводимо)", answer="Жарт і правило."),
+    )
+
+    def test_the_replies_are_laid_out_in_their_order(self) -> None:
+        rows = [_criterion("c1", MUST, NOT_MET)]
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            rows=rows,
+            explanation=_explanation("c1"),
+            language="ukr",
+            replies=self._REPLIES,
+        )
+
+        assert structure.replies == list(self._REPLIES)
+        markdown = assemble_review(structure)
+        assert markdown.index("Чому c1?") < markdown.index("(не наводимо)")
+
+    def test_with_no_reply_the_review_is_what_it_was(self) -> None:
+        rows = [_criterion("c1", MUST, NOT_MET)]
+        explanation = _explanation("c1")
+
+        without, score = build_text_review(
+            layer=AUTHOR, rows=rows, explanation=explanation, language="ukr"
+        )
+        with_replies, same_score = build_text_review(
+            layer=AUTHOR,
+            rows=rows,
+            explanation=explanation,
+            language="ukr",
+            replies=self._REPLIES,
+        )
+
+        assert without.replies == []
+        assert with_replies.model_copy(update={"replies": []}) == without
+        assert score == same_score
 
 
 class TestTheCourseLinks:

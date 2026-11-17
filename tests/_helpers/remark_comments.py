@@ -13,13 +13,15 @@ pinned on a real database (``tests/integration/test_remark_comment_repository_db
 from __future__ import annotations
 
 import uuid
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from course_supporter.homework.remark_comments import (
+    AnsweredReply,
     CommentRecord,
+    MentorAnswer,
     NewReply,
     ScreenMark,
     ThreadScope,
@@ -130,6 +132,62 @@ class FakeRemarkComments:
             else c
             for c in self.comments
         ]
+
+    async def answer_replies(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        submission_id: uuid.UUID,
+        answers: Sequence[MentorAnswer],
+    ) -> None:
+        """K4's write, in memory: once per reply and review, the reply marked."""
+        self.tenants.append(tenant_id)
+        for answer in answers:
+            reply = next(c for c in self.comments if c.id == answer.reply_id)
+            earlier = next(
+                (
+                    c
+                    for c in self.comments
+                    if c.parent_id == reply.id
+                    and c.author is CommentAuthor.MENTOR
+                    and c.submission_id == submission_id
+                ),
+                None,
+            )
+            if earlier is not None:
+                self.comments[self.comments.index(earlier)] = replace(
+                    earlier, body=answer.body
+                )
+            else:
+                self.comments.append(
+                    CommentRecord(
+                        id=uuid.uuid4(),
+                        submission_id=submission_id,
+                        item_id=reply.item_id,
+                        parent_id=reply.id,
+                        author=CommentAuthor.MENTOR,
+                        kind=CommentKind.ANSWER,
+                        body=answer.body,
+                        created_at=_EPOCH + timedelta(minutes=len(self.comments)),
+                    )
+                )
+            self.comments[self.comments.index(reply)] = replace(
+                reply, answered_in_submission_id=submission_id
+            )
+
+    async def answers_in_review(
+        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID
+    ) -> list[AnsweredReply]:
+        self.tenants.append(tenant_id)
+        by_id = {c.id: c for c in self.comments}
+        pairs = [
+            AnsweredReply(reply=by_id[c.parent_id], answer=c)
+            for c in self.comments
+            if c.author is CommentAuthor.MENTOR
+            and c.submission_id == submission_id
+            and c.parent_id in by_id
+        ]
+        return sorted(pairs, key=lambda p: (p.reply.created_at, p.reply.id))
 
 
 def a_reply(

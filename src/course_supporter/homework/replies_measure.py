@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from course_supporter.agents import criteria_evaluator, review_explainer
 from course_supporter.criteria_kinds import VerdictValue
@@ -73,8 +73,7 @@ from course_supporter.homework.explanation_measure import (
 from course_supporter.homework.reply_humor import HumorStyle, get_humor_styles
 from course_supporter.homework.review_explanation import replies_plan
 from course_supporter.homework.student_replies import (
-    ReplyTopic,
-    ThreadAuthor,
+    HOSTILE_CATEGORIES,
     ThreadEntry,
     replies_for_evaluation,
 )
@@ -85,6 +84,7 @@ from course_supporter.homework.verdict_explanation import (
     settle_reply_answers,
 )
 from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.remark_kinds import CommentAuthor, CommentKind, CommentTopic
 
 if TYPE_CHECKING:
     from course_supporter.homework.path_config import ModelStage
@@ -125,13 +125,22 @@ class SyntheticReply(BaseModel):
 
     id: str = Field(min_length=1)
     item: str = Field(min_length=1)
-    author: ThreadAuthor
-    kind: str
-    topic: ReplyTopic | None = None
+    author: CommentAuthor
+    kind: CommentKind
+    topic: CommentTopic | None = None
     category: str | None = None
     answered: bool = False
     reply_to: str | None = None
     text: str = Field(min_length=1)
+
+    @field_validator("category")
+    @classmethod
+    def _k3s_category(cls, category: str | None) -> str | None:
+        """Only what the reply screen writes: a ``ViolationCategory`` or none."""
+        if category is not None and category not in HOSTILE_CATEGORIES:
+            msg = f"{category!r} is not a category the reply screen writes"
+            raise ValueError(msg)
+        return category
 
 
 class SyntheticReplies(BaseModel):
@@ -215,7 +224,9 @@ def thread_entries(
                 parent_id=reply.reply_to,
                 topic=reply.topic,
                 hostile_category=reply.category,
-                answered=reply.answered,
+                # The review answers every reply of the student the file does
+                # not mark as answered by an earlier one.
+                pending=(reply.author is CommentAuthor.STUDENT and not reply.answered),
             )
         )
     return tuple(entries)
@@ -456,6 +467,9 @@ class Stand:
     explanations: dict[str, ExplanationWithReplies | None] = field(default_factory=dict)
     checks: dict[str, str] = field(default_factory=dict)
     answers: dict[str, tuple[SettledReplyAnswer, ...]] = field(default_factory=dict)
+    # By run and reply's local id, what the model wrote — before the check
+    # replaced a failed joke with the phrasebook's.
+    model_answers: dict[str, dict[str, str]] = field(default_factory=dict)
     plans: dict[str, RepliesPlan] = field(default_factory=dict)
     entries: tuple[ThreadEntry, ...] = ()
 
@@ -481,10 +495,10 @@ async def run_stand(
     request is only captured, answered with ``{}`` (a dry run).
     """
     stand = Stand(entries=tuple(entries))
-    hostile = [e.text for e in entries if e.topic is ReplyTopic.HOSTILE]
+    hostile = [e.text for e in entries if e.topic is CommentTopic.HOSTILE]
     expected = list(evaluation["items"])
     work = SubmittedWork(work_files(str(evaluation["submission_text"])))
-    replies_text = [e.text for e in entries if e.author is ThreadAuthor.STUDENT]
+    replies_text = [e.text for e in entries if e.author is CommentAuthor.STUDENT]
 
     async def send(
         label: str, stage_name: str, variables: Mapping[str, Any], schema: Any
@@ -526,7 +540,7 @@ async def run_stand(
     if without is not None and with_ is not None:
         stand.changes = verdict_changes(without, with_, work=work, replies=replies_text)
     if hostile_run:
-        only = [e for e in entries if e.topic is ReplyTopic.HOSTILE]
+        only = [e for e in entries if e.topic is CommentTopic.HOSTILE]
         await evaluate("evaluation.hostile_only", EVALUATION_WITH_REPLIES, only)
         alone = stand.evaluations["evaluation.hostile_only"]
         if without is not None and alone is not None:
@@ -581,6 +595,7 @@ def _read_explanation(
         return
     stand.explanations[label] = answer
     stand.checks[label] = "agrees"
+    stand.model_answers[label] = {r.comment_id: r.answer for r in answer.replies}
     stand.answers[label] = settle_reply_answers(answer, plan, phrases=phrases)
 
 
@@ -599,7 +614,12 @@ def write_stand(out_dir: Path, stand: Stand, *, record: Mapping[str, Any]) -> Pa
             _write_answer(out_dir / f"{call.label}.answer", call.content)
     by_id = {e.comment_id: e for e in stand.entries}
     replies = {
-        label: [_answer_json(answer, by_id, stand.plans[label]) for answer in answers]
+        label: [
+            _answer_json(
+                answer, by_id, stand.plans[label], stand.model_answers.get(label, {})
+            )
+            for answer in answers
+        ]
         for label, answers in stand.answers.items()
     }
     _write_json(out_dir / "replies.answers.json", replies)
@@ -653,7 +673,10 @@ def _summary(stand: Stand, record: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _answer_json(
-    answer: SettledReplyAnswer, by_id: Mapping[str, ThreadEntry], plan: RepliesPlan
+    answer: SettledReplyAnswer,
+    by_id: Mapping[str, ThreadEntry],
+    plan: RepliesPlan,
+    model_answers: Mapping[str, str],
 ) -> dict[str, Any]:
     entry = by_id[answer.comment_id]
     asked = next(a for a in plan.asked if a.entry.comment_id == answer.comment_id)
@@ -662,6 +685,7 @@ def _answer_json(
         "local_id": asked.local_id,
         "item": answer.item_id,
         "kind": answer.kind,
+        "model_answer": model_answers.get(asked.local_id),
         "topic": None if entry.topic is None else entry.topic.value,
         "off_topic_round": asked.off_topic_round,
         "hostile_category": entry.hostile_category,
@@ -676,11 +700,19 @@ def _answer_json(
 
 
 def _jokes(stand: Stand) -> str:
-    lines = ["# Жарти на ворожі репліки — зразки для оператора", ""]
+    """The jokes, style by style: the model's answer in full and the code's check.
+
+    For the product owner, who approves the styles on these samples: each
+    joke with the run it came from, the attempt's category, the model's
+    answer as written, what the code's check found
+    (:func:`~course_supporter.homework.verdict_explanation.joke_faults`), and
+    what was kept — the model's answer or the phrasebook's.
+    """
     by_id = {e.comment_id: e for e in stand.entries}
+    by_style: dict[str, list[str]] = {}
     for label, answers in stand.answers.items():
-        lines += [f"## {label}", ""]
         plan = stand.plans[label]
+        written = stand.model_answers.get(label, {})
         for answer in answers:
             if answer.way.value != "joke":
                 continue
@@ -689,18 +721,27 @@ def _jokes(stand: Stand) -> str:
             )
             entry = by_id[answer.comment_id]
             style = asked.style.id if asked.style is not None else "-"
-            verdict = (
-                "запасна заготовка: " + ", ".join(f.value for f in answer.faults)
+            raw = written.get(asked.local_id, "")
+            check = (
+                "не пройшла: " + ", ".join(f.value for f in answer.faults)
                 if answer.faults
-                else "пройшла перевірку"
+                else "пройшла"
             )
-            lines += [
-                f"- **{answer.comment_id}** · {entry.hostile_category} · стиль "
-                f"`{style}` · {len(answer.answer)} символів · {verdict}",
-                f"  - репліка (модель її не бачила): {entry.text}",
-                f"  - відповідь: {answer.answer}",
-            ]
-        lines.append("")
+            kept = "заготовка розмовника" if answer.faults else "відповідь моделі"
+            by_style.setdefault(style, []).extend(
+                [
+                    f"- **{answer.comment_id}** · прогін `{label}` · категорія "
+                    f"`{entry.hostile_category or 'без категорії'}` · "
+                    f"{len(raw)} символів",
+                    f"  - репліка (модель її не бачила): {entry.text}",
+                    f"  - відповідь моделі (повністю): {raw}",
+                    f"  - перевірка коду (`joke_faults`): {check}",
+                    f"  - збережено: {kept}",
+                ]
+            )
+    lines = ["# Жарти на ворожі репліки — зразки за стилями", ""]
+    for style, entries in by_style.items():
+        lines += [f"## Стиль `{style}`", "", *entries, ""]
     return "\n".join(lines)
 
 

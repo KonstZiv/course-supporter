@@ -240,7 +240,7 @@ def replies_for_prompt(replies: Sequence[EvaluationReply]) -> list[dict[str, Any
     recorded request exactly as a request renders them.
     """
     return [
-        {"item_id": reply.item_id, "kind": reply.kind, "text": reply.text}
+        {"item_id": reply.item_id, "kind": reply.kind.value, "text": reply.text}
         for reply in replies
     ]
 

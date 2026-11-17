@@ -16,11 +16,15 @@ Interface:
     :class:`ScreenMark` — what the reply screen decided about one reply.
     :class:`ThreadScope` — the student's work at one version of a task: the
     rows one thread runs through.
-    :class:`SqlRemarkCommentRepository` — six methods: ``lock_replies``,
+    :class:`MentorAnswer` — the Mentor's answer to one reply, as a review
+    hands it in; :class:`AnsweredReply` — a reply and the answer a review
+    gave it (task 12a, K4).
+    :class:`SqlRemarkCommentRepository` — eight methods: ``lock_replies``,
     ``count_student_replies``, ``add_student_reply``, ``thread``,
-    ``unanswered_student_replies`` and ``mark_screened``. It is the store
-    behind the port ``homework.remark_comments.RemarkCommentRepository``,
-    chosen by ``homework.remark_comments.build_remark_comment_repository``.
+    ``unanswered_student_replies``, ``mark_screened``, and K4's
+    ``answer_replies`` and ``answers_in_review``. It is the store behind the
+    port ``homework.remark_comments.RemarkCommentRepository``, chosen by
+    ``homework.remark_comments.build_remark_comment_repository``.
 
     Writes ``flush`` and never commit: the caller owns the transaction (the
     route commits a reply, the body of the path commits the screen's marks).
@@ -30,25 +34,28 @@ Interface:
     ``hostile_category`` is the safety check's violation
     (``security.schemas.ViolationCategory``) by its value: the storage layer
     holds the string the column holds and does not import the security layer.
-    The Mentor's answers are written by K4; this module writes and marks the
-    student's replies alone.
+    The Mentor's answers (K4) are written by ``answer_replies`` — under each
+    reply, in the review that answers it — and read back, with their replies,
+    by ``answers_in_review``.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from course_supporter.remark_kinds import CommentAuthor, CommentKind, CommentTopic
 from course_supporter.storage.orm import HomeworkSubmission, RemarkComment, Student
 
 _STUDENT = CommentAuthor.STUDENT.value
+_MENTOR = CommentAuthor.MENTOR.value
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +133,27 @@ class ScreenMark:
     topic: CommentTopic
     topic_confidence: float | None
     hostile_category: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class MentorAnswer:
+    """The Mentor's answer to one student's reply, as a review hands it in (K4).
+
+    ``reply_id`` is the reply answered; everything else the answer's row
+    holds — the item, the student's work at its version — is read off that
+    reply, never off the caller.
+    """
+
+    reply_id: uuid.UUID
+    body: str
+
+
+@dataclass(frozen=True, slots=True)
+class AnsweredReply:
+    """A student's reply and the answer one review gave it (K4)."""
+
+    reply: CommentRecord
+    answer: CommentRecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,3 +325,115 @@ class SqlRemarkCommentRepository:
             .execution_options(synchronize_session=False)
         )
         await self._session.flush()
+
+    async def answer_replies(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        submission_id: uuid.UUID,
+        answers: Sequence[MentorAnswer],
+    ) -> None:
+        """Keep the Mentor's answers given in the review of ``submission_id`` (K4).
+
+        Each answer is a comment of the Mentor (``kind = answer``) under its
+        reply (``parent_id``), on the reply's item and in the reply's branch —
+        its student, task and version — attached to ``submission_id``, the
+        review that gives it; the reply is marked answered by that submission
+        (``answered_in_submission_id``).
+
+        Once per reply and review: an answer ``submission_id`` already gave a
+        reply is rewritten in place, so the stage run again in one
+        transaction leaves one answer, never two — and nothing is deleted, so
+        no comment written under an answer goes with it. Flushes, never
+        commits: the answers and the marks are committed with what the caller
+        commits next, or rolled back with it, all together.
+
+        Raises:
+            ValueError: an answer names no student's reply of this tenant, or
+                a reply another review has answered.
+        """
+        if not answers:
+            return
+        ids = [answer.reply_id for answer in answers]
+        replies = {
+            row.id: row
+            for row in await self._session.scalars(
+                select(RemarkComment).where(
+                    RemarkComment.tenant_id == tenant_id,
+                    RemarkComment.id.in_(ids),
+                    RemarkComment.author == _STUDENT,
+                )
+            )
+        }
+        unknown = sorted(str(i) for i in ids if i not in replies)
+        if unknown:
+            msg = f"no student's reply of this tenant: {unknown}"
+            raise ValueError(msg)
+        elsewhere = sorted(
+            str(row.id)
+            for row in replies.values()
+            if row.answered_in_submission_id not in (None, submission_id)
+        )
+        if elsewhere:
+            msg = f"replies another review has answered: {elsewhere}"
+            raise ValueError(msg)
+        given = {
+            row.parent_id: row
+            for row in await self._session.scalars(
+                select(RemarkComment).where(
+                    RemarkComment.tenant_id == tenant_id,
+                    RemarkComment.submission_id == submission_id,
+                    RemarkComment.author == _MENTOR,
+                    RemarkComment.parent_id.in_(ids),
+                )
+            )
+        }
+        for answer in answers:
+            reply = replies[answer.reply_id]
+            earlier = given.get(answer.reply_id)
+            if earlier is not None:
+                earlier.body = answer.body
+            else:
+                self._session.add(
+                    RemarkComment(
+                        tenant_id=tenant_id,
+                        student_id=reply.student_id,
+                        authored_document_id=reply.authored_document_id,
+                        task_version=reply.task_version,
+                        submission_id=submission_id,
+                        item_id=reply.item_id,
+                        parent_id=reply.id,
+                        author=_MENTOR,
+                        kind=CommentKind.ANSWER.value,
+                        body=answer.body,
+                    )
+                )
+            reply.answered_in_submission_id = submission_id
+        await self._session.flush()
+
+    async def answers_in_review(
+        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID
+    ) -> list[AnsweredReply]:
+        """The answers the review of ``submission_id`` gave, each with its reply.
+
+        In the order of the replies (by ``created_at``, then by ``id``); a live
+        submission and a live student only, as every read.
+        """
+        reply = aliased(RemarkComment)
+        stmt = (
+            _live(select(RemarkComment, reply))
+            .join(reply, reply.id == RemarkComment.parent_id)
+            .where(
+                RemarkComment.tenant_id == tenant_id,
+                RemarkComment.submission_id == submission_id,
+                RemarkComment.author == _MENTOR,
+                reply.tenant_id == tenant_id,
+                reply.author == _STUDENT,
+            )
+            .order_by(reply.created_at, reply.id)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return [
+            AnsweredReply(reply=_record(asked), answer=_record(given))
+            for given, asked in rows
+        ]

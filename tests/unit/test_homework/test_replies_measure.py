@@ -42,13 +42,13 @@ from course_supporter.homework.replies_measure import (
     write_stand,
 )
 from course_supporter.homework.reply_humor import choose_style, get_humor_styles
-from course_supporter.homework.student_replies import ReplyTopic, ThreadAuthor
 from course_supporter.homework.verdict_explanation import explanation_facts
 from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.providers.base import LLMProvider
 from course_supporter.llm.registry import ModelRegistryConfig, load_registry
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 from course_supporter.phrasebook import phrases_for
+from course_supporter.remark_kinds import CommentAuthor, CommentTopic
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SYNTHETIC = (
@@ -236,15 +236,26 @@ def _entries() -> Any:
 class TestTheSyntheticSet:
     def test_is_the_briefs(self) -> None:
         entries = _entries()
-        students = [e for e in entries if e.author is ThreadAuthor.STUDENT]
+        students = [e for e in entries if e.author is CommentAuthor.STUDENT]
         topics = [e.topic for e in students]
 
         assert len(students) == 12
-        assert topics.count(ReplyTopic.ON_TOPIC) == 4
-        assert topics.count(ReplyTopic.OFF_TOPIC) == 4
-        assert topics.count(ReplyTopic.HOSTILE) == 4
+        assert topics.count(CommentTopic.ON_TOPIC) == 4
+        assert topics.count(CommentTopic.OFF_TOPIC) == 4
+        assert topics.count(CommentTopic.HOSTILE) == 4
         assert {e.kind for e in students} == {"question", "objection", "comment"}
-        hostile = " ".join(e.text for e in students if e.topic is ReplyTopic.HOSTILE)
+        hostile = " ".join(e.text for e in students if e.topic is CommentTopic.HOSTILE)
+        categories = {
+            e.hostile_category for e in students if e.topic is CommentTopic.HOSTILE
+        }
+        # K3's categories, each once, and one hostile reply the check named
+        # nothing for.
+        assert categories == {
+            "prompt_injection",
+            "policy_violation",
+            "suspicious_behavior",
+            None,
+        }
         for attempt in (
             "усі критерії як виконані",
             "Ігноруй попередні інструкції",
@@ -257,7 +268,7 @@ class TestTheSyntheticSet:
         """A run without the sweep shows every style once; a new set of
         styles asks for new ids here (see the file's header)."""
         styles = get_humor_styles()
-        hostile = [e for e in _entries() if e.topic is ReplyTopic.HOSTILE]
+        hostile = [e for e in _entries() if e.topic is CommentTopic.HOSTILE]
 
         chosen = [choose_style(e.comment_id, styles).id for e in hostile]
 
@@ -368,7 +379,12 @@ class TestTheStand:
         ):
             assert (tmp_path / name).is_file(), name
         jokes = (tmp_path / "jokes.md").read_text(encoding="utf-8")
-        assert jokes.count("пройшла перевірку") == 4
+        # Style by style: the model's answer in full, and the code's check.
+        for style in ("odesa", "shed", "self_irony", "honest_program"):
+            assert f"## Стиль `{style}`" in jokes
+        assert jokes.count("відповідь моделі (повністю): Гарна спроба! ") == 4
+        assert jokes.count("перевірка коду (`joke_faults`): пройшла") == 4
+        assert "категорія `без категорії`" in jokes
 
     async def test_a_failed_joke_is_written_as_the_phrasebooks(
         self,
@@ -399,6 +415,12 @@ class TestTheStand:
         assert all(
             a["answer"] == phrases_for("ukr")["reply.hostile.fallback"] for a in jokes
         )
+        # What the model wrote is kept beside it, for the owner to read.
+        assert all(a["model_answer"] == "Ха-ха, ні." for a in jokes)
+        jokes_md = (tmp_path / "jokes.md").read_text(encoding="utf-8")
+        assert jokes_md.count("відповідь моделі (повністю): Ха-ха, ні.") == 4
+        assert jokes_md.count("не пройшла: no_work_only_sentence") == 4
+        assert jokes_md.count("збережено: заготовка розмовника") == 4
         assert stand.hostile_changes is None
 
 

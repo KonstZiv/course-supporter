@@ -101,6 +101,7 @@ from course_supporter.homework.student_replies import (
     RepliesPlan,
 )
 from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.remark_kinds import COMMENT_MAX_CHARS, CommentKind
 
 
 class StoredVerdict(Protocol):
@@ -567,8 +568,10 @@ def read_explanation_with_replies(
     """:func:`read_explanation`, and every reply answered once.
 
     The rule is the remarks' rule: exactly one answer for each id of
-    ``to_answer``, none for another id, none repeated, none empty. An answer
-    that breaks it is a structural retry, every fault named at once. What an
+    ``to_answer``, none for another id, none repeated, none empty — and none
+    longer than a comment holds (``remark_kinds.COMMENT_MAX_CHARS``: the
+    answer is kept as one). An answer that breaks it is a structural retry,
+    every fault named at once. What an
     answer SAYS is not checked here; a joke's check is
     :func:`settle_reply_answers`, which replaces a failed joke, never retries.
 
@@ -618,6 +621,17 @@ def _reply_disagreements(
     blank = [reply.comment_id for reply in answer.replies if not reply.answer.strip()]
     if blank:
         problems.append(f"these answers are empty: {blank}. Write each of them.")
+    # The answer is kept as a comment (K1's table), which holds no longer one.
+    long = [
+        reply.comment_id
+        for reply in answer.replies
+        if len(reply.answer.strip()) > COMMENT_MAX_CHARS
+    ]
+    if long:
+        problems.append(
+            f"these answers are longer than {COMMENT_MAX_CHARS} characters: "
+            f"{long}. Shorten each of them."
+        )
     return problems
 
 
@@ -679,7 +693,7 @@ class SettledReplyAnswer:
 
     comment_id: str
     item_id: str
-    kind: str
+    kind: CommentKind
     way: AnswerWay
     answer: str
     source: AnswerSource

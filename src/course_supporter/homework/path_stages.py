@@ -84,7 +84,7 @@ if TYPE_CHECKING:
 
     from course_supporter.homework.criteria_verdicts import WorkFile
     from course_supporter.homework.doors import DoorReading
-    from course_supporter.homework.path_config import PathKey, PathStage
+    from course_supporter.homework.path_config import PathConfig, PathKey, PathStage
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.security.schemas import CourseContext
     from course_supporter.storage.orm import HomeworkSubmission
@@ -138,6 +138,11 @@ class StageContext:
     never used for this submission, whose state stays the body's. ``None``
     where no queue is at hand (a test that does not need one); the stage then
     leaves the others to the other two entries.
+
+    ``config`` is the submission-path file the body chose the path by: a
+    stage that reads the student's replies asks it whether the type takes
+    them, as the body did (task 12a, K4). ``None`` — the cached file, the one
+    the body reads in production.
     """
 
     session: AsyncSession
@@ -152,6 +157,7 @@ class StageContext:
     door: DoorReading | None = None
     work: tuple[WorkFile, ...] = ()
     arq: ArqRedis | None = None
+    config: PathConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)

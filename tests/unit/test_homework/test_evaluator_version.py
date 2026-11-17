@@ -304,11 +304,18 @@ class TestShippedFile:
         Moved on purpose by task 12a, K2: the states of the remarks between
         attempts change what a review says, so the verdict rules went 6 -> 7
         and the version ``ev1:3cddefc447c114ed`` -> ``ev1:985d508925abb6c7``.
+
+        Moved on purpose by task 12a, K4: the two stages of
+        ``repeat_with_replies`` bring their own prompts onto a path of the
+        text types, and the answers to the replies change what a review says
+        (the section of replies, the copy without it), so the verdict rules
+        went 7 -> 8 and the version ``ev1:985d508925abb6c7`` ->
+        ``ev1:7840954a86ae3e16``.
         """
         shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
         assert (
             evaluator_version(AssignmentType.TASK, shipped, prompt_base_path=_REPO_ROOT)
-            == "ev1:985d508925abb6c7"
+            == "ev1:7840954a86ae3e16"
         )
-        assert criteria_verdicts.VERDICT_RULES_VERSION == 7
+        assert criteria_verdicts.VERDICT_RULES_VERSION == 8

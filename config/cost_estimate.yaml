@@ -89,8 +89,8 @@ review:
   # live measurement gives their size.
   # prompts/criteria_evaluation/v1_with_replies.md 5975 chars - prompts/criteria_evaluation/v1.md 4446 = 1529 chars = 437 tokens: 4870 + 437
   criteria_evaluation_with_replies: {prompt_tokens: 5307, output_tokens: 8548, calls: 2, calibrated: false}
-  # prompts/review_explanation/v3_with_replies.md 12945 chars - prompts/review_explanation/v3.md 9182 = 3763 chars = 1075 tokens: 10399 + 1075
-  review_explanation_with_replies: {prompt_tokens: 11474, output_tokens: 8475, calls: 1, calibrated: false}
+  # prompts/review_explanation/v3_with_replies.md 13315 chars - prompts/review_explanation/v3.md 9182 = 4133 chars = 1181 tokens: 10399 + 1181
+  review_explanation_with_replies: {prompt_tokens: 11580, output_tokens: 8475, calls: 1, calibrated: false}
 
 # ── Task preparation: input = the task document + prompt_tokens ──
 task_preparation:

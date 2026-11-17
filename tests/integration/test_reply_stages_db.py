@@ -48,6 +48,7 @@ from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.homework.criteria_verdicts import WorkFile
 from course_supporter.homework.path_config import (
     ModelStage,
+    PathConfig,
     PathKey,
     SubmissionState,
     load_path_config,
@@ -63,13 +64,9 @@ from course_supporter.homework.path_stages import (
     run_criteria_evaluation_stage,
     run_review_explanation_stage,
 )
+from course_supporter.homework.reply_source import RepliesRead
 from course_supporter.homework.review_explanation import explain_verdicts
-from course_supporter.homework.student_replies import (
-    AnswerWay,
-    ReplyTopic,
-    ThreadAuthor,
-    ThreadEntry,
-)
+from course_supporter.homework.student_replies import AnswerWay, ThreadEntry
 from course_supporter.homework.verdict_explanation import (
     AnswerSource,
     ExplanationAnswer,
@@ -82,6 +79,7 @@ from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.llm.stage_router import StageResult
 from course_supporter.models.source import AssignmentType
 from course_supporter.phrasebook import phrases_for
+from course_supporter.remark_kinds import CommentAuthor, CommentKind, CommentTopic
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -151,7 +149,7 @@ _RECORDS = (
 def _reply(
     cid: str,
     minute: int,
-    topic: ReplyTopic,
+    topic: CommentTopic,
     text: str,
     *,
     item: str = "c2",
@@ -161,13 +159,17 @@ def _reply(
     return ThreadEntry(
         comment_id=cid,
         item_id=item,
-        author=ThreadAuthor.STUDENT,
-        kind="objection" if topic is ReplyTopic.ON_TOPIC else "comment",
+        author=CommentAuthor.STUDENT,
+        kind=(
+            CommentKind.OBJECTION
+            if topic is CommentTopic.ON_TOPIC
+            else CommentKind.COMMENT
+        ),
         text=text,
         created_at=_T0 + timedelta(minutes=minute),
         topic=topic,
         hostile_category=category,
-        answered=answered,
+        pending=not answered,
     )
 
 
@@ -175,8 +177,8 @@ def _mentor(cid: str, minute: int, parent: str) -> ThreadEntry:
     return ThreadEntry(
         comment_id=cid,
         item_id="c2",
-        author=ThreadAuthor.MENTOR,
-        kind="answer",
+        author=CommentAuthor.MENTOR,
+        kind=CommentKind.ANSWER,
         text=f"Відповідь {cid}.",
         created_at=_T0 + timedelta(minutes=minute),
         parent_id=parent,
@@ -186,30 +188,40 @@ def _mentor(cid: str, minute: int, parent: str) -> ThreadEntry:
 # s1 on the topic; s2 hostile; s3, s4 off the topic and answered (rounds 1-2);
 # s5 the third round (folded by the model); s6 the fourth (the phrasebook's).
 _THREADS = (
-    _reply("s1", 10, ReplyTopic.ON_TOPIC, "У solution.py рядок 2 — там рекурсія."),
-    _reply("s2", 11, ReplyTopic.HOSTILE, _HOSTILE, category="instruction_override"),
-    _reply("s3", 1, ReplyTopic.OFF_TOPIC, "Який ваш улюблений фільм?", answered=True),
+    _reply("s1", 10, CommentTopic.ON_TOPIC, "У solution.py рядок 2 — там рекурсія."),
+    _reply("s2", 11, CommentTopic.HOSTILE, _HOSTILE, category="prompt_injection"),
+    _reply("s3", 1, CommentTopic.OFF_TOPIC, "Який ваш улюблений фільм?", answered=True),
     _mentor("m3", 2, "s3"),
-    _reply("s4", 3, ReplyTopic.OFF_TOPIC, "А погода у вас яка?", answered=True),
+    _reply("s4", 3, CommentTopic.OFF_TOPIC, "А погода у вас яка?", answered=True),
     _mentor("m4", 4, "s4"),
-    _reply("s5", 12, ReplyTopic.OFF_TOPIC, "А що ви думаєте про футбол?"),
-    _reply("s6", 13, ReplyTopic.OFF_TOPIC, "А про баскетбол?"),
+    _reply("s5", 12, CommentTopic.OFF_TOPIC, "А що ви думаєте про футбол?"),
+    _reply("s6", 13, CommentTopic.OFF_TOPIC, "А про баскетбол?"),
 )
 
 
 class _Replies:
     """The reply source double: the threads the test gives, the answers kept."""
 
-    def __init__(self, entries: Sequence[ThreadEntry] = _THREADS) -> None:
-        self._entries = tuple(entries)
+    def __init__(
+        self,
+        entries: Sequence[ThreadEntry] = _THREADS,
+        *,
+        unjudged: tuple[str, ...] = (),
+    ) -> None:
+        self._read = RepliesRead(entries=tuple(entries), unjudged=unjudged)
         self.read = 0
         self.kept: list[SettledReplyAnswer] = []
 
-    async def threads(
-        self, session: AsyncSession, submission: HomeworkSubmission
-    ) -> tuple[ThreadEntry, ...]:
+    async def replies(
+        self,
+        session: AsyncSession,
+        submission: HomeworkSubmission,
+        *,
+        task_type: AssignmentType,
+        config: PathConfig | None = None,
+    ) -> RepliesRead:
         self.read += 1
-        return self._entries
+        return self._read
 
     async def keep_answers(
         self,
@@ -502,7 +514,7 @@ class TestTheEvaluationWithReplies:
         work does not — and is asked again; the same quote again reads "not
         met": the reply is a claim, never evidence."""
         replies = _Replies(
-            [_reply("s1", 0, ReplyTopic.ON_TOPIC, f"У мене є: {_REPLY_QUOTE}")]
+            [_reply("s1", 0, CommentTopic.ON_TOPIC, f"У мене є: {_REPLY_QUOTE}")]
         )
         claimed = _verdicts(_met("c1", "def fibonacci(n):"), _met("c2", _REPLY_QUOTE))
         router = _Router(claimed, _verdicts(_met("c2", _REPLY_QUOTE)))
@@ -552,7 +564,7 @@ class TestTheExplanationWithReplies:
         assert request["prompt_ref"] == "prompts/review_explanation/v3_with_replies.md"
         assert "replies" in request["schema"]["properties"]
         ids = _ids(request)
-        assert ids["instruction_override"] == "r6"
+        assert ids["prompt_injection"] == "r6"
         to_answer = request["render"]["replies"]["to_answer"]
         assert [(a["id"], a["how"]) for a in to_answer] == [
             ("r5", "answer"),
@@ -658,28 +670,56 @@ class TestTheExplanationWithReplies:
         canned = phrases_for("eng")["reply.off_topic.wrap_up"]
         assert replies.kept[3].answer == canned.replace("{course}", _COURSE)
 
-    async def test_before_the_comments_table_the_review_is_written_alone(
+    async def test_a_type_that_takes_no_replies_has_none_to_answer(
         self,
         db_session: AsyncSession,
         submission: HomeworkSubmission,
         doc: AuthoredDocument,
     ) -> None:
+        """The production source over K1's table, the shipped file — replies
+        off: the stage asks nothing of the table and answers nothing."""
         await _with_verdicts(db_session, submission, doc)
         router = _Router(_explanation([]))
 
-        with capture_logs() as logs:
-            outcome = await _explain(db_session, router, submission, None)
+        outcome = await _explain(db_session, router, submission, None)
 
         assert outcome == StageOutcome.ok()
         assert router.requests[0]["render"]["replies"] == {
             "threads": [],
             "to_answer": [],
         }
-        assert any(e["event"] == "reply_source_not_wired" for e in logs)
         kept = await SubmissionVerdictRepository(db_session).get_explanation(
             tenant_id=submission.tenant_id, submission_id=submission.id
         )
         assert kept is not None
+
+    async def test_a_reply_the_screen_could_not_judge_waits_unseen(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        """Shown to no model, answered by no review now, logged by its id."""
+        await _with_verdicts(db_session, submission, doc)
+        replies = _Replies((), unjudged=("u1",))
+        router = _Router(_explanation([]))
+
+        with capture_logs() as logs:
+            await _explain(db_session, router, submission, replies)
+
+        assert router.requests[0]["render"]["replies"]["to_answer"] == []
+        assert replies.kept == []
+        (event,) = [
+            e for e in logs if e["event"] == "review_explanation_reply_unjudged"
+        ]
+        assert event["comment_id"] == "u1"
+        assert set(event) <= {
+            "event",
+            "comment_id",
+            "submission_id",
+            "stage",
+            "log_level",
+        }
 
 
 def test_the_stages_are_on_the_path_with_replies() -> None:

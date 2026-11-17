@@ -14,21 +14,33 @@ Purpose:
 
 Interface:
     :class:`ThreadEntry` — one comment of a remark's thread, as read: the
-    student's reply or the Mentor's earlier answer.
+    student's reply or the Mentor's earlier answer, in K1's vocabularies
+    (:mod:`course_supporter.remark_kinds`).
     :class:`EvaluationReply`, :func:`replies_for_evaluation` — what the
     evaluation is shown.
     :class:`AnswerWay`, :class:`AskedReply`, :class:`RepliesView`,
     :class:`RepliesPlan`, :func:`plan_replies` — what the explanation is
     shown, and how each reply without an answer is answered.
 
+Which replies this review answers:
+    Those :func:`~course_supporter.homework.remark_comments.pending_replies`
+    names — the one definition (K3), read by the source of the threads
+    (:mod:`course_supporter.homework.reply_source`), which marks them
+    ``pending``. A reply the reply screen could not judge (no ``topic``) is
+    in no thread at all: no model is shown it, this review does not answer
+    it, and the source names it for the log alone.
+
 What each model sees:
-    * The evaluation — the student's replies without an answer, on the topic
-      and not hostile, each with its item, kind and text. Never a hostile
-      reply, never one off the topic, never the Mentor's answers.
+    * The evaluation — the pending replies on the topic, each with its item,
+      kind and text. Never a hostile reply, never one off the topic, never
+      the Mentor's answers.
     * The explanation — every thread (one per item), in the order of time,
       each entry with the local id of the entry it answers ("in reply to").
-      A hostile reply is shown by its category alone, NEVER by its text; a
-      reply answered by the phrasebook alone (below) is not shown at all.
+      A hostile reply is shown by its category alone, NEVER by its text — the
+      safety check's ``ViolationCategory`` (``prompt_injection``,
+      ``policy_violation``, ``suspicious_behavior``), or ``null`` when it named
+      none; a reply answered by the phrasebook alone (below) is not shown at
+      all.
 
 How a reply without an answer is answered (:class:`AnswerWay`):
     * on the topic — the model answers it;
@@ -72,13 +84,25 @@ from enum import StrEnum
 from typing import Final
 
 from course_supporter.homework.reply_humor import HumorStyle, choose_style
+from course_supporter.remark_kinds import CommentAuthor, CommentKind, CommentTopic
+from course_supporter.security.schemas import ViolationCategory
 
-STUDENT_REPLY_KINDS: Final = frozenset({"question", "objection", "comment"})
+STUDENT_REPLY_KINDS: Final = frozenset(
+    {CommentKind.QUESTION, CommentKind.OBJECTION, CommentKind.COMMENT}
+)
 """What a student's reply may be — the kinds the review names apart
 (``models/review_structure.ReplyKind``)."""
 
-MENTOR_ANSWER_KIND: Final = "answer"
-"""The kind of the Mentor's answer in a thread."""
+HOSTILE_CATEGORIES: Final = frozenset(
+    {
+        ViolationCategory.PROMPT_INJECTION.value,
+        ViolationCategory.POLICY_VIOLATION.value,
+        ViolationCategory.SUSPICIOUS_BEHAVIOR.value,
+    }
+)
+"""What the reply screen writes as a hostile reply's category (K3,
+``reply_screen.hostile_category``); none at all — a hostile reply the safety
+check named no violation for."""
 
 WRAP_UP_ROUND: Final = 3
 """The round off the topic on which the model folds the conversation."""
@@ -101,28 +125,7 @@ ENTRY_OVERHEAD_CHARS: Final = 120
 CUT_MARK: Final = " […]"
 """What ends a text cut at :data:`MAX_SHOWN_TEXT_CHARS`."""
 
-UNKNOWN_CATEGORY: Final = "unknown"
-"""A hostile reply's category when the one stored is not a plain identifier."""
-
-# A hostile category is our own word, set by the safety stage — never the
-# student's text. Anything else in its place is not shown.
-_CATEGORY = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _DIGITS = re.compile(r"(\d+)")
-
-
-class ThreadAuthor(StrEnum):
-    """Who wrote an entry of a thread."""
-
-    STUDENT = "student"
-    MENTOR = "mentor"
-
-
-class ReplyTopic(StrEnum):
-    """What the safety stage made of a student's reply (task 12a, K3)."""
-
-    ON_TOPIC = "on_topic"
-    OFF_TOPIC = "off_topic"
-    HOSTILE = "hostile"
 
 
 class AnswerWay(StrEnum):
@@ -148,45 +151,56 @@ class ThreadEntry:
         text: What was written.
         created_at: When; the thread's order.
         parent_id: The comment this one answers, if any.
-        topic: A student's reply as the safety stage marked it; ``None`` for
-            the Mentor's.
-        hostile_category: What a hostile reply attempted, as the safety stage
-            named it.
-        answered: A student's reply already answered by an earlier review.
+        topic: A student's reply as the reply screen judged it; ``None`` for
+            the Mentor's. A reply the screen could not judge is no entry.
+        hostile_category: What a hostile reply attempted, as the safety check
+            named it (:data:`HOSTILE_CATEGORIES`), or ``None``.
+        pending: A student's reply this review answers — one
+            :func:`~course_supporter.homework.remark_comments.pending_replies`
+            names.
 
     Raises:
         ValueError: A student's entry without a topic or of a kind the review
-            does not name, or a Mentor's entry that is not an answer or has a
-            topic.
+            does not name, or a Mentor's entry that is not an answer, has a
+            topic or is pending.
     """
 
     comment_id: str
     item_id: str
-    author: ThreadAuthor
-    kind: str
+    author: CommentAuthor
+    kind: CommentKind
     text: str
     created_at: datetime
     parent_id: str | None = None
-    topic: ReplyTopic | None = None
+    topic: CommentTopic | None = None
     hostile_category: str | None = None
-    answered: bool = False
+    pending: bool = False
 
     def __post_init__(self) -> None:
-        if self.author is ThreadAuthor.STUDENT:
+        if self.author is CommentAuthor.STUDENT:
             if self.kind not in STUDENT_REPLY_KINDS:
-                msg = f"reply {self.comment_id}: kind {self.kind!r} is not a reply's"
+                msg = (
+                    f"reply {self.comment_id}: kind {str(self.kind)!r} is not a reply's"
+                )
                 raise ValueError(msg)
             if self.topic is None:
                 msg = f"reply {self.comment_id} has no topic"
                 raise ValueError(msg)
-        elif self.kind != MENTOR_ANSWER_KIND or self.topic is not None:
-            msg = f"answer {self.comment_id}: kind {self.kind!r}, topic {self.topic}"
+        elif (
+            self.kind is not CommentKind.ANSWER
+            or self.topic is not None
+            or self.pending
+        ):
+            msg = (
+                f"answer {self.comment_id}: kind {str(self.kind)!r}, "
+                f"topic {self.topic}, pending {self.pending}"
+            )
             raise ValueError(msg)
 
     @property
     def awaits_answer(self) -> bool:
-        """A student's reply no review has answered yet."""
-        return self.author is ThreadAuthor.STUDENT and not self.answered
+        """A student's reply this review answers."""
+        return self.author is CommentAuthor.STUDENT and self.pending
 
 
 # ── What the evaluation is shown ──
@@ -197,7 +211,7 @@ class EvaluationReply:
     """One reply, as the evaluation is shown it: an item, a kind, a text."""
 
     item_id: str
-    kind: str
+    kind: CommentKind
     text: str
 
 
@@ -209,12 +223,12 @@ def replies_for_evaluation(
 ) -> tuple[EvaluationReply, ...]:
     """The student's replies the evaluation is shown, in the order of time.
 
-    Only those without an answer, on the topic — never a hostile one, never
+    Only those this review answers, on the topic — never a hostile one, never
     one off the topic, never the Mentor's answers — and of those the newest
     that fit ``budget_chars``.
     """
     candidates = sorted(
-        (e for e in entries if e.awaits_answer and e.topic is ReplyTopic.ON_TOPIC),
+        (e for e in entries if e.awaits_answer and e.topic is CommentTopic.ON_TOPIC),
         key=_time_order,
     )
     kept: list[EvaluationReply] = []
@@ -239,15 +253,16 @@ class ShownEntry:
     """One entry of a thread, as the explanation is shown it.
 
     ``text`` is ``None`` for a hostile reply, which is shown by ``hostile``
-    — its category — alone. ``in_reply_to`` is the local id of the entry
-    this one answers; that entry may be older than the budget kept.
+    — its category, ``None`` when the check named none — alone.
+    ``in_reply_to`` is the local id of the entry this one answers; that entry
+    may be older than the budget kept.
     """
 
     id: str
-    author: ThreadAuthor
-    kind: str
+    author: CommentAuthor
+    kind: CommentKind
     in_reply_to: str | None
-    topic: ReplyTopic | None = None
+    topic: CommentTopic | None = None
     text: str | None = None
     hostile: str | None = None
 
@@ -270,7 +285,8 @@ class ShownAsk:
         item: The item it is under.
         off_topic_round: Its round off the topic, for a reply off the topic.
         course: The course's name, which a folded conversation points to.
-        hostile: A hostile reply's category.
+        hostile: A hostile reply's category; ``None`` when the check named
+            none.
         style: The style of the joke, chosen by code.
         work_only: The sentence a joke must carry word for word: only the
             work is graded (the phrasebook's ``reply.work_only``).
@@ -403,15 +419,14 @@ def shown_text(text: str, max_chars: int = MAX_SHOWN_TEXT_CHARS) -> str:
     return text[:max_chars] + CUT_MARK
 
 
-def hostile_category(raw: str | None) -> str:
-    """A hostile reply's category as shown: our own identifier, or ``unknown``.
+def hostile_category(raw: str | None) -> str | None:
+    """A hostile reply's category as shown: one of :data:`HOSTILE_CATEGORIES`.
 
-    The category is the safety stage's word; anything that is not a plain
-    identifier is not shown, whatever it holds.
+    ``None`` when the safety check named none (K3), and for anything else in
+    the column: only the check's own words are ever shown, whatever the
+    column holds.
     """
-    if raw is not None and _CATEGORY.fullmatch(raw):
-        return raw
-    return UNKNOWN_CATEGORY
+    return raw if raw in HOSTILE_CATEGORIES else None
 
 
 def _time_order(entry: ThreadEntry) -> tuple[datetime, str]:
@@ -462,21 +477,21 @@ def _asked_in(
     asked: list[AskedReply] = []
     rounds = 0
     for entry in thread:
-        if entry.author is not ThreadAuthor.STUDENT:
+        if entry.author is not CommentAuthor.STUDENT:
             continue
-        if entry.topic is ReplyTopic.OFF_TOPIC:
+        if entry.topic is CommentTopic.OFF_TOPIC:
             rounds += 1
-        if entry.answered:
+        if not entry.pending:
             continue
         local_id = local[entry.comment_id]
-        if entry.topic is ReplyTopic.HOSTILE:
+        if entry.topic is CommentTopic.HOSTILE:
             style = (
                 style_for(entry.comment_id)
                 if style_for is not None
                 else choose_style(entry.comment_id, styles)
             )
             asked.append(AskedReply(local_id, entry, AnswerWay.JOKE, style=style))
-        elif entry.topic is ReplyTopic.OFF_TOPIC:
+        elif entry.topic is CommentTopic.OFF_TOPIC:
             asked.append(AskedReply(local_id, entry, _off_topic_way(rounds), rounds))
         else:
             asked.append(AskedReply(local_id, entry, AnswerWay.ANSWER))
@@ -493,7 +508,7 @@ def _off_topic_way(round_number: int) -> AnswerWay:
 
 def _cost(entry: ThreadEntry, max_text_chars: int) -> int:
     """What an entry takes of the budget; a hostile reply's text is not shown."""
-    if entry.topic is ReplyTopic.HOSTILE:
+    if entry.topic is CommentTopic.HOSTILE:
         return ENTRY_OVERHEAD_CHARS
     return len(shown_text(entry.text, max_text_chars)) + ENTRY_OVERHEAD_CHARS
 
@@ -523,7 +538,7 @@ def _shown(
 ) -> ShownEntry:
     """One entry as shown: a hostile reply by its category, never its text."""
     in_reply_to = local.get(entry.parent_id) if entry.parent_id is not None else None
-    if entry.topic is ReplyTopic.HOSTILE:
+    if entry.topic is CommentTopic.HOSTILE:
         return ShownEntry(
             id=local[entry.comment_id],
             author=entry.author,

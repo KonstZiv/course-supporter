@@ -47,7 +47,9 @@ Writes into ``--out``: ``<call>.answer.json`` for every call,
 ``verdict_changes.json`` (every change of a verdict with its quote and whether
 the work has it; the hostile run's changes), ``replies.answers.json`` (every
 reply: what it was, how it was answered, the answer, a joke's faults),
-``jokes.md`` (the jokes, for the operator) and ``summary.json`` (tokens and
+``jokes.md`` (style by style, each joke's answer by the model in full and the
+code's check of it, ``joke_faults`` — the product owner approves the styles on
+these samples) and ``summary.json`` (tokens and
 price of every call against its stage's ceilings, and the checks). The
 records and the output hold a student's work: keep them out of the
 repository.

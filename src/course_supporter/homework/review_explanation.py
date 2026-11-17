@@ -99,7 +99,11 @@ from course_supporter.homework.path_stages import (
     StageOutcome,
 )
 from course_supporter.homework.reply_humor import get_humor_styles
-from course_supporter.homework.reply_source import default_reply_source
+from course_supporter.homework.reply_source import (
+    course_name,
+    default_reply_source,
+    reply_phrases,
+)
 from course_supporter.homework.student_replies import RepliesPlan, plan_replies
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.homework.verdict_explanation import (
@@ -111,7 +115,6 @@ from course_supporter.homework.verdict_explanation import (
     settle_reply_answers,
 )
 from course_supporter.language import display_name, resolve_review_language
-from course_supporter.phrasebook import phrases_for
 from course_supporter.service_logging import CourseLinkTrace, record_course_link_trace
 from course_supporter.storage.orm import CourseNode
 from course_supporter.storage.submission_verdict_repository import (
@@ -244,10 +247,20 @@ async def _explain_with_replies(
         submission_text=context.submission_text,
         language=context.language,
     )
+    read = await source.replies(
+        context.session,
+        submission,
+        task_type=context.path_key.task_type,
+        config=context.config,
+    )
+    for comment_id in read.unjudged:
+        # The id alone: a reply the screen could not judge is shown to no
+        # model, answered by no review now, and its text is in no log.
+        log.info("review_explanation_reply_unjudged", comment_id=comment_id)
     plan, phrases = replies_plan(
-        await source.threads(context.session, submission),
+        read.entries,
         language=language,
-        course=await _course_name(context.session, submission, shown.task_title),
+        course=await course_name(context.session, submission),
     )
     explained = await ReviewExplainerAgent(context.router).explain_with_replies(
         replace(shown, replies=plan.view), execution=execution
@@ -295,12 +308,7 @@ def replies_plan(
         style_for: Another choice of a joke's style than by the reply's id —
             the measurement's sweep; ``None`` in production.
     """
-    words = phrases_for(language)
-    phrases = ReplyPhrases(
-        work_only=words["reply.work_only"],
-        hostile_fallback=words["reply.hostile.fallback"],
-        off_topic_canned=words["reply.off_topic.wrap_up"].replace("{course}", course),
-    )
+    phrases = reply_phrases(language, course)
     plan = plan_replies(
         entries,
         styles=styles if styles is not None else get_humor_styles(),
@@ -309,15 +317,6 @@ def replies_plan(
         style_for=style_for,
     )
     return plan, phrases
-
-
-async def _course_name(
-    session: AsyncSession, submission: HomeworkSubmission, task_title: str
-) -> str:
-    """The course's name: its root's title, else the task's own."""
-    root = await session.get(CourseNode, submission.course_node_id)
-    title = root.title.strip() if root is not None and root.title else ""
-    return title or task_title
 
 
 def _log_answers(log: Any, settled: Sequence[SettledReplyAnswer]) -> None:

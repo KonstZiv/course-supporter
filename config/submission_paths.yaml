@@ -422,19 +422,19 @@ stages:
       # `review_explanation`'s, copied. Its arithmetic at the largest
       # realistic input, at the router's 3.5 characters a token:
       #   the base stage's input (see `review_explanation`)          77 399
-      #   this prompt over v3: 12 945 - 9 182 = 3 763 characters      1 075
+      #   this prompt over v3: 13 315 - 9 182 = 4 133 characters      1 181
       #   the threads at their budget, THREADS_BUDGET_CHARS
       #   (homework/student_replies.py): 24 000 characters            6 857
       #   twelve replies to answer, four of them jokes with their
       #   style and sentence: ~3 000 characters                         857
-      #   in all                                                     86 188
-      # at the registry rates (config/external_services.yaml, read 2026-11-16):
-      #   qwen3.7-max, 8 192 out:    86 188 x 0.00165/1k + 8 192 x 0.004951/1k = 0.182769
-      #   deepseek-flash, 8 192 out: 86 188 x 0.00015/1k + 8 192 x 0.0006/1k   = 0.017843
+      #   in all                                                     86 294
+      # at the registry rates (config/external_services.yaml, read 2026-11-17):
+      #   qwen3.7-max, 8 192 out:    86 294 x 0.00165/1k + 8 192 x 0.004951/1k = 0.182944
+      #   deepseek-flash, 8 192 out: 86 294 x 0.00015/1k + 8 192 x 0.0006/1k   = 0.017859
       #   qwen's reasoning, 10 000 tokens:                10 000 x 0.004951/1k = 0.049510
-      #   total 0.250122 — 0.010 above the copied 0.24, inside the reserve for
+      #   total 0.250313 — 0.010 above the copied 0.24, inside the reserve for
       # qwen's reasoning, which the router's estimate does not count: both
-      # rungs stay reachable (0.182769, then 0.017843 of the 0.057231 left).
+      # rungs stay reachable (0.182944, then 0.017859 of the 0.057056 left).
       money_usd: 0.24
     ladder:
       - provider: dashscope

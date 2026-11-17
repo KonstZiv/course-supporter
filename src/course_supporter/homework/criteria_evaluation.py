@@ -264,10 +264,18 @@ async def _replies_shown(
     if context.stage_name != CRITERIA_EVALUATION_WITH_REPLIES:
         return None
     reader = source if source is not None else default_reply_source()
-    shown = replies_for_evaluation(
-        await reader.threads(context.session, context.submission)
+    read = await reader.replies(
+        context.session,
+        context.submission,
+        task_type=context.path_key.task_type,
+        config=context.config,
     )
-    log.info("criteria_evaluation_replies_shown", replies=len(shown))
+    shown = replies_for_evaluation(read.entries)
+    log.info(
+        "criteria_evaluation_replies_shown",
+        replies=len(shown),
+        unjudged=len(read.unjudged),
+    )
     return shown
 
 

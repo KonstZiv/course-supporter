@@ -87,7 +87,9 @@ from course_supporter.homework.path_stages import (
     ATTEMPT_CLASSIFIER,
     COURSE_LINK_LOOKUP,
     CRITERIA_EVALUATION,
+    CRITERIA_EVALUATION_WITH_REPLIES,
     REVIEW_EXPLANATION,
+    REVIEW_EXPLANATION_WITH_REPLIES,
     SAFETY,
 )
 from course_supporter.homework.result_builders import (
@@ -240,7 +242,32 @@ _PRICE = {
     ATTEMPT_CLASSIFIER: 0.006,
     CRITERIA_EVALUATION: 0.02,
     REVIEW_EXPLANATION: 0.008,
+    # The path with the student's replies (task 12a, K4): its two stages.
+    CRITERIA_EVALUATION_WITH_REPLIES: 0.02,
+    REVIEW_EXPLANATION_WITH_REPLIES: 0.008,
 }
+
+
+def _with_answers(explanation: str, to_answer: list[dict[str, Any]]) -> str:
+    """The explanation, and one answer to each reply the request asks about.
+
+    The stage with replies (task 12a, K4) asks its model for both; a joke
+    carries the sentence the request gives it, so its check lets it stand.
+    """
+    answer = json.loads(explanation)
+    answer["replies"] = [
+        {
+            "comment_id": ask["id"],
+            "answer": (
+                "Гарна спроба! " + ask["work_only"]
+                if ask["how"] == "joke"
+                else f"Відповідь на {ask['id']}."
+            ),
+        }
+        for ask in to_answer
+    ]
+    return json.dumps(answer, ensure_ascii=False)
+
 
 # The first-submission path of ``task``: the router is asked by every stage but
 # the search for course links, which is code and costs nothing.
@@ -302,7 +329,15 @@ class _RouterDouble:
             unit_type="tokens",
             priced=priced_exact(_PRICE[stage_name]),
         )
-        content = self.content[stage_name]
+        if stage_name == CRITERIA_EVALUATION_WITH_REPLIES:
+            content = self.content[CRITERIA_EVALUATION]
+        elif stage_name == REVIEW_EXPLANATION_WITH_REPLIES:
+            content = _with_answers(
+                self.content[REVIEW_EXPLANATION],
+                render_context["replies"]["to_answer"],
+            )
+        else:
+            content = self.content[stage_name]
         if response_validator is not None:
             response_validator(content)
         return StageResult(

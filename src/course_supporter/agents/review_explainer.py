@@ -51,6 +51,7 @@ import structlog
 
 from course_supporter.agents.wire_schema import wire_schema
 from course_supporter.criteria_kinds import VerdictValue
+from course_supporter.homework.student_replies import AnswerWay
 from course_supporter.homework.verdict_explanation import (
     CriterionFacts,
     ExplanationAnswer,
@@ -61,6 +62,7 @@ from course_supporter.homework.verdict_explanation import (
     read_explanation_with_replies,
 )
 from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.remark_kinds import CommentTopic
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -288,17 +290,23 @@ def _replies_for_prompt(view: RepliesView) -> dict[str, Any]:
 
 
 def _entry_for_prompt(entry: ShownEntry) -> dict[str, Any]:
+    """One entry of a thread: a hostile reply by ``hostile`` alone, never text.
+
+    ``hostile`` is the category the safety check named, ``null`` when it
+    named none — present on every hostile entry, so the prompt can tell
+    "no category" from "not hostile".
+    """
     shown: dict[str, Any] = {
         "id": entry.id,
         "author": entry.author.value,
-        "kind": entry.kind,
+        "kind": entry.kind.value,
         "in_reply_to": entry.in_reply_to,
     }
     if entry.topic is not None:
         shown["topic"] = entry.topic.value
     if entry.text is not None:
         shown["text"] = entry.text
-    if entry.hostile is not None:
+    if entry.topic is CommentTopic.HOSTILE:
         shown["hostile"] = entry.hostile
     return shown
 
@@ -309,7 +317,7 @@ def _ask_for_prompt(ask: ShownAsk) -> dict[str, Any]:
         shown["off_topic_round"] = ask.off_topic_round
     if ask.course is not None:
         shown["course"] = ask.course
-    if ask.hostile is not None:
+    if ask.how is AnswerWay.JOKE:
         shown["hostile"] = ask.hostile
     if ask.style is not None:
         shown["style"] = {

@@ -57,3 +57,9 @@ providers:
     units-5000-v1: prod_5DTm2EO5XM9Rbm53bRKVps
     units-10000-v1: prod_2u00d6l8qzsfhjeaDTl6FL
     sandbox-test-500: prod_2oJ3Yqnf53wOrikCrQGDtk
+  # Macropay product ids, one product per package with a one-time fixed EUR
+  # price, from the Macropay dashboard — of the sandbox while MACROPAY_API_BASE
+  # is the sandbox host (a sandbox product is unknown to the live API). None
+  # yet: the operator gives them once the sandbox is registered. Without an id
+  # the package cannot be bought through Macropay (503).
+  macropay: {}

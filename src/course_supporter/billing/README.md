@@ -108,6 +108,66 @@ uv run python scripts/billing_admin.py show-account --account <id>   # рядо�
 `--dry-run` — транзакція READ ONLY: той самий вивід, нічого не записано. Вивід — рахунок (id і
 вид, без ідентифікаторів власника), партія, `voided`, `left reserved`, `left held`; у кінці підсумок.
 
+## Macropay — другий посередник (`payments/macropay.py`)
+
+Запасний шлях, якщо Creem відмовить або затягне перевірку. На проді вимкнений: `BILLING_PROVIDERS`
+лишається `["creem"]`. Написаний за документацією docs.macropay.ai (прочитана 15.11) без пісочниці;
+перевірений тестами з підміною HTTP.
+
+* **Режим.** `test_mode` — за хостом `MACROPAY_API_BASE`: бойовий лише `api.macropay.ai`, усе інше —
+  пісочниця (помилкова адреса закриває купівлю, а не відкриває). Купівля в пісочниці зараховується
+  й позначається як тестова (`marked_by = credit`), як у Creem.
+* **Оформлення.** `POST /v1/checkouts/`: `products` [id товару з `providers.macropay` каталогу],
+  `currency` `eur`, `success_url` (наш `checkout_ref` у шляху), `return_url` (кнопка «назад»),
+  `metadata` {`account_id`, `package_id`, `checkout_ref`}. Персональних даних і `external_customer_id`
+  не шлемо. Без id товару пакет через Macropay не купується (503).
+* **Вебхук** — `POST /api/v1/billing/webhooks/macropay`, Standard Webhooks: HMAC-SHA256 над
+  `{webhook-id}.{webhook-timestamp}.{тіло}` з розкодованим base64 секретом `whsec_…`; кілька підписів
+  через пробіл (ротація), вікно 5 хвилин, порівняння сталим часом. Ідентифікатор події — `webhook-id`;
+  другий захист — `order.id` (купівля) і `refund.id` (повернення).
+* **Події.**
+
+  | Macropay | Подія порту | Звідки |
+  |---|---|---|
+  | `order.paid` (стан `paid`) | `PurchaseCompleted` | `metadata`, `total_amount` (з податком), `currency`, `id` (транзакція й рядок) |
+  | `refund.created` / `refund.updated` (стан `succeeded`) | `RefundApproved` | `id` (коригування), `order_id`, `amount` + `tax_amount`, `currency` |
+  | `refund.*` `pending` / `failed` / `canceled` | `Unknown` | — |
+  | `order.refunded`, `order.created`, `order.updated`, `checkout.updated` | `Unknown` | — |
+  | будь-яка інша (зокрема подія спору, якщо з'явиться) | `Unknown` | — |
+
+* **Повернення — часткові теж.** Адміністратор утримує юніти за замовленням
+  (`billing_admin.py refund-hold --provider macropay --order <order.id>`), повертає гроші в кабінеті
+  Macropay; перший `refund.*` зі станом `succeeded` завершує утримання, другий — повтор того самого
+  `refund.id`. `order.refunded` несе накопичену суму без id повернення, тож лише записується як
+  проігнорована: інакше юніти знялися б двічі. Повернення `failed` / `canceled` утримання не знімає —
+  `refund-release`, як для Creem. `request_refund` (`POST /v1/refunds/`, `reason` `customer_request`)
+  є, але його ще ніхто не викликає.
+* **Спори.** Подій спору в каталозі Macropay немає: `Chargeback` адаптер не дає. Повернення з
+  `reason: dispute_prevention` — звичайне повернення.
+
+**Не перевірено — закриє жива перевірка в пісочниці:**
+
+1. Конверт події — `{"type", "timestamp", "data"}` за специфікацією Standard Webhooks; `timestamp` —
+   ISO 8601 з поясом. Тіла тестів зібрані з полів документації, не з її зразків.
+2. Секрет `whsec_<base64>` декодується саме так (а не використовується як текст).
+3. `order.paid` приходить зі `status: "paid"`; `currency` — малими літерами (`eur`).
+4. Сума повернення в подіях: `amount` без податку, `tax_amount` окремо (порівнюємо `amount + tax_amount`
+   з `total_amount`).
+5. `amount` у `POST /v1/refunds/` — з податком чи без (журнал рахує з податком). Важливо, коли
+   з'явиться виклик `request_refund`.
+6. Який стан має повернення в `refund.created` (одразу `succeeded` чи `pending` → `refund.updated`).
+7. Чи ручне повторне надсилання з кабінету зберігає `webhook-id`.
+8. Чи приходить якась подія, коли спір усе-таки відкрито (шукати в `billing_provider_events` рядки
+   `ignored` з невідомим `provider_event_type`).
+9. Відповідь оформлення: поля `id` і `url`, код 201; що відповідає API на невідомий товар (зараз — 502).
+10. `return_url` справді веде на кнопку «назад»; `success_url` повертається без дописаних параметрів.
+
+**Що створити оператору в пісочниці Macropay:** Organization Access Token → `MACROPAY_API_KEY`;
+кінцеву точку вебхука `https://<api host>/api/v1/billing/webhooks/macropay` (події `order.*`,
+`refund.*`, `checkout.updated`), її секрет → `MACROPAY_WEBHOOK_SECRET`; чотири товари з разовою
+фіксованою ціною в EUR (як `units-500-v1` … `units-10000-v1`) → їхні id у `providers.macropay` в
+`config/billing_packages.yaml`. `MACROPAY_API_BASE` лишити типовим (пісочниця).
+
 ## Маршрути
 
 | Маршрут | Хто | Що |

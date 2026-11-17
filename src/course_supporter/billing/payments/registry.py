@@ -3,8 +3,9 @@
 Two lists:
 
 * the adapters there are (:func:`adapters`) — one per provider the code
-  can speak to: :class:`~.creem.CreemProvider` everywhere (it needs
-  ``CREEM_API_KEY`` and ``CREEM_WEBHOOK_SECRET`` once switched on, or the
+  can speak to: :class:`~.creem.CreemProvider` and
+  :class:`~.macropay.MacropayProvider` everywhere (each needs its key and its
+  webhook secret — ``CREEM_*``, ``MACROPAY_*`` — once switched on, or the
   startup stops); :class:`~.fake.FakeProvider` only in development and
   testing: its secret is in the code, so production and staging never have
   it (a test locks it). Another provider's adapter joins this list.
@@ -27,6 +28,7 @@ from course_supporter.billing.journal import PROVIDER_NAME
 from course_supporter.billing.payments.creem import CREEM, CreemProvider
 from course_supporter.billing.payments.fake import FAKE, FakeProvider
 from course_supporter.billing.payments.invoice import INVOICE_PROVIDER
+from course_supporter.billing.payments.macropay import MACROPAY, MacropayProvider
 from course_supporter.billing.payments.port import PaymentProvider
 from course_supporter.config import Environment, get_settings
 
@@ -66,9 +68,33 @@ def _creem(settings: Settings) -> PaymentProvider:
     )
 
 
+def _macropay(settings: Settings) -> PaymentProvider:
+    """Macropay with its token and secret; without either, a broken setting."""
+    key, secret = settings.macropay_api_key, settings.macropay_webhook_secret
+    missing = [
+        name
+        for name, value in (
+            ("MACROPAY_API_KEY", key),
+            ("MACROPAY_WEBHOOK_SECRET", secret),
+        )
+        if value is None or not value.get_secret_value().strip()
+    ]
+    if missing or key is None or secret is None:
+        msg = f"BILLING_PROVIDERS names {MACROPAY}, but {', '.join(missing)} is not set"
+        raise PaymentConfigError(msg)
+    try:
+        return MacropayProvider(
+            api_key=key.get_secret_value().strip(),
+            webhook_secret=secret.get_secret_value().strip(),
+            api_base=settings.macropay_api_base,
+        )
+    except ValueError as exc:  # its words name the shape, never the value
+        raise PaymentConfigError(f"MACROPAY_WEBHOOK_SECRET: {exc}") from exc
+
+
 def adapters(environment: Environment) -> dict[str, Factory]:
     """Every adapter there is in ``environment``, by name."""
-    found: dict[str, Factory] = {CREEM: _creem}
+    found: dict[str, Factory] = {CREEM: _creem, MACROPAY: _macropay}
     if environment in FAKE_ENVIRONMENTS:
         found[FAKE] = _fake
     return found

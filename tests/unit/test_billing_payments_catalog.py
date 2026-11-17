@@ -93,6 +93,12 @@ class TestShippedCatalog:
         assert sandbox is not None
         assert sandbox.active is False
 
+    def test_macropay_has_a_section_and_no_product_yet(self) -> None:
+        """The operator gives Macropay's sandbox products later: none is
+        invented, so no package is bought through Macropay (503) until then."""
+        catalog = load_catalog(SHIPPED)
+        assert catalog.providers["macropay"] == {}
+
     def test_its_packages_have_exactly_the_locked_fields(self) -> None:
         raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
         for package in raw["packages"]:

@@ -322,7 +322,8 @@ def test_the_fake_is_never_registered_outside_development_and_testing(
     settings = Settings(environment=Environment.TESTING, billing_providers=[FAKE])
     settings_there = settings.model_copy(update={"environment": environment})
     with pytest.raises(
-        PaymentConfigError, match=rf"{environment.value} has adapters for \['creem'\]"
+        PaymentConfigError,
+        match=rf"{environment.value} has adapters for \['creem', 'macropay'\]",
     ):
         build_registry(settings_there)
 

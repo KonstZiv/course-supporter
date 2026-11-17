@@ -95,7 +95,9 @@ _EVENT_STATE_OLD = (
     "recorded (a chargeback: kept, no action) | failed (see error; handled "
     "again when the provider repeats the event)."
 )
-_EVENT_ADJUSTMENT_NEW = "Refund: the provider's adjustment id; chargeback: its dispute id."
+_EVENT_ADJUSTMENT_NEW = (
+    "Refund: the provider's adjustment id; chargeback: its dispute id."
+)
 _EVENT_ADJUSTMENT_OLD = "Refund: the provider's adjustment id."
 _ACTION_NEW = (
     "What was done, e.g. author_settings.update, payment_rule.create, "
@@ -107,7 +109,9 @@ _ACTION_OLD = (
     "payment_rule.end, account.anonymize, batch.admin_credit, "
     "batch.invoice_credit."
 )
-_ENTITY_NEW = "Kind of row changed: account | author_settings | payment_rule | batch | refund."
+_ENTITY_NEW = (
+    "Kind of row changed: account | author_settings | payment_rule | batch | refund."
+)
 _ENTITY_OLD = "Kind of row changed: account | author_settings | payment_rule | batch."
 
 
@@ -141,7 +145,11 @@ def _comments(
         ("billing_audit_log", "entity", sa.String(32), entity, False),
     ):
         op.alter_column(
-            table, column, existing_type=type_, existing_nullable=nullable, comment=comment
+            table,
+            column,
+            existing_type=type_,
+            existing_nullable=nullable,
+            comment=comment,
         )
 
 
@@ -161,7 +169,9 @@ def upgrade() -> None:
     )
     op.drop_constraint("ck_billing_consents_channel", "billing_consents", type_="check")
     op.create_check_constraint(
-        "ck_billing_consents_channel", "billing_consents", "channel IN ('portal', 'api')"
+        "ck_billing_consents_channel",
+        "billing_consents",
+        "channel IN ('portal', 'api')",
     )
     _comments(
         refunds_table=_REFUNDS_TABLE_NEW,

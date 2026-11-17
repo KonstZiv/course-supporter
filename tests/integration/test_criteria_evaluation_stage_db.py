@@ -102,7 +102,9 @@ from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
+    ExternalServiceCall,
     HomeworkSubmission,
+    Job,
     Student,
     SubmissionCriterionVerdict,
     Tenant,
@@ -192,12 +194,20 @@ class _Router:
     """Router double: records each request, runs the validator, answers.
 
     ``by`` names the rung that answered each request — the first of the ladder
-    it was handed, unless the test says another.
+    it was handed, unless the test says another. ``call_ids`` are the register
+    rows the router names as the answering calls, one per request; none — no
+    row, as a router without a register.
     """
 
-    def __init__(self, *contents: str, by: tuple[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *contents: str,
+        by: tuple[str, str] | None = None,
+        call_ids: tuple[uuid.UUID, ...] = (),
+    ) -> None:
         self._contents = list(contents)
         self._by = by
+        self._call_ids = list(call_ids)
         self.requests: list[dict[str, Any]] = []
 
     async def execute_stage(
@@ -212,6 +222,7 @@ class _Router:
         response_schema: dict[str, Any] | None = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
+        repeat_on_rung: int | None = None,
         **render: Any,
     ) -> StageResult:
         self.requests.append(
@@ -220,6 +231,7 @@ class _Router:
                 "ladder": [(r.provider, r.model) for r in stage.ladder],
                 "money_ceiling_usd": money_ceiling_usd,
                 "stop_on_output_ceiling": stop_on_output_ceiling,
+                "repeat_on_rung": repeat_on_rung,
                 "render": render,
             }
         )
@@ -229,7 +241,11 @@ class _Router:
         provider, model = self._by or (stage.ladder[0].provider, stage.ladder[0].model)
         self._by = None
         return StageResult(
-            content=content, provider_used=provider, model_used=model, attempt_count=1
+            content=content,
+            provider_used=provider,
+            model_used=model,
+            attempt_count=1,
+            call_id=self._call_ids.pop(0) if self._call_ids else None,
         )
 
 
@@ -544,6 +560,100 @@ class TestTheRepeat:
 
         _, again = router.requests
         assert again["ladder"] == [("deepseek_thinking", "deepseek-v4-pro")]
+
+
+class TestTheTracesOfTheCalls:
+    """2026-11-16: the repeat is told from the first request, each verdict
+    names its call, and a retried item keeps the model's first word."""
+
+    @staticmethod
+    async def _calls(
+        session: AsyncSession, submission: HomeworkSubmission, count: int
+    ) -> tuple[uuid.UUID, ...]:
+        job = Job(
+            tenant_id=submission.tenant_id,
+            job_type="homework_processing",
+            subject_type="homework_submission",
+            subject_id=submission.id,
+        )
+        session.add(job)
+        await session.flush()
+        calls = [
+            ExternalServiceCall(
+                job_id=job.id,
+                action=CRITERIA_EVALUATION,
+                provider="dashscope",
+                model_id="qwen3.7-max",
+                success=True,
+            )
+            for _ in range(count)
+        ]
+        session.add_all(calls)
+        await session.flush()
+        return tuple(call.id for call in calls)
+
+    async def test_each_verdict_names_the_call_it_stands_on(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        first_call, repeat_call = await self._calls(db_session, submission, 2)
+        router = _Router(
+            _answer(
+                _met("c1", "def fib(n): pass"),
+                _met("c2.p1", _P1_QUOTE),
+                _not_met("c2.p2"),
+            ),
+            _answer(_not_met("c1")),
+            call_ids=(first_call, repeat_call),
+        )
+
+        await _evaluate(db_session, router, submission)
+
+        rows = await _rows(db_session, submission)
+        assert rows["c1"].answered_by_call_id == repeat_call
+        # The repeat took back the first "met": the change is in the row.
+        assert (rows["c1"].first_model_verdict, rows["c1"].model_verdict) == (
+            VerdictValue.MET,
+            VerdictValue.NOT_MET,
+        )
+        for item in ("c2.p1", "c2.p2"):
+            assert rows[item].answered_by_call_id == first_call
+            assert rows[item].first_model_verdict is None
+        assert rows["c2"].answered_by_call_id is None
+
+    @pytest.mark.parametrize(
+        ("by", "position"),
+        [
+            (None, 1),
+            (("deepseek_thinking", "deepseek-v4-pro"), 2),
+        ],
+        ids=["first-rung", "fallback"],
+    )
+    async def test_the_repeat_is_marked_with_the_rung_it_goes_to(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        by: tuple[str, str] | None,
+        position: int,
+    ) -> None:
+        router = _Router(
+            _answer(
+                _met("c1", "def fib(n): pass"),
+                _met("c2.p1", _P1_QUOTE),
+                _not_met("c2.p2"),
+            ),
+            _answer(_met("c1", _C1_QUOTE)),
+            by=by,
+        )
+
+        await _evaluate(db_session, router, submission)
+
+        first, again = router.requests
+        assert first["repeat_on_rung"] is None
+        assert again["repeat_on_rung"] == position
+        # Without a register row nothing is named, and the verdicts stand.
+        rows = await _rows(db_session, submission)
+        assert {row.answered_by_call_id for row in rows.values()} == {None}
+        assert rows["c1"].verdict == VerdictValue.MET
 
 
 class TestTheSafeguard:

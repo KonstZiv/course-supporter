@@ -28,6 +28,7 @@ from course_supporter.llm.ladder_config import (
 )
 from course_supporter.llm.prompt_loader_md import StagePrompt
 from course_supporter.llm.providers.base import LLMProvider
+from course_supporter.llm.providers.dashscope import DashScopeProvider
 from course_supporter.llm.registry import ModelRegistryConfig
 from course_supporter.llm.schemas import LLMResponse
 from course_supporter.llm.stage_router import StageResult, StageRouter
@@ -227,6 +228,39 @@ class TestInfrastructureFallback:
         assert result.content == "recovered"
         assert result.attempt_count == 2
         assert sleeps == [1]  # one backoff before the successful retry
+
+    async def test_dashscope_timeout_retries_on_same_rung(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _mock_load_prompt(monkeypatch)
+        sleeps = _capture_sleeps(monkeypatch)
+
+        dashscope = DashScopeProvider(api_keys=("test-key",), default_model="qwen-plus")
+        dashscope.complete = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[
+                TimeoutError(),
+                _ok_response("recovered", provider="dashscope", model="qwen-plus"),
+            ],
+        )
+
+        second_rung = _ok_provider("from second rung")
+        config = _config(
+            entries=(("dashscope", "qwen-plus"), ("fallback", "other-model")),
+        )
+
+        router = StageRouter(
+            config,
+            {"dashscope": dashscope, "fallback": second_rung},
+            registry=_registry(),
+        )
+        result = await router.execute_for_stage("demo")
+
+        assert result.content == "recovered"
+        assert result.provider_used == "dashscope"
+        assert result.attempt_count == 2
+        assert sleeps == [1]
+        assert second_rung.complete.await_count == 0
 
     @pytest.mark.parametrize(
         ("max_retries", "expected_attempts", "expected_sleeps"),

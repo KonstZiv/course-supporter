@@ -20,6 +20,7 @@ All SDK access is mocked; no real DashScope API call is made.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -374,6 +375,14 @@ class TestClassifyError:
         assert (
             provider.classify_error(InvalidParameter("bad param"))
             == ErrorCategory.SEMANTIC
+        )
+
+    def test_timeout_error_is_infrastructure(self) -> None:
+        provider = _make_provider()
+        assert provider.classify_error(TimeoutError()) == ErrorCategory.INFRASTRUCTURE
+        assert (
+            provider.classify_error(asyncio.TimeoutError())  # noqa: UP041
+            == ErrorCategory.INFRASTRUCTURE
         )
 
     def test_unknown_exception_falls_through_to_base(self) -> None:

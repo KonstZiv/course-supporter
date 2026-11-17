@@ -1131,7 +1131,8 @@ class TestTheShippedFileServesTextTasksOnTheNewPathInTestMode:
     ``TestTheShippedFileLeavesTextTasksWithTodaysMentor``: the text types are
     on the new path in test mode — the switch is thrown, the charge is not.
     Nothing reads test mode yet (the funds port is ``AlwaysEnoughFundsPort``);
-    the billing adapter will. ``test`` and ``project`` are as they were."""
+    the billing adapter will. ``test`` is as it was; ``project`` joined the
+    text types in test mode in project chain K8."""
 
     def test_the_file_serves_text_types_on_the_new_path_in_test_mode(self) -> None:
         shipped = _shipped()
@@ -1142,9 +1143,9 @@ class TestTheShippedFileServesTextTasksOnTheNewPathInTestMode:
         assert shipped.task_types[AssignmentType.TEST].served_by is ServedBy.NEW_PATH
         assert in_test_mode(AssignmentType.TEST, shipped) is False
         assert shipped.task_types[AssignmentType.PROJECT].served_by is (
-            ServedBy.TODAYS_MENTOR
+            ServedBy.NEW_PATH
         )
-        assert in_test_mode(AssignmentType.PROJECT, shipped) is False
+        assert in_test_mode(AssignmentType.PROJECT, shipped) is True
 
     async def test_the_new_path_takes_a_task(
         self,

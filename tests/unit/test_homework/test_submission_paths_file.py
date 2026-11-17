@@ -83,29 +83,30 @@ class TestCheckedInPaths:
                 f"stage {name!r} names a prompt that is not there: {stage.prompt_ref}"
             )
 
-    def test_the_text_types_are_on_the_new_path_in_test_mode(
+    def test_every_type_is_on_the_new_path_and_the_reviewed_in_test_mode(
         self, config: PathConfig
     ) -> None:
-        """Task 10, K5 (lock g): ``task`` and ``short_task`` move onto the new
-        path in test mode — served by it, not charged for; ``test`` stays on
-        the new path as it was, charged as usual (it costs nothing), and
-        ``project`` stays with today's Mentor.
+        """Project chain K8: ``project`` moves onto the new path in test mode —
+        served by it, not charged for — as ``task`` and ``short_task`` did in
+        task 10, K5 (lock g); ``test`` stays on the new path as it was, charged
+        as usual (it costs nothing).
 
         Until task 07 every type stood on today's Mentor; task 07 moved
-        ``test``. A type moves by an edit of these assertions, beside the
-        file's own line — never as a side effect of some other change.
+        ``test``, task 10 the text types, K8 the project. A type moves by an
+        edit of these assertions, beside the file's own line — never as a side
+        effect of some other change.
         """
         assert {t: d.served_by for t, d in config.task_types.items()} == {
             AssignmentType.TEST: ServedBy.NEW_PATH,
             AssignmentType.SHORT_TASK: ServedBy.NEW_PATH,
             AssignmentType.TASK: ServedBy.NEW_PATH,
-            AssignmentType.PROJECT: ServedBy.TODAYS_MENTOR,
+            AssignmentType.PROJECT: ServedBy.NEW_PATH,
         }
         assert {t: in_test_mode(t, config) for t in AssignmentType} == {
             AssignmentType.TEST: False,
             AssignmentType.SHORT_TASK: True,
             AssignmentType.TASK: True,
-            AssignmentType.PROJECT: False,
+            AssignmentType.PROJECT: True,
         }
 
     def test_every_type_describes_all_three_paths(self, config: PathConfig) -> None:
@@ -119,13 +120,29 @@ class TestCheckedInPaths:
         paths = config.task_types[AssignmentType.TEST].paths
         assert paths == {state: [] for state in SubmissionState}
 
-    def test_a_project_has_the_classifier_on_its_first_submission_only(
+    def test_a_project_is_judged_then_explained_on_every_path(
         self, config: PathConfig
     ) -> None:
+        """Project chain K8: a text task's path under the project's own stage
+        names; the classifier on the first submission only, as on ``task``."""
         paths = config.task_types[AssignmentType.PROJECT].paths
-        assert paths[SubmissionState.FIRST] == ["safety", "attempt_classifier"]
-        assert paths[SubmissionState.REPEAT_WITHOUT_REPLIES] == ["safety"]
-        assert paths[SubmissionState.REPEAT_WITH_REPLIES] == ["safety"]
+        assert paths[SubmissionState.FIRST] == [
+            "safety",
+            "attempt_classifier",
+            "project_criteria_evaluation",
+            "course_link_lookup",
+            "project_review_explanation",
+        ]
+        for state in (
+            SubmissionState.REPEAT_WITHOUT_REPLIES,
+            SubmissionState.REPEAT_WITH_REPLIES,
+        ):
+            assert paths[state] == [
+                "safety",
+                "project_criteria_evaluation",
+                "course_link_lookup",
+                "project_review_explanation",
+            ]
 
     @pytest.mark.parametrize(
         "task_type", [AssignmentType.TASK, AssignmentType.SHORT_TASK]
@@ -205,8 +222,10 @@ class TestCheckedInPaths:
             (AssignmentType.TASK, SubmissionState.REPEAT_WITH_REPLIES, 0.84),
             (AssignmentType.SHORT_TASK, SubmissionState.FIRST, 0.89),
             (AssignmentType.SHORT_TASK, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.84),
-            (AssignmentType.PROJECT, SubmissionState.FIRST, 0.10),
-            (AssignmentType.PROJECT, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.05),
+            # 0.05 + 0.05 + 0.56 + 0 + 0.24: the project's own two stages in
+            # place of the text ones (chain K8).
+            (AssignmentType.PROJECT, SubmissionState.FIRST, 0.90),
+            (AssignmentType.PROJECT, SubmissionState.REPEAT_WITHOUT_REPLIES, 0.85),
         ],
     )
     def test_path_ceiling_estimates(
@@ -303,7 +322,8 @@ def _over(prompt: str, twin: str) -> int:
 
 class TestTheProjectsOwnStages:
     """Project chain K4: a project's evaluation and explanation, with their own
-    prompts and ceilings, defined and runnable — and on no path yet."""
+    prompts and ceilings, defined and runnable — on the project's paths alone
+    since chain K8."""
 
     @pytest.mark.parametrize("name", sorted(_PROJECT_STAGES))
     def test_a_stage_is_its_text_twin_but_for_the_prompt_and_the_money(
@@ -319,18 +339,24 @@ class TestTheProjectsOwnStages:
         own = {"prompt_ref": True, "ceilings": {"money_usd"}}
         assert stage.model_dump(exclude=own) == twin.model_dump(exclude=own)
 
-    def test_no_path_of_any_type_lists_them(self, config: PathConfig) -> None:
-        """Lock e: the switch of ``project`` is a later change, with its own
-        live measurement; until then today's Mentor serves it."""
-        listed = {
+    def test_every_path_of_the_project_lists_them_and_no_other_does(
+        self, config: PathConfig
+    ) -> None:
+        """Lock e, turned by chain K8: the switch of ``project`` was a change
+        of its own, with its own live measurement after the deploy. Each
+        project path lists both stages; no path of another type lists one."""
+        project = config.task_types[AssignmentType.PROJECT]
+        assert project.served_by is ServedBy.NEW_PATH
+        for stage_names in project.paths.values():
+            assert set(_PROJECT_STAGES) <= set(stage_names)
+        listed_by_others = {
             name
-            for declared in config.task_types.values()
+            for task_type, declared in config.task_types.items()
+            if task_type is not AssignmentType.PROJECT
             for stage_names in declared.paths.values()
             for name in stage_names
         }
-        assert listed.isdisjoint(_PROJECT_STAGES)
-        project = config.task_types[AssignmentType.PROJECT]
-        assert project.served_by is ServedBy.TODAYS_MENTOR
+        assert listed_by_others.isdisjoint(_PROJECT_STAGES)
 
     @pytest.mark.parametrize(
         ("broken", "message"),
@@ -383,18 +409,17 @@ class TestTheProjectsOwnStages:
         """Both ceilings count the text stages' work of 131 072 characters: the
         new path's budget for ``project`` — with the two stages on its path
         or without them, the first rung of ``safety`` bounds it."""
-        today = path_context_budget_chars(AssignmentType.PROJECT, config, registry)
+        switched = path_context_budget_chars(AssignmentType.PROJECT, config, registry)
         raw = config.model_dump(mode="json")
-        raw["task_types"]["project"]["paths"]["first"] += [
-            "project_criteria_evaluation",
-            "course_link_lookup",
-            "project_review_explanation",
-        ]
-        switched = path_context_budget_chars(
+        for state, stage_names in raw["task_types"]["project"]["paths"].items():
+            raw["task_types"]["project"]["paths"][state] = [
+                name for name in stage_names if name not in _PROJECT_STAGES
+            ]
+        without = path_context_budget_chars(
             AssignmentType.PROJECT, PathConfig.model_validate(raw), registry
         )
 
-        assert today == switched == 131_072
+        assert switched == without == 131_072
 
     def test_the_evaluations_money_covers_its_dearest_attempts(
         self, config: PathConfig, registry: ModelRegistryConfig
@@ -450,8 +475,9 @@ class TestTheProjectsOwnStages:
     def test_they_leave_the_evaluator_version_of_every_type_where_it_was(
         self, config: PathConfig, task_type: AssignmentType
     ) -> None:
-        """A stage on no path is in no type's version: a review of unchanged
-        work is still given again (task 13), as before chain K4."""
+        """A project's stage is on the project's paths alone, so in no other
+        type's version: a review of their unchanged work is still given again
+        (task 13), as before chain K4 and K8."""
         raw = config.model_dump(mode="json")
         for name in _PROJECT_STAGES:
             del raw["stages"][name]

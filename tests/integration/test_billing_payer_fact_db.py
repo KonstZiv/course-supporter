@@ -68,6 +68,7 @@ async def attempt(
     *,
     outcome: CallOutcome | None = CallOutcome.SUCCESS,
     action: str = "criteria_evaluation",
+    unit_type: str = "tokens",
 ) -> None:
     """One priced row of the register; ``kind=None`` — a row without a kind
     (speech-to-text, or written before the column)."""
@@ -81,7 +82,7 @@ async def attempt(
                 success=outcome is not FAILED,
                 outcome=None if outcome is None else outcome.value,
                 request_kind=None if kind is None else kind.value,
-                unit_type="tokens",
+                unit_type=unit_type,
                 unit_in=10,
                 unit_out=10,
                 cost_usd=Decimal(usd),
@@ -130,17 +131,15 @@ class TestWhoPaysWhichCall:
         await attempt(session_factory, job, "0.04", FIRST)
         await attempt(session_factory, job, "0.02", ITEM_REPEAT)
         await attempt(session_factory, job, "0.01", None, outcome=None)
-        # A failed row without a kind stays the payer's, as before the decision.
-        await attempt(session_factory, job, "0.005", None, outcome=FAILED)
         await attempt(session_factory, job, "0.03", STRUCTURAL)
         await attempt(session_factory, job, "0.05", INFRA)
 
-        assert await review_fact(session_factory, w) == Decimal("0.075")
+        assert await review_fact(session_factory, w) == Decimal("0.07")
         found = await report(session_factory, w)
         (student,) = found.students
         (author,) = found.authors
         for spend in (student.spend, author.spend):
-            assert spend.known_usd == Decimal("0.155"), "the dollars stay whole"
+            assert spend.known_usd == Decimal("0.15"), "the dollars stay whole"
             assert spend.platform_usd == Decimal("0.08"), "structural + infra"
 
     async def test_a_first_attempt_that_failed_on_the_infrastructure_is_the_platforms(
@@ -156,6 +155,30 @@ class TestWhoPaysWhichCall:
         assert await review_fact(session_factory, w) == Decimal("0.03")
         (student,) = (await report(session_factory, w)).students
         assert student.spend.platform_usd == Decimal("0.06")
+
+    async def test_a_failed_speech_to_text_attempt_is_the_platforms(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """No kind, failed on the infrastructure, priced by the audio's length:
+        the platform's (billing session, 2026-11-17 ~21:55). The attempt that
+        transcribed — no kind, no failure — stays the payer's."""
+        w = await bil.make_world(session_factory)
+        job = w.processing_job_id
+        for outcome in (FAILED, CallOutcome.SUCCESS):
+            await attempt(
+                session_factory,
+                job,
+                "0.06",
+                None,
+                outcome=outcome,
+                action="transcribe",
+                unit_type="seconds",
+            )
+
+        assert await job_fact(session_factory, job) == Decimal("0.06")
+        (author,) = (await report(session_factory, w)).authors
+        assert author.spend.known_usd == Decimal("0.12")
+        assert author.spend.platform_usd == Decimal("0.06")
 
     async def test_a_first_attempt_whose_answer_was_refused_is_the_payers(
         self, session_factory: async_sessionmaker[AsyncSession]

@@ -560,14 +560,14 @@ apart from ``request_kind``; it is the platform's (``billing.costs``,
 of its own, not made here.
 """
 
-_PAYER_REQUEST: Final[ColumnElement[bool]] = or_(
-    ExternalServiceCall.request_kind.is_(None),
-    and_(
+_PAYER_REQUEST: Final[ColumnElement[bool]] = and_(
+    or_(
+        ExternalServiceCall.request_kind.is_(None),
         ExternalServiceCall.request_kind.in_(PAYER_REQUEST_KINDS),
-        ExternalServiceCall.outcome.is_distinct_from(CallOutcome.TRANSPORT_ERROR.value),
     ),
+    ExternalServiceCall.outcome.is_distinct_from(CallOutcome.TRANSPORT_ERROR.value),
 )
-"""The request-kind half of :data:`PAID_BY_PAYER`."""
+"""The request half of :data:`PAID_BY_PAYER`: its kind and its own failure."""
 
 PAID_BY_PAYER: Final[ColumnElement[bool]] = and_(
     _PAYER_REQUEST, not_(REPLY_SCREEN_CALL)
@@ -580,14 +580,15 @@ The operator, 2026-11-17 (15:51, confirmed 16:01): «Платник платит
 самим визначенням факту.» It stands on ``request_kind``
 (:class:`~course_supporter.call_outcome.RequestKind`):
 
-* the payer's — ``first`` and ``item_repeat``, except an attempt that itself
-  ended in an infrastructure failure (``outcome = 'transport_error'``: a
-  timeout, 429, 5xx, a dropped connection) — that one is the platform's even
-  as a ``first`` (the billing session's reading, vision-rules#24);
-* the platform's — ``structural_retry``, ``infra_retry`` and those failed
-  attempts;
-* ``NULL`` — the payer's, as before the decision: speech-to-text attempts and
-  rows written before the column; rows of no call carry no cost.
+* the payer's — ``first``, ``item_repeat`` and ``NULL`` (speech-to-text
+  attempts, rows written before the column; rows of no call carry no cost);
+* the platform's — ``structural_retry``, ``infra_retry``, and any attempt that
+  itself ended in an infrastructure failure (``outcome = 'transport_error'``:
+  a timeout, 429, 5xx, a dropped connection), whatever its kind — a ``first``
+  and a ``NULL`` row too. One rule for every failed attempt: the billing
+  session's reading (vision-rules#24), confirmed by the coordinator, and its
+  answer of 2026-11-17 ~21:55 on the rows without a kind (a failed
+  speech-to-text attempt is the platform's).
 
 Apart from the kind: a call of the reply screen is never the payer's
 (:data:`REPLY_SCREEN_CALL`).

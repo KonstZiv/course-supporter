@@ -232,6 +232,7 @@ async def run_new_path_if_switched(
                 authored_document_id=submission.authored_document_id,
                 config=config,
                 submission_id=submission.id,
+                tenant_id=submission.tenant_id,
             )
         if choice is None:
             return False

@@ -43,7 +43,9 @@ The review replies go to:
       review the one the next submission answers, as the attempt ledger
       leaves it the previous attempt;
     * the review was read against the version of the task in force now: the
-      next submission answers no reply to a review of another version.
+      next submission answers no reply to a review of another version — and a
+      review with no recorded version (one written before the attempt
+      ledger) is no such review: K1's table keys every comment by a version.
 
     Each of the three answers ``not_latest_review``: in each the reply would
     be stored and never answered.
@@ -109,6 +111,7 @@ from course_supporter.homework.student_text import (
     screened_student_text,
 )
 from course_supporter.models.source import AssignmentType
+from course_supporter.remark_kinds import CommentKind
 from course_supporter.security.exceptions import SecurityRejectedError
 from course_supporter.storage.homework_repository import ATTEMPT_STATUSES
 from course_supporter.storage.orm import (
@@ -143,7 +146,13 @@ __all__ = [
 logger = structlog.get_logger(__name__)
 
 REPLY_MAX_CHARS: Final = 2_000
-"""The most a reply may hold, in code points — ``details.max`` of the refusal."""
+"""The most a reply may hold, in code points — ``details.max`` of the refusal.
+
+The student's own limit, the code's to keep; the table admits up to
+:data:`~course_supporter.remark_kinds.COMMENT_MAX_CHARS` for any comment, the
+Mentor's answer included (K1).
+"""
+
 
 REPLIES_PER_REMARK: Final = 5
 """The most replies a student writes on one remark between two submissions."""
@@ -251,12 +260,16 @@ def _takes_replies(facts: ReviewFacts, config: PathConfig | None) -> bool:
     return facts.task_type is not None and replies_enabled(facts.task_type, config)
 
 
-def _scope_of(submission: HomeworkSubmission) -> ThreadScope:
-    """The submissions the threads of this review run through.
+def _scope_of(submission: HomeworkSubmission) -> ThreadScope | None:
+    """The student's work the threads of this review run through.
 
     Read off the submission — its tenant, its student, its task, the version
-    it was read against — never off the request beside it.
+    it was read against — never off the request beside it. ``None`` for a
+    submission with no recorded version (reviewed before the attempt
+    ledger): K1's table keys every comment by a version, so it has no thread.
     """
+    if submission.task_version is None:
+        return None
     return ThreadScope(
         tenant_id=submission.tenant_id,
         student_id=submission.student_id,
@@ -266,10 +279,15 @@ def _scope_of(submission: HomeworkSubmission) -> ThreadScope:
 
 
 def _replies_go_here(submission: HomeworkSubmission, facts: ReviewFacts) -> bool:
-    """Is this the review the next submission answers? (module docstring)"""
+    """Is this the review the next submission answers? (module docstring)
+
+    A review with no recorded version of the task is none: the next
+    submission reads no reply to it, and K1's table could not hold one.
+    """
     return (
         review_is_readable(submission)
         and all(status in _ENDED_WITHOUT_REVIEW for status in facts.later_statuses)
+        and submission.task_version is not None
         and submission.task_version == facts.task_version
     )
 
@@ -329,17 +347,18 @@ async def post_reply(
     facts = await review_facts(session, live)
     if not _takes_replies(facts, config):
         raise _not_found()
-    if not _replies_go_here(live, facts):
+    scope = _scope_of(live)
+    if scope is None or not _replies_go_here(live, facts):
         raise _refusal(ReplyRefusal.NOT_LATEST_REVIEW)
     if item_id not in facts.items:
         raise _refusal(ReplyRefusal.UNKNOWN_ITEM)
     if parent_id is not None:
-        thread = await comments.thread(_scope_of(live), (item_id,))
+        thread = await comments.thread(scope, (item_id,))
         if all(comment.id != parent_id for comment in thread):
             raise _refusal(ReplyRefusal.PARENT_NOT_IN_THREAD)
     await comments.lock_replies(live.id)
     written = await comments.count_student_replies(
-        submission_id=live.id, item_id=item_id
+        tenant_id=live.tenant_id, submission_id=live.id, item_id=item_id
     )
     if written >= REPLIES_PER_REMARK:
         raise _refusal(ReplyRefusal.COMMENT_LIMIT_REACHED, max=REPLIES_PER_REMARK)
@@ -347,11 +366,14 @@ async def post_reply(
 
     reply = await comments.add_student_reply(
         NewReply(
-            tenant_id=live.tenant_id,
+            tenant_id=scope.tenant_id,
+            student_id=scope.student_id,
+            authored_document_id=scope.authored_document_id,
+            task_version=scope.task_version,
             submission_id=live.id,
             item_id=item_id,
             parent_id=parent_id,
-            kind=kind,
+            kind=CommentKind(kind),
             body=text,
         )
     )
@@ -390,9 +412,10 @@ async def read_threads(
     """
     live = _owned(submission, student_id)
     facts = await review_facts(session, live)
-    if not _takes_replies(facts, config) or not facts.items:
+    scope = _scope_of(live)
+    if not _takes_replies(facts, config) or not facts.items or scope is None:
         return []
-    found = await comments.thread(_scope_of(live), facts.items)
+    found = await comments.thread(scope, facts.items)
     by_item: dict[str, list[CommentRecord]] = {}
     for comment in sorted(found, key=lambda c: (c.created_at, c.id)):
         by_item.setdefault(comment.item_id, []).append(comment)

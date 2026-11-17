@@ -29,7 +29,7 @@ from course_supporter.homework.feedback_core import SUBMISSION_NOT_FOUND
 from course_supporter.homework.remark_comments import ScreenMark, ThreadScope
 from course_supporter.homework.reply_core import ReviewFacts
 from course_supporter.models.source import AssignmentType
-from course_supporter.reply_kinds import CommentAuthor, ReplyTopic
+from course_supporter.remark_kinds import CommentAuthor, CommentKind, CommentTopic
 from course_supporter.security.schemas import ViolationCategory
 from course_supporter.storage.database import get_session
 from course_supporter.storage.homework_repository import HomeworkRepository
@@ -265,8 +265,11 @@ class TestThePortalDoor:
         store.comments.append(reply)
         store.scopes[submission.id] = _scope(submission)
         await store.mark_screened(
-            reply.id,
-            ScreenMark(ReplyTopic.HOSTILE, 0.9, ViolationCategory.PROMPT_INJECTION),
+            tenant_id=submission.tenant_id,
+            comment_id=reply.id,
+            mark=ScreenMark(
+                CommentTopic.HOSTILE, 0.9, ViolationCategory.PROMPT_INJECTION.value
+            ),
         )
         with _owned(submission):
             resp = await client.get(_portal(submission.id))
@@ -450,7 +453,7 @@ class TestBothDoorsAnswerAlike:
             submission.id,
             item_id="c1",
             author=CommentAuthor.MENTOR,
-            kind="answer",
+            kind=CommentKind.ANSWER,
             parent_id=question.id,
             minute=1,
         )

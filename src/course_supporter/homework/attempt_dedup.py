@@ -369,6 +369,7 @@ async def _find(
         return None
     if await pending_replies(
         session,
+        tenant_id=row.tenant_id,
         submission_id=submission_id,
         student_id=row.student_id,
         authored_document_id=row.authored_document_id,

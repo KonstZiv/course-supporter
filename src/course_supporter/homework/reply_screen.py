@@ -4,10 +4,12 @@ Purpose:
     A submission answers the replies its student wrote to the remarks of the
     previous review (K4). Before any of them is shown to a model that answers,
     each is judged once, here: is it an attempt on the grade or on the check
-    itself — hostile — and if not, is it about the work. What is judged is
-    written on the reply (``topic``, ``topic_confidence``,
-    ``hostile_category``); the answering model reads those marks, and of a
-    hostile reply the category alone, never its text (K4).
+    itself — hostile, which the safety check decides — and if not, is it about
+    the work, which the topic port decides (product owner's decision,
+    2026-11-16). What is judged is written on the reply (``topic``,
+    ``topic_confidence``, ``hostile_category``); the answering model reads
+    those marks, and of a hostile reply the category alone, never its text
+    (K4).
 
     The screen never decides the submission. On the grade only the work bears
     (product owner's decision, 2026-11-16): a reply — a comment, a question, a
@@ -35,12 +37,18 @@ The two judgements, per reply:
        reply — recorded under its own action,
        :data:`~course_supporter.homework.path_config.REPLY_SAFETY_ACTION`, so
        the price of screening replies is read apart from the price of
-       screening the work. An unsafe verdict marks the reply ``hostile``,
-       with the violation (:func:`hostile_category`) and the check's
-       confidence.
+       screening the work. The verdict makes the reply ``hostile``
+       (:func:`is_hostile`) when it is unsafe and names an attempt on the
+       grade or the check — ``prompt_injection``, ``policy_violation``,
+       ``suspicious_behavior``; the category is the gravest of them
+       (:func:`hostile_category`) — or when it is unsafe and names nothing at
+       all (hostile, no category). The confidence is the check's.
     2. **About the work?** — the topic port
-       (:mod:`~course_supporter.homework.reply_topic`), asked only of a reply
-       the safety check let through: no model reads a text it refused.
+       (:mod:`~course_supporter.homework.reply_topic`), asked of every reply
+       the safety check did not make hostile: one it passed, and one it
+       refused for ``off_topic`` alone — being beside the work is not an
+       attempt on the grade, and whether a reply is about the work is the
+       port's to say. No model reads a text the check found hostile.
 
     A reply either judgement could not answer (the ladder ran out, the
     verdict did not parse) is left unjudged — no topic — and a later run
@@ -48,7 +56,8 @@ The two judgements, per reply:
     unjudged reply (K4).
 
 Interface:
-    :func:`screen_replies` — the screen; :func:`hostile_category` — which
+    :func:`screen_replies` — the screen; :func:`is_hostile` — whether a
+    safety verdict makes a reply hostile; :func:`hostile_category` — which
     violation names a hostile reply; :class:`ScreenSummary` — what one run
     judged.
 
@@ -89,13 +98,17 @@ from course_supporter.homework.reply_topic import (
 )
 from course_supporter.llm.error_categories import LadderExhaustedError
 from course_supporter.llm.stage_router import StageExecution
-from course_supporter.reply_kinds import ReplyTopic
+from course_supporter.remark_kinds import CommentTopic
 from course_supporter.security.exceptions import (
     SafetyValidationError,
     SecurityRejectedError,
 )
 from course_supporter.security.policies import HOMEWORK_POLICY
-from course_supporter.security.schemas import ScreenFlag, ViolationCategory
+from course_supporter.security.schemas import (
+    SafetyResult,
+    ScreenFlag,
+    ViolationCategory,
+)
 from course_supporter.security.stage2 import run_stage2_safety_check
 from course_supporter.security.text_screen import screen_text
 
@@ -111,7 +124,7 @@ if TYPE_CHECKING:
     from course_supporter.security.schemas import CourseContext
     from course_supporter.storage.orm import HomeworkSubmission
 
-__all__ = ["ScreenSummary", "hostile_category", "screen_replies"]
+__all__ = ["ScreenSummary", "hostile_category", "is_hostile", "screen_replies"]
 
 logger = structlog.get_logger(__name__)
 
@@ -119,13 +132,15 @@ _BY_GRAVITY: Final = (
     ViolationCategory.PROMPT_INJECTION,
     ViolationCategory.POLICY_VIOLATION,
     ViolationCategory.SUSPICIOUS_BEHAVIOR,
-    ViolationCategory.OFF_TOPIC,
 )
-"""The violations a hostile reply is named by, the gravest first.
+"""The violations that make a reply hostile, the gravest first.
 
-An attempt on the check outranks everything — it is what "hostile" is for;
-then what the platform's policy forbids; then the taxonomy's catch-all; and
-off-topic last, being the mildest thing the safety check refuses.
+A hostile reply is an attempt on the grade or on the check itself (product
+owner's decision, 2026-11-16). An attempt on the check outranks everything —
+it is what "hostile" is for; then what the platform's policy forbids; then the
+taxonomy's catch-all for the clearly malicious. ``off_topic`` is not one of
+them: a reply beside the work attempts nothing, and whether it is about the
+work is the topic port's to say.
 """
 
 
@@ -141,14 +156,31 @@ class ScreenSummary:
 def hostile_category(
     violations: Iterable[ViolationCategory],
 ) -> ViolationCategory | None:
-    """The one violation a hostile reply is named by (``_BY_GRAVITY``).
+    """The gravest of the named violations that make a reply hostile.
 
-    ``None`` when the check refused and named none — its prompt asks for at
-    least one, and the parser does not insist; the reply is hostile all the
-    same, with no category invented for it.
+    ``None`` when none of them is named: no violation at all — the check's
+    prompt asks for one, and the parser does not insist — or ``off_topic``
+    alone (``_BY_GRAVITY``).
     """
     named = frozenset(violations)
     return next((v for v in _BY_GRAVITY if v in named), None)
+
+
+def is_hostile(verdict: SafetyResult) -> bool:
+    """Does the safety check's verdict make the reply hostile?
+
+    * unsafe, naming ``prompt_injection``, ``policy_violation`` or
+      ``suspicious_behavior`` — hostile, by the gravest of them;
+    * unsafe, naming nothing — hostile, with no category: the check refused
+      the text, and the screen does not invent why;
+    * unsafe, naming ``off_topic`` alone — not hostile: the reply goes on as
+      a safe one does, and the topic port says whether it is about the work;
+    * safe — not hostile, whatever it names, as the safety stage of the work
+      reads ``is_safe`` alone.
+    """
+    if verdict.is_safe:
+        return False
+    return not verdict.violations or hostile_category(verdict.violations) is not None
 
 
 def reply_safety_execution(config: PathConfig) -> StageExecution:
@@ -202,6 +234,7 @@ async def screen_replies(
     )
     pending = await pending_replies(
         session,
+        tenant_id=submission.tenant_id,
         submission_id=submission.id,
         student_id=submission.student_id,
         authored_document_id=submission.authored_document_id,
@@ -232,9 +265,11 @@ async def screen_replies(
         )
         if mark is None:
             continue
-        await store.mark_screened(reply.id, mark)
+        await store.mark_screened(
+            tenant_id=submission.tenant_id, comment_id=reply.id, mark=mark
+        )
         judged += 1
-        hostile += mark.topic is ReplyTopic.HOSTILE
+        hostile += mark.topic is CommentTopic.HOSTILE
 
     summary = ScreenSummary(
         judged=judged, hostile=hostile, unjudged=len(unjudged) - judged
@@ -270,20 +305,20 @@ async def _judge(
     except (LadderExhaustedError, SafetyValidationError, SecurityRejectedError):
         log.warning("reply_screen_unjudged", comment_id=str(reply.id), exc_info=True)
         return None
-    if not verdict.is_safe:
+    if is_hostile(verdict):
         category = hostile_category(verdict.violations)
+        named = category.value if category is not None else None
         # The category, never the text: the log is read by more people than
         # the review is.
-        log.info(
-            "reply_screen_hostile",
-            comment_id=str(reply.id),
-            category=category.value if category is not None else None,
-        )
+        log.info("reply_screen_hostile", comment_id=str(reply.id), category=named)
         return ScreenMark(
-            topic=ReplyTopic.HOSTILE,
+            topic=CommentTopic.HOSTILE,
             topic_confidence=verdict.confidence,
-            hostile_category=category,
+            hostile_category=named,
         )
+    if not verdict.is_safe:
+        # Refused as off-topic alone: beside the work, not an attempt on it.
+        log.info("reply_screen_off_topic_for_safety", comment_id=str(reply.id))
     try:
         topic = await topics.classify(reply, submission=submission)
     except LadderExhaustedError:

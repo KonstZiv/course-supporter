@@ -3,9 +3,9 @@
 No database here: what the core decides — which refusal, in which order, what
 it writes and with which tenant — is decided from facts about the review and
 from the store of comments, and both are doubles here. The facts are read on
-a real database in ``tests/integration/test_reply_core_db.py``; the store is
-the in-memory double of the port (``tests/_helpers/remark_comments.py``)
-until K1's table is merged (phase 2).
+a real database in ``tests/integration/test_reply_core_db.py``, where the
+core also runs over the store on K1's table; here the store is the in-memory
+double of the port (``tests/_helpers/remark_comments.py``).
 """
 
 from __future__ import annotations
@@ -40,7 +40,11 @@ from course_supporter.homework.reply_core import (
     read_threads,
 )
 from course_supporter.models.source import AssignmentType
-from course_supporter.reply_kinds import CommentAuthor
+from course_supporter.remark_kinds import (
+    COMMENT_MAX_CHARS,
+    CommentAuthor,
+    CommentKind,
+)
 from course_supporter.storage.orm import HomeworkSubmission
 
 _STUDENT_ID = uuid.UUID("01a0c000-0000-7000-8000-000000000001")
@@ -276,6 +280,25 @@ class TestTheReviewRepliesGoTo:
 
         assert _code(refusal) == ReplyRefusal.NOT_LATEST_REVIEW
 
+    @pytest.mark.parametrize("in_force", [_VERSION, None])
+    async def test_a_review_with_no_recorded_version(
+        self, in_force: str | None
+    ) -> None:
+        """Reviewed before the attempt ledger: no reply, and nothing written.
+
+        K1's table keys every comment by a version (``task_version`` NOT
+        NULL): the refusal is the core's, never the database's — even when
+        the task's own version is unknown too.
+        """
+        store = FakeRemarkComments()
+
+        refusal = await _refused(
+            _submission(task_version=None), store, facts=_facts(task_version=in_force)
+        )
+
+        assert _code(refusal) == ReplyRefusal.NOT_LATEST_REVIEW
+        assert store.added == [] and store.locked == []
+
 
 class TestTheRemarkAndItsThread:
     async def test_a_remark_the_review_does_not_have(self) -> None:
@@ -336,7 +359,7 @@ class TestTheRemarkAndItsThread:
             submission.id,
             item_id="c1",
             author=CommentAuthor.MENTOR,
-            kind="answer",
+            kind=CommentKind.ANSWER,
             parent_id=question.id,
             minute=5,
         )
@@ -393,9 +416,13 @@ class TestTheLimit:
             order.append("lock")
             await lock(submission_id)
 
-        async def counted(*, submission_id: uuid.UUID, item_id: str) -> int:
+        async def counted(
+            *, tenant_id: uuid.UUID, submission_id: uuid.UUID, item_id: str
+        ) -> int:
             order.append("count")
-            return await count(submission_id=submission_id, item_id=item_id)
+            return await count(
+                tenant_id=tenant_id, submission_id=submission_id, item_id=item_id
+            )
 
         with (
             patch.object(store, "lock_replies", new=locked),
@@ -423,6 +450,10 @@ class TestTheWords:
         reply = await _post(_submission(), store, body="😀" * 2_000)
 
         assert reply.body == "😀" * 2_000
+
+    def test_the_students_limit_fits_the_table(self) -> None:
+        """The code keeps the student's limit; K1's table admits up to 4 000."""
+        assert REPLY_MAX_CHARS <= COMMENT_MAX_CHARS
 
     async def test_one_more_is_refused_with_the_limit(self) -> None:
         refusal = await _refused(_submission(), FakeRemarkComments(), body="я" * 2_001)
@@ -523,10 +554,14 @@ class TestWhatIsWritten:
 
         (written,) = store.added
         assert written.tenant_id == _TENANT_ID
+        assert written.student_id == _STUDENT_ID
+        assert written.authored_document_id == _DOC_ID
+        assert written.task_version == _VERSION
         assert written.submission_id == submission.id
         assert written.item_id == "c1"
         assert written.parent_id == parent.id
-        assert written.kind == "question"
+        assert written.kind is CommentKind.QUESTION
+        assert set(store.tenants) == {_TENANT_ID}, "every call scoped by the tenant"
         assert written.body == "Чому критерій 1 не виконано? Перевірка є в рядку 12."
 
 
@@ -541,7 +576,7 @@ class TestTheThreads:
             submission.id,
             item_id="c1",
             author=CommentAuthor.MENTOR,
-            kind="answer",
+            kind=CommentKind.ANSWER,
             parent_id=question.id,
             minute=3,
         )
@@ -581,6 +616,22 @@ class TestTheThreads:
             )
 
         assert threads == []
+
+    async def test_a_review_with_no_recorded_version_has_none(self) -> None:
+        """No version, no thread: the store is not even asked."""
+        store = FakeRemarkComments()
+
+        with _review_facts(_facts()):
+            threads = await read_threads(
+                _session(),
+                submission=_submission(task_version=None),
+                student_id=_STUDENT_ID,
+                comments=store,
+                config=_REPLIES_ON,
+            )
+
+        assert threads == []
+        assert store.tenants == []
 
     async def test_a_foreign_submission_is_the_404(self) -> None:
         with _review_facts(_facts()), pytest.raises(HTTPException) as refused:

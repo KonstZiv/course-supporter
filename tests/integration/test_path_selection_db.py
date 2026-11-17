@@ -11,7 +11,6 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-from unittest.mock import patch
 
 import pytest
 
@@ -26,7 +25,7 @@ from course_supporter.homework.path_selection import (
     resolve_submission_state,
 )
 from course_supporter.models.source import AssignmentType
-from course_supporter.reply_kinds import CommentAuthor
+from course_supporter.remark_kinds import CommentAuthor, CommentKind
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -36,7 +35,7 @@ from course_supporter.storage.orm import (
     Tenant,
 )
 from course_supporter.storage.student_repository import StudentRepository
-from tests._helpers.remark_comments import FakeRemarkComments, a_reply
+from tests._helpers.remark_comments import a_stored_comment
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -445,20 +444,22 @@ class TestChoosePath:
 class TestTheRepliesState:
     """Task 12a, K3: the third state — the switch on, and replies to answer.
 
-    The attempts and the task's version are rows; the replies come from the
-    in-memory store until K1's table is merged (phase 2 replaces the store,
-    not these arrangements).
+    On real rows: the attempts, the task's version, and the replies in K1's
+    table, read by the store the body reads them by.
     """
 
-    @staticmethod
+    _VERSION = "the-version-in-force"
+
     async def _a_repeat(
+        self,
         session: AsyncSession,
         tenant: Tenant,
         root: CourseNode,
         doc: AuthoredDocument,
         name: str,
     ) -> tuple[Student, HomeworkSubmission, HomeworkSubmission]:
-        """A student's reviewed attempt, and their next submission, received."""
+        """A reviewed attempt at the version in force, and the next submission."""
+        doc.content_hash = self._VERSION
         student = await StudentRepository(session).create(
             tenant_id=tenant.id, external_id=f"ext-replies-{name}"
         )
@@ -466,9 +467,11 @@ class TestTheRepliesState:
         reviewed = await _submit(
             repo, tenant=tenant, student=student, root=root, doc=doc, status="delivered"
         )
+        reviewed.task_version = self._VERSION
         current = await _submit(
             repo, tenant=tenant, student=student, root=root, doc=doc, status="received"
         )
+        await session.flush()
         return student, reviewed, current
 
     @staticmethod
@@ -477,23 +480,19 @@ class TestTheRepliesState:
         student: Student,
         doc: AuthoredDocument,
         current: HomeworkSubmission,
-        store: FakeRemarkComments,
         *,
         replies_enabled: bool = True,
         named: bool = True,
     ) -> SubmissionState:
-        with patch(
-            "course_supporter.homework.remark_comments.build_remark_comment_repository",
-            return_value=store,
-        ):
-            return await resolve_submission_state(
-                session,
-                student_id=student.id,
-                authored_document_id=doc.id,
-                submission_id=current.id if named else None,
-                task_type=AssignmentType.TASK if named else None,
-                config=_config(replies_enabled=replies_enabled),
-            )
+        return await resolve_submission_state(
+            session,
+            student_id=student.id,
+            authored_document_id=doc.id,
+            submission_id=current.id if named else None,
+            tenant_id=current.tenant_id if named else None,
+            task_type=AssignmentType.TASK if named else None,
+            config=_config(replies_enabled=replies_enabled),
+        )
 
     async def test_replies_to_answer_make_the_replies_state(
         self,
@@ -505,11 +504,9 @@ class TestTheRepliesState:
         student, reviewed, current = await self._a_repeat(
             db_session, seed_tenant, seed_root_node, seed_material_entry, "yes"
         )
-        store = FakeRemarkComments([a_reply(reviewed.id)])
+        await a_stored_comment(db_session, reviewed)
 
-        state = await self._state(
-            db_session, student, seed_material_entry, current, store
-        )
+        state = await self._state(db_session, student, seed_material_entry, current)
 
         assert state is SubmissionState.REPEAT_WITH_REPLIES
 
@@ -523,20 +520,17 @@ class TestTheRepliesState:
         student, reviewed, current = await self._a_repeat(
             db_session, seed_tenant, seed_root_node, seed_material_entry, "path"
         )
-        store = FakeRemarkComments([a_reply(reviewed.id)])
+        await a_stored_comment(db_session, reviewed)
 
-        with patch(
-            "course_supporter.homework.remark_comments.build_remark_comment_repository",
-            return_value=store,
-        ):
-            choice = await choose_path(
-                db_session,
-                task_type=AssignmentType.TASK,
-                student_id=student.id,
-                authored_document_id=seed_material_entry.id,
-                config=_config(replies_enabled=True),
-                submission_id=current.id,
-            )
+        choice = await choose_path(
+            db_session,
+            task_type=AssignmentType.TASK,
+            student_id=student.id,
+            authored_document_id=seed_material_entry.id,
+            config=_config(replies_enabled=True),
+            submission_id=current.id,
+            tenant_id=current.tenant_id,
+        )
 
         assert choice is not None
         assert choice.key == PathKey(
@@ -555,15 +549,10 @@ class TestTheRepliesState:
         student, reviewed, current = await self._a_repeat(
             db_session, seed_tenant, seed_root_node, seed_material_entry, "off"
         )
-        store = FakeRemarkComments([a_reply(reviewed.id)])
+        await a_stored_comment(db_session, reviewed)
 
         state = await self._state(
-            db_session,
-            student,
-            seed_material_entry,
-            current,
-            store,
-            replies_enabled=False,
+            db_session, student, seed_material_entry, current, replies_enabled=False
         )
 
         assert state is SubmissionState.REPEAT_WITHOUT_REPLIES
@@ -578,16 +567,17 @@ class TestTheRepliesState:
         student, reviewed, current = await self._a_repeat(
             db_session, seed_tenant, seed_root_node, seed_material_entry, "answered"
         )
-        store = FakeRemarkComments(
-            [
-                a_reply(reviewed.id, answered_in=reviewed.id),
-                a_reply(reviewed.id, author=CommentAuthor.MENTOR, kind="answer"),
-            ]
+        question = await a_stored_comment(db_session, reviewed, answered_in=reviewed.id)
+        await a_stored_comment(
+            db_session,
+            reviewed,
+            author=CommentAuthor.MENTOR,
+            kind=CommentKind.ANSWER,
+            parent_id=question.id,
+            minute=1,
         )
 
-        state = await self._state(
-            db_session, student, seed_material_entry, current, store
-        )
+        state = await self._state(db_session, student, seed_material_entry, current)
 
         assert state is SubmissionState.REPEAT_WITHOUT_REPLIES
 
@@ -602,8 +592,9 @@ class TestTheRepliesState:
         student, reviewed, _ = await self._a_repeat(
             db_session, seed_tenant, seed_root_node, seed_material_entry, "earlier"
         )
+        await a_stored_comment(db_session, reviewed)
         repo = HomeworkRepository(db_session)
-        await _submit(
+        last = await _submit(
             repo,
             tenant=seed_tenant,
             student=student,
@@ -611,6 +602,7 @@ class TestTheRepliesState:
             doc=seed_material_entry,
             status="completed",
         )
+        last.task_version = self._VERSION
         later = await _submit(
             repo,
             tenant=seed_tenant,
@@ -619,11 +611,8 @@ class TestTheRepliesState:
             doc=seed_material_entry,
             status="received",
         )
-        store = FakeRemarkComments([a_reply(reviewed.id)])
 
-        state = await self._state(
-            db_session, student, seed_material_entry, later, store
-        )
+        state = await self._state(db_session, student, seed_material_entry, later)
 
         assert state is SubmissionState.REPEAT_WITHOUT_REPLIES
 
@@ -639,13 +628,9 @@ class TestTheRepliesState:
             db_session, seed_tenant, seed_root_node, seed_material_entry, "version"
         )
         reviewed.task_version = "the-version-the-review-read"
-        seed_material_entry.content_hash = "the-version-in-force-now"
-        await db_session.flush()
-        store = FakeRemarkComments([a_reply(reviewed.id)])
+        await a_stored_comment(db_session, reviewed)
 
-        state = await self._state(
-            db_session, student, seed_material_entry, current, store
-        )
+        state = await self._state(db_session, student, seed_material_entry, current)
 
         assert state is SubmissionState.REPEAT_WITHOUT_REPLIES
 
@@ -660,10 +645,10 @@ class TestTheRepliesState:
         student, reviewed, current = await self._a_repeat(
             db_session, seed_tenant, seed_root_node, seed_material_entry, "quote"
         )
-        store = FakeRemarkComments([a_reply(reviewed.id)])
+        await a_stored_comment(db_session, reviewed)
 
         state = await self._state(
-            db_session, student, seed_material_entry, current, store, named=False
+            db_session, student, seed_material_entry, current, named=False
         )
 
         assert state is SubmissionState.REPEAT_WITHOUT_REPLIES

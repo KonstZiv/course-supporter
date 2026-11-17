@@ -35,6 +35,7 @@ from course_supporter.homework.path_config import (
 from course_supporter.homework.remark_comments import CommentRecord
 from course_supporter.homework.reply_screen import (
     hostile_category,
+    is_hostile,
     reply_safety_execution,
     screen_replies,
 )
@@ -46,8 +47,12 @@ from course_supporter.llm.error_categories import LadderExhaustedError
 from course_supporter.llm.ladder_config import StageConfig
 from course_supporter.llm.stage_router import StageResult
 from course_supporter.models.source import AssignmentType
-from course_supporter.reply_kinds import ReplyTopic
-from course_supporter.security.schemas import CourseContext, ViolationCategory
+from course_supporter.remark_kinds import CommentTopic
+from course_supporter.security.schemas import (
+    CourseContext,
+    SafetyResult,
+    ViolationCategory,
+)
 from course_supporter.storage.orm import HomeworkSubmission
 
 _REPLIES_ON: PathConfig = shipped_with_replies_for(AssignmentType.TASK)
@@ -99,7 +104,7 @@ class _Topics:
     """The topic port as a spy: answers one verdict, keeps what it was asked."""
 
     def __init__(self, verdict: TopicVerdict | Exception | None = None) -> None:
-        self.verdict = verdict or TopicVerdict(ReplyTopic.ON_TOPIC, None)
+        self.verdict = verdict or TopicVerdict(CommentTopic.ON_TOPIC, None)
         self.asked: list[uuid.UUID] = []
 
     async def classify(
@@ -136,7 +141,9 @@ async def _screen(
     config: PathConfig = _REPLIES_ON,
 ) -> reply_screen.ScreenSummary:
     """The screen over the store's unanswered replies on the previous attempt."""
-    pending = await store.unanswered_student_replies(_PREVIOUS)
+    pending = await store.unanswered_student_replies(
+        tenant_id=uuid.uuid4(), submission_id=_PREVIOUS
+    )
     with (
         patch.object(
             reply_screen, "pending_replies", new=AsyncMock(return_value=pending)
@@ -205,13 +212,13 @@ class TestEachReplyIsJudgedByTheSafetyCheckUnderItsOwnName:
     async def test_a_safe_reply_takes_the_topic_ports_answer(self) -> None:
         reply = a_reply(_PREVIOUS)
         store = FakeRemarkComments([reply])
-        topics = _Topics(TopicVerdict(ReplyTopic.OFF_TOPIC, 0.72))
+        topics = _Topics(TopicVerdict(CommentTopic.OFF_TOPIC, 0.72))
 
         await _screen(store, _Router(_SAFE), topics=topics)
 
         mark = store.marks[reply.id]
         assert (mark.topic, mark.topic_confidence, mark.hostile_category) == (
-            ReplyTopic.OFF_TOPIC,
+            CommentTopic.OFF_TOPIC,
             0.72,
             None,
         )
@@ -220,7 +227,9 @@ class TestEachReplyIsJudgedByTheSafetyCheckUnderItsOwnName:
     async def test_the_placeholder_marks_on_topic_with_no_confidence(self) -> None:
         reply = a_reply(_PREVIOUS)
         store = FakeRemarkComments([reply])
-        pending = await store.unanswered_student_replies(_PREVIOUS)
+        pending = await store.unanswered_student_replies(
+            tenant_id=uuid.uuid4(), submission_id=_PREVIOUS
+        )
 
         with (
             patch.object(
@@ -240,7 +249,7 @@ class TestEachReplyIsJudgedByTheSafetyCheckUnderItsOwnName:
             )
 
         mark = store.marks[reply.id]
-        assert (mark.topic, mark.topic_confidence) == (ReplyTopic.ON_TOPIC, None)
+        assert (mark.topic, mark.topic_confidence) == (CommentTopic.ON_TOPIC, None)
 
 
 class TestAHostileReplyIsMarkedNotRefused:
@@ -261,11 +270,126 @@ class TestAHostileReplyIsMarkedNotRefused:
         summary = await _screen(store, _Router(unsafe), topics=topics)
 
         mark = store.marks[reply.id]
-        assert mark.topic is ReplyTopic.HOSTILE
-        assert mark.hostile_category is ViolationCategory.PROMPT_INJECTION
+        assert mark.topic is CommentTopic.HOSTILE
+        assert mark.hostile_category == ViolationCategory.PROMPT_INJECTION.value
         assert mark.topic_confidence == 0.97
         assert topics.asked == [], "no model reads a text the safety check refused"
         assert summary == reply_screen.ScreenSummary(judged=1, hostile=1, unjudged=0)
+
+
+class TestTheMarksAreTheSubmissionsTenants:
+    async def test_every_mark_is_written_under_the_submissions_tenant(self) -> None:
+        reply = a_reply(_PREVIOUS)
+        store = FakeRemarkComments([reply])
+        submission = _submission()
+
+        with (
+            patch.object(
+                reply_screen,
+                "pending_replies",
+                new=AsyncMock(return_value=[reply]),
+            ) as pending,
+            patch.object(
+                reply_screen, "course_context_of", new=AsyncMock(return_value=_COURSE)
+            ),
+        ):
+            await screen_replies(
+                MagicMock(spec=AsyncSession),
+                submission=submission,
+                task_type=AssignmentType.TASK,
+                router=_Router(_SAFE),  # type: ignore[arg-type]
+                config=_REPLIES_ON,
+                comments=store,
+                classifier=_Topics(),
+            )
+
+        assert store.tenants == [submission.tenant_id]
+        assert pending.await_args.kwargs["tenant_id"] == submission.tenant_id
+
+
+class TestTheThreeCasesOfAnUnsafeVerdict:
+    """The owner's rule (2026-11-16): hostile is an attempt on the grade or
+    the check, and the safety check decides it; whether a reply is about the
+    work is the topic port's to say."""
+
+    @pytest.mark.parametrize(
+        ("violations", "category"),
+        [
+            (("prompt_injection",), "prompt_injection"),
+            (("policy_violation",), "policy_violation"),
+            (("suspicious_behavior",), "suspicious_behavior"),
+            (("suspicious_behavior", "policy_violation"), "policy_violation"),
+            (("off_topic", "suspicious_behavior"), "suspicious_behavior"),
+        ],
+    )
+    async def test_an_attempt_named_is_hostile_by_the_gravest(
+        self, violations: tuple[str, ...], category: str
+    ) -> None:
+        """Case 1: one of the three named — hostile, the gravest its category."""
+        reply = a_reply(_PREVIOUS)
+        store = FakeRemarkComments([reply])
+        topics = _Topics()
+        unsafe = _verdict(safe=False, violations=violations, confidence=0.81)
+
+        await _screen(store, _Router(unsafe), topics=topics)
+
+        mark = store.marks[reply.id]
+        assert (mark.topic, mark.hostile_category, mark.topic_confidence) == (
+            CommentTopic.HOSTILE,
+            category,
+            0.81,
+        )
+        assert topics.asked == []
+
+    async def test_unsafe_with_nothing_named_is_hostile_without_a_category(
+        self,
+    ) -> None:
+        """Case 2: the check refused and named nothing — hostile, no category."""
+        reply = a_reply(_PREVIOUS)
+        store = FakeRemarkComments([reply])
+        topics = _Topics()
+
+        await _screen(
+            store, _Router(_verdict(safe=False, confidence=0.6)), topics=topics
+        )
+
+        mark = store.marks[reply.id]
+        assert (mark.topic, mark.hostile_category, mark.topic_confidence) == (
+            CommentTopic.HOSTILE,
+            None,
+            0.6,
+        )
+        assert topics.asked == []
+
+    async def test_off_topic_alone_is_not_hostile_and_goes_to_the_topic_port(
+        self,
+    ) -> None:
+        """Case 3: beside the work is no attempt on it — the port decides."""
+        reply = a_reply(_PREVIOUS, body="Порадьте, будь ласка, ноутбук для навчання.")
+        store = FakeRemarkComments([reply])
+        topics = _Topics(TopicVerdict(CommentTopic.OFF_TOPIC, 0.88))
+        unsafe = _verdict(safe=False, violations=("off_topic",), confidence=0.93)
+
+        summary = await _screen(store, _Router(unsafe), topics=topics)
+
+        mark = store.marks[reply.id]
+        assert (mark.topic, mark.hostile_category, mark.topic_confidence) == (
+            CommentTopic.OFF_TOPIC,
+            None,
+            0.88,
+        ), "the port's answer and confidence, not the safety check's"
+        assert topics.asked == [reply.id]
+        assert summary == reply_screen.ScreenSummary(judged=1, hostile=0, unjudged=0)
+
+    async def test_off_topic_alone_the_port_may_still_call_on_topic(self) -> None:
+        """The safety check's off-topic is not the topic: the port's word stands."""
+        reply = a_reply(_PREVIOUS)
+        store = FakeRemarkComments([reply])
+        unsafe = _verdict(safe=False, violations=("off_topic",))
+
+        await _screen(store, _Router(unsafe), topics=_Topics())
+
+        assert store.marks[reply.id].topic is CommentTopic.ON_TOPIC
 
     async def test_the_text_screens_flags_are_shown_to_the_check(self) -> None:
         """A phrase addressed to a model is a hint for the check, by place."""
@@ -286,7 +410,9 @@ class TestWhatTheScreenLeavesAlone:
         judged = a_reply(_PREVIOUS)
         store = FakeRemarkComments([judged, a_reply(_PREVIOUS, minute=1)])
         await store.mark_screened(
-            judged.id, reply_screen.ScreenMark(ReplyTopic.ON_TOPIC, None, None)
+            tenant_id=uuid.uuid4(),
+            comment_id=judged.id,
+            mark=reply_screen.ScreenMark(CommentTopic.ON_TOPIC, None, None),
         )
         router = _Router(_SAFE)
 
@@ -311,7 +437,7 @@ class TestWhatTheScreenLeavesAlone:
         summary = await _screen(store, _Router(failure, _SAFE))
 
         assert lost.id not in store.marks
-        assert store.marks[kept.id].topic is ReplyTopic.ON_TOPIC
+        assert store.marks[kept.id].topic is CommentTopic.ON_TOPIC
         assert summary == reply_screen.ScreenSummary(judged=1, hostile=0, unjudged=1)
 
     async def test_a_topic_port_that_cannot_answer_leaves_it_unjudged(self) -> None:
@@ -337,10 +463,31 @@ class TestTheNameOfAHostileReply:
         assert hostile_category([v.POLICY_VIOLATION, v.PROMPT_INJECTION]) is (
             v.PROMPT_INJECTION
         )
-        assert hostile_category([v.OFF_TOPIC]) is v.OFF_TOPIC
+
+    def test_off_topic_names_no_hostility(self) -> None:
+        assert hostile_category([ViolationCategory.OFF_TOPIC]) is None
 
     def test_none_named_invents_none(self) -> None:
         assert hostile_category([]) is None
+
+    @pytest.mark.parametrize(
+        ("safe", "violations", "hostile"),
+        [
+            (True, (), False),
+            (True, ("prompt_injection",), False),
+            (False, (), True),
+            (False, ("off_topic",), False),
+            (False, ("off_topic", "policy_violation"), True),
+        ],
+    )
+    def test_is_hostile(
+        self, safe: bool, violations: tuple[str, ...], hostile: bool
+    ) -> None:
+        verdict = SafetyResult.model_validate_json(
+            _verdict(safe=safe, violations=violations)
+        )
+
+        assert is_hostile(verdict) is hostile
 
 
 class TestTheExecutionOfTheScreen:
@@ -364,12 +511,12 @@ class TestTheTopicPort:
             a_reply(_PREVIOUS), submission=_submission()
         )
 
-        assert verdict == TopicVerdict(ReplyTopic.ON_TOPIC, None)
+        assert verdict == TopicVerdict(CommentTopic.ON_TOPIC, None)
 
     def test_hostile_is_never_a_topic(self) -> None:
         with pytest.raises(ValueError, match="safety check"):
-            TopicVerdict(ReplyTopic.HOSTILE, 0.9)
+            TopicVerdict(CommentTopic.HOSTILE, 0.9)
 
     def test_a_confidence_outside_zero_to_one_is_refused(self) -> None:
         with pytest.raises(ValueError, match="outside"):
-            TopicVerdict(ReplyTopic.ON_TOPIC, 1.5)
+            TopicVerdict(CommentTopic.ON_TOPIC, 1.5)

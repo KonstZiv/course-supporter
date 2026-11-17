@@ -39,7 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from course_supporter.reply_kinds import ReplyTopic
+from course_supporter.remark_kinds import CommentTopic
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,11 +63,11 @@ class TopicVerdict:
         ValueError: on ``HOSTILE`` — the safety check's word, never a topic.
     """
 
-    topic: ReplyTopic
+    topic: CommentTopic
     confidence: float | None
 
     def __post_init__(self) -> None:
-        if self.topic is ReplyTopic.HOSTILE:
+        if self.topic is CommentTopic.HOSTILE:
             msg = "hostile is the safety check's verdict, not a topic"
             raise ValueError(msg)
         if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
@@ -96,7 +96,7 @@ class EverythingOnTopic:
     async def classify(
         self, reply: CommentRecord, *, submission: HomeworkSubmission
     ) -> TopicVerdict:
-        return TopicVerdict(topic=ReplyTopic.ON_TOPIC, confidence=None)
+        return TopicVerdict(topic=CommentTopic.ON_TOPIC, confidence=None)
 
 
 def build_reply_topic_classifier(session: AsyncSession) -> ReplyTopicClassifier:

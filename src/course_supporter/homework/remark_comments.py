@@ -3,23 +3,23 @@
 Purpose:
     A student replies to a remark of their review; the next review answers the
     reply (product owner's decision, 2026-11-16). Every such comment is a row
-    of the comments table, which is K1's. This module is what the reply core,
-    the reply screen, the submission's state and the rule of the same work
-    depend on instead of that table: the values a comment is read as, the
-    port that stores and reads them, and the ONE definition of "the replies
+    of K1's table ``remark_comments``. This module is what the reply core, the
+    reply screen, the submission's state and the rule of the same work depend
+    on instead of that table: the port that stores and reads the comments,
+    the one place its store is chosen, and the ONE definition of "the replies
     the next review has to answer" — so the four cannot come to mean four
     different sets of replies.
 
 Interface:
-    :class:`CommentRecord` — one comment, as the store hands it back.
-    :class:`NewReply` — a student's reply, as the core hands it in.
-    :class:`ScreenMark` — what the reply screen judged a reply to be.
-    :class:`ThreadScope` — the submissions a thread spans: one student, one
-    task, one version of it.
+    :class:`CommentRecord`, :class:`NewReply`, :class:`ScreenMark`,
+    :class:`ThreadScope` — the values the port speaks in, defined beside the
+    store (``storage/remark_comment_repository.py``) and named here for the
+    port's readers.
     :class:`RemarkCommentRepository` — the port (a structural ``Protocol``):
-    six methods, the contract of each in its docstring.
+    six methods, the contract of each in its docstring; every read and write
+    is scoped by the tenant.
     :func:`build_remark_comment_repository` — the one place the store is
-    chosen; tests of other modules substitute it.
+    chosen: the store over K1's table. Tests of other modules substitute it.
     :func:`pending_replies` — the replies the submission is to answer.
 
 What "the replies to answer" are:
@@ -31,25 +31,17 @@ What "the replies to answer" are:
     — when that attempt was read against the version of the task in force
     now. Replies to a review of an earlier version are not answered: after
     the author changed the task, its criteria — and so the remarks — may be
-    other ones under the same ids. A type that takes no replies
+    other ones under the same ids. An attempt with no recorded version (one
+    reviewed before the attempt ledger) has no replies: K1's table keys every
+    comment by a version. A type that takes no replies
     (:func:`~course_supporter.homework.path_config.replies_enabled`) has none,
     and nothing is asked of the store.
-
-Phase 1 of K3:
-    The comments table is K1's and is not merged yet, so the store chosen
-    here answers every call with :class:`CommentsStoreUnavailableError`. That is
-    safe because every reader asks the switch first and the switch is off
-    for every type (``config/submission_paths.yaml``); phase 2 returns the
-    store over K1's table from :func:`build_remark_comment_repository`, and
-    nothing else changes.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Collection
-from dataclasses import dataclass
-from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
 
 from sqlalchemy import select
@@ -57,19 +49,22 @@ from sqlalchemy import select
 from course_supporter.homework.path_config import replies_enabled
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import AuthoredDocument
+from course_supporter.storage.remark_comment_repository import (
+    CommentRecord,
+    NewReply,
+    ScreenMark,
+    SqlRemarkCommentRepository,
+    ThreadScope,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from course_supporter.homework.path_config import PathConfig
-    from course_supporter.models.review_structure import ReplyKind
     from course_supporter.models.source import AssignmentType
-    from course_supporter.reply_kinds import CommentAuthor, ReplyTopic
-    from course_supporter.security.schemas import ViolationCategory
 
 __all__ = [
     "CommentRecord",
-    "CommentsStoreUnavailableError",
     "NewReply",
     "RemarkCommentRepository",
     "ScreenMark",
@@ -80,96 +75,13 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True, slots=True)
-class CommentRecord:
-    """One comment on one remark, as the store hands it back.
-
-    Attributes:
-        id: The comment.
-        submission_id: The submission whose review the comment is attached to.
-        item_id: The remark: ``c3`` — a criterion, ``c3.p2`` — a point of it.
-        parent_id: The comment of the same thread this one answers; ``None``
-            for a reply to the remark itself.
-        author: Who wrote it.
-        kind: For a student's reply, the review's own vocabulary (question,
-            objection, comment); a Mentor's answer carries the kind K4 gives
-            it.
-        body: The text, as it was stored.
-        created_at: When it was written; a thread reads in this order.
-        answered_in_submission_id: For a student's reply, the submission whose
-            review answered it; ``None`` while no review has.
-        topic: What the reply screen judged the reply to be; ``None`` until it
-            judged it — and for a reply it could not judge.
-        topic_confidence: The confidence of the verdict that set ``topic``:
-            the topic port's, or the safety check's for a hostile reply.
-            ``None`` when the verdict carried none.
-        hostile_category: The safety check's violation behind ``HOSTILE``;
-            ``None`` otherwise.
-    """
-
-    id: uuid.UUID
-    submission_id: uuid.UUID
-    item_id: str
-    parent_id: uuid.UUID | None
-    author: CommentAuthor
-    kind: str
-    body: str
-    created_at: datetime
-    answered_in_submission_id: uuid.UUID | None = None
-    topic: ReplyTopic | None = None
-    topic_confidence: float | None = None
-    hostile_category: ViolationCategory | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class NewReply:
-    """A student's reply as the core hands it to the store: checked, and final.
-
-    ``tenant_id`` is the submission's, read off the row the core checked —
-    never a value the request carried beside it.
-    """
-
-    tenant_id: uuid.UUID
-    submission_id: uuid.UUID
-    item_id: str
-    parent_id: uuid.UUID | None
-    kind: ReplyKind
-    body: str
-
-
-@dataclass(frozen=True, slots=True)
-class ScreenMark:
-    """What the reply screen decided about one reply (``ReplyTopic`` and why)."""
-
-    topic: ReplyTopic
-    topic_confidence: float | None
-    hostile_category: ViolationCategory | None
-
-
-@dataclass(frozen=True, slots=True)
-class ThreadScope:
-    """The submissions one thread spans: one student, one task, one version.
-
-    A thread of a remark runs through every attempt the student made at the
-    same version of the task — a reply on one attempt, its answer in the next
-    review, the student's answer to that — and stops at a new version: the
-    remark ``c3`` of another version may be another criterion. ``task_version``
-    is compared as it is stored, an absent version matching only an absent
-    one; the store keeps to live submissions of ``tenant_id``.
-    """
-
-    tenant_id: uuid.UUID
-    student_id: uuid.UUID
-    authored_document_id: uuid.UUID
-    task_version: str | None
-
-
 class RemarkCommentRepository(Protocol):
     """The store of comments on remarks — the port of this module.
 
     Writes ``flush`` and never commit: the caller owns the transaction (the
     route commits the reply, the body of the path commits the screen's marks
-    with what it writes next).
+    with what it writes next). Reads keep to live submissions and live
+    students.
     """
 
     async def lock_replies(self, submission_id: uuid.UUID) -> None:
@@ -183,7 +95,7 @@ class RemarkCommentRepository(Protocol):
         ...
 
     async def count_student_replies(
-        self, *, submission_id: uuid.UUID, item_id: str
+        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID, item_id: str
     ) -> int:
         """How many replies the student wrote on this remark of this review."""
         ...
@@ -195,14 +107,14 @@ class RemarkCommentRepository(Protocol):
     async def thread(
         self, scope: ThreadScope, item_ids: Collection[str]
     ) -> list[CommentRecord]:
-        """Every comment of the scope's submissions on these remarks.
+        """Every comment of the scope's work on these remarks.
 
         Both authors, oldest first (by ``created_at``, then by ``id``).
         """
         ...
 
     async def unanswered_student_replies(
-        self, submission_id: uuid.UUID
+        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID
     ) -> list[CommentRecord]:
         """The student's replies on this submission no review has answered.
 
@@ -210,60 +122,23 @@ class RemarkCommentRepository(Protocol):
         """
         ...
 
-    async def mark_screened(self, comment_id: uuid.UUID, mark: ScreenMark) -> None:
-        """Record what the reply screen decided about one reply."""
+    async def mark_screened(
+        self, *, tenant_id: uuid.UUID, comment_id: uuid.UUID, mark: ScreenMark
+    ) -> None:
+        """Record what the reply screen decided about one student's reply."""
         ...
-
-
-class CommentsStoreUnavailableError(RuntimeError):
-    """Phase 1 of K3: there is no store of comments until K1's table is in."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            "No store of remark comments: the comments table (task 12a, K1) is "
-            "not merged yet. Keep replies_enabled off for every type "
-            "(config/submission_paths.yaml) until K3's phase 2 is."
-        )
-
-
-class _NoCommentsStore:
-    """The store of phase 1: every call is refused (module docstring)."""
-
-    async def lock_replies(self, submission_id: uuid.UUID) -> None:
-        raise CommentsStoreUnavailableError
-
-    async def count_student_replies(
-        self, *, submission_id: uuid.UUID, item_id: str
-    ) -> int:
-        raise CommentsStoreUnavailableError
-
-    async def add_student_reply(self, reply: NewReply) -> CommentRecord:
-        raise CommentsStoreUnavailableError
-
-    async def thread(
-        self, scope: ThreadScope, item_ids: Collection[str]
-    ) -> list[CommentRecord]:
-        raise CommentsStoreUnavailableError
-
-    async def unanswered_student_replies(
-        self, submission_id: uuid.UUID
-    ) -> list[CommentRecord]:
-        raise CommentsStoreUnavailableError
-
-    async def mark_screened(self, comment_id: uuid.UUID, mark: ScreenMark) -> None:
-        raise CommentsStoreUnavailableError
 
 
 def build_remark_comment_repository(
     session: AsyncSession,
 ) -> RemarkCommentRepository:
-    """The production store of comments over ``session``.
+    """The production store of comments over ``session``: K1's table.
 
     The one place the store is chosen; tests of other modules substitute this
-    factory. Phase 1: the store that refuses every call (module docstring);
-    phase 2 builds the store over K1's table on ``session``.
+    factory, and the reply screen reaches it through this module so that one
+    substitution serves every reader.
     """
-    return _NoCommentsStore()
+    return SqlRemarkCommentRepository(session)
 
 
 async def current_task_version(
@@ -287,6 +162,7 @@ async def current_task_version(
 async def pending_replies(
     session: AsyncSession,
     *,
+    tenant_id: uuid.UUID,
     submission_id: uuid.UUID,
     student_id: uuid.UUID,
     authored_document_id: uuid.UUID,
@@ -312,11 +188,13 @@ async def pending_replies(
         authored_document_id=authored_document_id,
         excluding=submission_id,
     )
-    if previous_id is None:
+    if previous_id is None or previous_version is None:
         return []
     if previous_version != await current_task_version(session, authored_document_id):
         return []
     store = (
         comments if comments is not None else build_remark_comment_repository(session)
     )
-    return await store.unanswered_student_replies(previous_id)
+    return await store.unanswered_student_replies(
+        tenant_id=tenant_id, submission_id=previous_id
+    )

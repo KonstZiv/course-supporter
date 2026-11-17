@@ -43,7 +43,7 @@ from course_supporter.language import (
 from course_supporter.models.review_structure import ReplyKind, ReviewStructureV1
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 from course_supporter.normalizer import Manifest
-from course_supporter.reply_kinds import CommentAuthor
+from course_supporter.remark_kinds import CommentAuthor, CommentKind
 from course_supporter.storage.course_node_repository import SummaryStatus
 
 # --- Material Tree Nodes ---
@@ -2433,8 +2433,9 @@ class RemarkComment(BaseModel):
         description="The comment of the same thread this one answers.",
     )
     author: CommentAuthor
-    kind: str = Field(
-        description="question, objection or comment for a student's reply.",
+    kind: CommentKind = Field(
+        description="question, objection or comment — a student's reply; "
+        "answer — the Mentor's.",
     )
     body: str
     created_at: datetime

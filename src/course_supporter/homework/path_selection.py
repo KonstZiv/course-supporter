@@ -70,6 +70,7 @@ async def resolve_submission_state(
     student_id: uuid.UUID,
     authored_document_id: uuid.UUID,
     submission_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
     task_type: AssignmentType | None = None,
     config: PathConfig | None = None,
 ) -> SubmissionState:
@@ -85,7 +86,8 @@ async def resolve_submission_state(
     ``REPEAT_WITHOUT_REPLIES`` otherwise.
 
     The replies are asked about only for a submission that exists —
-    ``submission_id`` and ``task_type`` both given, as the body gives them; a
+    ``submission_id``, its ``tenant_id`` and ``task_type`` given, as the body
+    gives them; a
     caller that names no submission (the price quote, ``billing/quotes.py``)
     is answered without them. A type that takes no replies — every type in
     production until they are switched on with their answers (K4) and the
@@ -102,9 +104,11 @@ async def resolve_submission_state(
         return SubmissionState.FIRST
     if (
         submission_id is not None
+        and tenant_id is not None
         and task_type is not None
         and await pending_replies(
             session,
+            tenant_id=tenant_id,
             submission_id=submission_id,
             student_id=student_id,
             authored_document_id=authored_document_id,
@@ -124,13 +128,15 @@ async def choose_path(
     authored_document_id: uuid.UUID,
     config: PathConfig | None = None,
     submission_id: uuid.UUID | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> PathChoice | None:
     """Choose the path for one submission, or ``None`` for today's Mentor.
 
     ``config`` defaults to the process-wide configuration the boot validated
     (:func:`~course_supporter.homework.path_config.get_path_config`); tests pass
-    their own. ``submission_id`` names the submission the path is for: only
-    then can its state be the one with replies (:func:`resolve_submission_state`).
+    their own. ``submission_id`` and its ``tenant_id`` name the submission the
+    path is for: only then can its state be the one with replies
+    (:func:`resolve_submission_state`).
 
     The switch is read first: a type served by today's Mentor asks the database
     nothing, so a submission on that type costs exactly what it cost before this
@@ -150,6 +156,7 @@ async def choose_path(
         student_id=student_id,
         authored_document_id=authored_document_id,
         submission_id=submission_id,
+        tenant_id=tenant_id,
         task_type=task_type,
         config=cfg,
     )

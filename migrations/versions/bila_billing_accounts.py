@@ -345,9 +345,7 @@ def _consents() -> None:
             "text_sha256 ~ '^[0-9a-f]{64}$'",
             name="ck_billing_consents_text_sha256",
         ),
-        sa.CheckConstraint(
-            "channel IN ('portal')", name="ck_billing_consents_channel"
-        ),
+        sa.CheckConstraint("channel IN ('portal')", name="ck_billing_consents_channel"),
         sa.UniqueConstraint(
             "account_id", "terms_version", name="uq_billing_consents_version"
         ),

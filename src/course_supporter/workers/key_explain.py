@@ -39,7 +39,6 @@ Order of the body, and why each step is where it is:
 
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -55,7 +54,10 @@ from course_supporter.agents.key_explainer import (
     KeyExplainerAgent,
 )
 from course_supporter.billing.charging import job_fact_usd
-from course_supporter.billing.estimates import preparation_e_usd
+from course_supporter.billing.estimates import (
+    key_explanation_task_chars,
+    preparation_e_usd,
+)
 from course_supporter.call_outcome import FundsDecision
 from course_supporter.cost_estimate.hooks import shadow_task_preparation
 from course_supporter.funds_port import (
@@ -143,7 +145,7 @@ async def arq_explain_key(
             if key.written_text is not None
             else await _task_text(session, document.id)
         )
-        task_chars = len(task_text) + len(json.dumps(key.answers, default=str))
+        task_chars = key_explanation_task_chars(task_text, key.answers)
         context = VersionWorkContext(
             tenant_id=await _tenant_of(session, document),
             authored_document_id=document.id,

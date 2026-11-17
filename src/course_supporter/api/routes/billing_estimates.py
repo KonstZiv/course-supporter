@@ -48,16 +48,32 @@ from course_supporter.api.deps import get_current_student, get_session
 from course_supporter.api.routes.portal_submissions import _answerable_task
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.auth.scopes import require_scope
-from course_supporter.billing.estimates import preparation_e_usd, processing_e_usd
+from course_supporter.billing.estimates import (
+    key_explanation_task_chars,
+    preparation_e_usd,
+    processing_e_usd,
+)
 from course_supporter.billing.kinds import ActionKind
 from course_supporter.billing.quotes import Quote, author_quote, review_quote
 from course_supporter.cost_estimate.actions import REQUIRED_FACTORS, MaterialFactors
-from course_supporter.models.source import AssignmentType
+from course_supporter.homework.reference_key import AnswerKey
+from course_supporter.homework.reference_service import ReadOnlyQueue
+from course_supporter.homework.task_context import load_task_source_text
+from course_supporter.homework.test_object import (
+    DraftBody,
+    published_form,
+    render_for_prompt,
+)
+from course_supporter.homework.test_object_service import TestObjectService
+from course_supporter.models.source import AssignmentType, SourceType
+from course_supporter.reference_kinds import ReferenceKind
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
     HomeworkSubmission,
 )
+from course_supporter.storage.task_reference_repository import TaskReferenceRepository
+from course_supporter.storage.test_object_repository import TestObjectRepository
 
 router = APIRouter(tags=["billing"])
 
@@ -367,20 +383,57 @@ async def estimate_key_explanation(
     session: SessionDep,
     document_id: uuid.UUID,
 ) -> AuthorEstimateResponse:
-    """The price of the explanations of this test's key, asked by the author."""
-    from course_supporter.homework.task_context import load_task_context
+    """The price of the explanations of this test's key, asked by the author.
 
+    Priced on what the worker will show the model for the version the author
+    asks for now (:func:`_key_explanation_input`), by the worker's own rule
+    (:func:`~course_supporter.billing.estimates.key_explanation_task_chars`):
+    the price shown is the E the worker reserves.
+    """
     task = await session.get(AuthoredDocument, document_id)
     if task is None or task.deleted_at is not None:
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     root_id = await _course_root_of_node(session, tenant.tenant_id, task.course_node_id)
-    title, description, text = await load_task_context(session, document_id)
-    chars = sum(len(part or "") for part in (title, description, text))
+    text, answers = await _key_explanation_input(session, task)
     quote = await author_quote(
         session,
         action_kind=ActionKind.TASK_PREPARATION,
         tenant_id=tenant.tenant_id,
         course_node_id=root_id,
-        e_usd=preparation_e_usd(kind="key_explanation", task_chars=chars),
+        e_usd=preparation_e_usd(
+            kind="key_explanation",
+            task_chars=key_explanation_task_chars(text, answers),
+        ),
     )
     return _author_response(quote)
+
+
+async def _key_explanation_input(
+    session: AsyncSession, task: AuthoredDocument
+) -> tuple[str, AnswerKey]:
+    """The text and the key the explanations asked for now would be written from.
+
+    As the worker reads them (``workers/key_explain.py``, steps 2 and 4):
+
+    * a test written in the system — its draft, lettered in the course's
+      language. A check and a publication both ask by the axes of exactly that
+      (``TestObjectService.check`` / ``publish``), and every body the worker
+      finds by those axes has the same text and the same key.
+    * any other test — its source text and the author's key in force; without
+      a key yet, the text alone (an empty key).
+    """
+    if task.source_type == SourceType.TEST_OBJECT.value:
+        draft = await TestObjectRepository(session).get_draft(task.id)
+        if draft is None:
+            msg = f"test {task.id} has no draft; a test is created with one"
+            raise RuntimeError(msg)
+        language = await TestObjectService(session, ReadOnlyQueue()).course_language(
+            task.course_root_id
+        )
+        body = published_form(DraftBody.from_jsonb(draft.body), language)
+        return render_for_prompt(body), body.answer_key()
+    override = await TaskReferenceRepository(session).get_override(
+        task.id, ReferenceKind.TEST_KEY
+    )
+    answers: AnswerKey = override.answers if override is not None else {}
+    return await load_task_source_text(session, task.id), answers

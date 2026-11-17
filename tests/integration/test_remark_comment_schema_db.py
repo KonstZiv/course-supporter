@@ -73,14 +73,11 @@ from course_supporter.storage.student_repository import StudentRepository
 pytestmark = pytest.mark.requires_db
 
 REVISION = "task12a_remark_comments"
-BELOW = "biltestmark_test_batches"
+BELOW = "esc_request_traces"
 
 _COMMENTS = cast(Table, RemarkComment.__table__)
 _VERDICTS = cast(Table, SubmissionCriterionVerdict.__table__)
-_STATE_CHECKS = (
-    "ck_submission_criterion_verdicts_remark_state",
-    "ck_submission_criterion_verdicts_remark_state_matches_verdict",
-)
+_STATE_CHECK = "ck_submission_criterion_verdicts_remark_state"
 _MIRROR = "orm_mirror_task12a"
 """A scratch schema for the tables the ORM creates; it lives in one test's
 transaction and goes with its rollback."""
@@ -93,15 +90,16 @@ _TASK_VERSION = "3f5a0c9e"
 _THIS_SUBMISSION = "<this submission>"
 """Stands in a parametrized row for the id of the test's own submission."""
 
-_NOW: dict[RemarkState, VerdictValue] = {
-    RemarkState.NEW: VerdictValue.NOT_MET,
-    RemarkState.OPEN: VerdictValue.NOT_MET,
-    RemarkState.FIXED: VerdictValue.MET,
-    RemarkState.BROKEN: VerdictValue.NOT_MET,
+_CREDITED_NOW: dict[RemarkState, bool] = {
+    RemarkState.NEW: False,
+    RemarkState.OPEN: False,
+    RemarkState.FIXED: True,
+    RemarkState.BROKEN: False,
 }
-"""What each state says of the item now, in the words of the task: "new" — not
-met now; "open" — not met then and now; "fixed" — met now; "broken" — not met
-now."""
+"""Whether each state's item is credited now, by the one table of task 12a:
+"fixed" — credited, the other three — not. The tests below write the plain row
+of each — credited as "met", not credited as "not_met"; the database judges
+neither (the rule of what is credited is the code's)."""
 
 
 # ── The rows ────────────────────────────────────────────────────────────────
@@ -355,7 +353,7 @@ class TestTheMigrationIsTheOrm:
         assert all(column.comment for column in _COMMENTS.columns)
         assert live == orm
 
-    async def test_the_state_column_and_its_rules(
+    async def test_the_state_column_and_its_rule(
         self, db_session: AsyncSession
     ) -> None:
         live_schema = await db_session.scalar(text("SELECT current_schema()"))
@@ -365,8 +363,7 @@ class TestTheMigrationIsTheOrm:
         orm = await _shape(db_session, _MIRROR, _VERDICTS.name)
 
         assert live["columns"]["remark_state"] == orm["columns"]["remark_state"]
-        for name in _STATE_CHECKS:
-            assert live["constraints"][name] == orm["constraints"][name], name
+        assert live["constraints"][_STATE_CHECK] == orm["constraints"][_STATE_CHECK]
 
     async def test_the_new_rows_are_written_with_the_orm(
         self, db_session: AsyncSession, attempts: tuple[HomeworkSubmission, ...]
@@ -524,20 +521,40 @@ class TestTheDatabaseHoldsTheCommentRules:
 
 
 class TestTheDatabaseHoldsTheStateRules:
-    def test_every_state_says_what_the_item_is_now(self) -> None:
-        """The premise of the two tests below: they walk every state."""
-        assert set(_NOW) == set(RemarkState)
+    def test_every_state_is_credited_or_not_now(self) -> None:
+        """The premise of the test below: it walks every state."""
+        assert set(_CREDITED_NOW) == set(RemarkState)
 
-    async def test_every_state_is_admitted_on_its_verdict(
+    async def test_every_state_is_admitted(
         self, db_session: AsyncSession, submission: HomeworkSubmission
     ) -> None:
-        for number, (state, now) in enumerate(_NOW.items(), start=1):
+        for number, (state, credited) in enumerate(_CREDITED_NOW.items(), start=1):
+            now = VerdictValue.MET if credited else VerdictValue.NOT_MET
             await _verdict_row(
                 db_session,
                 _verdict_on(
                     submission, now, item_id=f"c{number}", remark_state=state.value
                 ),
             )
+
+    async def test_an_unconfirmed_item_credited_now_is_admitted_as_fixed(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        """Credited as the score counts it: "not_met" with quote_not_found.
+        An item not credited before is "fixed" on such a row, and the database
+        does not refuse it."""
+        unconfirmed = _verdict(
+            submission,
+            verdict=VerdictValue.NOT_MET.value,
+            model_verdict=VerdictValue.MET.value,
+            quote_file=None,
+            quote_line_start=None,
+            quote_line_end=None,
+            quote_not_found=True,
+            remark_state=RemarkState.FIXED.value,
+        )
+
+        await _verdict_row(db_session, unconfirmed)
 
     @pytest.mark.parametrize("now", list(VerdictValue))
     async def test_no_state_is_admitted_on_either_verdict(
@@ -548,27 +565,6 @@ class TestTheDatabaseHoldsTheStateRules:
     ) -> None:
         """Every row written before task 12a: nothing compared, no state."""
         await _verdict_row(db_session, _verdict_on(submission, now))
-
-    @pytest.mark.parametrize("state", list(RemarkState))
-    async def test_a_state_on_the_other_verdict_is_refused_by_the_agreement(
-        self,
-        db_session: AsyncSession,
-        submission: HomeworkSubmission,
-        state: RemarkState,
-    ) -> None:
-        other = (
-            VerdictValue.NOT_MET
-            if _NOW[state] is VerdictValue.MET
-            else VerdictValue.MET
-        )
-        row = _verdict_on(submission, other, remark_state=state.value)
-
-        await _refused_by_it_alone(
-            db_session,
-            _VERDICTS.name,
-            "ck_submission_criterion_verdicts_remark_state_matches_verdict",
-            lambda: _verdict_row(db_session, row),
-        )
 
     @pytest.mark.parametrize("now", list(VerdictValue))
     async def test_an_unknown_state_is_refused_by_the_vocabulary_alone(
@@ -582,7 +578,7 @@ class TestTheDatabaseHoldsTheStateRules:
         await _refused_by_it_alone(
             db_session,
             _VERDICTS.name,
-            "ck_submission_criterion_verdicts_remark_state",
+            _STATE_CHECK,
             lambda: _verdict_row(db_session, row),
         )
 
@@ -727,7 +723,7 @@ class TestTheDeletesReachTheComments:
 # ── The migration ───────────────────────────────────────────────────────────
 
 
-def test_one_head_and_the_revision_follows_the_test_batches() -> None:
+def test_one_head_and_the_revision_follows_the_request_traces() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
     heads = script.get_heads()
     revision = script.get_revision(REVISION)
@@ -759,5 +755,5 @@ def test_the_migration_goes_down_and_up() -> None:
         assert conn.scalar(text("SELECT version_num FROM alembic_version")) == head
         assert _COMMENTS.name in inspect(conn).get_table_names()
         names = {row.conname for row in conn.execute(states, {"t": _VERDICTS.name})}
-        assert names == set(_STATE_CHECKS)
+        assert names == {_STATE_CHECK}
     engine.dispose()

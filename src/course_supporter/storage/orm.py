@@ -2353,13 +2353,6 @@ _MET = VerdictValue.MET.value
 _NOT_MET = VerdictValue.NOT_MET.value
 _CRITERION = VerdictItemKind.CRITERION.value
 _POINT = VerdictItemKind.POINT.value
-# What a remark's state says of the item NOW (task 12a): "fixed" — met, the
-# other three — not met. The half of the state the verdict row itself shows.
-_FIXED = RemarkState.FIXED.value
-_NOT_MET_NOW = ", ".join(
-    f"'{state.value}'"
-    for state in (RemarkState.NEW, RemarkState.OPEN, RemarkState.BROKEN)
-)
 
 
 class SubmissionCriterionVerdict(Base):
@@ -2407,11 +2400,13 @@ class SubmissionCriterionVerdict(Base):
     filter on the live submission. Every read is scoped by ``tenant_id``.
 
     **The state of the remark** (task 12a): ``remark_state`` says how the
-    item's remark stands against the student's previous completed attempt at
-    the same version of the task (:class:`RemarkState`), computed from the
-    verdicts; NULL where there is nothing to compare. A state agrees with the
-    row's own verdict: "fixed" stands on a "met", the other three on a "not
-    met".
+    item's remark stands against the same item in the student's previous
+    completed attempt at the same version of the task (:class:`RemarkState`):
+    credited or not, then and now — credited as the score counts it, "met" or
+    "not met" with ``quote_not_found`` (unconfirmed). That rule is the code's
+    alone (``homework/criteria_verdicts.py``): the database holds the state's
+    vocabulary, not its agreement with the row's verdict, so an unconfirmed
+    item that was not credited before is "fixed" on a "not met" row.
     """
 
     __tablename__ = "submission_criterion_verdicts"
@@ -2483,13 +2478,6 @@ class SubmissionCriterionVerdict(Base):
         CheckConstraint(
             _nullable_in("remark_state", RemarkState),
             name="ck_submission_criterion_verdicts_remark_state",
-        ),
-        # Implications again: a state of an unknown word breaks the rule above
-        # alone, and a NULL state passes.
-        CheckConstraint(
-            f"(remark_state <> '{_FIXED}' OR verdict = '{_MET}') "
-            f"AND (remark_state NOT IN ({_NOT_MET_NOW}) OR verdict = '{_NOT_MET}')",
-            name="ck_submission_criterion_verdicts_remark_state_matches_verdict",
         ),
         # Not the converse: a row retried before the column has no reason.
         CheckConstraint(
@@ -2662,13 +2650,15 @@ class SubmissionCriterionVerdict(Base):
         String(16),
         nullable=True,
         comment="State of the item's remark between attempts (RemarkState), "
-        "computed from the verdicts and written by task 12a: 'new' — not met "
-        "now, and in the previous completed attempt at the same task version "
-        "it was not unmet; 'open' — not met then and not met now; 'fixed' — "
-        "not met then, met now; 'broken' — met then, not met now. NULL — "
-        "nothing to compare with (the first attempt, another task version), "
-        "or the item was met then and is met now; also on every row written "
-        "before task 12a computes it.",
+        "computed and written by task 12a: the item now against the same item "
+        "in the previous completed attempt at the same task version. Credited "
+        "— as the score counts it: 'met', or 'not_met' with quote_not_found "
+        "(unconfirmed). 'new' — not credited now, and there is no such attempt "
+        "(the first one, another task version) or the item was not in it; "
+        "'open' — not credited then and now; 'fixed' — not credited then, "
+        "credited now; 'broken' — credited then, not credited now. NULL — "
+        "credited now, and credited then or nothing to compare with; also on "
+        "every row written before task 12a computes it.",
     )
     quote_from_base: Mapped[bool] = mapped_column(
         Boolean,

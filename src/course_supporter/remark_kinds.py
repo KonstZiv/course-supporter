@@ -40,21 +40,24 @@ from typing import Final
 class RemarkState(StrEnum):
     """The state of the remark on one item between two attempts (task 12a).
 
-    Computed from the verdicts: the item's verdict now against its verdict in
-    the student's previous completed attempt at the same version of the task.
-    Kept on the item's verdict row. No state (NULL) — nothing to compare with
-    (the first attempt, another version of the task), or the item was met then
-    and is met now.
+    The item now against the same item in the student's previous completed
+    attempt at the same version of the task; kept on the item's verdict row.
+    "Credited" is as the score counts it (``homework/criteria_verdicts.py``,
+    ``score_percent``): "met", or "not met" with ``quote_not_found`` —
+    unconfirmed. That rule lives in the code alone; the database does not
+    repeat it. No state (NULL) — credited now, and credited then or nothing to
+    compare with.
     """
 
     NEW = "new"
-    """Not met now; in the previous attempt it was not unmet."""
+    """Not credited now; no previous attempt at this version (the first one,
+    another version of the task), or the item was not in it."""
     OPEN = "open"
-    """Not met then, not met now."""
+    """Not credited then, not credited now."""
     FIXED = "fixed"
-    """Not met then, met now."""
+    """Not credited then, credited now."""
     BROKEN = "broken"
-    """Met then, not met now."""
+    """Credited then, not credited now."""
 
 
 class CommentAuthor(StrEnum):

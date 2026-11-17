@@ -1,7 +1,7 @@
 """mentor-rebuild task 12a, K1: comments on remarks and the state of a remark.
 
 Revision ID: task12a_remark_comments
-Revises: biltestmark_test_batches
+Revises: esc_request_traces
 Create Date: 2026-11-16
 
 After a review the student may answer a remark — a question, an objection, a
@@ -40,10 +40,11 @@ production behaves as before.
 
 2. ``submission_criterion_verdicts.remark_state`` — ``VARCHAR(16)``, nullable:
    ``new`` | ``open`` | ``fixed`` | ``broken`` or NULL
-   (``ck_submission_criterion_verdicts_remark_state``), and a state that
-   agrees with the row's own verdict — ``fixed`` on a ``met``, the other
-   three on a ``not_met``
-   (``ck_submission_criterion_verdicts_remark_state_matches_verdict``).
+   (``ck_submission_criterion_verdicts_remark_state``). A state says whether
+   the item is credited now and was then — credited as the score counts it:
+   ``met``, or ``not_met`` with ``quote_not_found``. That rule is the code's
+   alone (``homework/criteria_verdicts.py``); the database holds the
+   vocabulary, not the state's agreement with the row's verdict.
 
 The vocabularies of the CHECK constraints are spelled out LITERALLY here, as in
 ``submission_verdict_tables``: the ORM builds them from ``remark_kinds`` and
@@ -60,7 +61,7 @@ Hand-written; ``--autogenerate`` is not used on this database (``DD-L4-A``).
 A new table and a nullable column: no row is rewritten, and every verdict row
 already there keeps NULL.
 
-Downgrade: drops the column with its CHECKs and the table — and with them
+Downgrade: drops the column with its CHECK and the table — and with them
 every state and every comment written since this revision; that loss is not
 recoverable.
 """
@@ -71,37 +72,38 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "task12a_remark_comments"
-down_revision: str | Sequence[str] | None = "biltestmark_test_batches"
+down_revision: str | Sequence[str] | None = "esc_request_traces"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _COMMENTS = "remark_comments"
 _VERDICTS = "submission_criterion_verdicts"
 _STATE_CHECK = "ck_submission_criterion_verdicts_remark_state"
-_STATE_VERDICT_CHECK = "ck_submission_criterion_verdicts_remark_state_matches_verdict"
 
 # Spelled out, not derived from the enums: see the module docstring.
 _AUTHORS = "'student', 'mentor'"
 _KINDS = "'question', 'objection', 'comment', 'answer'"
 _TOPICS = "'on_topic', 'off_topic', 'hostile'"
 _STATES = "'new', 'open', 'fixed', 'broken'"
-_NOT_MET_NOW_STATES = "'new', 'open', 'broken'"
 _CRITERION_ID = r"^c[1-9][0-9]*$"
 _POINT_ID = r"^c[1-9][0-9]*\.p[1-9][0-9]*$"
 
 _STATE_COMMENT = (
-    "State of the item's remark between attempts (RemarkState), computed from "
-    "the verdicts and written by task 12a: 'new' — not met now, and in the "
-    "previous completed attempt at the same task version it was not unmet; "
-    "'open' — not met then and not met now; 'fixed' — not met then, met now; "
-    "'broken' — met then, not met now. NULL — nothing to compare with (the "
-    "first attempt, another task version), or the item was met then and is "
-    "met now; also on every row written before task 12a computes it."
+    "State of the item's remark between attempts (RemarkState), computed and "
+    "written by task 12a: the item now against the same item in the previous "
+    "completed attempt at the same task version. Credited — as the score "
+    "counts it: 'met', or 'not_met' with quote_not_found (unconfirmed). "
+    "'new' — not credited now, and there is no such attempt (the first one, "
+    "another task version) or the item was not in it; 'open' — not credited "
+    "then and now; 'fixed' — not credited then, credited now; 'broken' — "
+    "credited then, not credited now. NULL — credited now, and credited then "
+    "or nothing to compare with; also on every row written before task 12a "
+    "computes it."
 )
 
 
 def upgrade() -> None:
-    """Create ``remark_comments``; add ``remark_state`` with its two CHECKs."""
+    """Create ``remark_comments``; add ``remark_state`` with its CHECK."""
     op.create_table(
         _COMMENTS,
         sa.Column(
@@ -328,17 +330,10 @@ def upgrade() -> None:
         _VERDICTS,
         f"remark_state IS NULL OR remark_state IN ({_STATES})",
     )
-    op.create_check_constraint(
-        _STATE_VERDICT_CHECK,
-        _VERDICTS,
-        "(remark_state <> 'fixed' OR verdict = 'met') "
-        f"AND (remark_state NOT IN ({_NOT_MET_NOW_STATES}) OR verdict = 'not_met')",
-    )
 
 
 def downgrade() -> None:
-    """Drop the column with its CHECKs and the table — what they held is lost."""
-    op.drop_constraint(_STATE_VERDICT_CHECK, _VERDICTS, type_="check")
+    """Drop the column with its CHECK and the table — what they held is lost."""
     op.drop_constraint(_STATE_CHECK, _VERDICTS, type_="check")
     op.drop_column(_VERDICTS, "remark_state")
     op.drop_table(_COMMENTS)

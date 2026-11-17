@@ -284,6 +284,8 @@ class DashScopeProvider(LLMProvider):
         """Map DashScope-surfaced failures to ladder categories.
 
         Mapping:
+        * Builtin ``TimeoutError`` (alias of ``asyncio.TimeoutError``
+          since Py3.11) -> INFRASTRUCTURE.
         * ``DashScopeResponseError`` with status 429/408/504/5xx
           -> INFRASTRUCTURE.
         * Status 413 / 400 matching overflow code prefix or pattern
@@ -293,6 +295,8 @@ class DashScopeProvider(LLMProvider):
         * ``InvalidInput`` / ``InvalidParameter`` -> SEMANTIC.
         * Other ``DashScopeException`` subclasses -> SEMANTIC via base.
         """
+        if isinstance(exc, TimeoutError):
+            return ErrorCategory.INFRASTRUCTURE
         if isinstance(exc, DashScopeResponseError):
             if exc.status_code in _HTTP_RATE_LIMITED:
                 return ErrorCategory.INFRASTRUCTURE

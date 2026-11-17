@@ -2456,9 +2456,16 @@ class RemarkThreads(BaseModel):
     """The threads on the remarks of one review (task 12a).
 
     Each runs through every attempt of the student at the same version of the
-    task; a remark nobody commented on has no thread.
+    task; a remark nobody commented on has no thread. ``accepting_replies``
+    says whether this review takes a reply now (K3b).
     """
 
+    accepting_replies: bool = Field(
+        description="Whether a reply to this review would be taken now: the "
+        "task takes replies, and this is the student's latest reviewed "
+        "attempt at the version of the task in force. The limit of replies "
+        "per remark is not counted in.",
+    )
     threads: list[RemarkThread]
 
 

@@ -4,14 +4,16 @@
 corpora (K1, K3), the project's own stages and prompts (K4), the place of a
 problem and the marks of the author's lines (K5), the builder and the refusals
 (K6, #677) — is joined here by one walk. The project is on the new path in
-test mode, with the path the next step (K8) will give it, in this test's own
-configuration; ``config/submission_paths.yaml`` is read for the stages' own
-descriptions and is not touched. Everything below the model layer is the real
-thing: the ARQ task (``arq_process_homework``), the seam, the real body, the
-project's door against a real base in the S3-compatible storage (``moto_server``
-in this run; SeaweedFS in the compose file), the attempt ledger, the dedup, the
-five stages of the path with their prompts, the verdict repository, the course
-search over a real course, the builder, the assembler, the webhook payload.
+test mode since K8, and the walk runs on the shipped file: its stages and its
+paths are read from ``config/submission_paths.yaml``, never copied here — a
+first submission walks ``first`` (the attempt classifier included), a later
+one ``repeat_without_replies`` (without it). Everything below the model layer
+is the real thing: the ARQ task (``arq_process_homework``), the seam, the real
+body, the project's door against a real base in the S3-compatible storage
+(``moto_server`` in this run; SeaweedFS in the compose file), the attempt
+ledger, the dedup, the stages of the path with their prompts, the verdict
+repository, the course search over a real course, the builder, the assembler,
+the webhook payload.
 
 The doors, and why each:
 
@@ -41,8 +43,8 @@ The runs:
 2. the same work again by the same student (``TestTheSameWorkAgain``): the
    first attempt's review is given again, no stage is called and nothing is
    paid for (task 13, K3);
-3. a changed work again (``TestAChangedWorkAgain``): a new, full review, and
-   the second attempt.
+3. a changed work again (``TestAChangedWorkAgain``): a new, full review on
+   the repeat path — no attempt classifier — and the second attempt.
 
 Requires ``docker compose up -d`` (or Postgres, Redis and an S3-compatible
 storage on the settings' addresses); run with ``--run-db``.
@@ -95,14 +97,16 @@ from course_supporter.homework.path_config import (
 )
 from course_supporter.homework.path_stages import (
     ATTEMPT_CLASSIFIER,
-    COURSE_LINK_LOOKUP,
     PROJECT_CRITERIA_EVALUATION,
     PROJECT_REVIEW_EXPLANATION,
     SAFETY,
 )
 from course_supporter.homework.project_submission import _submission_snapshot_key
 from course_supporter.homework.review_assembler import assemble_review
-from course_supporter.homework.text_budget import path_context_budget_chars
+from course_supporter.homework.text_budget import (
+    path_context_budget_chars,
+    project_path_budget_chars,
+)
 from course_supporter.llm.ladder_config import StageConfig
 from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.llm.registry import load_registry
@@ -157,30 +161,26 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WEBHOOK_URL = "https://example.com/hook"
 _TASK_HASH = "h" * 64
 
-# The path K8 gives the project, the same on every state of a submission.
-_PATH = (
-    SAFETY,
-    ATTEMPT_CLASSIFIER,
-    PROJECT_CRITERIA_EVALUATION,
-    COURSE_LINK_LOOKUP,
-    PROJECT_REVIEW_EXPLANATION,
-)
-
 
 def _shipped() -> PathConfig:
     """The shipped file, read from the repository (never cached)."""
     return load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
 
-def _config() -> PathConfig:
-    """The shipped stages with ``project`` on the new path, in test mode."""
-    raw = _shipped().model_dump(mode="json")
-    raw["task_types"]["project"] = {
-        "served_by": ServedBy.NEW_PATH.value,
-        "test_mode": True,
-        "paths": {state.value: list(_PATH) for state in SubmissionState},
-    }
-    return PathConfig.model_validate(raw)
+def _path(state: SubmissionState) -> tuple[str, ...]:
+    """The project's path on ``state``, as the shipped file lists it (K8)."""
+    return tuple(_shipped().task_types[AssignmentType.PROJECT].paths[state])
+
+
+def _calls(state: SubmissionState) -> list[str]:
+    """The router's calls of one full review on ``state``'s path, in order.
+
+    Each stage of the path as many times as it has recorded answers
+    (:func:`_answers`) — the evaluation twice, its repeat about the quote of
+    the base; the code stage has none and asks no router.
+    """
+    answers = _answers()
+    return [name for name in _path(state) for _ in answers.get(name, ())]
 
 
 # ── The author's list ───────────────────────────────────────────────────────
@@ -631,7 +631,7 @@ class _Walk:
         self.s3_client = s3_client
         self.world = world
         self.router = _RouterDouble(session_factory)
-        self.config = _config()
+        self.config = _shipped()
 
     async def run(self, files: dict[str, bytes]) -> _Outcome:
         """Submit ``files`` and run the task on the router's recorded answers."""
@@ -963,15 +963,11 @@ class TestAFirstSubmissionOfAProject:
     ) -> None:
         outcome = await walk.run(PROJECT)
 
-        # Each stage of the path asked its router, the code stage did not, and
-        # the register holds one row per call — the evaluation's repeat too.
-        assert walk.router.calls == [
-            SAFETY,
-            ATTEMPT_CLASSIFIER,
-            PROJECT_CRITERIA_EVALUATION,
-            PROJECT_CRITERIA_EVALUATION,
-            PROJECT_REVIEW_EXPLANATION,
-        ]
+        # Each stage of the first path asked its router — the attempt
+        # classifier among them — the code stage did not, and the register
+        # holds one row per call — the evaluation's repeat too.
+        assert walk.router.calls == _calls(SubmissionState.FIRST)
+        assert ATTEMPT_CLASSIFIER in walk.router.calls
         rows = await _register(session_factory, outcome.job_id)
         assert [row.action for row in rows] == walk.router.calls
         assert all(row.cost_usd is not None and row.cost_usd > 0 for row in rows)
@@ -984,14 +980,15 @@ class TestAFirstSubmissionOfAProject:
             stage = stages[name]
             assert isinstance(stage, ModelStage)
             assert cost <= stage.ceilings.money_usd, name
+        path = _path(SubmissionState.FIRST)
         assert sum(spent.values()) <= sum(
             stage.ceilings.money_usd
-            for name in _PATH
+            for name in path
             if isinstance(stage := stages[name], ModelStage)
         )
         # What the funds port was told, stage by stage, from the same rows.
         assert outcome.port.accounted == [
-            pytest.approx(spent.get(name, 0.0)) for name in _PATH
+            pytest.approx(spent.get(name, 0.0)) for name in path
         ]
 
 
@@ -1051,6 +1048,54 @@ class TestTheSameWorkAgain:
         assert payload.review.score == 50
 
 
+class TestTheSameWorkAgainstAnEditedList:
+    """Run 2b: the same archive after the author edited the project's list.
+
+    The list is part of the key of the same work for a project as for a text
+    task (project chain K8): the evaluation read the list in force, so a copy
+    of a review judged against another list would answer by criteria the
+    author no longer asks for.
+    """
+
+    async def test_the_same_work_is_reviewed_anew_against_the_new_list(
+        self, walk: _Walk, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        first = await walk.run(PROJECT)
+        assert first.submission.status == "delivered"
+        reworded = _CRITERIA[0].model_copy(update={"text": "Criterion c1, reworded"})
+        edited = (reworded, *_CRITERIA[1:])
+        async with session_factory() as session:
+            edit = await TaskCriteriaOverrideRepository(session).replace(
+                authored_document_id=walk.world["doc_id"],
+                source_content_hash=_TASK_HASH,
+                source_task_type="project",
+                criteria=criteria_to_document(edited),
+            )
+            await session.commit()
+        walk.world["in_force"] = CriteriaInForce(
+            criteria=edited, layer=CriteriaLayer.AUTHOR, source_id=edit.id
+        )
+
+        second = await walk.run(PROJECT)
+
+        # The same work, and still no copy: the evaluation was asked again and
+        # its verdicts stand on the list in force now.
+        receipt = second.submission.attempt_receipt
+        assert receipt is not None
+        assert (
+            receipt["fingerprint"]
+            == (first.submission.attempt_receipt or {})["fingerprint"]
+        )
+        assert DEDUP_RECEIPT_KEY not in receipt
+        assert PROJECT_CRITERIA_EVALUATION in walk.router.calls
+        assert second.structure.unchanged_from_attempt is None
+        assert {
+            (row.criteria_layer, row.criteria_source_id)
+            for row in (await _rows(session_factory, second.submission.id)).values()
+        } == {(CriteriaLayer.AUTHOR, edit.id)}
+        assert second.submission.status == "delivered"
+
+
 class TestAChangedWorkAgain:
     """Run 3: another line of the changed file — a new, full review."""
 
@@ -1063,15 +1108,11 @@ class TestAChangedWorkAgain:
 
         second = await walk.run({**PROJECT, "app.py": reworded.encode()})
 
-        # Every stage of the path was called, the work in its request is the
+        # Every stage of the repeat path was called — the attempt classifier
+        # is the first submission's alone — the work in its request is the
         # changed one, and the register holds the rows of a whole review.
-        assert walk.router.calls == [
-            SAFETY,
-            ATTEMPT_CLASSIFIER,
-            PROJECT_CRITERIA_EVALUATION,
-            PROJECT_CRITERIA_EVALUATION,
-            PROJECT_REVIEW_EXPLANATION,
-        ]
+        assert walk.router.calls == _calls(SubmissionState.REPEAT_WITHOUT_REPLIES)
+        assert ATTEMPT_CLASSIFIER not in walk.router.calls
         assert "like the base" in walk.router.asked(SAFETY)[0].user
         assert "like the base" in walk.router.asked(PROJECT_CRITERIA_EVALUATION)[0].user
         assert [
@@ -1108,33 +1149,37 @@ class TestAChangedWorkAgain:
 
 
 class TestTheConfigurationOfTheWalk:
-    """What the runs above stand on: the shipped stages, the project switched."""
+    """What the runs above stand on: the shipped file, as the body reads it."""
 
-    def test_it_differs_from_the_shipped_file_in_the_projects_entry_alone(
-        self,
-    ) -> None:
-        shipped, config = _shipped(), _config()
+    def test_the_project_is_on_the_new_path_in_test_mode(self) -> None:
+        shipped = _shipped()
 
-        assert config.stages == shipped.stages
-        others = {t for t in config.task_types if t is not AssignmentType.PROJECT}
-        assert {t: config.task_types[t] for t in others} == {
-            t: shipped.task_types[t] for t in others
-        }
-        project = config.task_types[AssignmentType.PROJECT]
-        assert project.served_by is ServedBy.NEW_PATH
-        assert in_test_mode(AssignmentType.PROJECT, config) is True
         assert shipped.task_types[AssignmentType.PROJECT].served_by is (
-            ServedBy.TODAYS_MENTOR
+            ServedBy.NEW_PATH
         )
+        assert in_test_mode(AssignmentType.PROJECT, shipped) is True
 
-    def test_the_input_budget_of_the_marks_is_the_same_on_the_new_path(
+    def test_the_attempt_classifier_asks_on_the_first_submission_alone(
         self,
     ) -> None:
+        """As on ``task``: the repeat paths are the first without it."""
+        first = _path(SubmissionState.FIRST)
+
+        assert ATTEMPT_CLASSIFIER in first
+        for state in (
+            SubmissionState.REPEAT_WITHOUT_REPLIES,
+            SubmissionState.REPEAT_WITH_REPLIES,
+        ):
+            assert _path(state) == tuple(
+                name for name in first if name != ATTEMPT_CLASSIFIER
+            )
+
+    def test_the_input_budget_of_the_marks_is_the_walks(self) -> None:
         """The marks of the author's lines are held to the budget of
-        ``project_path_budget_chars``, which reads the file the process cached —
-        today the shipped one. Switching the project does not move it."""
+        ``project_path_budget_chars``, which reads the file the process cached:
+        the shipped one, the walk's."""
         registry = load_registry(get_settings().external_services_path)
 
-        assert path_context_budget_chars(
-            AssignmentType.PROJECT, _config(), registry
-        ) == path_context_budget_chars(AssignmentType.PROJECT, _shipped(), registry)
+        assert project_path_budget_chars() == path_context_budget_chars(
+            AssignmentType.PROJECT, _shipped(), registry
+        )

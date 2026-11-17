@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 import structlog
+from tests._helpers.path_config import shipped_with_todays_mentor_for
 
 from course_supporter.homework import criteria_verdicts
 from course_supporter.homework.evaluator_version import evaluator_version
@@ -277,7 +278,7 @@ class TestNoVersion:
 
 
 class TestShippedFile:
-    """The shipped file: the text types have a version, a test and a project not."""
+    """The shipped file: the text types and a project have a version, a test not."""
 
     def test_versions(self) -> None:
         shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
@@ -290,7 +291,34 @@ class TestShippedFile:
         # The two text types walk the same stages: one evaluator.
         assert version(AssignmentType.SHORT_TASK) == task
         assert version(AssignmentType.TEST) is None
-        assert version(AssignmentType.PROJECT) is None
+        # A project walks its own stages, with its own prompts (chain K8).
+        project = version(AssignmentType.PROJECT)
+        assert project is not None
+        assert project != task
+
+    def test_the_switch_of_the_project_is_its_new_evaluator(self) -> None:
+        """Project chain K8 (decision of 2026-11-13): the verdict rules are not
+        raised for the switch — the project's evaluator changes by itself,
+        because its path does. Served by today's Mentor it had no version, so
+        no review of today's Mentor is ever the source of a copy; on the new
+        path its version is its own stages', and the text types' is the same
+        on either side of the switch.
+
+        The value is pinned as the text types' is below: the receipts of the
+        live measurement name it. A later change that moves it updates it on
+        purpose.
+        """
+        shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
+        before = shipped_with_todays_mentor_for(AssignmentType.PROJECT)
+
+        def version(task_type: AssignmentType, config: PathConfig) -> str | None:
+            return evaluator_version(task_type, config, prompt_base_path=_REPO_ROOT)
+
+        assert version(AssignmentType.PROJECT, before) is None
+        assert version(AssignmentType.PROJECT, shipped) == "ev1:b09ff854f4112f96"
+        for text_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
+            assert version(text_type, shipped) == version(text_type, before)
+        assert criteria_verdicts.VERDICT_RULES_VERSION == 6
 
     def test_the_text_types_version_is_unchanged_by_the_traces(self) -> None:
         """Lock (2026-11-16): the call traces leave the evaluator as it was.

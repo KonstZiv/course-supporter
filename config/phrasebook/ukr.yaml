@@ -9,8 +9,8 @@
 # ``03-BINDING.md``).
 #
 # Every key here is one the review structure of version 1 renders today — but
-# the three ``reply.*`` answers of task 12a (K4) at the end, which the
-# explanation stage writes into a review's replies as their text. A phrase a
+# the ``reply.*`` words of task 12a (K4) at the end, which the explanation
+# stage and the review's builder write into a review's replies as their text. A phrase a
 # later stage will need is added by that task: each key costs sixty
 # translations.
 #
@@ -104,8 +104,13 @@ verdict.rule.no_author_musts_failed: Автор не затвердив обов
 # sentence too. ``reply.hostile.fallback`` — the answer to a hostile reply when
 # the joke fails that check; it carries ``reply.work_only`` word for word.
 # ``reply.off_topic.wrap_up`` — the answer from the fourth round off the topic,
-# without a model; its words in quotes are the product owner's (2026-11-16);
-# ``{course}`` is the course's name.
+# without a model, and the copy's answer to a reply off the topic; the
+# wording is the product owner's (2026-11-17: "Розмови коштують грошей" — the
+# check is sometimes paid by the course's author, not the student);
+# ``{course}`` is the course's name. ``reply.said.withheld`` — what the
+# review's section of replies shows in place of a hostile reply's text: a
+# review is read by the school's own systems too.
 reply.work_only: Оцінюємо лише саму роботу — файли з розв'язком, а не те, що написано поруч.
 reply.hostile.fallback: Цікавий хід! Оцінюємо лише саму роботу — файли з розв'язком, а не те, що написано поруч. Щоб покращити результат, доопрацюйте розв'язок за зауваженнями цієї рецензії.
-reply.off_topic.wrap_up: Про це можна говорити довго, але на нас чекає робота, і час краще витратити на курс «{course}». За ваші гроші я готовий спілкуватися вічно, але звичайний чат-бот зробить це дешевше, а зі мною краще вчити «{course}».
+reply.off_topic.wrap_up: "Про це можна говорити довго, але на нас чекає робота, і час краще витратити на курс «{course}». Розмови коштують грошей: я готовий спілкуватися вічно, але звичайний чат-бот зробить це дешевше, а зі мною краще вчити «{course}»."
+reply.said.withheld: (текст цієї репліки в рецензії не наводимо)

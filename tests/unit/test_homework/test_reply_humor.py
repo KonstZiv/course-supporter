@@ -43,9 +43,25 @@ class TestTheShippedSet:
         }
 
         assert "дві великі різниці" in examples["odesa"]
-        assert "Ми дивимося, що лежить" in examples["shed"]
-        assert "бали ставлю лише за код" in examples["self_irony"]
+        # Reworded by the product owner on 2026-11-17, word for word.
+        assert examples["shed"] == (
+            "Знаєте жарт про напис на сараї і те, що там лежить? Ми дивимося на те, "
+            "що лежить. Тому під час оцінювання враховується лише файл чи архів, а "
+            "не коментарі."
+        )
+        assert examples["self_irony"] == (
+            "Я, звісно, люблю добре слово, але бали ставлю лише за роботу."
+        )
         assert "програма в мене одна" in examples["honest_program"]
+
+    def test_the_styles_speak_of_the_work_not_of_code(self) -> None:
+        """The platform checks more than programming (2026-11-17)."""
+        styles = load_humor_styles(_REPO_ROOT / HUMOR_STYLES_PATH)
+        self_irony = next(s for s in styles if s.id == "self_irony")
+
+        assert "work" in self_irony.description
+        assert "code" not in self_irony.description
+        assert "за код" not in self_irony.example
 
     def test_the_cache_reads_the_file_once(self) -> None:
         path = _REPO_ROOT / HUMOR_STYLES_PATH

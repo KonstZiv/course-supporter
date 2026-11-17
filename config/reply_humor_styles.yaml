@@ -14,8 +14,10 @@
 # the style, as the operator approved it; the model takes its spirit, never
 # its words, and writes in the review's language).
 #
-# The starting set is the product owner's (2026-11-16); the operator approves
-# it on 2026-11-18 after the live measurement of 12a. The descriptions may be
+# The starting set is the product owner's (2026-11-16; `self_irony` and `shed`
+# reworded by them on 2026-11-17 — the platform checks more than code); the
+# product owner approves the styles on the stand's samples after the live
+# measurement of 12a, and widens the set later. The descriptions may be
 # refined; the essence of each style may not change. Read once per process: an
 # edit takes effect on the next start.
 
@@ -33,18 +35,22 @@ styles:
     description: >-
       The old joke about the writing on a shed and what actually lies inside
       it: whatever is written on the outside, we look at what lies inside —
-      the work. Told lightly, as a shared joke between colleagues.
+      the work. Told lightly, as a shared joke between colleagues. In the
+      example, the second and the third sentences explain the joke; the
+      answer stays short (the same limit as every joke), and the rule's
+      sentence word for word follows the joke, as with every style.
     example: >-
-      Знаєте жарт про напис на сараї і те, що там лежить? Ми дивимося, що
-      лежить.
+      Знаєте жарт про напис на сараї і те, що там лежить? Ми дивимося на те,
+      що лежить. Тому під час оцінювання враховується лише файл чи архів, а не
+      коментарі.
 
   - id: self_irony
     description: >-
       Light self-irony of the Mentor: it admits a weakness for kind words or
-      clever requests, but its points go to the code alone. The joke is on the
-      Mentor itself, never on the student.
+      clever requests, but its points go to the work alone. The joke is on
+      the Mentor itself, never on the student.
     example: >-
-      Я, звісно, люблю добре слово, але бали ставлю лише за код.
+      Я, звісно, люблю добре слово, але бали ставлю лише за роботу.
 
   - id: honest_program
     description: >-

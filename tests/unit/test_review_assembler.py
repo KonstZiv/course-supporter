@@ -184,12 +184,19 @@ def full_review(language: str) -> ReviewStructureV1:
     )
 
 
-# The phrases that reach a reader not through this assembler but as the text
-# of an answer: the explanation stage with the student's replies writes them
-# into a review's ``replies`` (task 12a, K4; their use is locked in
-# ``tests/integration/test_reply_stages_db.py``).
+# The phrases that reach a reader not through this assembler's own phrases
+# but as the text of a review's ``replies`` (task 12a, K4): the answers the
+# explanation stage and the copy of the same work write, and what the builder
+# shows in place of a hostile reply's words. Their use is locked in
+# ``tests/integration/test_reply_stages_db.py`` and
+# ``tests/integration/test_reply_answers_db.py``.
 _THE_EXPLANATIONS_ANSWERS = frozenset(
-    {"reply.work_only", "reply.hostile.fallback", "reply.off_topic.wrap_up"}
+    {
+        "reply.work_only",
+        "reply.hostile.fallback",
+        "reply.off_topic.wrap_up",
+        "reply.said.withheld",
+    }
 )
 
 

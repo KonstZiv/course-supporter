@@ -31,7 +31,7 @@ from course_supporter.homework.remark_comments import (
     RemarkCommentRepository,
     build_remark_comment_repository,
 )
-from course_supporter.homework.reply_core import Thread
+from course_supporter.homework.reply_core import ReplyThreads
 from course_supporter.storage.orm import StudentFeedback
 
 
@@ -70,14 +70,15 @@ def to_remark_comment(record: CommentRecord) -> RemarkComment:
     )
 
 
-def to_remark_threads(threads: list[Thread]) -> RemarkThreads:
-    """The threads of a review as both doors serve them."""
+def to_remark_threads(read: ReplyThreads) -> RemarkThreads:
+    """A review's threads, and whether it takes a reply, as both doors serve them."""
     return RemarkThreads(
+        accepting_replies=read.accepting_replies,
         threads=[
             RemarkThread(
                 item_id=thread.item_id,
                 comments=[to_remark_comment(c) for c in thread.comments],
             )
-            for thread in threads
-        ]
+            for thread in read.threads
+        ],
     )

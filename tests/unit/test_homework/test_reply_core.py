@@ -484,7 +484,7 @@ class TestTheWords:
     @pytest.mark.parametrize(
         ("body", "category"),
         [
-            ("Чому так?‮где", "suspicious_unicode"),
+            ("Чому так?\u202eгде", "suspicious_unicode"),
             ("Тег\U000e0041 у тексті", "suspicious_unicode"),
             ("Самотній сурогат \ud800", "charset_violation"),
         ],
@@ -538,9 +538,163 @@ class TestTheOrderOfTheRefusals:
         submission = _submission()
         store = FakeRemarkComments([a_reply(submission.id, minute=m) for m in range(5)])
 
-        refusal = await _refused(submission, store, body="Чому?‮")
+        refusal = await _refused(submission, store, body="Чому?\u202e")
 
         assert _code(refusal) == ReplyRefusal.COMMENT_LIMIT_REACHED
+
+    async def test_an_unknown_remark_outranks_a_parent_outside_the_thread(
+        self,
+    ) -> None:
+        refusal = await _refused(
+            _submission(), FakeRemarkComments(), item_id="c9", parent_id=uuid.uuid4()
+        )
+
+        assert _code(refusal) == ReplyRefusal.UNKNOWN_ITEM
+
+    async def test_a_parent_outside_the_thread_outranks_a_full_remark(self) -> None:
+        submission = _submission()
+        store = FakeRemarkComments(
+            [a_reply(submission.id, minute=m) for m in range(5)],
+            scopes={submission.id: _scope(submission)},
+        )
+
+        refusal = await _refused(submission, store, parent_id=uuid.uuid4())
+
+        assert _code(refusal) == ReplyRefusal.PARENT_NOT_IN_THREAD
+
+    async def test_a_long_text_outranks_a_rejected_one(self) -> None:
+        """Too long and with a direction override: the length is told first."""
+        refusal = await _refused(
+            _submission(), FakeRemarkComments(), body="я" * 2_001 + "\u202e"
+        )
+
+        assert _code(refusal) == ReplyRefusal.COMMENT_TOO_LONG
+
+
+_ACCEPTING_CASES = [
+    pytest.param({}, {}, True, True, id="the-latest-review"),
+    pytest.param(
+        {}, {"later_statuses": ("rejected", "failed")}, True, True, id="later-ended"
+    ),
+    pytest.param(
+        {}, {"later_statuses": ("delivered",)}, True, False, id="an-earlier-attempt"
+    ),
+    pytest.param({"task_version": None}, {}, True, False, id="no-recorded-version"),
+    pytest.param(
+        {}, {"task_version": "a-newer-version"}, True, False, id="new-version"
+    ),
+    pytest.param(
+        {"status": "reviewing", "review_markdown": None},
+        {},
+        True,
+        False,
+        id="no-review",
+    ),
+    pytest.param({}, {}, False, False, id="the-switch-off"),
+]
+
+
+async def _read(
+    submission: HomeworkSubmission,
+    store: FakeRemarkComments,
+    *,
+    facts: ReviewFacts,
+    config: PathConfig,
+    session: AsyncSession | None = None,
+) -> bool:
+    with _review_facts(facts):
+        read = await read_threads(
+            session if session is not None else _session(),
+            submission=submission,
+            student_id=_STUDENT_ID,
+            comments=store,
+            config=config,
+        )
+    return read.accepting_replies
+
+
+class TestAcceptingReplies:
+    """K3b: the read's sign is the write's own rule, up to ``not_latest_review``."""
+
+    @pytest.mark.parametrize(
+        ("submission_kwargs", "facts_kwargs", "switch_on", "accepting"),
+        _ACCEPTING_CASES,
+    )
+    async def test_the_sign(
+        self,
+        submission_kwargs: dict[str, Any],
+        facts_kwargs: dict[str, Any],
+        switch_on: bool,
+        accepting: bool,
+    ) -> None:
+        config = _REPLIES_ON if switch_on else shipped_with_todays_mentor_for()
+
+        sign = await _read(
+            _submission(**submission_kwargs),
+            FakeRemarkComments(),
+            facts=_facts(**facts_kwargs),
+            config=config,
+        )
+
+        assert sign is accepting
+
+    @pytest.mark.parametrize(
+        ("submission_kwargs", "facts_kwargs", "switch_on", "accepting"),
+        _ACCEPTING_CASES,
+    )
+    async def test_the_read_and_the_write_agree(
+        self,
+        submission_kwargs: dict[str, Any],
+        facts_kwargs: dict[str, Any],
+        switch_on: bool,
+        accepting: bool,
+    ) -> None:
+        """Where the read says yes a reply is taken; where no — the 404 or
+        ``not_latest_review``, the two refusals the sign stands for."""
+        config = _REPLIES_ON if switch_on else shipped_with_todays_mentor_for()
+        submission = _submission(**submission_kwargs)
+        facts = _facts(**facts_kwargs)
+
+        sign = await _read(submission, FakeRemarkComments(), facts=facts, config=config)
+        try:
+            await _post(submission, FakeRemarkComments(), facts=facts, config=config)
+        except HTTPException as refused:
+            detail: Any = refused.detail
+            assert not sign, f"the read said yes, the write refused: {detail}"
+            assert refused.status_code == 404 or (
+                _code(refused) == ReplyRefusal.NOT_LATEST_REVIEW
+            )
+        else:
+            assert sign, "the read said no, the write took the reply"
+
+    async def test_the_switch_off_asks_nothing_more(self) -> None:
+        """No query of its own: the facts read anyway are all the sign reads."""
+        session = MagicMock(spec=AsyncSession)
+        store = FakeRemarkComments()
+
+        sign = await _read(
+            _submission(),
+            store,
+            facts=_facts(),
+            config=shipped_with_todays_mentor_for(),
+            session=session,
+        )
+
+        assert sign is False
+        assert session.method_calls == []
+        assert store.tenants == [] and store.locked == []
+
+    async def test_the_limit_of_a_remark_is_not_the_reviews(self) -> None:
+        """Five replies on a remark: the review still takes replies (others)."""
+        submission = _submission()
+        store = FakeRemarkComments(
+            [a_reply(submission.id, minute=m) for m in range(5)],
+            scopes={submission.id: _scope(submission)},
+        )
+
+        sign = await _read(submission, store, facts=_facts(), config=_REPLIES_ON)
+
+        assert sign is True
 
 
 class TestWhatIsWritten:
@@ -584,7 +738,7 @@ class TestTheThreads:
         store = FakeRemarkComments([follow_up, on_c3, answer, question], scopes=scopes)
 
         with _review_facts(_facts()):
-            threads = await read_threads(
+            read = await read_threads(
                 _session(),
                 submission=submission,
                 student_id=_STUDENT_ID,
@@ -592,6 +746,7 @@ class TestTheThreads:
                 config=_REPLIES_ON,
             )
 
+        threads = read.threads
         assert [t.item_id for t in threads] == ["c1", "c3"], "a remark without one"
         assert [c.id for c in threads[0].comments] == [
             question.id,
@@ -607,7 +762,7 @@ class TestTheThreads:
         )
 
         with _review_facts(_facts()):
-            threads = await read_threads(
+            read = await read_threads(
                 _session(),
                 submission=submission,
                 student_id=_STUDENT_ID,
@@ -615,14 +770,14 @@ class TestTheThreads:
                 config=shipped_with_todays_mentor_for(),
             )
 
-        assert threads == []
+        assert read.threads == ()
 
     async def test_a_review_with_no_recorded_version_has_none(self) -> None:
         """No version, no thread: the store is not even asked."""
         store = FakeRemarkComments()
 
         with _review_facts(_facts()):
-            threads = await read_threads(
+            read = await read_threads(
                 _session(),
                 submission=_submission(task_version=None),
                 student_id=_STUDENT_ID,
@@ -630,7 +785,7 @@ class TestTheThreads:
                 config=_REPLIES_ON,
             )
 
-        assert threads == []
+        assert read.threads == ()
         assert store.tenants == []
 
     async def test_a_foreign_submission_is_the_404(self) -> None:

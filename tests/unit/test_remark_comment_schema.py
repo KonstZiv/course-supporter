@@ -35,10 +35,15 @@ def test_the_evaluator_is_where_it_was() -> None:
     The value on main before K1. A later change that moves the evaluator on
     purpose writes the new value here — and with it every earlier review
     stops being given again by the dedup.
+
+    Moved on purpose by task 12a, K2: the states of the remarks between
+    attempts change what a review says — verdict rules 6 -> 7, the version
+    ``ev1:3cddefc447c114ed`` -> ``ev1:985d508925abb6c7``. K1 itself moved
+    nothing.
     """
     shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
     for task_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
         version = evaluator_version(task_type, shipped, prompt_base_path=_REPO_ROOT)
-        assert version == "ev1:3cddefc447c114ed", task_type
-    assert criteria_verdicts.VERDICT_RULES_VERSION == 6
+        assert version == "ev1:985d508925abb6c7", task_type
+    assert criteria_verdicts.VERDICT_RULES_VERSION == 7

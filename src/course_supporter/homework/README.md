@@ -1983,7 +1983,9 @@ NULL`).
 
 `POST` — тіло `{"item_id", "kind", "body", "parent_id"}` (у каналі ще `student_external_id`), `201`
 → коментар: `id`, `submission_id`, `item_id`, `parent_id`, `author`, `kind`, `body`, `created_at`,
-`answered_in_submission_id`. `GET` — `200` → `{"threads": [{"item_id", "comments": [...]}]}`:
+`answered_in_submission_id`. `GET` — `200` → `{"accepting_replies", "threads": [{"item_id", "comments": [...]}]}`
+(`accepting_replies` — чи прийме ця рецензія репліку зараз: те саме правило, що в записі, до
+`not_latest_review` включно; К3б):
 гілки всіх спроб студента на ту саму версію завдання для зауважень цієї рецензії, коментарі за
 часом, вкладеність — `parent_id`; зауваження без жодного коментаря гілки не має. Позначки екрана
 (тема, впевненість, ворожість) у відповідь не входять ніколи.

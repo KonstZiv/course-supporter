@@ -62,7 +62,31 @@ The place of a remark (project chain K5):
 The order of the remarks:
     By their criterion's weight — "must" first, then "should", then "may" —
     and within one weight by the criterion's number, ``c2`` before ``c10``:
-    what decides the pass is read first.
+    what decides the pass is read first. The same order in every section.
+
+The sections of the remarks (task 12a, K2):
+    Each remark goes to the section of its criterion's state since the
+    student's earlier attempt at the same version of the task
+    (:func:`~course_supporter.homework.criteria_verdicts.remark_states`):
+    "new", or no state — ``new_remarks``; "open" — ``open``; "broken" —
+    ``broken``. A criterion "fixed" is in ``fixed``, worded by its own remark
+    in the earlier attempt's explanation — without that remark's reading
+    and place, which were the earlier work's — or, when that explanation has
+    none, by the criterion's own words. Its remark of this submission, if
+    any — one is given only to a criterion unconfirmed now — stays new.
+    Points have states too, but a remark is a criterion's: a criterion's
+    own state places it. With nothing to compare with — a first attempt —
+    every remark is new, as before the states. Every remark, in each of the
+    four sections, names its criterion (``Remark.item_id``): the portal ties
+    a student's reply to the remark by it.
+
+    The states are the verdict rows' own (``remark_state``): the evaluation
+    stage counts and writes them with the rows
+    (:func:`~course_supporter.homework.criteria_verdicts.with_remark_states`),
+    and the builder reads them — a row written before the states has none,
+    and its remark is new. The earlier attempt
+    (:meth:`~course_supporter.storage.submission_verdict_repository.SubmissionVerdictRepository.earlier_attempt`)
+    is read here only for the words of a fixed criterion.
 
 Language:
     The explanation's own: the language its texts are written in, as the
@@ -77,14 +101,15 @@ Failure:
 Replacing:
     The body knows the builder by its two methods
     (:class:`~course_supporter.homework.result_builders.ResultBuilder`); the
-    review itself is :func:`build_text_review`, a pure function of the rows
-    and the explanation.
+    review itself is :func:`build_text_review`, a pure function of the rows,
+    the explanation and the states of the remarks.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Final, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, Protocol
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
@@ -97,12 +122,12 @@ from course_supporter.homework.course_link_delivery import (
     settle_course_links,
 )
 from course_supporter.homework.course_links import FoundCourseLinks
-from course_supporter.homework.criteria_form import WEIGHT_NUMBERS
+from course_supporter.homework.criteria_form import WEIGHT_NUMBERS, Criterion
 from course_supporter.homework.criteria_verdicts import (
     ScoredItem,
     pass_decision,
 )
-from course_supporter.homework.judged_list import judged_layer
+from course_supporter.homework.judged_list import judged_layer, read_judged_list
 from course_supporter.homework.result_builders import (
     BuildContext,
     BuiltResult,
@@ -122,6 +147,7 @@ from course_supporter.models.review_structure import (
     ReviewStructureV1,
     Verdict,
 )
+from course_supporter.remark_kinds import RemarkState
 from course_supporter.review_metrics import (
     Claim,
     ReviewMetrics,
@@ -133,14 +159,24 @@ from course_supporter.storage.submission_verdict_repository import (
     SubmissionVerdictRepository,
 )
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from course_supporter.storage.orm import (
+        HomeworkSubmission,
+        SubmissionCriterionVerdict,
+    )
+
 __all__ = [
     "REVIEW_PARTS_MISSING",
+    "FixedWords",
     "ReviewedItem",
     "TextResultBuilder",
     "build_text_review",
     "link_authenticity",
     "problem_positions",
 ]
+
 
 REVIEW_PARTS_MISSING: Final = "review_parts_missing"
 """The code a text task's submission fails with when its review has no parts.
@@ -167,6 +203,22 @@ class ReviewedItem(ScoredItem, Protocol):
 
     @property
     def quote_line_end(self) -> int | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FixedWords:
+    """The words of the criteria fixed since the earlier attempt (task 12a).
+
+    Attributes:
+        remarks: The earlier attempt's remarks, by criterion id: a fixed
+            criterion's own, which the student has dealt with.
+        criteria: The criteria the rows were judged against, by id: the
+            words of a fixed criterion the earlier explanation has no remark
+            on.
+    """
+
+    remarks: Mapping[str, CriterionRemark]
+    criteria: Mapping[str, Criterion]
 
 
 def problem_positions(rows: Iterable[ReviewedItem]) -> dict[str, Position]:
@@ -224,6 +276,8 @@ def build_text_review(
     explanation: ExplanationAnswer,
     language: str,
     reading: Mapping[str, Sequence[Reference]] | None = None,
+    states: Mapping[str, RemarkState | None] | None = None,
+    fixed_words: FixedWords | None = None,
 ) -> tuple[ReviewStructureV1, int]:
     """A text task's review as a structure, and its score — a pure function.
 
@@ -235,14 +289,50 @@ def build_text_review(
         language: The language the explanation is written in.
         reading: By criterion id, what its remark gives to read — the course
             links settled for it; a criterion missing here gives none.
+        states: By item id, where its remark stands since the student's
+            earlier attempt (task 12a): the section it goes to (module). An
+            item missing here has no state; ``None`` — none has, and every
+            remark is new.
+        fixed_words: The words of the criteria ``states`` names fixed.
 
     Raises:
         ValueError: The rows have no criterion, or a criterion without a
             weight (:func:`~course_supporter.homework.criteria_verdicts.score_percent`);
-            or the explanation remarks on a criterion the rows do not have.
+            or the explanation remarks on a criterion the rows do not have;
+            or a criterion is fixed and ``fixed_words`` has no words for it.
     """
     decided = pass_decision(rows, layer=layer)
     places = problem_positions(rows)
+    order = _weight_order(rows)
+    state_of = states or {}
+    new_remarks: list[Remark] = []
+    still_open: list[Remark] = []
+    broken: list[Remark] = []
+    section_of: dict[RemarkState | None, list[Remark]] = {
+        None: new_remarks,
+        RemarkState.NEW: new_remarks,
+        RemarkState.OPEN: still_open,
+        RemarkState.BROKEN: broken,
+        # A criterion fixed since the earlier attempt has a remark now only
+        # when it is unconfirmed: that is new. Its earlier remark is in fixed.
+        RemarkState.FIXED: new_remarks,
+    }
+    for remark in _by_weight(explanation.remarks, order):
+        section_of[state_of.get(remark.id)].append(
+            Remark(
+                what=remark.what,
+                why=remark.why,
+                todo=remark.todo,
+                read=list((reading or {}).get(remark.id, ())),
+                position=places.get(remark.id),
+                item_id=remark.id,
+            )
+        )
+    fixed = [
+        _fixed_remark(criterion_id, fixed_words)
+        for criterion_id in sorted(order, key=order.__getitem__)
+        if state_of.get(criterion_id) is RemarkState.FIXED
+    ]
     voice = explanation.mentor_voice
     structure = ReviewStructureV1(
         schema_version=REVIEW_SCHEMA_VERSION,
@@ -256,27 +346,19 @@ def build_text_review(
                 threshold=decided.threshold,
             ),
         ),
-        new_remarks=[
-            Remark(
-                what=remark.what,
-                why=remark.why,
-                todo=remark.todo,
-                read=list((reading or {}).get(remark.id, ())),
-                position=places.get(remark.id),
-            )
-            for remark in _by_weight(explanation.remarks, rows)
-        ],
+        fixed=fixed,
+        new_remarks=new_remarks,
+        open=still_open,
+        broken=broken,
         # A blank voice is no voice: the assembler would print its block empty.
         mentor_voice=voice if voice is not None and voice.strip() else None,
     )
     return structure, decided.score
 
 
-def _by_weight(
-    remarks: Iterable[CriterionRemark], rows: Iterable[ScoredItem]
-) -> list[CriterionRemark]:
-    """The remarks, heaviest criterion first, then by the criterion's number."""
-    place: dict[str, tuple[int, int]] = {
+def _weight_order(rows: Iterable[ScoredItem]) -> dict[str, tuple[int, int]]:
+    """By criterion id, its place among the remarks: heaviest first, then by number."""
+    return {
         row.item_id: (
             -WEIGHT_NUMBERS[WeightCategory(row.weight)],
             int(row.item_id.removeprefix("c")),
@@ -284,12 +366,85 @@ def _by_weight(
         for row in rows
         if row.item_kind == VerdictItemKind.CRITERION and row.weight is not None
     }
+
+
+def _by_weight(
+    remarks: Iterable[CriterionRemark], order: Mapping[str, tuple[int, int]]
+) -> list[CriterionRemark]:
+    """The remarks, heaviest criterion first, then by the criterion's number."""
     ordered = list(remarks)
-    strangers = sorted({remark.id for remark in ordered} - place.keys())
+    strangers = sorted({remark.id for remark in ordered} - order.keys())
     if strangers:
         msg = f"the explanation remarks on {strangers}, which have no verdict rows"
         raise ValueError(msg)
-    return sorted(ordered, key=lambda remark: place[remark.id])
+    return sorted(ordered, key=lambda remark: order[remark.id])
+
+
+def _fixed_remark(criterion_id: str, words: FixedWords | None) -> Remark:
+    """How the ``fixed`` section shows a criterion fixed since the earlier attempt.
+
+    Its own remark in the earlier attempt's explanation — what the student
+    has dealt with — without its reading and its place, which were the
+    earlier work's. When that explanation has none (its check gives one to
+    every criterion not met, so this is a defect of the data, not a reason to
+    fail the review), the criterion's own words, in the course's language:
+    what it requires, and what in a work shows it — no phrase of the
+    phrasebook says more.
+    """
+    earlier = words.remarks.get(criterion_id) if words is not None else None
+    if earlier is not None:
+        return Remark(
+            what=earlier.what,
+            why=earlier.why,
+            todo=earlier.todo,
+            item_id=criterion_id,
+        )
+    criterion = words.criteria.get(criterion_id) if words is not None else None
+    if criterion is None:
+        msg = f"criterion {criterion_id} is fixed, and there are no words for it"
+        raise ValueError(msg)
+    return Remark(
+        what=criterion.text,
+        why=criterion.text,
+        todo=criterion.evidence,
+        item_id=criterion_id,
+    )
+
+
+async def _fixed_words(
+    session: AsyncSession,
+    submission: HomeworkSubmission,
+    rows: Sequence[SubmissionCriterionVerdict],
+    *,
+    states: Mapping[str, RemarkState | None],
+) -> FixedWords | None:
+    """The words of the fixed criteria, read only when a criterion is fixed.
+
+    The explanation of the earlier attempt the stage compared with
+    (``SubmissionVerdictRepository.earlier_attempt``, the same read), when
+    there is one, and the criteria the rows were judged against
+    (:func:`~course_supporter.homework.judged_list.read_judged_list`) for a
+    fixed criterion that explanation has no remark on — or when an attempt
+    reviewed since the stage ran is the earlier one now and has none.
+    """
+    if RemarkState.FIXED not in states.values():
+        return None
+    stored = SubmissionVerdictRepository(session)
+    earlier = await stored.earlier_attempt(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
+    remarks: tuple[CriterionRemark, ...] = ()
+    if earlier is not None:
+        explained = await stored.get_explanation(
+            tenant_id=submission.tenant_id, submission_id=earlier.submission_id
+        )
+        if explained is not None:
+            remarks = ExplanationAnswer.model_validate(explained.body).remarks
+    criteria = await read_judged_list(session, submission, rows)
+    return FixedWords(
+        remarks={remark.id: remark for remark in remarks},
+        criteria={criterion.id: criterion for criterion in criteria},
+    )
 
 
 def link_authenticity(
@@ -352,6 +507,11 @@ class TextResultBuilder:
         links = await settle_course_links(
             context.session, context.session_factory, submission, answer, rows
         )
+        # The states the evaluation stage wrote with the rows (task 12a).
+        states = {
+            row.item_id: RemarkState(row.remark_state) if row.remark_state else None
+            for row in rows
+        }
         structure, score = build_text_review(
             rows=rows,
             layer=judged_layer(rows),
@@ -361,6 +521,10 @@ class TextResultBuilder:
                 criterion_id: [reference_of(place) for place in places]
                 for criterion_id, places in links.items()
             },
+            states=states,
+            fixed_words=await _fixed_words(
+                context.session, submission, rows, states=states
+            ),
         )
         return BuiltResult(
             structure=structure, markdown=assemble_review(structure), score=score

@@ -58,6 +58,8 @@ from course_supporter.homework.criteria_verdicts import (
 from course_supporter.llm.error_categories import StructuralRetryError
 
 if TYPE_CHECKING:
+    import uuid
+
     from course_supporter.homework.criteria_form import Criterion
     from course_supporter.homework.student_replies import EvaluationReply
     from course_supporter.llm.stage_router import StageExecution, StageRouter
@@ -107,11 +109,15 @@ class Evaluated:
 
     The rung is what the repeated request is sent to (``PRE-FLIGHT.md`` 9.5):
     the model whose quotes did not stand is the one asked to mend them.
+    ``call_id`` is the register row of the attempt that answered
+    (:attr:`StageResult.call_id`), which a verdict names as its source;
+    ``None`` when no row was written.
     """
 
     answer: EvaluationAnswer
     provider: str
     model: str
+    call_id: uuid.UUID | None = None
 
 
 class CriteriaEvaluatorAgent:
@@ -192,6 +198,7 @@ class CriteriaEvaluatorAgent:
             answer=parsed["answer"],
             provider=result.provider_used,
             model=result.model_used,
+            call_id=result.call_id,
         )
 
 

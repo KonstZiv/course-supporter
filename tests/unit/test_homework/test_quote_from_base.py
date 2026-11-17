@@ -203,6 +203,7 @@ class TestUnchangedLinesOfAChangedFile:
             model_verdict=MET,
             quote="return handle.read()",
             retried=True,
+            first_model_verdict=MET,
             repeat_reason=RepeatReason.QUOTE_FROM_BASE,
             quote_from_base=True,
         )
@@ -225,6 +226,7 @@ class TestUnchangedLinesOfAChangedFile:
             model_verdict=NOT_MET,
             missing=_MISSING,
             retried=True,
+            first_model_verdict=MET,
             repeat_reason=RepeatReason.QUOTE_FROM_BASE,
             quote_from_base=True,
         )

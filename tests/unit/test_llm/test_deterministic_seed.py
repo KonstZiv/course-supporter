@@ -17,7 +17,9 @@ measurement script, is ``tests/unit/test_measure_determinism.py``):
   it was on ``main``, and the call goes through;
 * (c) not deterministic -> the body is the one fingerprinted on ``main``;
 * (d) the trace -> a ``stage_router_reproducibility`` line, joined to the
-  register row by ``input_hash``, for (a); no line for (c).
+  register row by ``input_hash``, for (a); no line for (c);
+* (e, 2026-11-16) the register row's ``seed`` and ``temperature`` columns are
+  the values the body carried.
 
 Beside them: the set of connectors that take a seed is the documented one; a
 seed that reaches a connector which cannot send it is refused before the call;
@@ -216,9 +218,47 @@ def _fresh_router_logger(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+class TestTheRegisterColumns:
+    """(e, 2026-11-16) The row's seed and temperature are what the wire carried."""
+
+    @pytest.mark.parametrize("deterministic", [False, True], ids=["plain", "flag"])
+    @pytest.mark.parametrize("provider", _TAKES_A_SEED)
+    async def test_the_row_says_what_the_body_said(
+        self,
+        provider: str,
+        deterministic: bool,
+        register: list[dict[str, Any]],
+    ) -> None:
+        bodies, _ = await run_and_capture(
+            provider,
+            stage(provider, deterministic=deterministic),
+            with_schema=False,
+            with_register=True,
+        )
+
+        (row,) = register
+        assert (row["seed"], row["temperature"]) == _seed_and_temperature(
+            provider, json.loads(bodies[0])
+        )
+
+    @pytest.mark.parametrize("provider", _TAKES_NO_SEED)
+    async def test_no_seed_on_the_row_where_none_was_sent(
+        self, provider: str, register: list[dict[str, Any]]
+    ) -> None:
+        await run_and_capture(
+            provider,
+            stage(provider, deterministic=True),
+            with_schema=False,
+            with_register=True,
+        )
+
+        (row,) = register
+        assert (row["seed"], row["temperature"]) == (None, DETERMINISTIC_TEMPERATURE)
+
+
 @pytest.mark.usefixtures("_fresh_router_logger")
 class TestTheTrace:
-    """(d) The register has no field for it: a log line, joined by input_hash."""
+    """(d) A log line beside the register's columns, joined by input_hash."""
 
     async def test_a_seed_sent_is_logged_with_the_rows_input_hash(
         self, register: list[dict[str, Any]]

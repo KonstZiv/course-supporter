@@ -39,11 +39,24 @@ behaviour is unchanged by any of it -- these are writes, not decisions:
 
 A ``deterministic`` stage (2026-11-13, :mod:`~course_supporter.llm.reproducibility`)
 sends temperature 0 explicitly and a fixed seed to every rung whose connector
-can send one; a stage without the flag sends exactly what it sent before. The
-register has no column for the seed and no JSON field for it, so each attempt
-of a deterministic stage logs ``stage_router_reproducibility`` instead -- with
-the attempt's ``input_hash``, which joins the line to its register row. The
-seed is part of that hash (``llm/input_hash.py``).
+can send one; a stage without the flag sends exactly what it sent before. Each
+attempt of a deterministic stage also logs ``stage_router_reproducibility``,
+with the attempt's ``input_hash``. The seed is part of that hash
+(``llm/input_hash.py``).
+
+Since 2026-11-16 every attempt row also says what the request was, so variants
+of a stage (a cheaper model, another prompt, fewer repeats) are compared from
+the register alone:
+
+* ``request_kind`` (:class:`RequestKind`) -- the first request on a rung, an
+  item repeat (a caller's ``repeat_on_rung``), a structural retry, or an
+  infrastructure retry; ``NULL`` on trace rows;
+* ``seed`` and ``temperature`` -- what the request carried to the provider;
+* ``rung_index`` -- the rung's position on the stage's ladder, from 1, on
+  attempt and trace rows alike.
+
+:class:`StageResult` carries ``call_id``, the id of the attempt row whose
+answer it returns, so a stage can name the call its result stands on.
 
 Limitations carried forward to Phase 1+:
 
@@ -69,6 +82,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -77,7 +91,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from course_supporter.call_outcome import CallOutcome, SkipReason
+from course_supporter.call_outcome import CallOutcome, RequestKind, SkipReason
 from course_supporter.llm.error_categories import (
     ErrorCategory,
     LadderExhaustedError,
@@ -133,12 +147,16 @@ class StageResult:
             ladder entries -- useful for debugging fallback chains.
             Token / cost telemetry intentionally lives in ESC rows,
             not here.
+        call_id: Id of the register row of the attempt whose answer this
+            is; ``None`` when no row was written (a router without a session
+            factory, no job in context, a failed write).
     """
 
     content: str
     provider_used: str
     model_used: str
     attempt_count: int
+    call_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +196,28 @@ class _Attempt:
     attempts_used: int
     reason: str
     at_ceiling: bool = False
+    call_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Answered:
+    """One call's response and the id of its register row (``None``: no row)."""
+
+    response: LLMResponse
+    call_id: uuid.UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Rung:
+    """A ladder entry and its position on the stage's ladder, from 1.
+
+    The position is what the register's ``rung_index`` says; on an item repeat
+    it is the position of the rung the repeat is sent to, not 1 of the cut
+    ladder.
+    """
+
+    entry: LadderEntry
+    index: int
 
 
 # Register text of an attempt cut off at the output ceiling under a schema.
@@ -285,12 +325,14 @@ class StageExecution:
         stage_name: The name the call is recorded under.
         stop_on_output_ceiling: See :meth:`StageRouter.execute_stage`.
         money_ceiling_usd: See :meth:`StageRouter.execute_stage`.
+        repeat_on_rung: See :meth:`StageRouter.execute_stage`.
     """
 
     stage: StageConfig
     stage_name: str
     stop_on_output_ceiling: bool = False
     money_ceiling_usd: float | None = None
+    repeat_on_rung: int | None = None
 
     async def run(
         self,
@@ -312,6 +354,7 @@ class StageExecution:
             response_schema=response_schema,
             stop_on_output_ceiling=self.stop_on_output_ceiling,
             money_ceiling_usd=self.money_ceiling_usd,
+            repeat_on_rung=self.repeat_on_rung,
             **render_context,
         )
 
@@ -438,6 +481,7 @@ class StageRouter:
         response_schema: dict[str, Any] | None = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
+        repeat_on_rung: int | None = None,
         **render_context: Any,
     ) -> StageResult:
         """Execute the LLM call ladder for a stage description the caller holds.
@@ -497,6 +541,15 @@ class StageRouter:
                 walk makes, not by what it turned out to cost: admission and
                 spend are then judged by one yardstick, and a failed call — the
                 very case that leads to a second rung — reports no cost at all.
+            repeat_on_rung: This execution is an item repeat (2026-11-16): the
+                stage asks once more about what an earlier execution answered,
+                on the rung that answered it, and ``stage.ladder`` is already
+                cut to that one rung. The number is that rung's position on
+                the stage's own ladder, from 1. Its first attempt is recorded
+                as ``RequestKind.ITEM_REPEAT`` and every row of it with that
+                position. ``None`` — the default — a stage's own request:
+                ``RequestKind.FIRST``, positions counted on ``stage.ladder``.
+                Changes what is recorded, never what is sent.
             **render_context: Variables for the prompt template.
 
         Returns:
@@ -509,7 +562,20 @@ class StageRouter:
             RequestConfigError: if a rung's connector cannot send the request
                 as configured (e.g. JSON mode without the word "json"); raised
                 before that rung's call, so nothing is paid for it.
+            ValueError: ``repeat_on_rung`` is below 1, or given with a ladder
+                of more than one rung.
         """
+        if repeat_on_rung is not None and (
+            repeat_on_rung < 1 or len(stage.ladder) != 1
+        ):
+            msg = (
+                f"an item repeat goes to one rung at a position from 1; got "
+                f"position {repeat_on_rung} on a ladder of {len(stage.ladder)}"
+            )
+            raise ValueError(msg)
+        first_kind = (
+            RequestKind.FIRST if repeat_on_rung is None else RequestKind.ITEM_REPEAT
+        )
         # KD-1.2-H Variant A — observability log line at the start of
         # every stage execution. Correlates with caller-side logs (e.g.
         # ``homework_safety_check_executing``) via structlog's bound
@@ -549,7 +615,8 @@ class StageRouter:
         stop = LadderStop.EXHAUSTED
         money_left = money_ceiling_usd
 
-        for entry in stage.ladder:
+        for position, entry in enumerate(stage.ladder, start=1):
+            rung = _Rung(entry, repeat_on_rung or position)
             provider = self._providers.get(entry.provider)
             if provider is None:
                 attempts.append(
@@ -557,7 +624,7 @@ class StageRouter:
                 )
                 await self._record_trace(
                     record,
-                    entry,
+                    rung,
                     CallOutcome.SKIPPED,
                     SkipReason.PROVIDER_NOT_CONFIGURED,
                 )
@@ -565,7 +632,7 @@ class StageRouter:
             if not provider.enabled:
                 attempts.append((entry.provider, entry.model, "provider disabled"))
                 await self._record_trace(
-                    record, entry, CallOutcome.SKIPPED, SkipReason.PROVIDER_DISABLED
+                    record, rung, CallOutcome.SKIPPED, SkipReason.PROVIDER_DISABLED
                 )
                 continue
 
@@ -594,7 +661,7 @@ class StageRouter:
                     # No skip reason is invented for this branch: it is
                     # reachable only when the startup ladder check did not
                     # run, and none of the recorded reasons describes that.
-                    await self._record_trace(record, entry, CallOutcome.SKIPPED)
+                    await self._record_trace(record, rung, CallOutcome.SKIPPED)
                     continue
                 estimated_input = estimate_tokens(prompt.user or "", prompt.system)
                 budget = int(stage.input_budget_ratio * registry_model.max_context)
@@ -610,7 +677,7 @@ class StageRouter:
                     )
                     await self._record_trace(
                         record,
-                        entry,
+                        rung,
                         CallOutcome.SKIPPED,
                         SkipReason.INPUT_BUDGET_EXCEEDED,
                     )
@@ -635,7 +702,7 @@ class StageRouter:
                     )
                     await self._record_trace(
                         record,
-                        entry,
+                        rung,
                         CallOutcome.SKIPPED,
                         SkipReason.MONEY_CEILING_EXCEEDED,
                     )
@@ -659,11 +726,12 @@ class StageRouter:
             provider.check_request(request)
             attempt = await self._attempt_entry(
                 provider,
-                entry,
+                rung,
                 request,
                 record,
                 response_validator,
                 stop_on_output_ceiling,
+                first_kind=first_kind,
             )
             total_attempt_count += attempt.attempts_used
             if money_left is not None and attempt_cost is not None:
@@ -678,10 +746,11 @@ class StageRouter:
                     provider_used=entry.provider,
                     model_used=entry.model,
                     attempt_count=total_attempt_count,
+                    call_id=attempt.call_id,
                 )
 
             attempts.append((entry.provider, entry.model, attempt.reason))
-            await self._record_trace(record, entry, CallOutcome.ABANDONED)
+            await self._record_trace(record, rung, CallOutcome.ABANDONED)
 
             if stop_on_output_ceiling and attempt.at_ceiling:
                 # The rung had room to answer and spent it all on nothing (or,
@@ -806,35 +875,40 @@ class StageRouter:
     async def _attempt_entry(
         self,
         provider: LLMProvider,
-        entry: LadderEntry,
+        rung: _Rung,
         request: LLMRequest,
         record: _StageRecord,
         response_validator: Callable[[str], None] | None,
         stop_on_output_ceiling: bool = False,
+        *,
+        first_kind: RequestKind = RequestKind.FIRST,
     ) -> _Attempt:
         """Walk one ladder entry: initial call + INFRASTRUCTURE retries.
 
         Returns an :class:`_Attempt`. On success its ``response`` is non-None
         and ``reason`` is ``""``; otherwise ``response`` is ``None`` and
-        ``reason`` describes why the entry was abandoned.
+        ``reason`` describes why the entry was abandoned. The initial call is
+        recorded as ``first_kind``, each retry after an infrastructure error
+        as ``RequestKind.INFRA_RETRY``.
         """
         attempts_used = 0
 
         for attempt_idx in range(self._max_retries_infra + 1):
             attempts_used += 1
             try:
-                response = await self._call_with_log(
+                answered = await self._call_with_log(
                     provider,
-                    entry,
+                    rung,
                     request,
                     record,
                     response_validator,
                     stop_on_output_ceiling,
+                    kind=first_kind if attempt_idx == 0 else RequestKind.INFRA_RETRY,
                 )
             except StructuralRetryError as exc:
                 retry = await self._structural_retry(
                     provider,
-                    entry,
+                    rung,
                     request,
                     exc,
                     record,
@@ -843,7 +917,9 @@ class StageRouter:
                 )
                 attempts_used += retry.attempts_used
                 if retry.response is not None:
-                    return _Attempt(retry.response, attempts_used, "")
+                    return _Attempt(
+                        retry.response, attempts_used, "", call_id=retry.call_id
+                    )
                 return _Attempt(
                     None,
                     attempts_used,
@@ -871,6 +947,7 @@ class StageRouter:
                 # against in 0.5, so treat as immediate fallback.
                 return _Attempt(None, attempts_used, f"{category.name}: {exc}")
             else:
+                response = answered.response
                 if not response.content:
                     return _Attempt(
                         None,
@@ -887,7 +964,7 @@ class StageRouter:
                         f"OUTPUT_CEILING: {_TRUNCATED_MESSAGE}",
                         at_ceiling=True,
                     )
-                return _Attempt(response, attempts_used, "")
+                return _Attempt(response, attempts_used, "", call_id=answered.call_id)
 
         # Defensive: the loop always returns in the body above.
         return _Attempt(None, attempts_used, "INFRASTRUCTURE: retry loop exhausted")
@@ -895,7 +972,7 @@ class StageRouter:
     async def _structural_retry(
         self,
         provider: LLMProvider,
-        entry: LadderEntry,
+        rung: _Rung,
         original_request: LLMRequest,
         exc: StructuralRetryError,
         record: _StageRecord,
@@ -913,16 +990,18 @@ class StageRouter:
             }
         )
         try:
-            response = await self._call_with_log(
+            answered = await self._call_with_log(
                 provider,
-                entry,
+                rung,
                 retry_request,
                 record,
                 response_validator,
                 stop_on_output_ceiling,
+                kind=RequestKind.STRUCTURAL_RETRY,
             )
         except Exception as retry_exc:
             return _Attempt(None, 1, f"STRUCTURAL: retry exhausted - {retry_exc}")
+        response = answered.response
         if not response.content:
             return _Attempt(
                 None,
@@ -934,18 +1013,25 @@ class StageRouter:
             return _Attempt(
                 None, 1, f"OUTPUT_CEILING: {_TRUNCATED_MESSAGE}", at_ceiling=True
             )
-        return _Attempt(response, 1, "")
+        return _Attempt(response, 1, "", call_id=answered.call_id)
 
     async def _call_with_log(
         self,
         provider: LLMProvider,
-        entry: LadderEntry,
+        rung: _Rung,
         request: LLMRequest,
         record: _StageRecord,
         response_validator: Callable[[str], None] | None,
         stop_on_output_ceiling: bool = False,
-    ) -> LLMResponse:
+        *,
+        kind: RequestKind,
+    ) -> _Answered:
         """One LLM call. Persists ESC for the attempt in ``finally``.
+
+        Returns the response with the id of the row written for it (``None``
+        when none was), so the caller can name the call an answer came from.
+        The row records ``kind``, the rung's position, and the seed and the
+        temperature exactly as the request carried them to the provider.
 
         If ``response_validator`` is non-None and the provider returns
         non-empty content, the validator runs before this function
@@ -965,10 +1051,11 @@ class StageRouter:
         validator: whatever it said would start a structural retry under the
         same ceiling. The row says why the answer was dropped instead.
         """
+        entry = rung.entry
         if record.deterministic:
-            # The register has no field for the seed (no migration in this
-            # change); the line carries the attempt's ``input_hash`` so it
-            # joins the register row written below.
+            # Kept beside the register's own seed and temperature columns
+            # (2026-11-16): the line carries the attempt's ``input_hash``, so
+            # a log read alone still joins the register row written below.
             logger.info(
                 "stage_router_reproducibility",
                 stage=record.stage_name,
@@ -985,6 +1072,7 @@ class StageRouter:
         error_message: str | None = None
         raised: Exception | None = None
         truncated = False
+        call_id: uuid.UUID | None = None
         try:
             response = await provider.complete(request)
             truncated = _truncated_under_schema(
@@ -1003,7 +1091,6 @@ class StageRouter:
                 # in the register exactly like a normal one. Step E met that on
                 # criteria_decomposition: two rows, one stage, no way to tell.
                 error_message = f"{ErrorCategory.SEMANTIC.value}: empty response"
-            return response
         except Exception as exc:
             raised = exc
             # Guard against exception types whose ``str(exc)`` is empty
@@ -1036,7 +1123,7 @@ class StageRouter:
                     input_estimate=input_estimate,
                 )
                 try:
-                    await _persist(
+                    call_id = await _persist(
                         self._session_factory,
                         action=record.stage_name,
                         strategy="default",
@@ -1073,9 +1160,15 @@ class StageRouter:
                             if record.record_output and response is not None
                             else None
                         ),
+                        request_kind=kind,
+                        seed=request.seed,
+                        temperature=request.temperature,
+                        rung_index=rung.index,
                     )
                 except Exception:
                     logger.exception("stage_router_esc_persist_failed")
+        # Reached only when the call returned: every failure re-raised above.
+        return _Answered(response, call_id)
 
     def _price_attempt(
         self,
@@ -1111,7 +1204,7 @@ class StageRouter:
     async def _record_trace(
         self,
         record: _StageRecord,
-        entry: LadderEntry,
+        rung: _Rung,
         outcome: CallOutcome,
         skip_reason: SkipReason | None = None,
     ) -> None:
@@ -1119,11 +1212,13 @@ class StageRouter:
 
         ``success`` is NULL (no transport happened) and ``error_message``
         stays empty, so the row stays out of the canonical failure count
-        ``NOT success OR error_message IS NOT NULL``. Telemetry: a failure
-        here is logged and never interrupts the ladder.
+        ``NOT success OR error_message IS NOT NULL``. It names the rung's
+        position and no request kind: no request was sent. Telemetry: a
+        failure here is logged and never interrupts the ladder.
         """
         if self._session_factory is None:
             return
+        entry = rung.entry
         try:
             await _persist(
                 self._session_factory,
@@ -1136,6 +1231,7 @@ class StageRouter:
                 skip_reason=skip_reason,
                 prompt_ref=record.prompt_ref,
                 prompt_hash=record.prompt_hash,
+                rung_index=rung.index,
             )
         except Exception:
             logger.exception("stage_router_esc_persist_failed")

@@ -53,8 +53,15 @@ def _refusal(note: str) -> dict[str, str]:
 
 class TestNoComment:
     def test_none_is_left_alone_without_a_screen(self) -> None:
-        """A submission without a comment meets nothing new at the door."""
-        with patch("course_supporter.homework.submission_core.screen_text") as screen:
+        """A submission without a comment meets nothing new at the door.
+
+        The screen is reached through the step the comment shares with a
+        reply to a remark (``homework/student_text.py``, task 12a), so that
+        step is what is watched here.
+        """
+        with patch(
+            "course_supporter.homework.submission_core.screened_student_text"
+        ) as screen:
             assert check_student_note(None) is None
         screen.assert_not_called()
 

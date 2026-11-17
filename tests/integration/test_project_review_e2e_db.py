@@ -355,6 +355,7 @@ class _RouterDouble:
         response_schema: dict[str, Any] | None = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
+        repeat_on_rung: int | None = None,
         **render_context: Any,
     ) -> StageResult:
         rendered = load_prompt(stage.prompt_ref).render(**render_context)
@@ -1101,7 +1102,13 @@ class TestAChangedWorkAgain:
             "c2.p2",
             "c3",
         }
-        assert second.structure.new_remarks[1].position == _PLACE
+        # A second attempt at the same version of the task (task 12a): the
+        # remarks of the first that still stand are open, none is new — the
+        # copy between the two has no rows and is passed over.
+        assert second.structure.new_remarks == []
+        assert second.structure.open[1].position == _PLACE
+        # Each remark names its criterion: a reply is tied to it by that.
+        assert [remark.item_id for remark in second.structure.open] == ["c2", "c3"]
         [payload] = second.reviewed
         assert payload.structure == second.structure
 

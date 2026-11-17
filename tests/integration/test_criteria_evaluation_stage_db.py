@@ -102,7 +102,9 @@ from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
+    ExternalServiceCall,
     HomeworkSubmission,
+    Job,
     Student,
     SubmissionCriterionVerdict,
     Tenant,
@@ -192,12 +194,20 @@ class _Router:
     """Router double: records each request, runs the validator, answers.
 
     ``by`` names the rung that answered each request — the first of the ladder
-    it was handed, unless the test says another.
+    it was handed, unless the test says another. ``call_ids`` are the register
+    rows the router names as the answering calls, one per request; none — no
+    row, as a router without a register.
     """
 
-    def __init__(self, *contents: str, by: tuple[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *contents: str,
+        by: tuple[str, str] | None = None,
+        call_ids: tuple[uuid.UUID, ...] = (),
+    ) -> None:
         self._contents = list(contents)
         self._by = by
+        self._call_ids = list(call_ids)
         self.requests: list[dict[str, Any]] = []
 
     async def execute_stage(
@@ -212,6 +222,7 @@ class _Router:
         response_schema: dict[str, Any] | None = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
+        repeat_on_rung: int | None = None,
         **render: Any,
     ) -> StageResult:
         self.requests.append(
@@ -220,6 +231,7 @@ class _Router:
                 "ladder": [(r.provider, r.model) for r in stage.ladder],
                 "money_ceiling_usd": money_ceiling_usd,
                 "stop_on_output_ceiling": stop_on_output_ceiling,
+                "repeat_on_rung": repeat_on_rung,
                 "render": render,
             }
         )
@@ -229,7 +241,11 @@ class _Router:
         provider, model = self._by or (stage.ladder[0].provider, stage.ladder[0].model)
         self._by = None
         return StageResult(
-            content=content, provider_used=provider, model_used=model, attempt_count=1
+            content=content,
+            provider_used=provider,
+            model_used=model,
+            attempt_count=1,
+            call_id=self._call_ids.pop(0) if self._call_ids else None,
         )
 
 
@@ -546,6 +562,100 @@ class TestTheRepeat:
         assert again["ladder"] == [("deepseek_thinking", "deepseek-v4-pro")]
 
 
+class TestTheTracesOfTheCalls:
+    """2026-11-16: the repeat is told from the first request, each verdict
+    names its call, and a retried item keeps the model's first word."""
+
+    @staticmethod
+    async def _calls(
+        session: AsyncSession, submission: HomeworkSubmission, count: int
+    ) -> tuple[uuid.UUID, ...]:
+        job = Job(
+            tenant_id=submission.tenant_id,
+            job_type="homework_processing",
+            subject_type="homework_submission",
+            subject_id=submission.id,
+        )
+        session.add(job)
+        await session.flush()
+        calls = [
+            ExternalServiceCall(
+                job_id=job.id,
+                action=CRITERIA_EVALUATION,
+                provider="dashscope",
+                model_id="qwen3.7-max",
+                success=True,
+            )
+            for _ in range(count)
+        ]
+        session.add_all(calls)
+        await session.flush()
+        return tuple(call.id for call in calls)
+
+    async def test_each_verdict_names_the_call_it_stands_on(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        first_call, repeat_call = await self._calls(db_session, submission, 2)
+        router = _Router(
+            _answer(
+                _met("c1", "def fib(n): pass"),
+                _met("c2.p1", _P1_QUOTE),
+                _not_met("c2.p2"),
+            ),
+            _answer(_not_met("c1")),
+            call_ids=(first_call, repeat_call),
+        )
+
+        await _evaluate(db_session, router, submission)
+
+        rows = await _rows(db_session, submission)
+        assert rows["c1"].answered_by_call_id == repeat_call
+        # The repeat took back the first "met": the change is in the row.
+        assert (rows["c1"].first_model_verdict, rows["c1"].model_verdict) == (
+            VerdictValue.MET,
+            VerdictValue.NOT_MET,
+        )
+        for item in ("c2.p1", "c2.p2"):
+            assert rows[item].answered_by_call_id == first_call
+            assert rows[item].first_model_verdict is None
+        assert rows["c2"].answered_by_call_id is None
+
+    @pytest.mark.parametrize(
+        ("by", "position"),
+        [
+            (None, 1),
+            (("deepseek_thinking", "deepseek-v4-pro"), 2),
+        ],
+        ids=["first-rung", "fallback"],
+    )
+    async def test_the_repeat_is_marked_with_the_rung_it_goes_to(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        by: tuple[str, str] | None,
+        position: int,
+    ) -> None:
+        router = _Router(
+            _answer(
+                _met("c1", "def fib(n): pass"),
+                _met("c2.p1", _P1_QUOTE),
+                _not_met("c2.p2"),
+            ),
+            _answer(_met("c1", _C1_QUOTE)),
+            by=by,
+        )
+
+        await _evaluate(db_session, router, submission)
+
+        first, again = router.requests
+        assert first["repeat_on_rung"] is None
+        assert again["repeat_on_rung"] == position
+        # Without a register row nothing is named, and the verdicts stand.
+        rows = await _rows(db_session, submission)
+        assert {row.answered_by_call_id for row in rows.values()} == {None}
+        assert rows["c1"].verdict == VerdictValue.MET
+
+
 class TestTheSafeguard:
     """Lock 5: within one list, an earlier "met" still in the work stands."""
 
@@ -654,6 +764,154 @@ class TestTheSafeguard:
         rows = await _rows(db_session, current)
         assert rows["c1"].verdict == VerdictValue.NOT_MET
         assert rows["c1"].safeguard_submission_id is None
+
+
+# Task 12a, K2: an earlier attempt judged against the model's list, and an
+# author's edit of it — the same ids, and c4 added — that the next is judged by.
+_BEFORE = (*_CRITERIA, _criterion("c3", "may"))
+_AFTER = (*_BEFORE, _criterion("c4", "may"))
+_REWORKED = (
+    "def fib(n):\n"  # 1
+    "    if n < 2:\n"  # 2
+    "        return n\n"  # 3
+    "    return fib(n - 1) + fib(n - 2)\n"  # 4
+    "\n"  # 5
+    "def test_fib():\n"  # 6
+    "    assert fib(10) == 55\n"  # 7
+)
+
+
+class TestTheStateOfEachRemark:
+    """Task 12a, K2: the stage writes each row's state with the rows.
+
+    Against the student's earlier attempt at the same version of the task —
+    whatever list either was judged by: the items are matched by id. A run of
+    the stage again writes the same states.
+    """
+
+    @staticmethod
+    async def _attempts(
+        session: AsyncSession,
+        *,
+        tenant: Tenant,
+        student: Student,
+        root: CourseNode,
+        doc: AuthoredDocument,
+    ) -> tuple[HomeworkSubmission, HomeworkSubmission]:
+        """The first attempt, reviewed and judged; the second, to be judged."""
+        first, second = [
+            await _submission(
+                session, tenant=tenant, student=student, root=root, doc=doc
+            )
+            for _ in range(2)
+        ]
+        await _evaluate(
+            session,
+            _Router(
+                _answer(
+                    _met("c1", _C1_QUOTE),
+                    _met("c2.p1", _P1_QUOTE),
+                    _not_met("c2.p2"),
+                    _not_met("c3"),
+                )
+            ),
+            first,
+            source=_Source(
+                CriteriaInForce(
+                    criteria=_BEFORE, layer=CriteriaLayer.MODEL, source_id=_LIST_ID
+                )
+            ),
+        )
+        first.status = "delivered"
+        first.task_version = second.task_version = "v1"
+        await session.flush()
+        return first, second
+
+    @staticmethod
+    async def _judge_the_second(
+        session: AsyncSession, second: HomeworkSubmission, call: uuid.UUID
+    ) -> dict[str, SubmissionCriterionVerdict]:
+        await _evaluate(
+            session,
+            _Router(
+                _answer(
+                    _not_met("c1", "Функції fibonacci немає."),
+                    _met("c2.p1", "return fib(n - 1) + fib(n - 2)"),
+                    _met("c2.p2", "assert fib(10) == 55"),
+                    _not_met("c3"),
+                    _not_met("c4"),
+                ),
+                call_ids=(call,),
+            ),
+            second,
+            source=_Source(
+                CriteriaInForce(
+                    criteria=_AFTER,
+                    layer=CriteriaLayer.AUTHOR,
+                    source_id=_OTHER_LIST_ID,
+                )
+            ),
+            work=(WorkFile("solution.py", _REWORKED, True),),
+            submission_text=_REWORKED,
+        )
+        return await _rows(session, second)
+
+    async def test_every_row_has_its_state_beside_the_calls_traces(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        student: Student,
+        root: CourseNode,
+        doc: AuthoredDocument,
+    ) -> None:
+        first, second = await self._attempts(
+            db_session, tenant=seed_tenant, student=student, root=root, doc=doc
+        )
+        (call,) = await TestTheTracesOfTheCalls._calls(db_session, second, 1)
+
+        rows = await self._judge_the_second(db_session, second, call)
+
+        # The first attempt had nothing to compare with: what it did not
+        # credit is new.
+        assert {
+            item: row.remark_state
+            for item, row in (await _rows(db_session, first)).items()
+        } == {"c1": None, "c2": "new", "c2.p1": None, "c2.p2": "new", "c3": "new"}
+        # The second, row by row, by the table.
+        assert {item: row.remark_state for item, row in rows.items()} == {
+            "c1": "broken",  # credited then, not now
+            "c2": "fixed",  # its points all met now
+            "c2.p1": None,  # credited then and now
+            "c2.p2": "fixed",  # not credited then, credited now
+            "c3": "open",  # not credited then or now
+            "c4": "new",  # the author added it: not in the earlier attempt
+        }
+        # The traces of the calls (#682) stand beside the state.
+        assert {item: row.answered_by_call_id for item, row in rows.items()} == {
+            item: None if item == "c2" else call for item in rows
+        }
+
+    async def test_the_stage_run_again_writes_the_same_states(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        student: Student,
+        root: CourseNode,
+        doc: AuthoredDocument,
+    ) -> None:
+        """The rows are deleted and written anew — the states with them."""
+        _, second = await self._attempts(
+            db_session, tenant=seed_tenant, student=student, root=root, doc=doc
+        )
+        (call,) = await TestTheTracesOfTheCalls._calls(db_session, second, 1)
+
+        once = await self._judge_the_second(db_session, second, call)
+        states = {item: row.remark_state for item, row in once.items()}
+        assert set(states.values()) == {"broken", "fixed", "open", "new", None}
+        again = await self._judge_the_second(db_session, second, call)
+
+        assert {item: row.remark_state for item, row in again.items()} == states
+        assert len(again) == len(once) == 6
 
 
 class TestWithoutAList:

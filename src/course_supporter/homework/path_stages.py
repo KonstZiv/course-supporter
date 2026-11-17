@@ -322,7 +322,7 @@ async def run_safety_stage(context: StageContext) -> StageOutcome:
     verdict = await run_stage2_safety_check(
         _safety_input(context),
         router=context.router,
-        course_context=await _course_context(context.session, context.submission),
+        course_context=await course_context_of(context.session, context.submission),
         execution=_execution(context),
         screen_flags=door.flags if door is not None else (),
         student_note=context.submission.student_note,
@@ -365,13 +365,16 @@ def _safety_input(context: StageContext) -> str:
     return door.safety_text
 
 
-async def _course_context(
+async def course_context_of(
     session: AsyncSession, submission: HomeworkSubmission
 ) -> CourseContext:
     """The course and the topic the work is for, as today's Mentor builds it.
 
     The same four fields from the same two nodes (``api/tasks.py``); a node
-    that is gone leaves its fields empty rather than failing the stage.
+    that is gone leaves its fields empty rather than failing the stage. The
+    reply screen shows the safety check the same context for a reply
+    (``homework/reply_screen.py``, task 12a), so the two judge ``off_topic``
+    against one course.
     """
     from course_supporter.security.schemas import CourseContext
     from course_supporter.storage.course_node_repository import (

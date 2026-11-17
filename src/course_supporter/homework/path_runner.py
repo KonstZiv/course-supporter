@@ -3,9 +3,12 @@
 Purpose:
     One linear body. It opens the same free doors today's Mentor opens, asks the
     funds port once before anything is paid for, walks the stage list its path
-    resolved to, and finishes the revision. Work the student already sent is
-    answered before any of that is paid for: its earlier review is given again
-    and the revision finishes without a stage or a funds question
+    resolved to, and finishes the revision. The student's replies to the
+    remarks of their last review are judged in the doors, never deciding the
+    submission (:mod:`~course_supporter.homework.reply_screen`, task 12a).
+    Work the student already sent is answered before any of that is paid for:
+    its earlier review is given again and the revision finishes without a
+    stage or a funds question
     (:mod:`~course_supporter.homework.attempt_dedup`, task 13). It knows the
     NAMES of its stages and not their meanings: a stage is a description plus
     an executor, and what a stage decided comes back as a value the body acts
@@ -75,6 +78,7 @@ from course_supporter.homework.path_stages import (
     StageOutcome,
     get_stage_executor,
 )
+from course_supporter.homework.reply_screen import screen_replies
 from course_supporter.homework.result_builders import (
     BuildContext,
     ResultBuilder,
@@ -227,6 +231,8 @@ async def run_new_path_if_switched(
                 student_id=submission.student_id,
                 authored_document_id=submission.authored_document_id,
                 config=config,
+                submission_id=submission.id,
+                tenant_id=submission.tenant_id,
             )
         if choice is None:
             return False
@@ -371,6 +377,20 @@ async def _run_path(
             config=config,
         )
         await session.commit()
+        # ── The student's replies to the last review (task 12a, K3) ──
+        # Judged before the rule of the same work reads them and before
+        # anything is paid for; never a refusal of the work. On every run: only
+        # a reply not judged yet is judged, and a type that takes no replies
+        # reads nothing at all.
+        screened = await screen_replies(
+            session,
+            submission=submission,
+            task_type=choice.key.task_type,
+            router=router,
+            config=config,
+        )
+        if screened.judged:
+            await session.commit()
         # ── The same work again (task 13, K3): its review, nothing paid ──
         # Before the estimate, the funds port and every stage: a repeated
         # review calls no model and costs nothing. Asked only on a run with no

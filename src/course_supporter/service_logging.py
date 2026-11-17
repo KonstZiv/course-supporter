@@ -39,7 +39,7 @@ from course_supporter.review_metrics import REVIEW_METRICS_ACTION
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from course_supporter.call_outcome import FundsDecision, SkipReason
+    from course_supporter.call_outcome import FundsDecision, RequestKind, SkipReason
     from course_supporter.funds_port import FundsAnswer, FundsRefusalReason
     from course_supporter.homework.path_config import PathKey
     from course_supporter.llm.finish_reason import FinishReason
@@ -342,10 +342,17 @@ async def _persist(
     funds_decision: FundsDecision | None = None,
     funds_refusal_reason: FundsRefusalReason | None = None,
     path_key: str | None = None,
-) -> None:
-    """Write a single ExternalServiceCall row.
+    request_kind: RequestKind | None = None,
+    seed: int | None = None,
+    temperature: float | None = None,
+    rung_index: int | None = None,
+) -> uuid.UUID | None:
+    """Write a single ExternalServiceCall row; return its id, if it was written.
 
-    DB errors are swallowed — call flow is never interrupted.
+    DB errors are swallowed — call flow is never interrupted. The id is
+    ``None`` when the row was dropped (no job in context, a failed write), so
+    a caller that keeps it as a reference never points at a row that is not
+    there.
 
     ``success`` is ``None`` only on rows that record no call: a ladder trace
     (``outcome`` skipped / abandoned), the per-review metrics row, the
@@ -411,12 +418,19 @@ async def _persist(
         funds_decision=funds_decision,
         funds_refusal_reason=funds_refusal_reason,
         path_key=path_key,
+        request_kind=request_kind,
+        seed=seed,
+        temperature=temperature,
+        rung_index=rung_index,
     )
     if not _under_current_job(record):
-        return
+        return None
     try:
         async with session_factory() as session:
             session.add(record)
+            # The id is given at flush; read it before the commit expires it.
+            await session.flush()
+            written: uuid.UUID = record.id
             await session.commit()
     except (SQLAlchemyError, OSError) as exc:
         logger.error(
@@ -430,6 +444,8 @@ async def _persist(
             exc_info=True,
             **_row_fields(record),
         )
+        return None
+    return written
 
 
 # ── Review metrics row ──

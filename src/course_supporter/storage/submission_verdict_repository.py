@@ -3,26 +3,29 @@
 Purpose:
     The evaluation stage writes a submission's verdicts; the explanation stage
     and the review's builder read them; the next submission of the same student
-    reads them back through the resubmission safeguard. Each of these has to
-    remember the same filters — the tenant, and the live submission — and a
+    reads them back through the resubmission safeguard, and its review compares
+    its remarks with them (task 12a). Each of these has to remember the same
+    filters — the tenant, and the live submission — and a
     rule spread over several call sites is a rule that drifts, so all of them
     live here, with the explanation stage's answer beside them — and, since
     task 10, the course links the search found for the failed criteria.
 
 Interface:
     :class:`VerdictRecord` — one verdict as a stage hands it in.
-    :class:`SubmissionVerdictRepository` — seven methods:
+    :class:`EarlierAttempt` — the attempt a submission's remarks are compared
+    with (task 12a), as ``earlier_attempt`` reads it.
+    :class:`SubmissionVerdictRepository` — eight methods:
     ``replace_for_submission``, ``list_for_submission``, ``previous_verdicts``,
-    ``store_explanation``, ``get_explanation``, ``store_candidates`` and
-    ``get_candidates``.
+    ``earlier_attempt``, ``store_explanation``, ``get_explanation``,
+    ``store_candidates`` and ``get_candidates``.
 
     Writes ``flush`` and never commit: the caller owns the transaction, so a
     stage's verdicts are committed together with the checkpoint that marks the
     stage done (``homework/path_runner.py``).
 
 Replacing:
-    The stages depend on these seven methods and on the two value types only;
-    another store implements the same seven without touching a stage.
+    The stages depend on these eight methods and on the value types only;
+    another store implements the same eight without touching a stage.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import delete, func, select, tuple_
+from sqlalchemy import delete, exists, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -44,6 +47,8 @@ from course_supporter.criteria_kinds import (
     VerdictValue,
     WeightCategory,
 )
+from course_supporter.remark_kinds import RemarkState
+from course_supporter.storage.homework_repository import ATTEMPT_STATUSES
 from course_supporter.storage.orm import (
     HomeworkSubmission,
     SubmissionCourseLinkCandidates,
@@ -93,6 +98,21 @@ class VerdictRecord:
             one of its points carries it.
         safeguard_submission_id: The earlier submission whose "met" the
             safeguard kept; ``None`` when it did not fire.
+        first_model_verdict: What the model said in its first answer, on a
+            retried item alone (``model_verdict`` is its word after the
+            repeat); ``None`` for every other item. Kept for the database
+            alone (whether a repeat changed the verdict): no review, webhook
+            or API reads it.
+        answered_by_call_id: The register row of the call whose answer the
+            verdict stands on — of a retried item, the one
+            ``criteria_verdicts._word_to_settle`` chose; ``None`` for a
+            criterion derived from its points, or when the call's row was not
+            written. For the database alone, as ``first_model_verdict``.
+        remark_state: Where the item's remark stands since the student's
+            earlier attempt at the same version of the task (task 12a,
+            ``homework/criteria_verdicts.py``, ``with_remark_states``);
+            ``None`` — no state. The review's builder lays its remarks out by
+            it.
     """
 
     item_id: str
@@ -109,6 +129,9 @@ class VerdictRecord:
     quote_not_found: bool = False
     quote_from_base: bool = False
     safeguard_submission_id: uuid.UUID | None = None
+    first_model_verdict: VerdictValue | None = None
+    answered_by_call_id: uuid.UUID | None = None
+    remark_state: RemarkState | None = None
 
     @property
     def quote_line_start(self) -> int | None:
@@ -119,6 +142,23 @@ class VerdictRecord:
     def quote_line_end(self) -> int | None:
         """The last line of :attr:`quote_lines`, as the stored row names it."""
         return self.quote_lines[1] if self.quote_lines else None
+
+
+@dataclass(frozen=True, slots=True)
+class EarlierAttempt:
+    """The student's earlier attempt a submission's remarks are compared with.
+
+    Task 12a: each remark's state is counted from the two attempts' rows
+    (``homework/criteria_verdicts.py``, ``remark_states``), and the review
+    words a fixed one by this attempt's explanation.
+
+    Attributes:
+        submission_id: The earlier attempt's submission.
+        rows: Its verdict rows, in the order they were written.
+    """
+
+    submission_id: uuid.UUID
+    rows: tuple[SubmissionCriterionVerdict, ...]
 
 
 class SubmissionVerdictRepository:
@@ -224,6 +264,62 @@ class SubmissionVerdictRepository:
         )
         result = await self._session.execute(stmt)
         return {row.item_id: row for row in result.scalars().all()}
+
+    async def earlier_attempt(
+        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID
+    ) -> EarlierAttempt | None:
+        """The attempt the submission's remarks are compared with (task 12a).
+
+        The LATEST earlier attempt of the same student at the same task — a
+        live submission that got a review (``ATTEMPT_STATUSES``, the attempt
+        ledger's own notion) — at the same ``task_version``, that has verdict
+        rows. So a copy of an unchanged work's review (``dedup_of``), which has
+        none, is passed over for the attempt it repeated, and so is a review
+        by today's Mentor; a submission still in flight is not an attempt,
+        whatever rows it already has. "Earlier" is by creation time, then by
+        id, as :meth:`previous_verdicts` orders.
+
+        The criteria list is not part of the key, as it is for the safeguard:
+        the items are matched by id, which an author's edit keeps (task 08).
+
+        Returns:
+            The attempt and its rows; ``None`` when there is nothing to
+            compare with — a first attempt, none at this version of the task,
+            or a submission whose version was never recorded (before the
+            ledger, or the doors refused): an unknown version is never the
+            same.
+        """
+        current = aliased(HomeworkSubmission)
+        earlier = aliased(HomeworkSubmission)
+        stmt = (
+            select(earlier.id)
+            .join(current, current.id == submission_id)
+            .where(
+                current.tenant_id == tenant_id,
+                earlier.tenant_id == tenant_id,
+                earlier.student_id == current.student_id,
+                earlier.authored_document_id == current.authored_document_id,
+                # NULL on either side matches nothing: an unknown version.
+                earlier.task_version == current.task_version,
+                earlier.status.in_(ATTEMPT_STATUSES),
+                earlier.deleted_at.is_(None),
+                tuple_(earlier.created_at, earlier.id)
+                < tuple_(current.created_at, current.id),
+                exists().where(
+                    SubmissionCriterionVerdict.tenant_id == tenant_id,
+                    SubmissionCriterionVerdict.submission_id == earlier.id,
+                ),
+            )
+            .order_by(earlier.created_at.desc(), earlier.id.desc())
+            .limit(1)
+        )
+        earlier_id = await self._session.scalar(stmt)
+        if earlier_id is None:
+            return None
+        rows = await self.list_for_submission(
+            tenant_id=tenant_id, submission_id=earlier_id
+        )
+        return EarlierAttempt(submission_id=earlier_id, rows=tuple(rows))
 
     async def store_explanation(
         self,
@@ -339,4 +435,9 @@ def _row(
         quote_from_base=record.quote_from_base,
         safeguard_fired=record.safeguard_submission_id is not None,
         safeguard_submission_id=record.safeguard_submission_id,
+        first_model_verdict=(
+            record.first_model_verdict.value if record.first_model_verdict else None
+        ),
+        answered_by_call_id=record.answered_by_call_id,
+        remark_state=record.remark_state.value if record.remark_state else None,
     )

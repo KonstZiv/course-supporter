@@ -11,6 +11,13 @@ error_codes:
   - ANSWERS_DO_NOT_MATCH_TEST
   - STUDENT_NOTE_TOO_LONG
   - STUDENT_NOTE_REJECTED
+  - not_latest_review
+  - unknown_item
+  - parent_not_in_thread
+  - comment_limit_reached
+  - comment_empty
+  - comment_too_long
+  - comment_rejected
   - path_failed
   - test_not_ready
   - review_parts_missing
@@ -51,7 +58,8 @@ keywords:
   - YAML
   - коментар
   - критерії
-last_updated: 2026-10-03
+  - репліки
+last_updated: 2026-11-16
 ---
 
 # Коди помилок
@@ -84,6 +92,23 @@ last_updated: 2026-10-03
 |---|---|---|---|
 | [`STUDENT_NOTE_TOO_LONG`](../api/index.md#STUDENT_NOTE_TOO_LONG) | 422 | коментар довший за 2 000 знаків | попросити студента скоротити коментар і надіслати подачу знову |
 | [`STUDENT_NOTE_REJECTED`](../api/index.md#STUDENT_NOTE_REJECTED) | 422 | у коментарі символи зміни напрямку тексту, тегові чи керівні символи або рядок, що не є правильним Unicode; `details` починається з категорії | попросити студента переписати коментар без них і надіслати подачу знову |
+
+## Репліки до рецензії
+
+Коди, які отримує платформа школи, надсилаючи репліку студента до зауваження рецензії (див.
+[Репліки студента](../api/index.md#replies)). **Поки не видаються**: репліки вимкнено, і маршрут
+відповідає **404**, як на відсутню подачу. Відмовлену репліку не збережено. На відміну від інших
+відмов, `details` тут — об'єкт.
+
+| код | стан | причина | що робити |
+|---|---|---|---|
+| [`not_latest_review`](../api/index.md#not_latest_review) | 422 | рецензія вже не остання перевірена, ще не написана чи стосується старої версії завдання | показати студентові останню рецензію й відповідати до неї |
+| [`unknown_item`](../api/index.md#unknown_item) | 422 | у рецензії немає такого зауваження | перевірити `item_id` |
+| [`parent_not_in_thread`](../api/index.md#parent_not_in_thread) | 422 | `parent_id` не з гілки цього зауваження | прочитати гілки знову або надіслати без `parent_id` |
+| [`comment_limit_reached`](../api/index.md#comment_limit_reached) | 422 | 5 реплік студента до цього зауваження вже є; `details.max` — `5` | писати до рецензії наступної подачі |
+| [`comment_empty`](../api/index.md#comment_empty) | 422 | репліка порожня | попросити студента написати текст |
+| [`comment_too_long`](../api/index.md#comment_too_long) | 422 | репліка довша за 2 000 знаків; `details.max` — `2000` | попросити студента скоротити репліку |
+| [`comment_rejected`](../api/index.md#comment_rejected) | 422 | символи зміни напрямку тексту, тегові чи керівні символи або рядок, що не є правильним Unicode; `details.category` — категорія | попросити студента переписати репліку без них |
 
 ## Подія `failed` у вебхуку
 

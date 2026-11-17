@@ -291,3 +291,24 @@ class TestShippedFile:
         assert version(AssignmentType.SHORT_TASK) == task
         assert version(AssignmentType.TEST) is None
         assert version(AssignmentType.PROJECT) is None
+
+    def test_the_text_types_version_is_unchanged_by_the_traces(self) -> None:
+        """Lock (2026-11-16): the call traces leave the evaluator as it was.
+
+        The value on main before the traces of a cheaper evaluation were added
+        (``esc_request_traces``): they are recorded, never sent or settled on,
+        so no prompt, first rung or verdict rule moved. A later change that
+        does move one updates this value on purpose — and with it every
+        earlier review stops being given again by the dedup.
+
+        Moved on purpose by task 12a, K2: the states of the remarks between
+        attempts change what a review says, so the verdict rules went 6 -> 7
+        and the version ``ev1:3cddefc447c114ed`` -> ``ev1:985d508925abb6c7``.
+        """
+        shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
+
+        assert (
+            evaluator_version(AssignmentType.TASK, shipped, prompt_base_path=_REPO_ROOT)
+            == "ev1:985d508925abb6c7"
+        )
+        assert criteria_verdicts.VERDICT_RULES_VERSION == 7

@@ -30,12 +30,14 @@ Steps:
        more, alone, each with its reason, of the rung that answered
        (``PRE-FLIGHT.md`` 9.5 (a); widened 2026-10-02).
     4. The verdicts are settled — the resubmission safeguard reads the latest
-       earlier verdicts of the same list — and written. On a project's stage
-       a "not met" keeps the place of its problem in the student's files
-       when its line is there (chain K5); nothing is asked again for one
-       that is not. A project's request reads its whole changed files with
-       the author's lines marked, when the marked text fits the project's
-       input budget, and without a mark when it does not (chain K5).
+       earlier verdicts of the same list — and written, each with its
+       remark's state since the student's earlier attempt (task 12a). On a
+       project's stage a "not met" keeps the place of its problem in the
+       student's files when its line is there (chain K5); nothing is asked
+       again for one that is not. A project's request reads its whole
+       changed files with the author's lines marked, when the marked text
+       fits the project's input budget, and without a mark when it does not
+       (chain K5).
 
 The student's replies (task 12a, K4):
     On ``criteria_evaluation_with_replies`` alone — the switch by the stage's
@@ -85,6 +87,7 @@ from course_supporter.homework.criteria_verdicts import (
     SubmittedWork,
     items_to_ask_again,
     settle_verdicts,
+    with_remark_states,
 )
 from course_supporter.homework.mentor_context import mark_authors_lines
 from course_supporter.homework.path_checkpoint import FreezeReason
@@ -201,6 +204,7 @@ async def evaluate_criteria(
     agent = CriteriaEvaluatorAgent(context.router)
 
     first = await agent.evaluate(shown, execution=execution)
+    again: Evaluated | None = None
     repeat: EvaluationAnswer | None = None
     to_repeat = items_to_ask_again(first.answer, work)
     if to_repeat:
@@ -229,7 +233,15 @@ async def evaluate_criteria(
         work=work,
         earlier=earlier,
         place_unmet=project,
+        first_call_id=first.call_id,
+        repeat_call_id=again.call_id if again is not None else None,
     )
+    # The state of each remark since the earlier attempt (task 12a), written
+    # with the rows: counted anew whenever the stage writes them.
+    attempt = await verdicts.earlier_attempt(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
+    records = with_remark_states(records, attempt.rows if attempt is not None else None)
     await verdicts.replace_for_submission(
         tenant_id=submission.tenant_id,
         submission_id=submission.id,
@@ -320,12 +332,18 @@ def _on_the_rung(execution: StageExecution, evaluated: Evaluated) -> StageExecut
     after the first request lives inside the router's walk and does not cross
     to a second one. The ceiling was counted with the repeat inside it
     (``PRE-FLIGHT.md`` 9.6), so it bounds the repeat with room to spare.
+
+    The execution is marked as an item repeat on that rung's position
+    (``repeat_on_rung``): the register then tells the repeat from the first
+    request and keeps the rung's place on the whole ladder. What is sent is
+    the same.
     """
-    for rung in execution.stage.ladder:
+    for position, rung in enumerate(execution.stage.ladder, start=1):
         if (rung.provider, rung.model) == (evaluated.provider, evaluated.model):
             return replace(
                 execution,
                 stage=execution.stage.model_copy(update={"ladder": [rung]}),
+                repeat_on_rung=position,
             )
     msg = (
         f"the rung that answered ({evaluated.provider}/{evaluated.model}) is not "

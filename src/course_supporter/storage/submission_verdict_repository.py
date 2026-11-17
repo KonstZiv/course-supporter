@@ -97,6 +97,16 @@ class VerdictRecord:
             one of its points carries it.
         safeguard_submission_id: The earlier submission whose "met" the
             safeguard kept; ``None`` when it did not fire.
+        first_model_verdict: What the model said in its first answer, on a
+            retried item alone (``model_verdict`` is its word after the
+            repeat); ``None`` for every other item. Kept for the database
+            alone (whether a repeat changed the verdict): no review, webhook
+            or API reads it.
+        answered_by_call_id: The register row of the call whose answer the
+            verdict stands on — of a retried item, the one
+            ``criteria_verdicts._word_to_settle`` chose; ``None`` for a
+            criterion derived from its points, or when the call's row was not
+            written. For the database alone, as ``first_model_verdict``.
     """
 
     item_id: str
@@ -113,6 +123,8 @@ class VerdictRecord:
     quote_not_found: bool = False
     quote_from_base: bool = False
     safeguard_submission_id: uuid.UUID | None = None
+    first_model_verdict: VerdictValue | None = None
+    answered_by_call_id: uuid.UUID | None = None
 
     @property
     def quote_line_start(self) -> int | None:
@@ -416,4 +428,8 @@ def _row(
         quote_from_base=record.quote_from_base,
         safeguard_fired=record.safeguard_submission_id is not None,
         safeguard_submission_id=record.safeguard_submission_id,
+        first_model_verdict=(
+            record.first_model_verdict.value if record.first_model_verdict else None
+        ),
+        answered_by_call_id=record.answered_by_call_id,
     )

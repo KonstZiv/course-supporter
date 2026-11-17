@@ -177,10 +177,12 @@ class _CapturingRouter:
         response_schema: Any = None,
         stop_on_output_ceiling: bool = False,
         money_ceiling_usd: float | None = None,
+        repeat_on_rung: int | None = None,
         **render_context: Any,
     ) -> StageResult:
         """The entry of a caller holding its own stage — the same capture."""
         del stage, response_schema, stop_on_output_ceiling, money_ceiling_usd
+        del repeat_on_rung
         return await self.execute_for_stage(
             stage_name,
             response_validator=response_validator,

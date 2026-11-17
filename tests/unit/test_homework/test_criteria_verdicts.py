@@ -16,7 +16,7 @@ import doctest
 import json
 import unicodedata
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import pytest
@@ -591,6 +591,7 @@ class TestRepeat:
             model_verdict=MET,
             quote=_SHORT,
             retried=True,
+            first_model_verdict=MET,
             repeat_reason=RepeatReason.QUOTE_TOO_SHORT,
             quote_not_found=True,
         )
@@ -602,6 +603,7 @@ class TestRepeat:
             model_verdict=NOT_MET,
             missing="The work does not do this.",
             retried=True,
+            first_model_verdict=MET,
             repeat_reason=RepeatReason.QUOTE_NOT_FOUND,
         )
 
@@ -779,6 +781,7 @@ class TestDefectOfOneVerdict:
             model_verdict=MET,
             quote=stored,
             retried=True,
+            first_model_verdict=MET,
             repeat_reason=reason,
             quote_not_found=True,
         )
@@ -795,6 +798,7 @@ class TestDefectOfOneVerdict:
             verdict=NOT_MET,
             model_verdict=NOT_MET,
             retried=True,
+            first_model_verdict=NOT_MET,
             repeat_reason=RepeatReason.NO_SENTENCE,
         )
 
@@ -1350,6 +1354,7 @@ class TestUnconfirmed:
             model_verdict=MET,
             quote=_VENV,
             retried=True,
+            first_model_verdict=MET,
             repeat_reason=RepeatReason.QUOTE_TOO_SHORT,
             quote_not_found=True,
         )
@@ -1381,6 +1386,7 @@ class TestUnconfirmed:
             model_verdict=MET,
             quote=_SHORT,
             retried=True,
+            first_model_verdict=MET,
             repeat_reason=RepeatReason.QUOTE_TOO_SHORT,
             quote_not_found=True,
         )
@@ -1521,6 +1527,7 @@ class TestARealNotMet:
             model_verdict=NOT_MET,
             missing="No memoisation in the work.",
             retried=True,
+            first_model_verdict=MET,
             repeat_reason=RepeatReason.QUOTE_NOT_FOUND,
         )
         assert is_passed(records, layer=AUTHOR) is False
@@ -1546,6 +1553,7 @@ class TestARealNotMet:
             model_verdict=NOT_MET,
             missing="No base case.",
             retried=True,
+            first_model_verdict=MET,
             repeat_reason=RepeatReason.QUOTE_TOO_SHORT,
         )
         assert is_passed(records, layer=AUTHOR) is False
@@ -1603,6 +1611,82 @@ class TestARealNotMet:
             False,
         )
         assert is_passed(records, layer=AUTHOR) is False
+
+
+class TestTracesOfTheCalls:
+    """2026-11-16: which call a verdict stands on, and the model's first word.
+
+    Traces for the database, not rules: a row's verdict, flags and quote are
+    those of the same answers without them (``TestRepeat`` above).
+    """
+
+    _FIRST_CALL = uuid.UUID("01999999-0000-7000-8000-0000000000c1")
+    _REPEAT_CALL = uuid.UUID("01999999-0000-7000-8000-0000000000c2")
+
+    def _settle_with_calls(
+        self, repeat: EvaluationAnswer | None
+    ) -> dict[str, VerdictRecord]:
+        records = settle_verdicts(
+            _LIST,
+            TestRepeat._FIRST,
+            repeat,
+            work=_WORK,
+            earlier={},
+            first_call_id=self._FIRST_CALL,
+            repeat_call_id=self._REPEAT_CALL if repeat is not None else None,
+        )
+        return {record.item_id: record for record in records}
+
+    def test_an_item_not_asked_again_names_the_first_call(self) -> None:
+        settled = self._settle_with_calls(_answer(_not_met("c2.p1"), _not_met("c2.p2")))
+
+        for item in ("c1", "c3", "c4", "c5.p1"):
+            assert settled[item].answered_by_call_id == self._FIRST_CALL
+            assert settled[item].first_model_verdict is None
+
+    def test_a_retried_item_settled_on_the_repeat_names_the_repeat(self) -> None:
+        settled = self._settle_with_calls(_answer(_not_met("c2.p1"), _not_met("c2.p2")))
+
+        c2p1 = settled["c2.p1"]
+        assert c2p1.answered_by_call_id == self._REPEAT_CALL
+        # The repeat changed the model's word: "met" first, "not met" after.
+        assert (c2p1.first_model_verdict, c2p1.model_verdict) == (MET, NOT_MET)
+
+    def test_a_retried_item_settled_on_its_first_word_names_the_first(
+        self,
+    ) -> None:
+        # _word_to_settle keeps the first "met" of a too-short quote that is
+        # in the work, taken back on the repeat: the first call answered it.
+        settled = self._settle_with_calls(_answer(_not_met("c2.p1"), _not_met("c2.p2")))
+
+        c2p2 = settled["c2.p2"]
+        assert c2p2.repeat_reason is RepeatReason.QUOTE_TOO_SHORT
+        assert c2p2.answered_by_call_id == self._FIRST_CALL
+        assert (c2p2.first_model_verdict, c2p2.model_verdict) == (MET, MET)
+
+    def test_a_criterion_derived_from_its_points_names_no_call(self) -> None:
+        settled = self._settle_with_calls(None)
+
+        for criterion in ("c2", "c5"):
+            assert settled[criterion].model_verdict is None
+            assert settled[criterion].answered_by_call_id is None
+            assert settled[criterion].first_model_verdict is None
+
+    def test_the_traces_do_not_change_what_is_settled(self) -> None:
+        repeat = _answer(_not_met("c2.p1"), _not_met("c2.p2"))
+        with_calls = self._settle_with_calls(repeat)
+        without = _settle(TestRepeat._FIRST, repeat)
+
+        assert with_calls.keys() == without.keys()
+        for item, record in with_calls.items():
+            assert replace(record, answered_by_call_id=None) == without[item], item
+
+    def test_without_ids_no_call_is_named(self) -> None:
+        settled = _settle(
+            TestRepeat._FIRST, _answer(_not_met("c2.p1"), _not_met("c2.p2"))
+        )
+
+        assert {record.answered_by_call_id for record in settled.values()} == {None}
 
 
 def test_documentation_examples_run() -> None:

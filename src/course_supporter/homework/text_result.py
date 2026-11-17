@@ -76,7 +76,9 @@ The sections of the remarks (task 12a, K2):
     any — one is given only to a criterion unconfirmed now — stays new.
     Points have states too, but a remark is a criterion's: a criterion's
     own state places it. With nothing to compare with — a first attempt —
-    every remark is new, as before the states.
+    every remark is new, as before the states. Every remark, in each of the
+    four sections, names its criterion (``Remark.item_id``): the portal ties
+    a student's reply to the remark by it.
 
     The states are the verdict rows' own (``remark_state``): the evaluation
     stage counts and writes them with the rows
@@ -323,6 +325,7 @@ def build_text_review(
                 todo=remark.todo,
                 read=list((reading or {}).get(remark.id, ())),
                 position=places.get(remark.id),
+                item_id=remark.id,
             )
         )
     fixed = [
@@ -390,12 +393,22 @@ def _fixed_remark(criterion_id: str, words: FixedWords | None) -> Remark:
     """
     earlier = words.remarks.get(criterion_id) if words is not None else None
     if earlier is not None:
-        return Remark(what=earlier.what, why=earlier.why, todo=earlier.todo)
+        return Remark(
+            what=earlier.what,
+            why=earlier.why,
+            todo=earlier.todo,
+            item_id=criterion_id,
+        )
     criterion = words.criteria.get(criterion_id) if words is not None else None
     if criterion is None:
         msg = f"criterion {criterion_id} is fixed, and there are no words for it"
         raise ValueError(msg)
-    return Remark(what=criterion.text, why=criterion.text, todo=criterion.evidence)
+    return Remark(
+        what=criterion.text,
+        why=criterion.text,
+        todo=criterion.evidence,
+        item_id=criterion_id,
+    )
 
 
 async def _fixed_words(

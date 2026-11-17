@@ -790,6 +790,7 @@ class TestAFirstSubmissionIsReviewedFromItsVerdicts:
                 what=_remark(cid)["what"],
                 why=_remark(cid)["why"],
                 todo=_remark(cid)["todo"],
+                item_id=cid,
             )
             for cid in ("c2", "c3")
         ]
@@ -944,7 +945,10 @@ def _said(cid: str, attempt: int) -> dict[str, Any]:
 
 
 def _shown(said: dict[str, Any]) -> Remark:
-    return Remark(what=said["what"], why=said["why"], todo=said["todo"])
+    """The remark as the review shows it: its words, and its criterion."""
+    return Remark(
+        what=said["what"], why=said["why"], todo=said["todo"], item_id=said["id"]
+    )
 
 
 async def _versioned_task(

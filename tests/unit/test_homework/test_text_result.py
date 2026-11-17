@@ -200,7 +200,8 @@ class TestTheRemarks:
             "Як зроблено c1.",
         ]
 
-    def test_a_remark_keeps_the_three_parts_and_nothing_else(self) -> None:
+    def test_a_remark_keeps_the_three_parts_and_its_item(self) -> None:
+        """The three parts, and the criterion it is about (task 12a)."""
         rows = [_criterion("c1", MUST, NOT_MET)]
 
         structure, _ = build_text_review(
@@ -209,7 +210,10 @@ class TestTheRemarks:
 
         assert structure.new_remarks == [
             Remark(
-                what="Як зроблено c1.", why="Чому c1 не гаразд.", todo="Як зробити c1."
+                what="Як зроблено c1.",
+                why="Чому c1 не гаразд.",
+                todo="Як зробити c1.",
+                item_id="c1",
             )
         ]
 
@@ -405,6 +409,7 @@ class TestTheSectionsByState:
                 what="Раніше c4 не було.",
                 why="Без c4 не працювало.",
                 todo="Додайте c4.",
+                item_id="c4",
             )
         ]
         assert [remark.what for remark in structure.new_remarks] == ["Як зроблено c3."]
@@ -530,7 +535,9 @@ class TestTheSectionsByState:
         )
 
         assert structure.fixed == [
-            Remark(what="Вимога c1", why="Вимога c1", todo="Що показує c1")
+            Remark(
+                what="Вимога c1", why="Вимога c1", todo="Що показує c1", item_id="c1"
+            )
         ]
 
     def test_a_fixed_criterion_without_words_is_a_defect(self) -> None:
@@ -565,6 +572,53 @@ class TestTheSectionsByState:
 
         assert structure.fixed == []
         assert [remark.what for remark in structure.open] == ["Як зроблено c1."]
+
+    def test_every_remark_in_every_section_names_its_criterion(self) -> None:
+        """Task 12a: the portal ties a student's reply to a remark by its
+        ``item_id`` — in each of the four sections, the earlier attempt's
+        remark under "fixed" included. The markdown does not print it."""
+        rows = [
+            _criterion("c1", MUST, NOT_MET),
+            _criterion("c2", SHOULD, NOT_MET),
+            _criterion("c3", MAY, NOT_MET),
+            _criterion("c4", SHOULD, MET),
+        ]
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            rows=rows,
+            explanation=_explanation("c1", "c2", "c3", passed=False),
+            language="ukr",
+            states={
+                "c1": RemarkState.OPEN,
+                "c2": RemarkState.BROKEN,
+                "c3": RemarkState.NEW,
+                "c4": RemarkState.FIXED,
+            },
+            fixed_words=self._words(self._earlier("c4")),
+        )
+
+        assert {
+            section: [remark.item_id for remark in getattr(structure, section)]
+            for section in ("fixed", "new_remarks", "open", "broken")
+        } == {
+            "fixed": ["c4"],
+            "new_remarks": ["c3"],
+            "open": ["c1"],
+            "broken": ["c2"],
+        }
+        # Not printed: the same markdown as the review without the handles.
+        sections = ("fixed", "new_remarks", "open", "broken")
+        without = structure.model_copy(
+            update={
+                section: [
+                    remark.model_copy(update={"item_id": None})
+                    for remark in getattr(structure, section)
+                ]
+                for section in sections
+            }
+        )
+        assert assemble_review(structure) == assemble_review(without)
 
     def test_the_markdown_prints_the_sections_in_their_order(self) -> None:
         rows = [

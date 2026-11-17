@@ -1107,6 +1107,8 @@ class TestAChangedWorkAgain:
         # copy between the two has no rows and is passed over.
         assert second.structure.new_remarks == []
         assert second.structure.open[1].position == _PLACE
+        # Each remark names its criterion: a reply is tied to it by that.
+        assert [remark.item_id for remark in second.structure.open] == ["c2", "c3"]
         [payload] = second.reviewed
         assert payload.structure == second.structure
 

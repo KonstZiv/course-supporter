@@ -76,8 +76,10 @@ The words:
 
 Interface:
     :func:`post_reply` — record a reply; :func:`read_threads` — the threads of
-    a review's remarks; :func:`review_facts` and :func:`review_items` — what
-    both read about the review; :class:`ReplyRefusal` — the codes of the 422
+    a review's remarks and whether a reply to it would be taken
+    (``accepting_replies``, the write's own rule — task 12a, K3b);
+    :func:`review_facts` and :func:`review_items` — what both read about the
+    review; :class:`ReplyRefusal` — the codes of the 422
     refusals, each with ``details`` as an object (``details.max`` for the two
     limits, ``details.category`` for the text screen's refusal).
 """
@@ -135,6 +137,7 @@ __all__ = [
     "REPLY_MAX_CHARS",
     "REPLY_SOURCE",
     "ReplyRefusal",
+    "ReplyThreads",
     "ReviewFacts",
     "Thread",
     "post_reply",
@@ -225,6 +228,23 @@ class Thread:
     comments: tuple[CommentRecord, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ReplyThreads:
+    """What the read of a review's threads answers (task 12a, K3b).
+
+    Attributes:
+        accepting_replies: Whether a reply to this review would be taken —
+            :func:`_accepts_replies`, the write's own rule up to
+            ``not_latest_review``. ``False`` for a type that takes no replies,
+            for a review that is not the one replies go to, and for one with
+            no recorded version.
+        threads: The threads on its remarks, in the order of the remarks.
+    """
+
+    accepting_replies: bool
+    threads: tuple[Thread, ...]
+
+
 def _not_found() -> HTTPException:
     """The one refusal every access failure gets — the read path's own words."""
     return HTTPException(status_code=404, detail=SUBMISSION_NOT_FOUND)
@@ -292,6 +312,37 @@ def _replies_go_here(submission: HomeworkSubmission, facts: ReviewFacts) -> bool
     )
 
 
+def _open_scope(
+    submission: HomeworkSubmission, facts: ReviewFacts
+) -> ThreadScope | None:
+    """Where a reply to this review would be written — ``None``: not here.
+
+    The one rule of "the review replies go to" (module docstring), asked by
+    the write and by the read alike: the student's work at a recorded version
+    (:func:`_scope_of`), on the review the next submission answers
+    (:func:`_replies_go_here`). ``None`` is ``not_latest_review`` to a reply
+    and ``accepting_replies: false`` to a read.
+    """
+    scope = _scope_of(submission)
+    if scope is None or not _replies_go_here(submission, facts):
+        return None
+    return scope
+
+
+def _accepts_replies(
+    submission: HomeworkSubmission, facts: ReviewFacts, config: PathConfig | None
+) -> bool:
+    """Would a reply here pass every check up to ``not_latest_review``?
+
+    The type takes replies (else the reply's 404) and the review is the one
+    replies go to (else ``not_latest_review``) — the same two questions
+    :func:`post_reply` asks, in its order; the limit per remark is a remark's
+    question, not the review's, and is not asked. Read from the facts already
+    read: no query of its own.
+    """
+    return _takes_replies(facts, config) and _open_scope(submission, facts) is not None
+
+
 def _checked_text(body: str) -> str:
     """The reply's words as they are stored, or the refusal of the third kind."""
     text = normalized_student_text(body)
@@ -347,8 +398,8 @@ async def post_reply(
     facts = await review_facts(session, live)
     if not _takes_replies(facts, config):
         raise _not_found()
-    scope = _scope_of(live)
-    if scope is None or not _replies_go_here(live, facts):
+    scope = _open_scope(live, facts)
+    if scope is None:
         raise _refusal(ReplyRefusal.NOT_LATEST_REVIEW)
     if item_id not in facts.items:
         raise _refusal(ReplyRefusal.UNKNOWN_ITEM)
@@ -396,8 +447,8 @@ async def read_threads(
     student_id: uuid.UUID,
     comments: RemarkCommentRepository,
     config: PathConfig | None = None,
-) -> list[Thread]:
-    """The threads on the remarks of this submission's review.
+) -> ReplyThreads:
+    """The threads on the remarks of this submission's review, and the sign.
 
     Each thread runs through every attempt of the student at the same version
     of the task (:class:`~course_supporter.homework.remark_comments.ThreadScope`),
@@ -406,24 +457,34 @@ async def read_threads(
     has none. A type that takes no replies, and a review with no remark, have
     no threads.
 
+    ``accepting_replies`` tells the portal whether to offer a reply here —
+    without it a type that takes no replies and a review nobody has commented
+    on read the same. It is the write's own rule (:func:`_accepts_replies`),
+    read from the facts this read reads anyway: a type that takes no replies
+    costs no query more than before.
+
     Raises:
         HTTPException: 404 with the read path's "not found" for a submission
             the student cannot read.
     """
     live = _owned(submission, student_id)
     facts = await review_facts(session, live)
+    accepting = _accepts_replies(live, facts, config)
     scope = _scope_of(live)
     if not _takes_replies(facts, config) or not facts.items or scope is None:
-        return []
+        return ReplyThreads(accepting_replies=accepting, threads=())
     found = await comments.thread(scope, facts.items)
     by_item: dict[str, list[CommentRecord]] = {}
     for comment in sorted(found, key=lambda c: (c.created_at, c.id)):
         by_item.setdefault(comment.item_id, []).append(comment)
-    return [
-        Thread(item_id=item, comments=tuple(by_item[item]))
-        for item in facts.items
-        if item in by_item
-    ]
+    return ReplyThreads(
+        accepting_replies=accepting,
+        threads=tuple(
+            Thread(item_id=item, comments=tuple(by_item[item]))
+            for item in facts.items
+            if item in by_item
+        ),
+    )
 
 
 async def review_facts(

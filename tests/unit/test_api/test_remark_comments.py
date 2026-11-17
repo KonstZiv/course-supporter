@@ -308,7 +308,14 @@ class TestTheSwitchOff:
             == {"detail": SUBMISSION_NOT_FOUND}
         )
         assert portal_get.status_code == channel_get.status_code == 200
-        assert portal_get.json() == channel_get.json() == {"threads": []}
+        assert (
+            portal_get.json()
+            == channel_get.json()
+            == {
+                "accepting_replies": False,
+                "threads": [],
+            }
+        )
         assert store.added == [] and store.locked == []
 
 
@@ -406,7 +413,7 @@ class TestBothDoorsAnswerAlike:
             (_body(body="   "), "comment_empty"),
             (_body(item_id="c9"), "unknown_item"),
             (_body(parent_id=str(uuid.uuid4())), "parent_not_in_thread"),
-            (_body(body="Чому?‮"), "comment_rejected"),
+            (_body(body="Чому?\u202e"), "comment_rejected"),
         ],
     )
     async def test_a_refusal_word_for_word(
@@ -443,6 +450,36 @@ class TestBothDoorsAnswerAlike:
             == channel.json()
             == {"detail": {"code": "comment_limit_reached", "details": {"max": 5}}}
         )
+
+    @pytest.mark.parametrize(
+        ("later", "accepting"),
+        [((), True), (("delivered",), False), (("received",), False)],
+        ids=["the-latest-review", "a-later-review", "a-later-submission-in-flight"],
+    )
+    async def test_the_sign_word_for_word(
+        self,
+        client: AsyncClient,
+        review_facts: AsyncMock,
+        later: tuple[str, ...],
+        accepting: bool,
+    ) -> None:
+        """K3b: ``accepting_replies`` beside the threads, the same from both."""
+        review_facts.return_value = ReviewFacts(
+            task_type=AssignmentType.TASK,
+            task_version=_VERSION,
+            later_statuses=later,
+            items=("c1", "c2"),
+        )
+        submission = _submission()
+        with _known_student(), _owned(submission):
+            portal = await client.get(_portal(submission.id))
+            channel = await client.get(
+                _channel(submission.id), params={"student_external_id": _EXTERNAL_ID}
+            )
+
+        assert portal.status_code == channel.status_code == 200
+        assert portal.json() == channel.json()
+        assert portal.json() == {"accepting_replies": accepting, "threads": []}
 
     async def test_the_mentors_answer_is_served_as_a_comment(
         self, client: AsyncClient, store: FakeRemarkComments

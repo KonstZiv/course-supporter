@@ -63,7 +63,7 @@ from decimal import ROUND_CEILING, Decimal
 from typing import TYPE_CHECKING, Final
 
 import structlog
-from sqlalchemy import ColumnElement, and_, func, or_, select
+from sqlalchemy import ColumnElement, and_, func, not_, or_, select
 
 from course_supporter.billing import ledger
 from course_supporter.billing.errors import BillingConflictError
@@ -86,6 +86,7 @@ from course_supporter.billing.payer import (
 from course_supporter.call_outcome import CallOutcome, RequestKind
 from course_supporter.cost_estimate.core import fact_units, price_units, reserve_units
 from course_supporter.cost_estimate.settings import get_estimate_settings
+from course_supporter.homework.path_config import REPLY_SAFETY_ACTION
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.storage.orm import (
     BillingAccount,
@@ -539,12 +540,37 @@ _PRICED_CALL = ExternalServiceCall.unit_type.is_not(None)
 PAYER_REQUEST_KINDS: Final = (RequestKind.FIRST.value, RequestKind.ITEM_REPEAT.value)
 """The kinds of request whose cost is the payer's (:data:`PAID_BY_PAYER`)."""
 
-PAID_BY_PAYER: Final[ColumnElement[bool]] = or_(
+REPLY_SCREEN_ACTIONS: Final = frozenset({REPLY_SAFETY_ACTION})
+"""The actions the reply screen's calls are recorded under (task 12a, K3,
+``homework/reply_screen.py``): today its safety check alone — the topic port
+is a placeholder that calls no model. A topic adapter with an action of its
+own joins this set."""
+
+REPLY_SCREEN_CALL: Final[ColumnElement[bool]] = ExternalServiceCall.action.in_(
+    REPLY_SCREEN_ACTIONS
+)
+"""A call of the reply screen — never in the payer's fact, whatever its kind.
+
+The billing session, 2026-11-17 ~21:30, on the Mentor's remark (an addition to
+BIL-FACT): the screen of a student's replies to the remarks of the last review
+runs in the submission's job, before the funds port and outside the shadow
+estimate, and its cost is not the fact of the review. An exclusion of its own,
+apart from ``request_kind``; it is the platform's (``billing.costs``,
+``platform_usd``). Whether replies are ever paid for separately is a decision
+of its own, not made here.
+"""
+
+_PAYER_REQUEST: Final[ColumnElement[bool]] = or_(
     ExternalServiceCall.request_kind.is_(None),
     and_(
         ExternalServiceCall.request_kind.in_(PAYER_REQUEST_KINDS),
         ExternalServiceCall.outcome.is_distinct_from(CallOutcome.TRANSPORT_ERROR.value),
     ),
+)
+"""The request-kind half of :data:`PAID_BY_PAYER`."""
+
+PAID_BY_PAYER: Final[ColumnElement[bool]] = and_(
+    _PAYER_REQUEST, not_(REPLY_SCREEN_CALL)
 )
 """A register row whose cost the payer pays — THE definition of the fact.
 
@@ -562,6 +588,9 @@ The operator, 2026-11-17 (15:51, confirmed 16:01): «Платник платит
   attempts;
 * ``NULL`` — the payer's, as before the decision: speech-to-text attempts and
   rows written before the column; rows of no call carry no cost.
+
+Apart from the kind: a call of the reply screen is never the payer's
+(:data:`REPLY_SCREEN_CALL`).
 
 Says nothing about whether a row is priced: each reader keeps its own test
 for that. The rest of a row's cost — ``NOT PAID_BY_PAYER`` — is what the

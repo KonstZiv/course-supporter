@@ -857,8 +857,8 @@ def _render_student_table(report: billing_costs.CostReport) -> list[str]:
 
 
 _PLATFORM_HEADER = "платформа_usd"
-"""Of the dollars, what no payer pays: retries and calls that failed on the
-infrastructure (``costs.SpendSummary.platform_usd``)."""
+"""Of the dollars, what no payer pays: retries, calls that failed on the
+infrastructure, the reply screen (``costs.SpendSummary.platform_usd``)."""
 
 _UNITS_HEADERS = ("виставлено_авторові", "виставлено_студентам", "покрито_юнітів")
 """Units billed to the author, to students, and borne by the benefit or the

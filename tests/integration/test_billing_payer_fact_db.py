@@ -29,6 +29,7 @@ from course_supporter.billing.kinds import ActionKind, MovementKind
 from course_supporter.call_outcome import CallOutcome, RequestKind
 from course_supporter.cost_kinds import CostKind
 from course_supporter.funds_port import SubmissionOutcome
+from course_supporter.homework.path_config import REPLY_SAFETY_ACTION
 from course_supporter.storage.orm import ExternalServiceCall
 from tests._helpers.billing_cleanup import drop_billing_of_tenant
 from tests.integration import test_billing_charging_db as bil
@@ -168,6 +169,24 @@ class TestWhoPaysWhichCall:
         await attempt(session_factory, job, "0.04", STRUCTURAL)
 
         assert await review_fact(session_factory, w) == Decimal("0.04")
+
+    async def test_the_reply_screen_is_the_platforms_whatever_its_kind(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """The screen of a student's replies runs in the submission's job; its
+        calls are not the review's fact (billing session, 2026-11-17 ~21:30)."""
+        w = await bil.make_world(session_factory)
+        job = w.homework_job_id
+        screen = REPLY_SAFETY_ACTION
+        await attempt(session_factory, job, "0.04", FIRST)
+        await attempt(session_factory, job, "0.01", FIRST, action=screen)
+        await attempt(session_factory, job, "0.02", None, outcome=None, action=screen)
+        await attempt(session_factory, job, "0.03", INFRA, action=screen)
+
+        assert await review_fact(session_factory, w) == Decimal("0.04")
+        (student,) = (await report(session_factory, w)).students
+        assert student.spend.known_usd == Decimal("0.10")
+        assert student.spend.platform_usd == Decimal("0.06")
 
     async def test_processing_and_preparation_by_the_same_rule(
         self, session_factory: async_sessionmaker[AsyncSession]

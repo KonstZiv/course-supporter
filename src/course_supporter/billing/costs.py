@@ -15,8 +15,9 @@ Attribution rules (operator decisions 2026-11-06 / 2026-11-11):
   included in call counts and counted explicitly in ``unknown_calls``.
 - ``platform_usd`` — the part of the known dollars that no payer pays
   (``NOT charging.PAID_BY_PAYER``, operator 2026-11-17): structural and
-  infrastructure retries, and attempts that themselves failed on the
-  infrastructure. The platform took it on; it never reaches the journal.
+  infrastructure retries, attempts that themselves failed on the
+  infrastructure, and the calls of the reply screen. The platform took it on;
+  it never reaches the journal.
 
 Units billed beside the dollars (BIL-E2, operator 2026-11-15, 5b item 3):
 - billed — ``debit`` + ``difference_arisen`` of an action, in two columns by

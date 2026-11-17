@@ -17,6 +17,8 @@ Interface:
     :func:`apply_edit` — the author's criteria against the list they edit:
     identifiers kept or assigned, check methods and concepts checked. Pure:
     the service reads what it needs and stores what it returns.
+    :func:`mark_must_by_author` — which "must" criteria of the edit the author
+    made mandatory themselves (2026-11-17). Pure, as :func:`apply_edit`.
 
 The rules:
     * Nothing is composed here. No route composes a list (``TASK.md``
@@ -35,6 +37,9 @@ The rules:
     * An edit keeps the identifiers of the list in force when it is made
       (decision 21); what the author adds gets identifiers of its own
       (:func:`apply_edit`).
+    * Each criterion of an edit is stored with ``must_by_author``, settled
+      once, when the edit is stored (:func:`mark_must_by_author`): only these
+      "must" criteria make the pass strict, never the ones the model put.
     * A reset soft-deletes the edit, and a replacement does the same to the
       edit it replaces: every earlier edit stays as a snapshot.
     * A test is not served: it is checked by its answer key
@@ -50,6 +55,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
 from course_supporter.concept_dedup import normalization_key
+from course_supporter.criteria_kinds import WeightCategory
 from course_supporter.criteria_list_state import CriteriaListState
 from course_supporter.homework.criteria_form import (
     CheckMethod,
@@ -123,6 +129,10 @@ class CriteriaRefusalCode(StrEnum):
 
     UNKNOWN_CONCEPT = "UNKNOWN_CONCEPT"
     """A concept outside those a criterion of the task may name."""
+
+    MUST_BY_AUTHOR_WITHOUT_MUST = "MUST_BY_AUTHOR_WITHOUT_MUST"
+    """``must_by_author: true`` on a criterion whose weight is not ``must``:
+    only a "must" is made mandatory for the pass (:func:`mark_must_by_author`)."""
 
 
 class CriteriaRefusedError(Exception):
@@ -347,6 +357,13 @@ class CriteriaEditService:
             also_taken=before.model or (),
             task_type=task.task_type,
             concepts=before.concepts,
+        )
+        # Once, here, and stored with each criterion: the edit it replaces is
+        # this version's author layer as the reading shows it.
+        criteria = mark_must_by_author(
+            list(zip(criteria, (edit.must_by_author for edit in edits), strict=True)),
+            model=before.model or (),
+            previous=before.author or (),
         )
         await TaskCriteriaOverrideRepository(self._session).replace(
             authored_document_id=task.document.id,
@@ -617,6 +634,93 @@ def apply_edit(
             )
         )
     return tuple(criteria)
+
+
+def mark_must_by_author(
+    edited: Sequence[tuple[Criterion, bool | None]],
+    *,
+    model: Sequence[Criterion],
+    previous: Sequence[Criterion],
+) -> tuple[Criterion, ...]:
+    """Each criterion of the edit with its ``must_by_author`` (2026-11-17).
+
+    The product owner's rule: the pass is strict only by the "must" criteria
+    the author chose (``criteria_verdicts.pass_decision``), never by the marks
+    the model put, which an author who corrected one word keeps with the
+    whole list. The mark is settled once, when the edit is stored, from what
+    the author sent, the model's list and the edit this one replaces:
+
+    ========  ========  ==============================  =======================
+    weight    sent      the criterion's ``id``          ``must_by_author``
+    ========  ========  ==============================  =======================
+    not must  ``true``  —                               refused
+    not must  other     —                               ``False``
+    must      a value   —                               the value sent
+    must      omitted   not in the model's list (new)   ``True``
+    must      omitted   not a "must" there (raised)     ``True``
+    must      omitted   a "must" there                  the replaced edit's
+                                                        mark of it; ``False``
+                                                        without one (kept)
+    ========  ========  ==============================  =======================
+
+    Args:
+        edited: Each criterion of the edit as it is stored (:func:`apply_edit`
+            — identifiers given), with the ``must_by_author`` the author sent
+            for it, ``None`` when none was sent; in the author's order.
+        model: The model's list for this version of the task; empty when
+            there is none.
+        previous: The author's edit this one replaces, for this version of
+            the task, each criterion with its mark; empty when there is none.
+
+    Returns:
+        The criteria, in the author's order, each with its mark.
+
+    Raises:
+        CriteriaRefusedError: ``MUST_BY_AUTHOR_WITHOUT_MUST``.
+
+    >>> def criterion(cid, weight):
+    ...     return Criterion(
+    ...         id=cid, text="t", evidence="e", weight=weight,
+    ...         check_method="model_verdict", soft_descent=False,
+    ...         concepts=(), mandatory_points=(),
+    ...     )
+    >>> model = [criterion("c1", "must"), criterion("c2", "should")]
+    >>> marked = mark_must_by_author(
+    ...     [(criterion("c1", "must"), None), (criterion("c2", "must"), None),
+    ...      (criterion("c3", "must"), None), (criterion("c4", "may"), None)],
+    ...     model=model, previous=(),
+    ... )
+    >>> [criterion.must_by_author for criterion in marked]
+    [False, True, True, False]
+    """
+    refused = [
+        f"criteria.{index}"
+        for index, (criterion, sent) in enumerate(edited)
+        if sent is True and criterion.weight is not WeightCategory.MUST
+    ]
+    if refused:
+        raise CriteriaRefusedError(
+            CriteriaRefusalCode.MUST_BY_AUTHOR_WITHOUT_MUST,
+            f"{refused} send must_by_author true on a criterion whose weight is "
+            "not 'must'; make it a 'must' or leave must_by_author out",
+        )
+    models = {criterion.id: criterion for criterion in model}
+    marks = {criterion.id: criterion.must_by_author is True for criterion in previous}
+
+    def mark(criterion: Criterion, sent: bool | None) -> bool:
+        if criterion.weight is not WeightCategory.MUST:
+            return False
+        if sent is not None:
+            return sent
+        proposed = models.get(criterion.id)
+        if proposed is None or proposed.weight is not WeightCategory.MUST:
+            return True
+        return marks.get(criterion.id, False)
+
+    return tuple(
+        criterion.model_copy(update={"must_by_author": mark(criterion, sent)})
+        for criterion, sent in edited
+    )
 
 
 def _unknown_ids(

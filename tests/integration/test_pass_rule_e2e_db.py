@@ -2,16 +2,21 @@
 
 The order's locks, transliterated: d — end to end, by name; e — one function.
 
-Lock d: a ``task`` on the model's list, the recorded answers of the model give
-one "must" not met and a score of 82 — the review says "passed", with the
-phrase of the 80 threshold in its markdown. The author then saves a list with
-the same "must" (what ``PUT /documents/{id}/criteria/override`` stores), and
-the same work submitted again is "not passed", with the phrase of the
-author's mandatory criteria.
+Lock d, with the decision of 2026-11-17: a ``task`` on the model's list, the
+recorded answers of the model give one "must" not met and a score of 82 — the
+review says "passed", with the phrase of the 80 threshold in its markdown. The
+author then saves the list, correcting a word and keeping the model's "must"
+(the control submission of 2026-11-16): the same work is still "passed" by the
+80 threshold — a kept "must" is not the author's. The author then makes that
+"must" mandatory themselves (``must_by_author: true``), and the same work is
+"not passed", with the phrase of the author's mandatory criteria. Both edits
+are stored by the edit service the route calls
+(``CriteriaEditService.replace``), which settles the mark.
 
-Lock e: in both walks the pass is one: the explanation stage's facts (what the
+Lock e: in every walk the pass is one: the explanation stage's facts (what the
 model was told it may not contradict, read from the stage's log), the builder's
-structure, a recount from the stored rows, the webhook and the portal.
+structure, a recount from the stored rows and the list they were judged by, the
+webhook and the portal.
 
 What is real and what is a double — as in ``test_text_review_e2e_db.py``, whose
 doubles and helpers this module reuses: the router answers with recorded
@@ -38,7 +43,12 @@ from structlog.testing import capture_logs
 
 from course_supporter.api.routes._portal_shared import curated_verdict
 from course_supporter.criteria_kinds import CriteriaLayer
-from course_supporter.homework.criteria_form import Criterion, criteria_to_document
+from course_supporter.homework.criteria_edit_service import CriteriaEditService
+from course_supporter.homework.criteria_form import (
+    Criterion,
+    CriterionEdit,
+    criteria_to_document,
+)
 from course_supporter.homework.criteria_list_service import (
     CriteriaInForce,
     CriteriaUnavailable,
@@ -46,7 +56,7 @@ from course_supporter.homework.criteria_list_service import (
     load_in_force,
 )
 from course_supporter.homework.criteria_verdicts import is_passed, score_percent
-from course_supporter.homework.judged_list import judged_layer
+from course_supporter.homework.judged_list import judged_author_musts, judged_layer
 from course_supporter.homework.path_stages import (
     CRITERIA_EVALUATION,
     REVIEW_EXPLANATION,
@@ -66,9 +76,6 @@ from course_supporter.storage.submission_verdict_repository import (
 )
 from course_supporter.storage.task_criteria_list_repository import (
     TaskCriteriaListRepository,
-)
-from course_supporter.storage.task_criteria_override_repository import (
-    TaskCriteriaOverrideRepository,
 )
 from tests.integration.test_text_review_e2e_db import (
     _evaluation,
@@ -116,6 +123,13 @@ _EVALUATION = _evaluation(
         _verdict(f"c{n}", "met", quote="def solve(n):" if n % 2 else "return n * 2")
         for n in range(2, 9)
     ),
+)
+
+
+# The phrase of the 80 threshold, the score of the recorded answers put in.
+_PASSED_AT_80 = (
+    "Автор не затвердив обов'язкових критеріїв для цього завдання. Для таких "
+    "завдань поріг заліку — 80 зі 100; ваш бал — 82, тож роботу зараховано."
 )
 
 
@@ -236,22 +250,33 @@ async def world(
 
 
 async def _author_saves_the_list(
-    session_factory: async_sessionmaker[AsyncSession], world: dict[str, Any]
+    session_factory: async_sessionmaker[AsyncSession],
+    world: dict[str, Any],
+    **c1: Any,
 ) -> uuid.UUID:
-    """The author keeps the model's criteria, the "must" with them, as their own.
+    """The author sends the model's criteria back, c1 with ``c1``'s changes.
 
-    What ``PUT /documents/{id}/criteria/override`` stores: the whole list, for
-    the task's current version, through the same repository.
+    What ``PUT /documents/{id}/criteria/override`` does: the edit service the
+    route calls stores the whole list for the task's current version, each
+    criterion with the mark it settles; the id of the edit stored.
     """
-    async with session_factory() as session:
-        saved = await TaskCriteriaOverrideRepository(session).replace(
-            authored_document_id=world["doc_id"],
-            source_content_hash=_HASH,
-            source_task_type="task",
-            criteria=criteria_to_document(_CRITERIA),
+    edits = [
+        CriterionEdit.model_validate(
+            {
+                **criterion.model_dump(
+                    mode="json", exclude={"soft_descent", "must_by_author"}
+                ),
+                **(c1 if criterion.id == "c1" else {}),
+            }
         )
+        for criterion in _CRITERIA
+    ]
+    async with session_factory() as session:
+        view = await CriteriaEditService(session).replace(world["doc_id"], edits)
         await session.commit()
-        return saved.id
+    assert view.in_force is not None
+    assert view.in_force.layer is CriteriaLayer.AUTHOR
+    return view.in_force.source_id
 
 
 async def _walk(
@@ -279,6 +304,7 @@ async def _walk(
         rows = await SubmissionVerdictRepository(session).list_for_submission(
             tenant_id=world["tenant_id"], submission_id=submission_id
         )
+        own = await judged_author_musts(session, submission, rows)
     [explained] = [log for log in logs if log["event"] == "review_explanation_written"]
     [payload] = _reviewed(webhook)
     portal = curated_verdict(submission.review_result, score=submission.score)
@@ -292,11 +318,12 @@ async def _walk(
         "source_id": {row.criteria_source_id for row in rows},
         "verdicts": {row.item_id: row.verdict for row in rows},
         "score": score_percent(rows),
+        "own": own,
         # Lock e: the five places that state the pass.
         "passes": {
             "stage": explained["passed"],
             "builder": structure.verdict.passed,
-            "recount": is_passed(rows, layer=judged_layer(rows)),
+            "recount": is_passed(rows, layer=judged_layer(rows), author_musts=own),
             "webhook": payload.review.passed,
             "portal": portal.passed,
         },
@@ -304,9 +331,9 @@ async def _walk(
 
 
 class TestLockD:
-    """d: the same "must" not met — passed on the model's list, not on the author's."""
+    """d: the same "must" not met — it blocks only once the author makes it theirs."""
 
-    async def test_the_models_must_does_not_block_the_authors_does(
+    async def test_a_kept_must_does_not_block_the_authors_own_does(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         world: dict[str, Any],
@@ -321,6 +348,7 @@ class TestLockD:
 
         assert first["layer"] is CriteriaLayer.MODEL
         assert first["source_id"] == {world["model_list_id"]}
+        assert first["own"] == frozenset()
         assert first["verdicts"]["c1"] == "not_met"
         assert first["score"] == first["submission"].score == 82
         assert first["passes"] == dict.fromkeys(first["passes"], True)
@@ -329,30 +357,45 @@ class TestLockD:
         )
         markdown = first["submission"].review_markdown
         assert "## Зараховано" in markdown
-        assert (
-            "Автор не затвердив обов'язкових критеріїв для цього завдання. Для "
-            "таких завдань поріг заліку — 80 зі 100; ваш бал — 82, тож роботу "
-            "зараховано."
-        ) in markdown.splitlines()
+        assert _PASSED_AT_80 in markdown.splitlines()
         # The "must" is judged and shown: its remark is in the review.
         assert "Зараз від'ємне n не перевіряється." in markdown
 
-        # ── The author saves the list with the same "must" ──
-        override_id = await _author_saves_the_list(session_factory, world)
-
-        # ── The same work again: c1 not met -> not passed, whatever the score ──
-        router.content[REVIEW_EXPLANATION] = _explanation(passed=False)
+        # ── The control submission of 2026-11-16: the author corrects a word
+        # and keeps the model's "must" — still passed by the 80 threshold ──
+        kept_id = await _author_saves_the_list(
+            session_factory, world, text="Обробляє від'ємне n"
+        )
         second = await _walk(session_factory, world, router, tmp_path)
 
         assert second["layer"] is CriteriaLayer.AUTHOR
-        assert second["source_id"] == {override_id}
+        assert second["source_id"] == {kept_id}
+        assert second["own"] == frozenset()
         assert second["verdicts"] == first["verdicts"]
         assert second["score"] == second["submission"].score == 82
-        assert second["passes"] == dict.fromkeys(second["passes"], False)
+        assert second["passes"] == dict.fromkeys(second["passes"], True)
         assert second["structure"].verdict.rule == PassRule(
+            basis="no_author_musts_passed", score=82, threshold=80
+        )
+        assert _PASSED_AT_80 in second["submission"].review_markdown.splitlines()
+
+        # ── The author makes c1 mandatory: the same work, not passed ──
+        own_id = await _author_saves_the_list(
+            session_factory, world, text="Обробляє від'ємне n", must_by_author=True
+        )
+        router.content[REVIEW_EXPLANATION] = _explanation(passed=False)
+        third = await _walk(session_factory, world, router, tmp_path)
+
+        assert third["layer"] is CriteriaLayer.AUTHOR
+        assert third["source_id"] == {own_id}
+        assert third["own"] == {"c1"}
+        assert third["verdicts"] == first["verdicts"]
+        assert third["score"] == third["submission"].score == 82
+        assert third["passes"] == dict.fromkeys(third["passes"], False)
+        assert third["structure"].verdict.rule == PassRule(
             basis="author_musts_unmet", score=82, threshold=70
         )
-        markdown = second["submission"].review_markdown
+        markdown = third["submission"].review_markdown
         assert "## Не зараховано" in markdown
         assert (
             "Не виконано обов'язкові критерії автора, тому роботу не зараховано. "

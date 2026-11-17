@@ -387,7 +387,9 @@ async def get_author_spending(
     )
     return BillingSpendingResponse(
         period=BillingSpendingPeriod(from_date=start, to_date=end),
-        charging_enabled=charging.charging_enabled(),
+        charging_enabled=await charging.charging_applies(
+            session, account.id if account is not None else None
+        ),
         totals=_units(found.totals),
         courses=[
             BillingSpendingCourse(

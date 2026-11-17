@@ -396,7 +396,7 @@ async def _require_units(
     is above 0. A review the author pays for is never refused here: it is
     taken, and waits for the author's units if it must (5a, item 2).
     """
-    from course_supporter.billing.charging import charging_enabled
+    from course_supporter.billing.charging import charging_possible
     from course_supporter.billing.quotes import (
         UnitsRefusedError,
         require_enough,
@@ -404,7 +404,7 @@ async def _require_units(
     )
     from course_supporter.security.exceptions import SecurityRejectedError
 
-    if not charging_enabled():
+    if not charging_possible():
         return
     from course_supporter.api.routes.billing_estimates import (
         FileForQuote,

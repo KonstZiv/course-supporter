@@ -403,6 +403,8 @@ class TestTwoAttemptsWithReplies:
         assert {c.id for c in read if c.author == CommentAuthor.MENTOR} == {
             a.id for a in answers.values()
         }
+        # The answering review is the one the next replies go to (K3b's sign).
+        assert threads.accepting_replies is True
 
         # The hostile text: in no request of the path's stages, nor in the
         # review. The one request that carries it is the reply screen's own

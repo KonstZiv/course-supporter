@@ -2856,8 +2856,8 @@ class RemarkComment(Base):
     the verdicts: the rows go with a hard delete of their student or their
     submission (``ON DELETE CASCADE``), a reply with its parent, and the reads
     filter on the live submission and the live student. Every read is scoped
-    by ``tenant_id``. Task 12a, K1 lands the table; nothing writes or reads it
-    yet.
+    by ``tenant_id``. Task 12a, K1 lands the table; K3 writes and reads the
+    student's replies (``storage/remark_comment_repository.py``).
     """
 
     __tablename__ = "remark_comments"

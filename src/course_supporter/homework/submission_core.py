@@ -54,11 +54,14 @@ from course_supporter.api.upload_validation import (
 )
 from course_supporter.enqueue import create_homework_job, dispatch_homework
 from course_supporter.homework.attempt_dedup import same_work_reaches_the_new_path
+from course_supporter.homework.student_text import (
+    normalized_student_text,
+    screened_student_text,
+)
 from course_supporter.homework.test_doors import check_test_answers, stored_answers
 from course_supporter.security.exceptions import ErrorCategory, SecurityRejectedError
 from course_supporter.security.policies import HOMEWORK_POLICY
 from course_supporter.security.stage1 import archive_kind_for_filename
-from course_supporter.security.text_screen import screen_text
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.project_base_repository import ProjectBaseRepository
 from course_supporter.storage.s3 import upload_file_chunks
@@ -201,7 +204,9 @@ def check_student_note(student_note: str | None) -> str | None:
     portal's form, another through a JSON body — and refuse what the portal's
     counter allowed. Then the edges are trimmed and the rest is counted in code
     points. What is stored is the screened text in NFC, as Stage 1 stores text;
-    a comment of nothing but whitespace is no comment.
+    a comment of nothing but whitespace is no comment. Both steps are the
+    ones a reply to a remark meets too (``homework/student_text.py``, task
+    12a): one reading of a student's words, two doors.
 
     Raises:
         HTTPException: 422 with ``{code, details}``, the body of the other
@@ -210,7 +215,7 @@ def check_student_note(student_note: str | None) -> str | None:
     """
     if student_note is None:
         return None
-    note = student_note.replace("\r\n", "\n").replace("\r", "\n").strip()
+    note = normalized_student_text(student_note)
     if not note:
         return None
     if len(note) > STUDENT_NOTE_MAX_CHARS:
@@ -226,16 +231,7 @@ def check_student_note(student_note: str | None) -> str | None:
             },
         )
     try:
-        # No languages: bytes encoded from a str are UTF-8, which is read
-        # without one. The one exception is a lone surrogate a JSON body can
-        # carry: ``surrogatepass`` turns it into bytes that are not UTF-8, and
-        # the screen refuses them rather than the encoder failing with a 500.
-        screened = screen_text(
-            note.encode("utf-8", "surrogatepass"),
-            name="student_note",
-            mode=HOMEWORK_POLICY.text_screen_mode,
-            context="homework",
-        ).text
+        screened = screened_student_text(note, name="student_note")
     except SecurityRejectedError as exc:
         raise HTTPException(
             status_code=422,

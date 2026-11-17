@@ -156,6 +156,17 @@ class Settings(BaseSettings):
     creem_api_base: Literal[
         "https://test-api.creem.io/v1", "https://api.creem.io/v1"
     ] = "https://test-api.creem.io/v1"
+    # Macropay (billing.payments.macropay), the second merchant of record, read
+    # when BILLING_PROVIDERS names "macropay"; without the token and the secret
+    # that name stops the startup. The token (Organization Access Token) goes in
+    # Authorization: Bearer; the secret (whsec_<base64>) checks the Standard
+    # Webhooks signature. Never logged. The API's host: the sandbox by default —
+    # the live one only by its explicit value (their tokens do not mix).
+    macropay_api_key: SecretStr | None = None
+    macropay_webhook_secret: SecretStr | None = None
+    macropay_api_base: Literal[
+        "https://sandbox-api.macropay.ai/v1", "https://api.macropay.ai/v1"
+    ] = "https://sandbox-api.macropay.ai/v1"
 
     # --- Periodic tasks (course_supporter.periodic) ---
     # ARQ cron jobs of WorkerSettings. Each task: a switch and a schedule of

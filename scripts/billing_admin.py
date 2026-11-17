@@ -105,6 +105,10 @@ Audited as refund.order_hold / refund.order_release:
         [--provider creem] --reason "the user asked, ticket 42" --actor kostiantyn
     refund-release --order ord_6vSsOdTANP5PhOzuDlUuXE [--provider creem] \
         --actor kostiantyn      # the refund did not happen
+Macropay (the second provider) refunds partially too, from its dashboard: the
+same commands with --provider macropay and its order.id; the first
+refund.created / refund.updated "succeeded" completes the hold, and
+order.refunded takes nothing (billing/README.md, Macropay).
 
 Anonymization, AFTER the tenant or the student was deleted by hand (there is
 no account-deletion flow yet; when one appears it calls the same functions).

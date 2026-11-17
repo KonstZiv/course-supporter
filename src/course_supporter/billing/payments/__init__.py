@@ -17,6 +17,8 @@ Modules:
     (``BILLING_PROVIDERS``, none by default: payment is unavailable).
     :mod:`.creem` — :class:`.creem.CreemProvider`, Creem's checkout, webhooks
     and refunds (its dashboard's only).
+    :mod:`.macropay` — :class:`.macropay.MacropayProvider`, Macropay's checkout,
+    Standard Webhooks and refunds (partial ones too): the second provider.
     :mod:`.fake` — :class:`.fake.FakeProvider`, for tests and local
     development only; never registered in production.
     :mod:`.checkout` — a payer opens a checkout of a package (a student from

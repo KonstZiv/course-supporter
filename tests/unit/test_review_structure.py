@@ -330,6 +330,61 @@ class TestAStoredVersion1Review:
         )  # type: ignore[index]
 
 
+# A remark as every builder before ``item_id`` wrote it to the database.
+_STORED_REMARK: dict[str, object] = {
+    "what": "Wrong.",
+    "why": "It matters.",
+    "todo": "Fix it.",
+    "read": [],
+    "position": None,
+}
+
+
+class TestTheRemarksItem:
+    """Task 12a: a remark names its item of the criteria list (``item_id``)."""
+
+    def test_a_review_stored_before_the_field_reads_and_dumps_as_before(
+        self,
+    ) -> None:
+        stored = {
+            "schema_version": REVIEW_SCHEMA_VERSION,
+            "language": "ukr",
+            "verdict": {"passed": False, "why": "Not yet."},
+            **{
+                section: [dict(_STORED_REMARK)]
+                for section in ("fixed", "new_remarks", "open", "broken")
+            },
+        }
+
+        review = ReviewStructureV1.model_validate(stored)
+        dumped = review.model_dump(mode="json")
+
+        for section in ("fixed", "new_remarks", "open", "broken"):
+            [remark] = getattr(review, section)
+            assert remark.item_id is None
+            # Key for key as before: no "item_id" key appears.
+            assert dumped[section] == [_STORED_REMARK]
+
+    @pytest.mark.parametrize("item_id", ["c3", "c12.p2"])
+    def test_the_item_goes_through_storage(self, item_id: str) -> None:
+        review = ReviewStructureV1(
+            schema_version="1",
+            language="ukr",
+            open=[_A_REMARK.model_copy(update={"item_id": item_id})],
+        )
+
+        dumped = review.model_dump(mode="json")
+
+        assert dumped["open"][0]["item_id"] == item_id
+        assert ReviewStructureV1.model_validate(dumped) == review
+
+    @pytest.mark.parametrize("item_id", ["c0", "3", "C3", "c3.p", "c3.p0", "c3.p1.x"])
+    def test_an_item_of_another_shape_is_refused(self, item_id: str) -> None:
+        """The shape of a verdict row's ``item_id``: ``cK`` or ``cK.pN``."""
+        with pytest.raises(ValidationError, match="item_id"):
+            Remark(what="Wrong.", why="It matters.", todo="Fix it.", item_id=item_id)
+
+
 class TestParts:
     @pytest.mark.parametrize("kind", ["video", "audio", "slide", "paragraph", "file"])
     def test_the_five_kinds_of_position(self, kind: str) -> None:

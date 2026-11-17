@@ -30,12 +30,14 @@ Steps:
        more, alone, each with its reason, of the rung that answered
        (``PRE-FLIGHT.md`` 9.5 (a); widened 2026-10-02).
     4. The verdicts are settled — the resubmission safeguard reads the latest
-       earlier verdicts of the same list — and written. On a project's stage
-       a "not met" keeps the place of its problem in the student's files
-       when its line is there (chain K5); nothing is asked again for one
-       that is not. A project's request reads its whole changed files with
-       the author's lines marked, when the marked text fits the project's
-       input budget, and without a mark when it does not (chain K5).
+       earlier verdicts of the same list — and written, each with its
+       remark's state since the student's earlier attempt (task 12a). On a
+       project's stage a "not met" keeps the place of its problem in the
+       student's files when its line is there (chain K5); nothing is asked
+       again for one that is not. A project's request reads its whole
+       changed files with the author's lines marked, when the marked text
+       fits the project's input budget, and without a mark when it does not
+       (chain K5).
 
 Failure:
     No list is not a failure (step 1). A ladder that gives no answer — on
@@ -75,6 +77,7 @@ from course_supporter.homework.criteria_verdicts import (
     SubmittedWork,
     items_to_ask_again,
     settle_verdicts,
+    with_remark_states,
 )
 from course_supporter.homework.mentor_context import mark_authors_lines
 from course_supporter.homework.path_checkpoint import FreezeReason
@@ -213,6 +216,12 @@ async def evaluate_criteria(
         first_call_id=first.call_id,
         repeat_call_id=again.call_id if again is not None else None,
     )
+    # The state of each remark since the earlier attempt (task 12a), written
+    # with the rows: counted anew whenever the stage writes them.
+    attempt = await verdicts.earlier_attempt(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
+    records = with_remark_states(records, attempt.rows if attempt is not None else None)
     await verdicts.replace_for_submission(
         tenant_id=submission.tenant_id,
         submission_id=submission.id,

@@ -29,6 +29,9 @@ Interface:
     ``Verdict.rule`` (:class:`PassRule`, :data:`PassBasis`) — which branch of
     a criteria list's pass rule decided, with the score and the threshold
     (2026-11-12). Optional on the same terms.
+    ``Remark.item_id`` — the item of the criteria list a remark is about, the
+    portal's handle for a student's reply to it (task 12a). Optional on the
+    same terms.
 
 Two rules the model enforces rather than documents:
 
@@ -63,6 +66,7 @@ from typing import Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from course_supporter.criteria_kinds import CRITERION_ID_PATTERN, POINT_ID_PATTERN
 from course_supporter.models.review_schema import VersionedReview
 
 SECTION_ORDER: Final[tuple[str, ...]] = (
@@ -233,6 +237,11 @@ class Remark(BaseModel):
     matters, and one without a ``todo`` leaves them with a verdict instead of a
     lesson.
 
+    ``item_id`` names the item of the criteria list the remark is about, as
+    the item's verdict row names it — the handle a student's reply to the
+    remark is tied by (task 12a). It is not printed: the student reads the
+    remark, the portal reads the handle.
+
     >>> Remark(what="Пароль написано просто текстом.",
     ...        why="Його побачить кожен, хто відкриє файл.",
     ...        todo="Перенести пароль до змінної середовища.").read
@@ -251,6 +260,20 @@ class Remark(BaseModel):
     position: Position | None = Field(
         default=None,
         description="Where in the material this is, when the remark has a place.",
+    )
+    # Left out of the dump when absent, as ``Verdict.rule`` is: every remark
+    # stored before the field reads and is sent key for key as before.
+    item_id: str | None = Field(
+        default=None,
+        pattern=f"{CRITERION_ID_PATTERN}|{POINT_ID_PATTERN}",
+        exclude_if=lambda value: value is None,
+        description=(
+            "The item of the criteria list the remark is about — a criterion "
+            "('c3') or a mandatory point ('c3.p2') — as its verdict row names "
+            "it; a student's reply to the remark is tied to it by this (task "
+            "12a). None for a remark of no list's item, and for every remark "
+            "stored before the field."
+        ),
     )
 
 

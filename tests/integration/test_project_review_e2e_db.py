@@ -1102,7 +1102,13 @@ class TestAChangedWorkAgain:
             "c2.p2",
             "c3",
         }
-        assert second.structure.new_remarks[1].position == _PLACE
+        # A second attempt at the same version of the task (task 12a): the
+        # remarks of the first that still stand are open, none is new — the
+        # copy between the two has no rows and is passed over.
+        assert second.structure.new_remarks == []
+        assert second.structure.open[1].position == _PLACE
+        # Each remark names its criterion: a reply is tied to it by that.
+        assert [remark.item_id for remark in second.structure.open] == ["c2", "c3"]
         [payload] = second.reviewed
         assert payload.structure == second.structure
 

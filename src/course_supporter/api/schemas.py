@@ -1166,8 +1166,9 @@ class CriteriaOverrideRequest(BaseModel):
             "``mandatory_points``) and, for a ``must``, ``must_by_author`` — "
             "``true`` makes it mandatory for the pass, ``false`` leaves it to "
             "weigh in the score; omitted, a new ``must`` or one whose weight was "
-            "raised is mandatory and a kept one keeps its mark. ``soft_descent`` "
-            "is the code's and is not sent."
+            "raised is mandatory, and a ``must`` of the model's list keeps the "
+            "value of the edit this one replaces, ``false`` without one. "
+            "``soft_descent`` is the code's and is not sent."
         ),
     )
 

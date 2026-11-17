@@ -208,10 +208,14 @@ def _criterion(
 
 # Weights 3 / 2 / 1. c2 is checked by two points: reading the lines and
 # printing the statistics. c3 names a concept the course teaches.
+# The author's edit: c1 a "must" the author made mandatory themselves
+# (``must_by_author``, 2026-11-17).
 _CRITERIA = (
-    _criterion("c1", "must"),
-    _criterion("c2", "should", points=2),
-    _criterion("c3", "may", concepts=("empty-input",)),
+    _criterion("c1", "must").model_copy(update={"must_by_author": True}),
+    _criterion("c2", "should", points=2).model_copy(update={"must_by_author": False}),
+    _criterion("c3", "may", concepts=("empty-input",)).model_copy(
+        update={"must_by_author": False}
+    ),
 )
 
 # ── The recorded answers ────────────────────────────────────────────────────
@@ -900,8 +904,8 @@ class TestAFirstSubmissionOfAProject:
         assert structure.verdict is not None
         assert structure.verdict.passed is False
         assert structure.verdict.why == _WHY
-        # The author's list: its "must" is met, and 50 is under the author's
-        # threshold of 70 (the pass rule of 2026-11-12).
+        # The author's list: its own "must" is met, and 50 is under the
+        # author's threshold of 70 (the pass rule of 2026-11-12 and 2026-11-17).
         assert structure.verdict.rule == PassRule(
             basis="author_musts_below_threshold", score=50, threshold=70
         )

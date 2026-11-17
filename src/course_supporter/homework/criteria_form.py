@@ -353,9 +353,11 @@ class CriterionEdit(BaseModel):
         default=None,
         description=(
             "For a ``must`` criterion: ``true`` — mandatory for the pass, "
-            "``false`` — weighs in the score alone. Omitted — a new ``must`` or "
-            "one whose weight you raised is mandatory, a kept one keeps its mark. "
-            "``true`` on a criterion that is not a ``must`` is refused."
+            "``false`` — weighs in the score alone. Omitted — a new ``must``, or "
+            "one whose weight you raised above the model's list, is mandatory; a "
+            "``must`` of the model's list keeps the value your edit it replaces "
+            "gave it, ``false`` without one. ``true`` on a criterion that is not "
+            "a ``must`` is refused."
         ),
     )
 

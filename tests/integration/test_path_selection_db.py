@@ -25,6 +25,7 @@ from course_supporter.homework.path_selection import (
     resolve_submission_state,
 )
 from course_supporter.models.source import AssignmentType
+from course_supporter.remark_kinds import CommentAuthor, CommentKind
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -34,6 +35,7 @@ from course_supporter.storage.orm import (
     Tenant,
 )
 from course_supporter.storage.student_repository import StudentRepository
+from tests._helpers.remark_comments import a_stored_comment
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,8 +43,14 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.requires_db
 
 
-def _config(*, served_by: ServedBy = ServedBy.NEW_PATH) -> PathConfig:
-    """A config whose ``task`` type is on the new path, with three described states."""
+def _config(
+    *, served_by: ServedBy = ServedBy.NEW_PATH, replies_enabled: bool = False
+) -> PathConfig:
+    """A config whose ``task`` type is on the new path, with three described states.
+
+    ``replies_enabled`` switches on the students' replies of ``task`` (task
+    12a, K3); its replies path is told apart by a stage of its own.
+    """
     stage = {
         "deterministic": True,
         "prompt_ref": "prompts/safety_check/v1.md",
@@ -73,10 +81,11 @@ def _config(*, served_by: ServedBy = ServedBy.NEW_PATH) -> PathConfig:
                 },
                 "task": {
                     "served_by": served_by.value,
+                    "replies_enabled": replies_enabled,
                     "paths": {
                         "first": ["safety", "attempt_classifier"],
                         "repeat_without_replies": ["safety"],
-                        "repeat_with_replies": ["safety"],
+                        "repeat_with_replies": ["safety", "attempt_classifier"],
                     },
                 },
                 "project": {"served_by": ServedBy.TODAYS_MENTOR.value, "paths": {}},
@@ -389,18 +398,19 @@ class TestChoosePath:
         )
         assert choice.stages == ("safety",)
 
-    async def test_the_replies_state_is_never_chosen(
+    async def test_without_replies_the_replies_state_is_never_chosen(
         self,
         db_session: AsyncSession,
         seed_tenant: Tenant,
         seed_root_node: CourseNode,
         seed_material_entry: AuthoredDocument,
     ) -> None:
-        """Described, reachable only from task 12 — never from today's data.
+        """Today's data, today's file: no type takes replies, none is chosen.
 
-        Both reachable arrangements are exercised: a student with no review and
-        a student with one. Neither can produce the third state, because nothing
-        in the data says a submission carries replies.
+        Until task 12a this lock read "never from today's data"; K3 makes the
+        third state reachable, and only so (``TestTheRepliesState`` below).
+        Both reachable arrangements are exercised: a student with no review
+        and a student with one.
         """
         student = await StudentRepository(db_session).create(
             tenant_id=seed_tenant.id, external_id="ext-never-replies"
@@ -429,3 +439,216 @@ class TestChoosePath:
             SubmissionState.REPEAT_WITHOUT_REPLIES,
         ]
         assert SubmissionState.REPEAT_WITH_REPLIES not in chosen
+
+
+class TestTheRepliesState:
+    """Task 12a, K3: the third state — the switch on, and replies to answer.
+
+    On real rows: the attempts, the task's version, and the replies in K1's
+    table, read by the store the body reads them by.
+    """
+
+    _VERSION = "the-version-in-force"
+
+    async def _a_repeat(
+        self,
+        session: AsyncSession,
+        tenant: Tenant,
+        root: CourseNode,
+        doc: AuthoredDocument,
+        name: str,
+    ) -> tuple[Student, HomeworkSubmission, HomeworkSubmission]:
+        """A reviewed attempt at the version in force, and the next submission."""
+        doc.content_hash = self._VERSION
+        student = await StudentRepository(session).create(
+            tenant_id=tenant.id, external_id=f"ext-replies-{name}"
+        )
+        repo = HomeworkRepository(session)
+        reviewed = await _submit(
+            repo, tenant=tenant, student=student, root=root, doc=doc, status="delivered"
+        )
+        reviewed.task_version = self._VERSION
+        current = await _submit(
+            repo, tenant=tenant, student=student, root=root, doc=doc, status="received"
+        )
+        await session.flush()
+        return student, reviewed, current
+
+    @staticmethod
+    async def _state(
+        session: AsyncSession,
+        student: Student,
+        doc: AuthoredDocument,
+        current: HomeworkSubmission,
+        *,
+        replies_enabled: bool = True,
+        named: bool = True,
+    ) -> SubmissionState:
+        return await resolve_submission_state(
+            session,
+            student_id=student.id,
+            authored_document_id=doc.id,
+            submission_id=current.id if named else None,
+            tenant_id=current.tenant_id if named else None,
+            task_type=AssignmentType.TASK if named else None,
+            config=_config(replies_enabled=replies_enabled),
+        )
+
+    async def test_replies_to_answer_make_the_replies_state(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        student, reviewed, current = await self._a_repeat(
+            db_session, seed_tenant, seed_root_node, seed_material_entry, "yes"
+        )
+        await a_stored_comment(db_session, reviewed)
+
+        state = await self._state(db_session, student, seed_material_entry, current)
+
+        assert state is SubmissionState.REPEAT_WITH_REPLIES
+
+    async def test_the_choice_walks_the_replies_path(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        student, reviewed, current = await self._a_repeat(
+            db_session, seed_tenant, seed_root_node, seed_material_entry, "path"
+        )
+        await a_stored_comment(db_session, reviewed)
+
+        choice = await choose_path(
+            db_session,
+            task_type=AssignmentType.TASK,
+            student_id=student.id,
+            authored_document_id=seed_material_entry.id,
+            config=_config(replies_enabled=True),
+            submission_id=current.id,
+            tenant_id=current.tenant_id,
+        )
+
+        assert choice is not None
+        assert choice.key == PathKey(
+            AssignmentType.TASK, SubmissionState.REPEAT_WITH_REPLIES
+        )
+        assert choice.stages == ("safety", "attempt_classifier")
+
+    async def test_the_switch_off_never_chooses_it(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """Replies left from a day the switch was on: no answer comes, no state."""
+        student, reviewed, current = await self._a_repeat(
+            db_session, seed_tenant, seed_root_node, seed_material_entry, "off"
+        )
+        await a_stored_comment(db_session, reviewed)
+
+        state = await self._state(
+            db_session, student, seed_material_entry, current, replies_enabled=False
+        )
+
+        assert state is SubmissionState.REPEAT_WITHOUT_REPLIES
+
+    async def test_answered_replies_and_the_mentors_answers_do_not_count(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        student, reviewed, current = await self._a_repeat(
+            db_session, seed_tenant, seed_root_node, seed_material_entry, "answered"
+        )
+        question = await a_stored_comment(db_session, reviewed, answered_in=reviewed.id)
+        await a_stored_comment(
+            db_session,
+            reviewed,
+            author=CommentAuthor.MENTOR,
+            kind=CommentKind.ANSWER,
+            parent_id=question.id,
+            minute=1,
+        )
+
+        state = await self._state(db_session, student, seed_material_entry, current)
+
+        assert state is SubmissionState.REPEAT_WITHOUT_REPLIES
+
+    async def test_replies_to_an_earlier_review_than_the_last_do_not_count(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """The submission answers the replies to its previous attempt alone."""
+        student, reviewed, _ = await self._a_repeat(
+            db_session, seed_tenant, seed_root_node, seed_material_entry, "earlier"
+        )
+        await a_stored_comment(db_session, reviewed)
+        repo = HomeworkRepository(db_session)
+        last = await _submit(
+            repo,
+            tenant=seed_tenant,
+            student=student,
+            root=seed_root_node,
+            doc=seed_material_entry,
+            status="completed",
+        )
+        last.task_version = self._VERSION
+        later = await _submit(
+            repo,
+            tenant=seed_tenant,
+            student=student,
+            root=seed_root_node,
+            doc=seed_material_entry,
+            status="received",
+        )
+
+        state = await self._state(db_session, student, seed_material_entry, later)
+
+        assert state is SubmissionState.REPEAT_WITHOUT_REPLIES
+
+    async def test_replies_to_a_review_of_another_version_do_not_count(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """The author changed the task: its remarks may be other criteria now."""
+        student, reviewed, current = await self._a_repeat(
+            db_session, seed_tenant, seed_root_node, seed_material_entry, "version"
+        )
+        reviewed.task_version = "the-version-the-review-read"
+        await a_stored_comment(db_session, reviewed)
+
+        state = await self._state(db_session, student, seed_material_entry, current)
+
+        assert state is SubmissionState.REPEAT_WITHOUT_REPLIES
+
+    async def test_a_caller_that_names_no_submission_is_not_asked_about_them(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+        seed_material_entry: AuthoredDocument,
+    ) -> None:
+        """The price quote: no submission yet, no replies asked."""
+        student, reviewed, current = await self._a_repeat(
+            db_session, seed_tenant, seed_root_node, seed_material_entry, "quote"
+        )
+        await a_stored_comment(db_session, reviewed)
+
+        state = await self._state(
+            db_session, student, seed_material_entry, current, named=False
+        )
+
+        assert state is SubmissionState.REPEAT_WITHOUT_REPLIES

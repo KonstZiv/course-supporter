@@ -40,9 +40,10 @@ from course_supporter.language import (
     LanguageNotAllowedError,
     normalize_and_validate,
 )
-from course_supporter.models.review_structure import ReviewStructureV1
+from course_supporter.models.review_structure import ReplyKind, ReviewStructureV1
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 from course_supporter.normalizer import Manifest
+from course_supporter.remark_kinds import CommentAuthor, CommentKind
 from course_supporter.storage.course_node_repository import SummaryStatus
 
 # --- Material Tree Nodes ---
@@ -2373,6 +2374,92 @@ class ChannelTouchRequest(PortalTouchRequest):
         description="Student identifier from the caller's system, as used on "
         "submission. Resolved within the key's tenant; never created here.",
     )
+
+
+class PortalCommentRequest(BaseModel):
+    """A student's reply to a remark of their review, as it arrives (task 12a).
+
+    The words are checked by the core, not here: an empty, too long or
+    refused text answers with the reply's own codes (``comment_empty``,
+    ``comment_too_long``, ``comment_rejected``), never with a validation
+    error of the schema.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str = Field(
+        description="The remark: c3 for a criterion, c3.p2 for a point of it.",
+    )
+    kind: ReplyKind = Field(description="question, objection or comment.")
+    body: str = Field(
+        description="What the student writes: up to 2000 characters, line "
+        "breaks counted once, edges trimmed.",
+    )
+    parent_id: uuid.UUID | None = Field(
+        default=None,
+        description="The comment of the remark's thread this one answers; "
+        "null for a reply to the remark itself.",
+    )
+
+
+class ChannelCommentRequest(PortalCommentRequest):
+    """The same reply, arriving from the caller's channel (task 12a).
+
+    Adds what a tenant key cannot know by itself: WHICH student writes, named
+    by the identifier the caller's own system uses. Never created here.
+    """
+
+    student_external_id: str = Field(
+        min_length=1,
+        description="Student identifier from the caller's system, as used on "
+        "submission. Resolved within the key's tenant; never created here.",
+    )
+
+
+class RemarkComment(BaseModel):
+    """One comment on a remark, as both doors serve it (task 12a).
+
+    A student's reply or the Mentor's answer to one. What the reply screen
+    made of a reply — its topic, its hostility — is the platform's and never
+    served.
+    """
+
+    id: uuid.UUID
+    submission_id: uuid.UUID = Field(
+        description="The submission whose review the comment is attached to.",
+    )
+    item_id: str = Field(description="The remark: c3, or c3.p2 for a point.")
+    parent_id: uuid.UUID | None = Field(
+        description="The comment of the same thread this one answers.",
+    )
+    author: CommentAuthor
+    kind: CommentKind = Field(
+        description="question, objection or comment — a student's reply; "
+        "answer — the Mentor's.",
+    )
+    body: str
+    created_at: datetime
+    answered_in_submission_id: uuid.UUID | None = Field(
+        description="For a student's reply: the submission whose review "
+        "answered it; null while none has.",
+    )
+
+
+class RemarkThread(BaseModel):
+    """The comments on one remark, oldest first; nesting is ``parent_id``."""
+
+    item_id: str
+    comments: list[RemarkComment]
+
+
+class RemarkThreads(BaseModel):
+    """The threads on the remarks of one review (task 12a).
+
+    Each runs through every attempt of the student at the same version of the
+    task; a remark nobody commented on has no thread.
+    """
+
+    threads: list[RemarkThread]
 
 
 class FeedbackTouch(BaseModel):

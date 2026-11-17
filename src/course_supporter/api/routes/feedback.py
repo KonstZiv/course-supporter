@@ -10,6 +10,11 @@ student it names, a touch does not. A touch is an answer about work that was
 already done, so a student nobody has heard of has nothing to answer about —
 and saying so in any way other than the one generic "not found" would turn this
 route into a way of asking which external identifiers exist.
+
+A reply to a remark (task 12a, K3) is the same kind of answer and comes
+through the same door: ``POST`` / ``GET /feedback/submissions/{id}/comments``,
+one resolution of the student and the submission for all three
+(``_on_the_channel``), one core (``homework/reply_core.py``).
 """
 
 from __future__ import annotations
@@ -22,9 +27,20 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_session
-from course_supporter.api.routes._feedback_shared import to_touch
+from course_supporter.api.routes._feedback_shared import (
+    remark_comments,
+    to_remark_comment,
+    to_remark_threads,
+    to_touch,
+)
 from course_supporter.api.routes._portal_shared import material_label
-from course_supporter.api.schemas import ChannelTouchRequest, FeedbackTouch
+from course_supporter.api.schemas import (
+    ChannelCommentRequest,
+    ChannelTouchRequest,
+    FeedbackTouch,
+    RemarkComment,
+    RemarkThreads,
+)
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
@@ -32,6 +48,8 @@ from course_supporter.homework.feedback_core import (
     SUBMISSION_NOT_FOUND,
     touch_review,
 )
+from course_supporter.homework.remark_comments import RemarkCommentRepository
+from course_supporter.homework.reply_core import post_reply, read_threads
 from course_supporter.models.feedback import (
     CourseTouchCountersResponse,
     TaskTouchCountersEntry,
@@ -39,6 +57,7 @@ from course_supporter.models.feedback import (
 )
 from course_supporter.storage.feedback_repository import FeedbackRepository
 from course_supporter.storage.homework_repository import HomeworkRepository
+from course_supporter.storage.orm import HomeworkSubmission, Student
 from course_supporter.storage.student_repository import StudentRepository
 
 logger = structlog.get_logger()
@@ -48,6 +67,7 @@ router = APIRouter(tags=["feedback"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 CheckDep = Annotated[TenantContext, Depends(require_scope(AuthScope.CHECK))]
 PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
+CommentsDep = Annotated[RemarkCommentRepository, Depends(remark_comments)]
 
 
 @router.post(
@@ -75,13 +95,42 @@ async def touch_submission_review(
     as the SAME generic 404 the portal gives, with the same body. The scope is
     CHECK, the scope the caller's submissions already travel on.
     """
+    student, submission = await _on_the_channel(
+        session, tenant, submission_id, body.student_external_id
+    )
+    row = await touch_review(
+        session,
+        submission=submission,
+        student_id=student.id,
+        value=body.value,
+    )
+    await session.commit()
+    return to_touch(row)
+
+
+async def _on_the_channel(
+    session: AsyncSession,
+    tenant: TenantContext,
+    submission_id: uuid.UUID,
+    student_external_id: str,
+) -> tuple[Student, HomeworkSubmission | None]:
+    """The student the caller names, and the submission as theirs — or ``None``.
+
+    The one resolution of the channel, for the touch and for the replies: the
+    student by ``student_external_id`` WITHIN the key's tenant, never created;
+    the submission by the ownership helper of the read path. A student nobody
+    has heard of is refused here, there being nothing to name into the core;
+    a submission that does not resolve goes to the core as ``None``, and the
+    core refuses it with the same 404.
+
+    Raises:
+        HTTPException: 404 with the core's own constant — not a copy of its
+            wording — when the student does not resolve.
+    """
     student = await StudentRepository(session).get_by_external_id(
-        tenant.tenant_id, body.student_external_id
+        tenant.tenant_id, student_external_id
     )
     if student is None:
-        # Nothing to name into the core, so the refusal is given here — with
-        # the core's OWN constant, not a copy of its wording, so the two doors
-        # cannot drift into two different sentences for the same situation.
         raise HTTPException(status_code=404, detail=SUBMISSION_NOT_FOUND)
 
     submission = await HomeworkRepository(session).get_owned(submission_id, student.id)
@@ -91,15 +140,87 @@ async def touch_submission_review(
     # stops being true.
     if submission is not None and submission.tenant_id != tenant.tenant_id:
         submission = None
+    return student, submission
 
-    row = await touch_review(
+
+@router.post(
+    "/feedback/submissions/{submission_id}/comments",
+    response_model=RemarkComment,
+    status_code=201,
+)
+async def reply_to_remark_from_the_channel(
+    tenant: CheckDep,
+    session: SessionDep,
+    comments: CommentsDep,
+    body: ChannelCommentRequest,
+    submission_id: Annotated[
+        uuid.UUID,
+        Path(description="The submission whose review's remark is answered."),
+    ],
+) -> RemarkComment:
+    """Reply to a remark of the review — from the caller's channel (task 12a).
+
+    The mirror of the portal's door, as the touch is: the student by
+    ``student_external_id`` within the key's tenant, never created; the
+    same core (``homework/reply_core.py``) and the same answers — the read
+    path's one 404 for everything the student cannot reply on, 422 with
+    ``{code, details}`` for a reply the core refuses. Scope CHECK, the scope
+    the caller's submissions travel on.
+    """
+    student, submission = await _on_the_channel(
+        session, tenant, submission_id, body.student_external_id
+    )
+    reply = await post_reply(
         session,
         submission=submission,
         student_id=student.id,
-        value=body.value,
+        item_id=body.item_id,
+        kind=body.kind,
+        body=body.body,
+        parent_id=body.parent_id,
+        comments=comments,
     )
     await session.commit()
-    return to_touch(row)
+    return to_remark_comment(reply)
+
+
+@router.get(
+    "/feedback/submissions/{submission_id}/comments",
+    response_model=RemarkThreads,
+)
+async def read_remark_threads_from_the_channel(
+    tenant: CheckDep,
+    session: SessionDep,
+    comments: CommentsDep,
+    submission_id: Annotated[
+        uuid.UUID,
+        Path(description="The submission whose review's threads are read."),
+    ],
+    student_external_id: Annotated[
+        str,
+        Query(
+            min_length=1,
+            description="Student identifier from the caller's system, as "
+            "used on submission. Resolved within the key's tenant.",
+        ),
+    ],
+) -> RemarkThreads:
+    """The threads on the remarks of the review — from the caller's channel.
+
+    A read has no body, so the student is named in the query. The same core
+    as the portal's read and the same answers: no threads for a type that
+    takes no replies, the one 404 for a submission the student cannot read.
+    """
+    student, submission = await _on_the_channel(
+        session, tenant, submission_id, student_external_id
+    )
+    threads = await read_threads(
+        session,
+        submission=submission,
+        student_id=student.id,
+        comments=comments,
+    )
+    return to_remark_threads(threads)
 
 
 @router.get(

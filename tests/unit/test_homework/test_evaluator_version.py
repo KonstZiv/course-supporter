@@ -300,11 +300,15 @@ class TestShippedFile:
         so no prompt, first rung or verdict rule moved. A later change that
         does move one updates this value on purpose — and with it every
         earlier review stops being given again by the dedup.
+
+        Moved on purpose by task 12a, K2: the states of the remarks between
+        attempts change what a review says, so the verdict rules went 6 -> 7
+        and the version ``ev1:3cddefc447c114ed`` -> ``ev1:985d508925abb6c7``.
         """
         shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
         assert (
             evaluator_version(AssignmentType.TASK, shipped, prompt_base_path=_REPO_ROOT)
-            == "ev1:3cddefc447c114ed"
+            == "ev1:985d508925abb6c7"
         )
-        assert criteria_verdicts.VERDICT_RULES_VERSION == 6
+        assert criteria_verdicts.VERDICT_RULES_VERSION == 7

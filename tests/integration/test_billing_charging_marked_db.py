@@ -570,6 +570,35 @@ class Test2Review:
         assert await footprint(session_factory, w) == before
 
 
+class Test2ReviewOnAPathInTestMode:
+    @pytest.mark.parametrize("units", [0, 500])
+    async def test_marked_student_is_neither_reserved_nor_charged(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+        units: int,
+    ) -> None:
+        """The task type's path is in test mode (``path_config.in_test_mode``):
+        not charged for, whoever pays — a marked payer included."""
+        monkeypatch.setattr(funds, "in_test_mode", lambda *a, **k: True)
+        monkeypatch.setattr(quotes, "in_test_mode", lambda *a, **k: True)
+        w = await make_world(session_factory, student=Mark.MARKED)
+        if units:
+            await buy(session_factory, w, units, student=True)
+        before = await footprint(session_factory, w)
+        port = build_funds_port(session_factory)
+
+        answer = await port.check_and_reserve(review(w), 1.0)
+        await call(session_factory, w.homework_job_id, "0.04")
+        await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
+        quote = await review_quote(session_factory, w)
+
+        assert isinstance(port, funds.LedgerFundsPort)
+        assert answer.decision is FundsDecision.ALLOWED
+        assert await footprint(session_factory, w) == before, "no reserve, no move"
+        assert (quote.charging_enabled, quote.enough) == (False, True)
+
+
 class Test2ReviewTheAuthorPays:
     async def test_marked_author_unmarked_student_the_author_is_charged(
         self, session_factory: async_sessionmaker[AsyncSession]
@@ -1046,15 +1075,54 @@ class Test12HeldReviews:
         assert (short, funded) == (False, True)
 
     @pytest.mark.parametrize("mark", NOT_CHARGED)
-    async def test_not_marked_without_units_nothing_written(
+    async def test_not_marked_is_continued_at_once_nothing_written(
         self, session_factory: async_sessionmaker[AsyncSession], mark: Mark
     ) -> None:
+        """Operator 2026-11-17: charging does not apply — nothing to wait for."""
         w = await make_world(session_factory, student=mark)
         await hold(session_factory, w)
         before = await footprint(session_factory, w)
 
-        assert await resumed(session_factory, w) is False
+        assert await resumed(session_factory, w) is True  # 0 units
         assert await footprint(session_factory, w) == before
+
+    async def test_the_mark_taken_off_while_held_continues_it_at_once_for_free(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        w = await make_world(session_factory, student=Mark.MARKED)
+        port = build_funds_port(session_factory)
+        refused = await port.check_and_reserve(review(w), 1.0)  # 0 units
+        await hold(session_factory, w)
+        waits = await resumed(session_factory, w)
+        async with session_factory() as session:
+            await admin.set_test_purchase(
+                session,
+                tenant_id=w.tenant_id,
+                student_id=w.student_id,
+                allowed=False,
+                actor=ACTOR,
+            )
+            await session.commit()
+        before = await footprint(session_factory, w)
+        arq = AsyncMock()
+        arq.enqueue_job = AsyncMock(return_value=MagicMock(job_id="arq:hw:resume"))
+
+        async with session_factory() as session:
+            done = await resume_funded(session, arq, dry_run=False)
+            queued = await session.scalar(
+                select(func.count(Job.id)).where(
+                    Job.subject_id == w.submission_id, Job.status == "queued"
+                )
+            )
+        answer = await port.check_and_reserve(review(w), 1.0)  # the new job's run
+        await call(session_factory, w.homework_job_id, "0.04")
+        await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
+
+        assert (refused.decision, waits) == (FundsDecision.REFUSED, False)
+        assert w.submission_id in done.resumed
+        assert queued == 1
+        assert answer.decision is FundsDecision.ALLOWED
+        assert await footprint(session_factory, w) == before, "no reserve, no charge"
 
 
 # ── Regression: both switches off; charging for every account ─────────

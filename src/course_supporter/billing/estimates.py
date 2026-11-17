@@ -15,6 +15,7 @@ returns ``None`` and is not charged (no estimate, no charge — operator
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -95,6 +96,18 @@ def preparation_e_usd(
             "billing_estimate_failed", action_kind="task_preparation", exc_info=True
         )
         return None
+
+
+def key_explanation_task_chars(task_text: str, answers: object) -> int:
+    """The size of what the explanations of a test's key are shown, in characters.
+
+    The test's text as the model reads it and its key as JSON. One rule for the
+    two places that price the work: the route that shows the author the price
+    before asking (``POST /documents/{document_id}/reference/estimate``) and
+    the worker that reserves E before writing them (``workers/key_explain.py``,
+    step 2) — so the price shown is the E reserved.
+    """
+    return len(task_text) + len(json.dumps(answers, default=str))
 
 
 def processing_e_usd(

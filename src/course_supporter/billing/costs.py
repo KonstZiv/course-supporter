@@ -13,6 +13,10 @@ Attribution rules (operator decisions 2026-11-06 / 2026-11-11):
   inside a ``homework_processing`` job, and are excluded from per-student rows.
 - Calls with ``cost_kind = 'unknown'`` have ``cost_usd IS NULL``; they are
   included in call counts and counted explicitly in ``unknown_calls``.
+- ``platform_usd`` — the part of the known dollars that no payer pays
+  (``NOT charging.PAID_BY_PAYER``, operator 2026-11-17): structural and
+  infrastructure retries, and attempts that themselves failed on the
+  infrastructure. The platform took it on; it never reaches the journal.
 
 Units billed beside the dollars (BIL-E2, operator 2026-11-15, 5b item 3):
 - billed — ``debit`` + ``difference_arisen`` of an action, in two columns by
@@ -40,10 +44,11 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import ColumnElement, Row, and_, case, func, or_, select
+from sqlalchemy import ColumnElement, Row, and_, case, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from course_supporter.billing.charging import PAID_BY_PAYER
 from course_supporter.billing.errors import BillingInvalidError
 from course_supporter.billing.kinds import AccountKind, ActionKind, MovementKind
 from course_supporter.billing.links import (
@@ -97,7 +102,11 @@ _JOB_OF_SUBMISSION = and_(
 
 @dataclass(frozen=True, slots=True)
 class SpendSummary:
-    """Call counts and known USD totals broken down by ``cost_kind``."""
+    """Call counts and known USD totals broken down by ``cost_kind``.
+
+    ``platform_usd`` is the part of :attr:`known_usd` the platform took on
+    (the module's rule).
+    """
 
     calls: int
     exact_calls: int
@@ -105,6 +114,7 @@ class SpendSummary:
     estimated_calls: int
     estimated_usd: Decimal
     unknown_calls: int
+    platform_usd: Decimal = ZERO_USD
 
     @property
     def known_usd(self) -> Decimal:
@@ -131,6 +141,7 @@ class SpendSummary:
             estimated_calls=self.estimated_calls + other.estimated_calls,
             estimated_usd=self.estimated_usd + other.estimated_usd,
             unknown_calls=self.unknown_calls + other.unknown_calls,
+            platform_usd=self.platform_usd + other.platform_usd,
         )
 
 
@@ -329,6 +340,9 @@ def _spend_columns() -> tuple[ColumnElement[Any], ...]:
         func.count(ExternalServiceCall.id)
         .filter(ExternalServiceCall.cost_kind == CostKind.UNKNOWN.value)
         .label("unknown_calls"),
+        func.sum(ExternalServiceCall.cost_usd)
+        .filter(not_(PAID_BY_PAYER))
+        .label("platform_usd"),
     )
 
 
@@ -340,6 +354,7 @@ def _spend_from_row(row: Row[Any]) -> SpendSummary:
         estimated_calls=int(row.estimated_calls or 0),
         estimated_usd=_to_decimal(row.estimated_usd),
         unknown_calls=int(row.unknown_calls or 0),
+        platform_usd=_to_decimal(row.platform_usd),
     )
 
 

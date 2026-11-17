@@ -29,8 +29,9 @@ The rules (operator 2026-10-30, 2026-11-04, 2026-11-11, 2026-11-15):
     * Start: a reserve of ``min(2E, the ceiling, available)`` units
       (:func:`reserve_for`; the ledger caps it by what is available, so it
       may be 0).
-    * End: the fact F — the cost of the action's calls in the register, in
-      units (:func:`fact_of`) — is settled (:func:`finish`). A payer without
+    * End: the fact F — the cost of the action's calls in the register that
+      the payer pays (:data:`PAID_BY_PAYER`, operator 2026-11-17), in units
+      (:func:`fact_of`) — is settled (:func:`finish`). A payer without
       credit (every student, an author without credit) is charged at most the
       reserve; the excess is ``platform_covered``. An author with credit
       keeps the ledger's difference. The author's benefit applies first,
@@ -59,10 +60,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_CEILING, Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 
 from course_supporter.billing import ledger
 from course_supporter.billing.errors import BillingConflictError
@@ -82,6 +83,7 @@ from course_supporter.billing.payer import (
     find_payer,
     resolve_payer,
 )
+from course_supporter.call_outcome import CallOutcome, RequestKind
 from course_supporter.cost_estimate.core import fact_units, price_units, reserve_units
 from course_supporter.cost_estimate.settings import get_estimate_settings
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
@@ -534,10 +536,45 @@ _PRICED_CALL = ExternalServiceCall.unit_type.is_not(None)
 """A row of a call that was made and priced (the register's
 ``ck_esc_priced_call``); the funds-port and metrics rows have none."""
 
+PAYER_REQUEST_KINDS: Final = (RequestKind.FIRST.value, RequestKind.ITEM_REPEAT.value)
+"""The kinds of request whose cost is the payer's (:data:`PAID_BY_PAYER`)."""
+
+PAID_BY_PAYER: Final[ColumnElement[bool]] = or_(
+    ExternalServiceCall.request_kind.is_(None),
+    and_(
+        ExternalServiceCall.request_kind.in_(PAYER_REQUEST_KINDS),
+        ExternalServiceCall.outcome.is_distinct_from(CallOutcome.TRANSPORT_ERROR.value),
+    ),
+)
+"""A register row whose cost the payer pays — THE definition of the fact.
+
+The operator, 2026-11-17 (15:51, confirmed 16:01): «Платник платить за перший
+запит стадії і за повтор сумнівного пункту. Повтори через поламану структуру
+відповіді й через збій мережі несе платформа. Оцінка ціни калібрується за тим
+самим визначенням факту.» It stands on ``request_kind``
+(:class:`~course_supporter.call_outcome.RequestKind`):
+
+* the payer's — ``first`` and ``item_repeat``, except an attempt that itself
+  ended in an infrastructure failure (``outcome = 'transport_error'``: a
+  timeout, 429, 5xx, a dropped connection) — that one is the platform's even
+  as a ``first`` (the billing session's reading, vision-rules#24);
+* the platform's — ``structural_retry``, ``infra_retry`` and those failed
+  attempts;
+* ``NULL`` — the payer's, as before the decision: speech-to-text attempts and
+  rows written before the column; rows of no call carry no cost.
+
+Says nothing about whether a row is priced: each reader keeps its own test
+for that. The rest of a row's cost — ``NOT PAID_BY_PAYER`` — is what the
+platform took on (``billing.costs``, ``platform_usd``). The facts of the
+journal (:func:`review_fact_usd`, :func:`job_fact_usd`) and the calibration
+report (``scripts/cost_estimate_report.py``) read this one condition.
+"""  # noqa: RUF001 - the operator's words, quoted as said
+
 
 async def review_fact_usd(session: AsyncSession, submission_id: uuid.UUID) -> Decimal:
-    """What the review's calls cost: every job of the submission, without the
-    task's preparation run inside them (as the cost report, ``billing.costs``)."""
+    """What the review's calls cost the payer (:data:`PAID_BY_PAYER`): every job
+    of the submission, without the task's preparation run inside them (as the
+    cost report, ``billing.costs``)."""
     jobs = select(Job.id).where(
         Job.subject_type == JOB_SUBJECT_TYPE[JobType.HOMEWORK_PROCESSING],
         Job.subject_id == submission_id,
@@ -546,6 +583,7 @@ async def review_fact_usd(session: AsyncSession, submission_id: uuid.UUID) -> De
         select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0)).where(
             ExternalServiceCall.job_id.in_(jobs),
             _PRICED_CALL,
+            PAID_BY_PAYER,
             ExternalServiceCall.action.not_in(PREPARATION_STAGES),
         )
     )
@@ -555,9 +593,10 @@ async def review_fact_usd(session: AsyncSession, submission_id: uuid.UUID) -> De
 async def job_fact_usd(
     session: AsyncSession, job_id: uuid.UUID, *, action: str | None = None
 ) -> Decimal:
-    """What one job's calls cost — all of them, or those of one ``action``."""
+    """What one job's calls cost the payer (:data:`PAID_BY_PAYER`) — all of
+    them, or those of one ``action``."""
     stmt = select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0)).where(
-        ExternalServiceCall.job_id == job_id, _PRICED_CALL
+        ExternalServiceCall.job_id == job_id, _PRICED_CALL, PAID_BY_PAYER
     )
     if action is not None:
         stmt = stmt.where(ExternalServiceCall.action == action)

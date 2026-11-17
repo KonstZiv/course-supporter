@@ -41,6 +41,7 @@ import re
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -50,7 +51,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.agents.key_explainer import STAGE_NAME
-from course_supporter.call_outcome import FundsDecision
+from course_supporter.call_outcome import CallOutcome, FundsDecision, RequestKind
 from course_supporter.funds_port import (
     FUNDS_PORT_ACTION,
     FundsAnswer,
@@ -402,6 +403,41 @@ class TestTheWorkThatSucceeds:
             "the work paid, so its sum is above zero; two zeros agree over no rows"
         )
         assert port.accounted == [pytest.approx(float(registered or 0))]
+
+    async def test_the_port_is_told_the_payers_fact_not_a_retry(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        seeded: dict[str, uuid.UUID],
+    ) -> None:
+        """A structural retry of the stage is the platform's (operator
+        2026-11-17): in the register, not in what the port settles."""
+        async with session_factory() as session:
+            session.add(
+                ExternalServiceCall(
+                    job_id=seeded["job_id"],
+                    action=STAGE_NAME,
+                    provider="deepseek_thinking",
+                    model_id="deepseek-v4-pro",
+                    success=True,
+                    outcome=CallOutcome.SUCCESS.value,
+                    request_kind=RequestKind.STRUCTURAL_RETRY.value,
+                    unit_type="tokens",
+                    cost_usd=Decimal("0.05"),
+                    cost_kind="estimated",
+                )
+            )
+            await session.commit()
+        router = _RouterDouble(session_factory, content=_GOOD)
+        port = _CountingPort()
+
+        await arq_explain_key(
+            _ctx(session_factory, router, port),
+            str(seeded["job_id"]),
+            str(seeded["version_id"]),
+        )
+
+        assert len(await _stage_rows(session_factory, seeded["job_id"])) == 2
+        assert port.accounted == [pytest.approx(_COST)]
 
 
 class TestTheWorkThatSpendsNothing:

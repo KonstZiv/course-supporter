@@ -27,6 +27,7 @@ from course_supporter.agents.methodist import (
     MethodistAgent,
     build_document_blocks,
 )
+from course_supporter.call_outcome import CallOutcome, RequestKind
 from course_supporter.cost_estimate import hooks
 from course_supporter.cost_estimate import node_summary as reader
 from course_supporter.cost_estimate.settings import get_estimate_settings
@@ -570,3 +571,50 @@ class TestTheReportSeesIt:
         assert report.calls == 1
         assert report.deviation_usd == report.fact_usd - report.e_usd
         assert set(report.step_deviation) == {"methodist_bottomup"}
+
+    async def test_the_fact_is_the_payers_alone(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        committed_course: tuple[Tenant, CourseNode, Job],
+    ) -> None:
+        """E is calibrated against the fact the journal charges (operator
+        2026-11-17): retries and an infrastructure failure stay out."""
+        tenant, root, job = committed_course
+        with tenant_scope(tenant.id):
+            await hooks.shadow_node_summary_regeneration(
+                session_factory=session_factory,
+                vertex_node_id=root.id,
+                job_id=job.id,
+            )
+        async with session_factory() as session:
+            for kind, outcome, usd in (
+                (RequestKind.FIRST, CallOutcome.SUCCESS, "0.03"),
+                (RequestKind.FIRST, CallOutcome.TRANSPORT_ERROR, "0.01"),
+                (RequestKind.INFRA_RETRY, CallOutcome.SUCCESS, "0.02"),
+                (RequestKind.STRUCTURAL_RETRY, CallOutcome.SUCCESS, "0.02"),
+            ):
+                session.add(
+                    ExternalServiceCall(
+                        job_id=job.id,
+                        action="methodist_bottomup",
+                        provider="deepseek_thinking",
+                        model_id="deepseek-v4-pro",
+                        success=outcome is CallOutcome.SUCCESS,
+                        outcome=outcome.value,
+                        request_kind=kind.value,
+                        unit_type="tokens",
+                        cost_usd=Decimal(usd),
+                        cost_kind="estimated",
+                    )
+                )
+            await session.commit()
+
+        async with session_factory() as session:
+            [report] = [
+                r
+                for r in await _load(session, None, None)
+                if r.action_key == str(job.id)
+            ]
+
+        assert report.fact_usd == Decimal("0.03")
+        assert report.calls == 1

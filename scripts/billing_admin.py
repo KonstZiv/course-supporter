@@ -722,6 +722,7 @@ def _render_author_table(report: billing_costs.CostReport) -> list[str]:
         "орендар",
         "виклики",
         "сума_usd",
+        _PLATFORM_HEADER,
         *_UNITS_HEADERS,
         "exact",
         "estimated",
@@ -748,6 +749,7 @@ def _render_author_table(report: billing_costs.CostReport) -> list[str]:
             tenant_name_str,
             str(spend.calls),
             _fmt_usd(spend.known_usd),
+            _fmt_usd(spend.platform_usd),
             *_units_cells(units),
             f"{spend.exact_calls} / {_fmt_usd(spend.exact_usd)}",
             f"{spend.estimated_calls} / {_fmt_usd(spend.estimated_usd)}",
@@ -786,7 +788,9 @@ def _render_author_table(report: billing_costs.CostReport) -> list[str]:
     )
     lines = ["По авторах:"]
     lines.extend(
-        _format_ascii_table(headers, rows, total_row, right_align={2, 3, 4, 5, 6, 9})
+        _format_ascii_table(
+            headers, rows, total_row, right_align={2, 3, 4, 5, 6, 7, 10}
+        )
     )
     lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
     return lines
@@ -800,6 +804,7 @@ def _render_student_table(report: billing_costs.CostReport) -> list[str]:
         "подачі",
         "виклики",
         "сума_usd",
+        _PLATFORM_HEADER,
         *_UNITS_HEADERS,
         "exact",
         "estimated",
@@ -821,6 +826,7 @@ def _render_student_table(report: billing_costs.CostReport) -> list[str]:
             str(submissions),
             str(spend.calls),
             _fmt_usd(spend.known_usd),
+            _fmt_usd(spend.platform_usd),
             *_units_cells(units),
             f"{spend.exact_calls} / {_fmt_usd(spend.exact_usd)}",
             f"{spend.estimated_calls} / {_fmt_usd(spend.estimated_usd)}",
@@ -843,12 +849,16 @@ def _render_student_table(report: billing_costs.CostReport) -> list[str]:
     lines = ["По студентах:"]
     lines.extend(
         _format_ascii_table(
-            headers, rows, total_row, right_align={3, 4, 5, 6, 7, 8, 11}
+            headers, rows, total_row, right_align={3, 4, 5, 6, 7, 8, 9, 12}
         )
     )
     lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
     return lines
 
+
+_PLATFORM_HEADER = "платформа_usd"
+"""Of the dollars, what no payer pays: retries, calls that failed on the
+infrastructure, the reply screen (``costs.SpendSummary.platform_usd``)."""
 
 _UNITS_HEADERS = ("виставлено_авторові", "виставлено_студентам", "покрито_юнітів")
 """Units billed to the author, to students, and borne by the benefit or the
@@ -873,6 +883,7 @@ def _render_task_table(report: billing_costs.CostReport) -> list[str]:
         "завдання",
         "виклики",
         "сума_usd",
+        _PLATFORM_HEADER,
         *_UNITS_HEADERS,
         "unknown",
         "курс_id",
@@ -894,6 +905,7 @@ def _render_task_table(report: billing_costs.CostReport) -> list[str]:
             task,
             str(spend.calls),
             _fmt_usd(spend.known_usd),
+            _fmt_usd(spend.platform_usd),
             *_units_cells(units),
             str(spend.unknown_calls),
             course_id,
@@ -916,7 +928,9 @@ def _render_task_table(report: billing_costs.CostReport) -> list[str]:
     total_row = _cells("разом", "", "", totals.spend, totals.units, "", "")
     lines = ["По завданнях (автор → курс → завдання):"]
     lines.extend(
-        _format_ascii_table(headers, rows, total_row, right_align={3, 4, 5, 6, 7, 8})
+        _format_ascii_table(
+            headers, rows, total_row, right_align={3, 4, 5, 6, 7, 8, 9}
+        )
     )
     lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
     return lines
@@ -954,6 +968,7 @@ _CSV_FIELDNAMES = (
     "submissions",
     "calls",
     "total_usd",
+    "platform_usd",
     "exact_calls",
     "exact_usd",
     "estimated_calls",
@@ -1000,6 +1015,7 @@ def _spend_csv_fields(spend: billing_costs.SpendSummary) -> dict[str, str]:
     return {
         "calls": str(spend.calls),
         "total_usd": _format_decimal_usd(spend.known_usd),
+        "platform_usd": _format_decimal_usd(spend.platform_usd),
         "exact_calls": str(spend.exact_calls),
         "exact_usd": _format_decimal_usd(spend.exact_usd),
         "estimated_calls": str(spend.estimated_calls),

@@ -53,7 +53,10 @@ from course_supporter.storage.submission_verdict_repository import (
     SubmissionVerdictRepository,
     VerdictRecord,
 )
-from tests._helpers.path_config import shipped_with_replies_for
+from tests._helpers.path_config import (
+    shipped_with_replies_for,
+    shipped_with_todays_mentor_for,
+)
 from tests._helpers.remark_comments import a_stored_comment
 from tests.integration.test_attempt_ledger_db import (
     _VERSION_A,
@@ -355,7 +358,7 @@ async def _threads(
         comments=build_remark_comment_repository(session),
         config=_REPLIES_ON,
     )
-    return {t.item_id: [c.id for c in t.comments] for t in threads}
+    return {t.item_id: [c.id for c in t.comments] for t in threads.threads}
 
 
 async def _rows(session: AsyncSession, submission_id: uuid.UUID) -> int:
@@ -645,13 +648,14 @@ class TestDeletion:
         # The rows changed under the session's objects: read them anew.
         db_session.expire_all()
 
-        (thread,) = await read_threads(
+        read = await read_threads(
             db_session,
             submission=await db_session.get(HomeworkSubmission, first_id),
             student_id=me_id,
             comments=build_remark_comment_repository(db_session),
             config=_REPLIES_ON,
         )
+        (thread,) = read.threads
         assert [c.id for c in thread.comments] == [question.id]
         assert thread.comments[0].answered_in_submission_id is None
         await db_session.execute(
@@ -682,3 +686,89 @@ class TestDeletion:
 
         assert await _threads(db_session, second) == {"c1": [on_second.id]}
         assert await _rows(db_session, first.id) == 1
+
+
+class TestAcceptingRepliesOnTheTable:
+    """K3b: the read's sign over real rows, and the write agreeing with it."""
+
+    @staticmethod
+    async def _case(
+        session: AsyncSession,
+        tenant: Tenant,
+        root: CourseNode,
+        case: str,
+    ) -> HomeworkSubmission:
+        """The review the case is about, among the rows the case needs."""
+        doc = await _task(session, root)
+        me = await _student(session, tenant, f"sign-{case}")
+        earlier = await _submission(
+            session, student=me, doc=doc, status="delivered", minute=0
+        )
+        await _judged(session, earlier)
+        if case == "an-earlier-attempt":
+            latest = await _submission(
+                session, student=me, doc=doc, status="delivered", minute=1
+            )
+            await _judged(session, latest)
+            return earlier
+        if case == "no-recorded-version":
+            earlier.task_version = None
+        if case == "a-new-version":
+            doc.content_hash = "b" * 64
+        await session.flush()
+        return earlier
+
+    @pytest.mark.parametrize(
+        ("case", "switch_on", "accepting"),
+        [
+            ("the-latest-review", True, True),
+            ("an-earlier-attempt", True, False),
+            ("no-recorded-version", True, False),
+            ("a-new-version", True, False),
+            ("the-latest-review", False, False),
+        ],
+    )
+    async def test_the_sign_and_the_write_agree(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+        case: str,
+        switch_on: bool,
+        accepting: bool,
+    ) -> None:
+        review = await self._case(db_session, seed_tenant, seed_root_node, case)
+        config = _REPLIES_ON if switch_on else shipped_with_todays_mentor_for()
+        store = build_remark_comment_repository(db_session)
+
+        read = await read_threads(
+            db_session,
+            submission=review,
+            student_id=review.student_id,
+            comments=store,
+            config=config,
+        )
+        try:
+            await post_reply(
+                db_session,
+                submission=review,
+                student_id=review.student_id,
+                item_id="c1",
+                kind="question",
+                body="Чому критерій 1 не виконано?",
+                parent_id=None,
+                comments=store,
+                config=config,
+            )
+        except HTTPException as refused:
+            # fastapi takes ``detail: Any``; starlette types the attribute ``str``.
+            detail: Any = refused.detail
+            written = False
+            assert refused.status_code == 404 or (
+                detail["code"] == ReplyRefusal.NOT_LATEST_REVIEW.value
+            ), detail
+        else:
+            written = True
+
+        assert read.accepting_replies is accepting
+        assert written is accepting, "the read and the write disagree"

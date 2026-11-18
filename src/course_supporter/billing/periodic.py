@@ -27,8 +27,9 @@ its logic; the lock, the transaction and the log line are the runner's
                               seconds and the student waits for the review, so
                               the wait after it stays short, while a run is one
                               indexed read of the held reviews. Only while
-                              charging is on; dispatches nothing from the
-                              script (no queue there).
+                              charging is possible (for all or for marked
+                              accounts); dispatches nothing from the script
+                              (no queue there).
 """
 
 from __future__ import annotations
@@ -89,10 +90,10 @@ async def _stale_reserves(run: TaskContext) -> TaskResult:
 
 
 async def _resume_funded(run: TaskContext) -> TaskResult:
-    from course_supporter.billing.charging import charging_enabled
+    from course_supporter.billing.charging import charging_possible
     from course_supporter.billing.resume_funded import resume_funded
 
-    if not charging_enabled(run.settings) or run.redis is None:
+    if not charging_possible(run.settings) or run.redis is None:
         return TaskResult(0, {"skipped": 1})
     async with run.session_factory() as session:
         done = await resume_funded(session, run.redis, dry_run=run.dry_run)

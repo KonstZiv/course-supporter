@@ -3034,8 +3034,8 @@ class BillingSpendingResponse(BaseModel):
 
     period: BillingSpendingPeriod
     charging_enabled: bool = Field(
-        description="BILLING_CHARGING_ENABLED: while false nothing is charged "
-        "and every number is 0."
+        description="Charging applies to the author's account (every account, "
+        "or a marked one): while false nothing is charged and every number is 0."
     )
     totals: BillingSpendingUnits
     courses: list[BillingSpendingCourse]

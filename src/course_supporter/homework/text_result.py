@@ -28,7 +28,10 @@ What is the code's and what is the model's (``PRE-PLAN.md`` decisions 2, 3, 5):
     * The pass rule depends on whose list the rows were judged against — the
       layer of the address the rows carry, read by
       :func:`~course_supporter.homework.judged_list.judged_layer`, the same
-      address the course links read the list by. ``verdict.rule`` keeps the
+      address the course links read the list by — and on the "must"
+      criteria the author made mandatory themselves, read from that list
+      (:func:`~course_supporter.homework.judged_list.judged_author_musts`,
+      2026-11-17). ``verdict.rule`` keeps the
       branch that decided, the score and the threshold; the assembler prints
       its phrase under the verdict (2026-11-12).
     * The reason, the remarks and the Mentor's own word are the explanation's.
@@ -107,7 +110,7 @@ Replacing:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -127,7 +130,11 @@ from course_supporter.homework.criteria_verdicts import (
     ScoredItem,
     pass_decision,
 )
-from course_supporter.homework.judged_list import judged_layer, read_judged_list
+from course_supporter.homework.judged_list import (
+    judged_author_musts,
+    judged_layer,
+    read_judged_list,
+)
 from course_supporter.homework.result_builders import (
     BuildContext,
     BuiltResult,
@@ -273,6 +280,7 @@ def build_text_review(
     *,
     rows: Sequence[ReviewedItem],
     layer: CriteriaLayer,
+    author_musts: Collection[str],
     explanation: ExplanationAnswer,
     language: str,
     reading: Mapping[str, Sequence[Reference]] | None = None,
@@ -285,6 +293,8 @@ def build_text_review(
         rows: The submission's verdict rows, criteria and points alike.
         layer: Whose list the rows were judged against: the pass rule
             depends on it.
+        author_musts: The criteria of that list the author made mandatory
+            themselves: the pass rule depends on them too.
         explanation: The explanation stage's answer.
         language: The language the explanation is written in.
         reading: By criterion id, what its remark gives to read — the course
@@ -301,7 +311,7 @@ def build_text_review(
             or the explanation remarks on a criterion the rows do not have;
             or a criterion is fixed and ``fixed_words`` has no words for it.
     """
-    decided = pass_decision(rows, layer=layer)
+    decided = pass_decision(rows, layer=layer, author_musts=author_musts)
     places = problem_positions(rows)
     order = _weight_order(rows)
     state_of = states or {}
@@ -515,6 +525,7 @@ class TextResultBuilder:
         structure, score = build_text_review(
             rows=rows,
             layer=judged_layer(rows),
+            author_musts=await judged_author_musts(context.session, submission, rows),
             explanation=answer,
             language=explained.language,
             reading={

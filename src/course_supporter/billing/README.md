@@ -153,7 +153,8 @@ Creem перевіряє магазин лише в бойовому режим�
 * Налаштування читає лише API: `build_registry` кладе його в `ProviderRegistry.purchase_marked_only`
   (раз на процес); маршрути пакетів, оформлення й вебхука беруть його з реєстру. Тести підставляють
   `ProviderRegistry([...], purchase_marked_only=True)` — без латок налаштувань.
-* **Бойові ідентифікатори товарів** — `providers_live.creem` у `config/billing_packages.yaml`.
+* **Бойові ідентифікатори товарів** — `providers_live.creem` у `config/billing_packages.yaml`
+  (вписані: товари бойового кабінету Creem, створені 18.11, для чотирьох активних пакетів).
   Оформлення в бойовому режимі (`CREEM_API_BASE=https://api.creem.io/v1`, `test_mode = False`) бере
   ідентифікатор лише звідти, у тестовому — з `providers.creem`. Пакет без бойового ідентифікатора в
   бойовому режимі не купується: 503 `payment_unavailable`, тестовий ідентифікатор туди не йде.
@@ -165,7 +166,7 @@ Creem перевіряє магазин лише в бойовому режим�
 `docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d app`; воркери налаштувань
 купівлі не читають):
 
-1. **Викласти цей запит** (з бойовими ідентифікаторами в `providers_live.creem`, якщо вони вже є).
+1. **Викласти цей запит** (разом із бойовими ідентифікаторами в `providers_live.creem`).
    Перевірити: app здоровий; посередник ще тестовий — поведінка як раніше (непозначений рахунок:
    `GET .../billing/packages` → `purchase_not_open`).
 2. **`BILLING_PURCHASE_MARKED_ONLY=true`**, перестворити app. Перевірити:
@@ -174,8 +175,8 @@ Creem перевіряє магазин лише в бойовому режим�
    `purchase_not_open`, для позначеного — `open = true`.
 3. **Бойові `CREEM_API_BASE=https://api.creem.io/v1`, `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`**
    (з кабінету Creem поза Test Mode; адреса вебхука в бойовому кабінеті —
-   `https://<api host>/api/v1/billing/webhooks/creem`), перестворити app. До цього кроку
-   `providers_live.creem` має бути заповнений і викладений, інакше оформлення — 503. Перевірити:
+   `https://<api host>/api/v1/billing/webhooks/creem`), перестворити app. Бойові ідентифікатори
+   товарів викладені на кроці 1 (без них оформлення — 503). Перевірити:
    непозначений — пакети `purchase_not_open`, оформлення 403; позначений — оформлення повертає
    посилання Creem бойового режиму; у логах app немає `billing_creem_product_unknown`.
 4. **Перша бойова купівля позначеним рахунком.** Перевірити: рядок `billing_provider_events`

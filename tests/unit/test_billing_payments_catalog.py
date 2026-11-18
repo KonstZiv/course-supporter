@@ -96,15 +96,38 @@ class TestShippedCatalog:
         assert sandbox is not None
         assert sandbox.active is False
 
-    def test_its_live_creem_section_never_sells_the_sandbox_package(self) -> None:
-        """BIL-LIVE: the live section is there (empty until the operator's
-        live products); never a test id, never the sandbox package."""
+    def test_its_live_creem_products(self) -> None:
+        """BIL-LIVE: the live Creem products (the operator's live dashboard,
+        2026-11-18) in live mode, the test ones in test mode — one per active
+        package; never a test id live, never the sandbox package."""
         catalog = load_catalog(SHIPPED)
-        assert "creem" in catalog.providers_live
-        live = catalog.providers_live["creem"]
-        assert "sandbox-test-500" not in live
-        assert not set(live.values()) & set(catalog.providers["creem"].values())
-        assert set(live) <= {p.id for p in catalog.active()}
+        expected_live = {
+            "units-500-v1": "prod_641KyNDG0h2IN0GPNJ7zKT",
+            "units-1500-v1": "prod_6JbFesPKLrkcURhHH8F3sk",
+            "units-5000-v1": "prod_5t0ORZST2Hw4ZqW8hV5qC7",
+            "units-10000-v1": "prod_1TE2jSDw0OcglA1TY0TC1O",
+        }
+        expected_test = {
+            "units-500-v1": "prod_IjKGKARYgwR25ktF0By1A",
+            "units-1500-v1": "prod_7MjqlyfEXv7zVO37m0vCjN",
+            "units-5000-v1": "prod_5DTm2EO5XM9Rbm53bRKVps",
+            "units-10000-v1": "prod_2u00d6l8qzsfhjeaDTl6FL",
+        }
+        assert catalog.providers_live == {"creem": expected_live}
+        for package_id in expected_live:
+            live = catalog.provider_item("creem", package_id, test_mode=False)
+            test = catalog.provider_item("creem", package_id, test_mode=True)
+            assert (live, test) == (
+                expected_live[package_id],
+                expected_test[package_id],
+            )
+        assert (
+            catalog.provider_item("creem", "sandbox-test-500", test_mode=False) is None
+        )
+        assert not set(expected_live.values()) & set(
+            catalog.providers["creem"].values()
+        )
+        assert set(expected_live) == {p.id for p in catalog.active()}
 
     def test_its_packages_have_exactly_the_locked_fields(self) -> None:
         raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))

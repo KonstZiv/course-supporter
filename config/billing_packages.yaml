@@ -66,5 +66,10 @@ providers:
 # (503) — its test id is never sent to the live API. sandbox-test-500 never
 # goes here.
 providers_live:
-  # Empty until the operator creates the live products in the Creem dashboard.
-  creem: {}
+  # Ідентифікатори бойового кабінету Creem, створені 2026-11-18; пакети й ціни —
+  # ті самі, що в каталозі.
+  creem:
+    units-500-v1: prod_641KyNDG0h2IN0GPNJ7zKT
+    units-1500-v1: prod_6JbFesPKLrkcURhHH8F3sk
+    units-5000-v1: prod_5t0ORZST2Hw4ZqW8hV5qC7
+    units-10000-v1: prod_1TE2jSDw0OcglA1TY0TC1O

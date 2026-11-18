@@ -6,7 +6,7 @@ Purpose:
     * :class:`LedgerFundsPort` — the funds port (``course_supporter.funds_port``)
       on the journal: a student's review on the new path and a task's key
       explanations. Chosen by :func:`course_supporter.funds_port.build_funds_port`
-      while ``BILLING_CHARGING_ENABLED`` is on.
+      while charging is possible (:func:`.charging.charging_possible`).
     * :func:`processing_started` / :func:`job_ended` — a material's processing:
       the threshold and the reserve at its shadow estimate, before its first
       paid step (operator 2026-11-15, S1); its fact or its release when the job
@@ -16,13 +16,15 @@ Purpose:
     * :func:`billing_note` — what a student is told about a review that cost
       more than its reserve (notification 6.3).
 
-    Every function here is a no-op while charging is off: nothing is written to
-    the journal, nothing is refused (A6).
+    Every function here is a no-op while charging is off, and for a payer it
+    does not apply to (:func:`.charging.charging_applies`): nothing is written
+    to the journal or the audit, no account is created, nothing is refused (A6).
 
 Who pays:
-    Always :func:`.payer.resolve_payer`, through :func:`.charging.payer_of` —
-    the student for their own review, the author for processing and task
-    preparation, the author under a payment rule for a student's review.
+    Always :func:`.payer.resolve_payer`, through :func:`.charging.charged_payer_of`
+    — the student for their own review, the author for processing and task
+    preparation, the author under a payment rule for a student's review. It
+    reads the payer first and resolves it only when charging applies to it.
 
 Transactions:
     Each entry opens its own session from the factory and commits: a reserve
@@ -123,7 +125,11 @@ class LedgerFundsPort:
     (:func:`.quotes.ceiling_threshold`), and reserves ``min(N, available)``,
     N the ceiling in units. A failure releases everything.
     The numbers of every answer are also kept on the funds-port row of the
-    call register, as by the first implementation.
+    call register, as by the first implementation. A payer charging does not
+    apply to (:func:`.charging.charged_payer_of`) is answered as by
+    :class:`~course_supporter.funds_port.AlwaysEnoughFundsPort`: allowed,
+    nothing held, nothing created; its end then finds no reserve and writes
+    nothing.
     """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -160,13 +166,15 @@ class LedgerFundsPort:
         e_usd = ceiling if context.expected_usd is None else context.expected_usd
         async with self._session_factory() as session:
             task = await _task_of_submission(session, context.submission_id)
-            payer = await charging.payer_of(
+            payer = await charging.charged_payer_of(
                 session,
                 action_kind=ActionKind.REVIEW,
                 tenant_id=context.tenant_id,
                 course_node_id=task.course_root_id if task is not None else None,
                 student_id=context.student_id,
             )
+            if payer is None:  # as AlwaysEnoughFundsPort: nothing held
+                return FundsAnswer.allowed()
             if task_type is AssignmentType.TEST:
                 allowed = await charging.test_allowed(session, payer)
                 await session.commit()
@@ -277,13 +285,15 @@ class LedgerFundsPort:
         e_usd = context.expected_usd if context.expected_usd is not None else ceiling
         async with self._session_factory() as session:
             task = await session.get(AuthoredDocument, context.authored_document_id)
-            payer = await charging.payer_of(
+            payer = await charging.charged_payer_of(
                 session,
                 action_kind=ActionKind.TASK_PREPARATION,
                 tenant_id=context.tenant_id,
                 course_node_id=task.course_root_id if task is not None else None,
                 student_id=None,
             )
+            if payer is None:  # as AlwaysEnoughFundsPort: nothing held
+                return FundsAnswer.allowed()
             found = await charging.quote(
                 session,
                 action_kind=ActionKind.TASK_PREPARATION,
@@ -375,7 +385,7 @@ async def processing_started(
         InsufficientUnitsError: see above.
     """
     factory = session_factory or _session_factory
-    if not charging.charging_enabled() or factory is None:
+    if not charging.charging_possible() or factory is None:
         return
     if job_id is None or tenant_id is None:
         logger.warning("billing_processing_without_job", kind=kind)
@@ -389,13 +399,15 @@ async def processing_started(
             if authored_document_id is not None
             else None
         )
-        payer = await charging.payer_of(
+        payer = await charging.charged_payer_of(
             session,
             action_kind=ActionKind.PROCESSING,
             tenant_id=tenant_id,
             course_node_id=task.course_root_id if task is not None else None,
             student_id=None,
         )
+        if payer is None:
+            return
         found = await charging.quote(
             session,
             action_kind=ActionKind.PROCESSING,
@@ -438,7 +450,7 @@ async def job_ended(
     A job that reserved nothing (charging off at its start, no estimate) is
     left alone. Never raises: the job's end is already written.
     """
-    if not charging.charging_enabled():
+    if not charging.charging_possible():
         return
     key = processing_key(job_id)
     try:
@@ -492,10 +504,11 @@ async def preparation_started(
     """Reserve for a preparation a student's submission started.
 
     No threshold, no refusal (operator 2026-11-15): the reserve is
-    ``min(2E, available)`` and may be 0. ``None`` while charging is off or no
-    estimate can be made. Never raises: a review is never stopped by it.
+    ``min(2E, available)`` and may be 0. ``None`` while charging is off, does
+    not apply to the payer, or no estimate can be made. Never raises: a review
+    is never stopped by it.
     """
-    if not charging.charging_enabled():
+    if not charging.charging_possible():
         return None
     e_usd = preparation_e_usd(kind=kind, task_chars=task_chars)
     if e_usd is None:
@@ -511,13 +524,15 @@ async def preparation_started(
                 tenant_id=tenant_id,
                 course_node_id=document.course_root_id,
             )
-            payer = await charging.payer_of(
+            payer = await charging.charged_payer_of(
                 session,
                 action_kind=ActionKind.TASK_PREPARATION,
                 tenant_id=charge.tenant_id,
                 course_node_id=charge.course_node_id,
                 student_id=None,
             )
+            if payer is None:
+                return None
             await charging.reserve_for(
                 session,
                 action_kind=ActionKind.TASK_PREPARATION,

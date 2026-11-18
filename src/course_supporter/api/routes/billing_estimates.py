@@ -105,7 +105,8 @@ class AuthorEstimateResponse(BaseModel):
         description="P - available when not enough; null when there is no price."
     )
     charging_enabled: bool = Field(
-        description="BILLING_CHARGING_ENABLED: while false nothing is refused."
+        description="Charging applies to the payer of the action (every payer, "
+        "or a marked one): while false nothing is refused."
     )
     unpriced_reason: UnpricedReason | None = Field(
         default=None,
@@ -141,7 +142,8 @@ class ReviewEstimateResponse(BaseModel):
         description="P - available when not enough; null when the author pays."
     )
     charging_enabled: bool = Field(
-        description="Charging on AND the task's path not in its test mode."
+        description="Charging applies to the review's payer (every payer, or a "
+        "marked one) AND the task's path is not in its test mode."
     )
     basis: Literal["typical", "file", "ceiling"] = Field(
         description="typical: this task's usual size; file: the file sent; "

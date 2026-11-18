@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Författarens obligatoriska kriterier är inte 
 verdict.rule.author_musts_below_threshold: Ni har uppfyllt alla författarens obligatoriska kriterier men fått {score} av 100 — under gränsen {threshold} för uppgifter med författarens obligatoriska kriterier, så arbetet är underkänt.
 verdict.rule.no_author_musts_passed: Författaren har inte godkänt obligatoriska kriterier för den här uppgiften. För sådana uppgifter är gränsen för godkänt {threshold} av 100; er poäng är {score}, så arbetet är godkänt.
 verdict.rule.no_author_musts_failed: Författaren har inte godkänt obligatoriska kriterier för den här uppgiften. För sådana uppgifter är gränsen för godkänt {threshold} av 100; er poäng är {score}, så arbetet är underkänt.
+reply.work_only: Vi bedömer endast själva arbetet – lösningsfilerna, inte det som skrivits bredvid.
+reply.hostile.fallback: Intressant drag! Vi bedömer endast själva arbetet – lösningsfilerna, inte det som skrivits bredvid. För att förbättra Ert resultat, bearbeta lösningen enligt kommentarerna i denna granskning.
+reply.off_topic.wrap_up: 'Detta kan man tala länge om, men arbetet väntar och tiden läggs bäst på kursen ”{course}”. Samtal kostar pengar: jag pratar gärna i all oändlighet, men en vanlig chattbot gör det billigare, och med mig är det bättre att lära sig ”{course}”.'
+reply.said.withheld: (replikens text återges inte i granskningen)

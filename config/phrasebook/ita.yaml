@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: I criteri obbligatori dell'autore non sono sodd
 verdict.rule.author_musts_below_threshold: Ha soddisfatto tutti i criteri obbligatori dell'autore, ma ha ottenuto {score} su 100, sotto la soglia di {threshold} per i compiti con criteri obbligatori dell'autore, quindi il lavoro non è approvato.
 verdict.rule.no_author_musts_passed: L'autore non ha approvato criteri obbligatori per questo compito. Per questi compiti la soglia di approvazione è {threshold} su 100; il suo punteggio è {score}, quindi il lavoro è approvato.
 verdict.rule.no_author_musts_failed: L'autore non ha approvato criteri obbligatori per questo compito. Per questi compiti la soglia di approvazione è {threshold} su 100; il suo punteggio è {score}, quindi il lavoro non è approvato.
+reply.work_only: 'Valutiamo solo il lavoro in sé: i file con la soluzione, non ciò che è scritto accanto.'
+reply.hostile.fallback: 'Mossa interessante! Valutiamo solo il lavoro in sé: i file con la soluzione, non ciò che è scritto accanto. Per migliorare il risultato, perfezioni la soluzione seguendo le osservazioni di questa revisione.'
+reply.off_topic.wrap_up: 'Ne potremmo parlare a lungo, ma il lavoro ci attende ed è meglio dedicare il tempo al corso «{course}». Le chiacchiere costano: sarei pronto a conversare all''infinito, ma un normale chatbot lo farebbe a minor prezzo, mentre con me è meglio studiare «{course}».'
+reply.said.withheld: (il testo di questo messaggio non viene riportato nella revisione)

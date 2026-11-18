@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Privalomi autoriaus kriterijai neįvykdyti, tod
 verdict.rule.author_musts_below_threshold: Įvykdėte visus privalomus autoriaus kriterijus, bet gavote įvertinimą {score} iš 100 — žemiau ribos {threshold}, taikomos užduotims su privalomais autoriaus kriterijais, todėl darbas neįskaitytas.
 verdict.rule.no_author_musts_passed: Autorius šiai užduočiai nepatvirtino privalomų kriterijų. Tokioms užduotims įskaitos riba yra {threshold} iš 100; jūsų įvertinimas yra {score}, todėl darbas įskaitytas.
 verdict.rule.no_author_musts_failed: Autorius šiai užduočiai nepatvirtino privalomų kriterijų. Tokioms užduotims įskaitos riba yra {threshold} iš 100; jūsų įvertinimas yra {score}, todėl darbas neįskaitytas.
+reply.work_only: Vertiname tik patį darbą – sprendimo failus, o ne tai, kas parašyta šalia.
+reply.hostile.fallback: Įdomus ėjimas! Vertiname tik patį darbą – sprendimo failus, o ne tai, kas parašyta šalia. Norėdami pagerinti rezultatą, patikslinkite sprendimą pagal šios peržiūros pastabas.
+reply.off_topic.wrap_up: 'Apie tai galima kalbėti ilgai, bet mūsų laukia darbas, ir laiką verčiau skirti kursui „{course}“. Pokalbiai kainuoja: esu pasirengęs bendrauti amžinai, bet paprastas pokalbių robotas tai padarys pigiau, o su manimi geriau mokytis „{course}“.'
+reply.said.withheld: (šios replikos tekstas peržiūroje nepateikiamas)

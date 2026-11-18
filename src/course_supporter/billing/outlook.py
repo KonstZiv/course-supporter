@@ -14,6 +14,8 @@ Purpose:
       are enrolled in, or of the one named). ``low`` below
       ``billing_reminder_low_reviews``; ``next_may_fail`` below one. When the
       author pays for their reviews under a rule, nothing about units is said.
+      ``charging_enabled`` — charging applies to that payer
+      (:func:`.charging.charging_applies`): the one ``paid_by`` names.
     * :func:`author_outlook` — about how many days the author's units last at
       the pace of the last ``billing_reminder_pace_days`` days (their charges
       over those days ÷ the days); no charges — nothing is said.
@@ -73,6 +75,7 @@ class StudentOutlook:
     warning: StudentWarning | None
     expiring_soon: Expiring | None
     paid_by: Literal["self", "author"]
+    charging_enabled: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +234,7 @@ async def student_outlook(
         student_id=student_id,
     )
     own = payer.lookup.beneficiary_account_id
+    enabled = await charging.charging_applies(session, payer.account_id, settings)
     soon = (
         await expiring_soon(
             session, own, within_days=settings.billing_expiry_notice_days, now=now
@@ -239,21 +243,21 @@ async def student_outlook(
         else None
     )
     if payer.kind is AccountKind.AUTHOR:
-        return StudentOutlook(None, None, soon, "author")
+        return StudentOutlook(None, None, soon, "author", enabled)
     cost = await _average_review_charge(session, own) if own is not None else None
     if cost is None:
         cost = await _typical_review_price(
             session, tenant_id=tenant_id, student_id=student_id, course_id=course_id
         )
     if not cost:
-        return StudentOutlook(None, None, soon, "self")
+        return StudentOutlook(None, None, soon, "self", enabled)
     left = int(await charging.available_units(session, own, now=now) // cost)
     warning: StudentWarning | None = None
     if left < 1:
         warning = "next_may_fail"
     elif left < settings.billing_reminder_low_reviews:
         warning = "low"
-    return StudentOutlook(left, warning, soon, "self")
+    return StudentOutlook(left, warning, soon, "self", enabled)
 
 
 async def author_outlook(

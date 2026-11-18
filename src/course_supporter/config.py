@@ -119,6 +119,12 @@ class Settings(BaseSettings):
     # refused when its payer is short (billing.charging). Switched on in prod
     # by the operator's decision, together with the purchase screens.
     billing_charging_enabled: bool = False
+    # Charging for marked accounts only (operator 2026-11-17, "1b"): while
+    # billing_charging_enabled is off, an action is charged as above only when
+    # its payer's account has test_purchase_allowed (the shop's reviewer, our
+    # own tests); every other payer runs as with charging off, and no account
+    # is created for it. Nothing more while billing_charging_enabled is on.
+    billing_charging_marked: bool = False
     # Reminders (BIL-E part C): a student is warned when fewer than this many
     # reviews are left ("low"; "next_may_fail" below one).
     billing_reminder_low_reviews: int = Field(default=2, ge=1)
@@ -170,7 +176,7 @@ class Settings(BaseSettings):
     periodic_billing_purge_enabled: bool = True
     periodic_billing_purge_cron: str = "30 3 * * *"
     # Submissions held for funds continued once their payer can pay (BIL-E;
-    # runs only while billing_charging_enabled is on).
+    # runs only while billing_charging_enabled or billing_charging_marked is on).
     periodic_billing_resume_funded_enabled: bool = True
     periodic_billing_resume_funded_cron: str = "*/5 * * * *"
 

@@ -43,6 +43,14 @@ The rules (operator 2026-10-30, 2026-11-04, 2026-11-11, 2026-11-15):
     (:func:`test_allowed`) — an author with credit is never stopped; it
     reserves and charges nothing.
 
+The switches:
+    ``BILLING_CHARGING_ENABLED`` charges every payer; while it is off,
+    ``BILLING_CHARGING_MARKED`` charges only a payer whose account is marked
+    ``test_purchase_allowed`` (operator 2026-11-17). A place asks
+    :func:`charging_possible` before its payer is known and
+    :func:`charging_applies` once it is; a start that must not create an
+    account asks :func:`charged_payer_of`.
+
 Keys:
     The estimate's: a review is its submission (all its jobs), a processing is
     its job, a preparation is (task, version, kind) —
@@ -105,13 +113,65 @@ logger = structlog.get_logger(__name__)
 # ── The switch ─────────────────────────────────────────────────────────
 
 
-def charging_enabled(settings: Settings | None = None) -> bool:
-    """Is charging on (``BILLING_CHARGING_ENABLED``)? Off by default."""
+def _settings(settings: Settings | None) -> Settings:
     if settings is None:
         from course_supporter.config import get_settings
 
         settings = get_settings()
-    return settings.billing_charging_enabled
+    return settings
+
+
+def charging_enabled(settings: Settings | None = None) -> bool:
+    """Charging for every account (``BILLING_CHARGING_ENABLED``)? Off by default.
+
+    Read only by the two questions below; a caller asks one of them —
+    :func:`charging_possible` before its payer is known, :func:`charging_applies`
+    once it is.
+    """
+    return _settings(settings).billing_charging_enabled
+
+
+def charging_possible(settings: Settings | None = None) -> bool:
+    """May charging apply to any payer — every one, or the marked ones
+    (``BILLING_CHARGING_MARKED``)?
+
+    For a place that does not know its payer yet: the choice of the funds
+    port, the continuation of held reviews, the end of a processing (it
+    settles only what its start reserved), the doors of a submission (the
+    quote they read answers for the payer). False: nothing to do.
+    """
+    settings = _settings(settings)
+    return charging_enabled(settings) or settings.billing_charging_marked
+
+
+async def charging_applies(
+    session: AsyncSession,
+    account_id: uuid.UUID | None,
+    settings: Settings | None = None,
+) -> bool:
+    """Does charging apply to this payer's account (``None``: not created yet)?
+
+    Yes for every account while ``BILLING_CHARGING_ENABLED`` is on. While only
+    ``BILLING_CHARGING_MARKED`` is on, yes for an existing account marked
+    ``test_purchase_allowed`` — in a course where the author pays, the
+    author's mark decides, not the student's. Otherwise no: the action runs as
+    with charging off — nothing reserved, refused or held, no account created.
+    A read; the account is not locked.
+
+    The mark ``test_purchase_allowed`` means two things (operator 2026-11-17):
+    (a) the account may buy while the payment provider is in its test mode
+    (``payments.checkout.purchase_closed``); (b) the account is charged while
+    ``BILLING_CHARGING_ENABLED`` is off and ``BILLING_CHARGING_MARKED`` is on.
+    It is cleared for both at once — before the provider's live mode, when
+    charging for every account is switched on anyway.
+    """
+    settings = _settings(settings)
+    if charging_enabled(settings):
+        return True
+    if not settings.billing_charging_marked or account_id is None:
+        return False
+    account = await session.get(BillingAccount, account_id)
+    return account is not None and account.test_purchase_allowed
 
 
 # ── Units ──────────────────────────────────────────────────────────────
@@ -271,6 +331,38 @@ async def find_payer_of(
         lookup,
         AccountKind(account.kind),
         credit_allowed=await credit_allowed(session, account),
+    )
+
+
+async def charged_payer_of(
+    session: AsyncSession,
+    *,
+    action_kind: ActionKind,
+    tenant_id: uuid.UUID,
+    course_node_id: uuid.UUID | None,
+    student_id: uuid.UUID | None,
+) -> Payer | None:
+    """:func:`payer_of` for a start, when charging applies to the payer.
+
+    The payer is read first (:func:`find_payer_of`); ``None`` — charging does
+    not apply to it (:func:`charging_applies`): the start goes on as with
+    charging off, and nothing was created or written.
+    """
+    found = await find_payer_of(
+        session,
+        action_kind=action_kind,
+        tenant_id=tenant_id,
+        course_node_id=course_node_id,
+        student_id=student_id,
+    )
+    if not await charging_applies(session, found.account_id):
+        return None
+    return await payer_of(
+        session,
+        action_kind=action_kind,
+        tenant_id=tenant_id,
+        course_node_id=course_node_id,
+        student_id=student_id,
     )
 
 

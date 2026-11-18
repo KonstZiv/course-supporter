@@ -27,10 +27,11 @@ webhook — locks 1 and 2 through the body); the same machine input once more
 submission with no list (held, then exactly one continuation and one review
 once a list appears — lock 6); the language of a review the doors gave none;
 the builder's refusal when either part is missing; the shipped file, which
-since task 10 (K5) serves a text task on the new path in test mode (lock 8,
-rewritten); and a failed criterion whose topic the course teaches, linked in
-the review to the place that teaches it (task 10, K6, lock a — the course is
-the real one, its search the real finder); and, since the owner's decision of
+since task 10 (K5) serves a text task on the new path, out of test mode since
+BIL-TESTMODE (lock 8, rewritten); and a failed criterion whose topic the
+course teaches, linked in the review to the place that teaches it (task 10,
+K6, lock a — the course is the real one, its search the real finder); and,
+since the owner's decision of
 2026-11-13, a failed criterion whose only places score below the threshold —
 production's two places of 0.14 — which the review does not link, beside one
 whose place scores 0.6, which it does (task 10, lock g); and, since task
@@ -1336,19 +1337,22 @@ class TestAReviewWithoutItsPartsFails:
         assert refused.value.code == REVIEW_PARTS_MISSING
 
 
-class TestTheShippedFileServesTextTasksOnTheNewPathInTestMode:
+class TestTheShippedFileServesTextTasksOnTheNewPathOutOfTestMode:
     """Lock 8, rewritten in task 10 (K5) — was
-    ``TestTheShippedFileLeavesTextTasksWithTodaysMentor``: the text types are
-    on the new path in test mode — the switch is thrown, the charge is not.
-    Nothing reads test mode yet (the funds port is ``AlwaysEnoughFundsPort``);
-    the billing adapter will. ``test`` and ``project`` are as they were."""
+    ``TestTheShippedFileLeavesTextTasksWithTodaysMentor`` — and again in
+    BIL-TESTMODE (2026-11-17): the text types are on the new path and out of
+    test mode, so whether a review is charged for is the billing switches'
+    decision (``BILLING_CHARGING_ENABLED`` / ``BILLING_CHARGING_MARKED``), not
+    the file's. ``test`` and ``project`` are as they were."""
 
-    def test_the_file_serves_text_types_on_the_new_path_in_test_mode(self) -> None:
+    def test_the_file_serves_text_types_on_the_new_path_out_of_test_mode(
+        self,
+    ) -> None:
         shipped = _shipped()
 
         for text_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
             assert shipped.task_types[text_type].served_by is ServedBy.NEW_PATH
-            assert in_test_mode(text_type, shipped) is True
+            assert in_test_mode(text_type, shipped) is False
         assert shipped.task_types[AssignmentType.TEST].served_by is ServedBy.NEW_PATH
         assert in_test_mode(AssignmentType.TEST, shipped) is False
         assert shipped.task_types[AssignmentType.PROJECT].served_by is (

@@ -456,9 +456,9 @@ class TestLockBNumbering:
             "task_version": _VERSION_A,
             "task_version_changed": False,
             "fingerprint": two.fingerprint,
-            # The shipped file serves ``task`` on the new path, in test mode.
+            # The shipped file serves ``task`` on the new path, out of test mode.
             "path": "new_path",
-            "test_mode": True,
+            "test_mode": False,
         }
 
     async def test_a_completed_review_counts_as_delivered_does(
@@ -779,7 +779,7 @@ class TestLockGgPathAndTestModeInTheReceipt:
     string ``"true"``. Today's Mentor: ``TestLockEProjectOnTodaysMentor``.
     """
 
-    async def test_a_task_on_the_new_path_in_test_mode(
+    async def test_a_task_on_the_new_path_out_of_test_mode(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         task_world: dict[str, Any],
@@ -792,7 +792,7 @@ class TestLockGgPathAndTestModeInTheReceipt:
         receipt = (await _row(session_factory, submission_id)).attempt_receipt
         assert receipt is not None
         assert receipt["path"] == "new_path"
-        assert receipt["test_mode"] is True
+        assert receipt["test_mode"] is False
         assert await _receipt_types(session_factory, submission_id) == (
             "string",
             "boolean",

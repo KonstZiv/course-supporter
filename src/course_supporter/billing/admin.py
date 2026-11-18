@@ -34,8 +34,9 @@ Accounts (BIL-E3):
     by the administrator's ``actor`` before the change's own entry.
 
 Test purchases (BIL-PAY, operator 2026-11-15):
-    While a payment provider is in its test mode, only an account marked for
-    test purchases may buy (``billing.payments.checkout``).
+    While a payment provider is in its test mode, or
+    ``BILLING_PURCHASE_MARKED_ONLY`` is on, only an account marked for test
+    purchases may buy (``billing.payments.checkout``).
     :func:`set_test_purchase` marks or unmarks the owner's account — created
     on first need, as a credit does — audited as ``account.test_purchase``.
 

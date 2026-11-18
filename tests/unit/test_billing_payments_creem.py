@@ -362,6 +362,25 @@ class TestCheckoutCompleted:
         with pytest.raises(InvalidWebhookError, match="amount paid"):
             creem().parse_webhook(*signed(payload))
 
+    def test_a_null_amount_paid_is_refused_not_read_as_zero(self) -> None:
+        payload = with_(CHECKOUT_COMPLETED)
+        payload["object"]["order"]["amount_paid"] = None
+        with pytest.raises(InvalidWebhookError, match="amount paid"):
+            creem().parse_webhook(*signed(payload))
+
+    def test_an_order_paid_zero_is_a_purchase_of_the_package(self) -> None:
+        """BIL-LIVE: a 100 % discount code — ``order.amount_paid`` 0 — buys
+        the package for 0; no field of the discount is read."""
+        payload = with_(CHECKOUT_COMPLETED)
+        payload["object"]["order"]["amount_paid"] = 0
+        [event] = creem(api_base=LIVE_API_BASE).parse_webhook(*signed(payload))
+        assert isinstance(event, PurchaseCompleted)
+        assert (event.package_id, event.amount_paid_minor, event.currency) == (
+            "starter",
+            0,
+            "EUR",
+        )
+
     def test_the_payers_data_never_reaches_the_refusal(self) -> None:
         payload = with_(CHECKOUT_COMPLETED)
         payload["object"]["order"]["amount_paid"] = "customer@emaildomain"

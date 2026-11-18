@@ -88,8 +88,9 @@ class Refusal(StrEnum):
     """No payment provider is switched on, or none sells the package (503)."""
 
     PURCHASE_NOT_OPEN = PurchaseClosed.PURCHASE_NOT_OPEN.value
-    """The provider is in test mode and the account is not marked for test
-    purchases (403): the screen says the purchase is not open yet."""
+    """A test purchase (the provider in test mode, or purchases for marked
+    accounts only) and the account is not marked (403): the screen says the
+    purchase is not open yet."""
 
     TERMS_CONSENT_REQUIRED = "terms_consent_required"
     """A purchase before the holder agreed to the terms in force (409)."""
@@ -171,7 +172,9 @@ def packages_of(
     """The packages on sale (units and prices, never a provider's id) and
     whether ``account`` — the holder's, None while they have none — may buy
     through the default provider."""
-    closed = purchase_closed(registry.default(), account)
+    closed = purchase_closed(
+        registry.default(), account, marked_only=registry.purchase_marked_only
+    )
     return BillingPackagesResponse(
         packages=[
             BillingPackageResponse(

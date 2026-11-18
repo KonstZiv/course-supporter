@@ -75,9 +75,9 @@ BIL-E2, BIL-TESTMARK; рішення оператора — у docstring кож�
 `charging_enabled()` читають лише ці дві функції.
 
 **Позначка `test_purchase_allowed` має два значення:** (а) рахунок може купувати, поки посередник у
-тестовому режимі; (б) з рахунку списують, поки `BILLING_CHARGING_ENABLED` вимкнений, а
-`BILLING_CHARGING_MARKED` увімкнений. Знімається для обох значень разом — перед бойовим режимом
-посередника, коли загальне списання й так вмикається.
+тестовому режимі або увімкнений `BILLING_PURCHASE_MARKED_ONLY`; (б) з рахунку списують, поки
+`BILLING_CHARGING_ENABLED` вимкнений, а `BILLING_CHARGING_MARKED` увімкнений. Знімається для обох
+значень разом — коли купівлю відкривають усім і загальне списання й так вмикається.
 
 ## Коли з'являється рахунок (`accounts.py`, BIL-E3)
 
@@ -118,9 +118,10 @@ BIL-E2, BIL-TESTMARK; рішення оператора — у docstring кож�
 
 * **Позначка** — таблиця `billing_test_batches` (`batch_id`, `marked_at`, `marked_by`), лише
   дописування (тригер `billing_refuse_update`; DELETE — лише п'ятирічне знищення, разом із партією).
-  `marked_by = credit`: купівлю зараховано, коли посередник, що перевірив підпис події, був у
-  тестовому режимі (`PaymentProvider.test_mode`) — позначка в тій самій транзакції, що й партія
-  (`payments/webhooks.py`); у бойовому режимі позначки немає. `marked_by = backfill`: міграція
+  `marked_by = credit`: купівлю зараховано як тестову — посередник, що перевірив підпис події, був у
+  тестовому режимі (`PaymentProvider.test_mode`) або увімкнений `BILLING_PURCHASE_MARKED_ONLY`
+  (`payments/checkout.is_test_purchase`); позначка в тій самій транзакції, що й партія
+  (`payments/webhooks.py`). У бойовому режимі без налаштування позначки немає. `marked_by = backfill`: міграція
   `biltestmark_test_batches` позначила всі купівлі Creem, зроблені до неї (бойових ключів Creem на
   проді не було). Рахунок-фактура B2B і нарахування адміністратора не позначаються.
 * **Зняття** — вільні юніти (`journal.available`) кожної позначеної партії виходять одним рухом
@@ -137,6 +138,52 @@ uv run python scripts/billing_admin.py show-account --account <id>   # рядо�
 
 `--dry-run` — транзакція READ ONLY: той самий вивід, нічого не записано. Вивід — рахунок (id і
 вид, без ідентифікаторів власника), партія, `voided`, `left reserved`, `left held`; у кінці підсумок.
+
+## Бойовий режим до схвалення магазину (BIL-LIVE, рішення оператора 18.11)
+
+Creem перевіряє магазин лише в бойовому режимі: перевіряльник купує одноразовим кодом знижки 100 %
+(замовлення нульової суми). До схвалення будь-яка купівля — тест або демо перевіряльника.
+
+* **`BILLING_PURCHASE_MARKED_ONLY`** (типово `false`). Увімкнений — купують лише рахунки з позначкою
+  `test_purchase_allowed` за будь-якого режиму посередника (`purchase_closed`: пакети —
+  `purchase.open = false`, `reason = purchase_not_open`; оформлення — 403), і кожна зарахована
+  купівля позначається як тестова (`marked_by = credit`, та сама транзакція) — її юніти знімає
+  `void-test-batches` перед загальним списанням. Правило одне: `checkout.is_test_purchase` — «посередник
+  у тестовому режимі АБО налаштування». Знімається, коли купівлю відкривають усім.
+* Налаштування читає лише API: `build_registry` кладе його в `ProviderRegistry.purchase_marked_only`
+  (раз на процес); маршрути пакетів, оформлення й вебхука беруть його з реєстру. Тести підставляють
+  `ProviderRegistry([...], purchase_marked_only=True)` — без латок налаштувань.
+* **Бойові ідентифікатори товарів** — `providers_live.creem` у `config/billing_packages.yaml`.
+  Оформлення в бойовому режимі (`CREEM_API_BASE=https://api.creem.io/v1`, `test_mode = False`) бере
+  ідентифікатор лише звідти, у тестовому — з `providers.creem`. Пакет без бойового ідентифікатора в
+  бойовому режимі не купується: 503 `payment_unavailable`, тестовий ідентифікатор туди не йде.
+  Вебхук визначає пакет за `metadata.package_id` оформлення, не за ідентифікатором товару.
+* **Нульова сума**: `order.amount_paid = 0` зараховує юніти пакета з `amount_paid_minor = 0`. Без поля
+  `amount_paid` (або `null`) подія відхиляється (400, лог `billing_webhook_refused`), нуль не вигадується.
+
+**Порядок перемикання проду** (кожна зміна `.env.prod` — перестворення app:
+`docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d app`; воркери налаштувань
+купівлі не читають):
+
+1. **Викласти цей запит** (з бойовими ідентифікаторами в `providers_live.creem`, якщо вони вже є).
+   Перевірити: app здоровий; посередник ще тестовий — поведінка як раніше (непозначений рахунок:
+   `GET .../billing/packages` → `purchase_not_open`).
+2. **`BILLING_PURCHASE_MARKED_ONLY=true`**, перестворити app. Перевірити:
+   `docker compose ... exec app python -c "from course_supporter.config import get_settings;
+   print(get_settings().billing_purchase_marked_only)"` → `True`; пакети для непозначеного —
+   `purchase_not_open`, для позначеного — `open = true`.
+3. **Бойові `CREEM_API_BASE=https://api.creem.io/v1`, `CREEM_API_KEY`, `CREEM_WEBHOOK_SECRET`**
+   (з кабінету Creem поза Test Mode; адреса вебхука в бойовому кабінеті —
+   `https://<api host>/api/v1/billing/webhooks/creem`), перестворити app. До цього кроку
+   `providers_live.creem` має бути заповнений і викладений, інакше оформлення — 503. Перевірити:
+   непозначений — пакети `purchase_not_open`, оформлення 403; позначений — оформлення повертає
+   посилання Creem бойового режиму; у логах app немає `billing_creem_product_unknown`.
+4. **Перша бойова купівля позначеним рахунком.** Перевірити: рядок `billing_provider_events`
+   `processed`; партія з юнітами пакета й сумою з події (0 для коду 100 %); позначка
+   `billing_test_batches.marked_by = credit` (`show-account` → `test units=N`); стан оформлення
+   `credited`; у логах app — `billing_test_purchase_marked`. Подія `ignored` (статус замовлення не
+   `paid`) або 400 без `amount_paid` — зупинитися й розібратися: ці поля для нульового замовлення ще
+   не перевірені на бойовому Creem.
 
 ## Маршрути
 

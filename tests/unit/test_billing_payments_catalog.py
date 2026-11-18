@@ -63,7 +63,7 @@ class TestShippedCatalog:
         assert sandbox.prices_minor == {"EUR": 500}
         assert sandbox.active is False
         assert (
-            catalog.provider_item("creem", "sandbox-test-500")
+            catalog.provider_item("creem", "sandbox-test-500", test_mode=True)
             == "prod_2oJ3Yqnf53wOrikCrQGDtk"
         )
 
@@ -87,11 +87,24 @@ class TestShippedCatalog:
             "units-10000-v1": "prod_2u00d6l8qzsfhjeaDTl6FL",
         }
         for package_id, expected_product in expected_creem.items():
-            assert catalog.provider_item("creem", package_id) == expected_product
+            assert (
+                catalog.provider_item("creem", package_id, test_mode=True)
+                == expected_product
+            )
 
         sandbox = catalog.package("sandbox-test-500")
         assert sandbox is not None
         assert sandbox.active is False
+
+    def test_its_live_creem_section_never_sells_the_sandbox_package(self) -> None:
+        """BIL-LIVE: the live section is there (empty until the operator's
+        live products); never a test id, never the sandbox package."""
+        catalog = load_catalog(SHIPPED)
+        assert "creem" in catalog.providers_live
+        live = catalog.providers_live["creem"]
+        assert "sandbox-test-500" not in live
+        assert not set(live.values()) & set(catalog.providers["creem"].values())
+        assert set(live) <= {p.id for p in catalog.active()}
 
     def test_its_packages_have_exactly_the_locked_fields(self) -> None:
         raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
@@ -102,7 +115,7 @@ class TestShippedCatalog:
 def test_the_shape_is_locked() -> None:
     """Adding a field to a package or to the file is a decision, not a drift."""
     assert set(Package.model_fields) == {"id", "units", "prices_minor", "active"}
-    assert set(Catalog.model_fields) == {"packages", "providers"}
+    assert set(Catalog.model_fields) == {"packages", "providers", "providers_live"}
 
 
 def test_lookups(tmp_path: Path) -> None:
@@ -122,10 +135,30 @@ def test_lookups(tmp_path: Path) -> None:
     old = catalog.package("old")
     assert old is not None and old.prices_minor == {"EUR": 5, "USD": 6}
     assert catalog.package("nope") is None
-    assert catalog.provider_item("paddle", "starter") == "pri_1"
-    assert catalog.provider_item("paddle", "old") is None
-    assert catalog.provider_item("creem", "starter") is None
-    assert catalog.provider_item("fake", "starter") is None
+    assert catalog.provider_item("paddle", "starter", test_mode=True) == "pri_1"
+    assert catalog.provider_item("paddle", "old", test_mode=True) is None
+    assert catalog.provider_item("creem", "starter", test_mode=True) is None
+    assert catalog.provider_item("fake", "starter", test_mode=True) is None
+
+
+def test_each_mode_reads_its_own_table(tmp_path: Path) -> None:
+    """BIL-LIVE: test mode reads ``providers``, live mode ``providers_live``
+    only — a package without a live id has none in live mode, never the test
+    one."""
+    catalog = load_catalog(
+        _write(
+            tmp_path,
+            {
+                "packages": [_package(), _package(id="other")],
+                "providers": {"creem": {"starter": "prod_test", "other": "prod_t2"}},
+                "providers_live": {"creem": {"starter": "prod_live"}},
+            },
+        )
+    )
+    assert catalog.provider_item("creem", "starter", test_mode=True) == "prod_test"
+    assert catalog.provider_item("creem", "starter", test_mode=False) == "prod_live"
+    assert catalog.provider_item("creem", "other", test_mode=False) is None
+    assert catalog.provider_item("creem", "other", test_mode=True) == "prod_t2"
 
 
 @pytest.mark.parametrize(
@@ -164,6 +197,14 @@ def test_a_bad_package_is_refused(
         ),
         (
             {"packages": [_package()], "providers": {"paddle": {"starter": ""}}},
+            "1 to 64 characters",
+        ),
+        (
+            {"packages": [_package()], "providers_live": {"creem": {"x": "p"}}},
+            "providers_live.creem names no such package",
+        ),
+        (
+            {"packages": [_package()], "providers_live": {"creem": {"starter": ""}}},
             "1 to 64 characters",
         ),
         ({"packages": [_package()], "prices": {}}, "Extra inputs"),

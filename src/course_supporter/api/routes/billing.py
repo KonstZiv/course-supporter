@@ -113,6 +113,7 @@ from course_supporter.billing.costs import UnitsSummary, default_month_bounds
 from course_supporter.billing.errors import BillingConflictError
 from course_supporter.billing.kinds import AccountKind, ActionKind
 from course_supporter.billing.payments.catalog import Catalog
+from course_supporter.billing.payments.checkout import is_test_purchase
 from course_supporter.billing.payments.port import InvalidWebhookError
 from course_supporter.billing.payments.registry import ProviderRegistry
 from course_supporter.billing.payments.webhooks import (
@@ -186,7 +187,9 @@ async def receive_webhook(
             events=events,
             body_sha256=hashlib.sha256(body).hexdigest(),
             catalog=catalog,
-            test_mode=adapter.test_mode,
+            test_purchases=is_test_purchase(
+                adapter, marked_only=registry.purchase_marked_only
+            ),
         )
     except EventHandlingError:
         return JSONResponse(

@@ -143,6 +143,13 @@ class Settings(BaseSettings):
     # startup (billing.payments.registry); the test adapter "fake" answers in
     # development and testing only.
     billing_providers: list[str] = []
+    # Purchases for marked accounts only (operator 2026-11-18): while on, only
+    # an account with test_purchase_allowed may buy, whatever the provider's
+    # mode, and every purchase credited is marked as a test purchase
+    # (billing.payments.checkout.is_test_purchase). For the provider's live
+    # mode before it approves the shop; switched off when purchase opens to
+    # everyone.
+    billing_purchase_marked_only: bool = False
     # The packages on sale and each provider's id of them.
     billing_packages_path: Path = Path("config/billing_packages.yaml")
     # Base URL of the author SPA: an author's checkout returns to

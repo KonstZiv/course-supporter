@@ -8,12 +8,11 @@
 # change a package, give it a new id.
 #
 # Активні пакети — ті, що на сторінці цін, а id товарів посередника —
-# тестового режиму, доки посередник не в бойовому.
+# тестового режиму в providers і бойового в providers_live.
 
 packages:
   # Ціни й розміри — як на сторінці цін сайту (рішення оператора 2026-11-15);
-  # id товарів Creem — тестового режиму, перед бойовим режимом їх замінюють
-  # id бойових товарів.
+  # id товарів Creem — у providers (тестовий режим) і providers_live (бойовий).
   - id: units-500-v1
     units: 500
     prices_minor:
@@ -44,7 +43,9 @@ packages:
 
 # A section per provider (its adapter's name, as in BILLING_PROVIDERS):
 # package id -> the provider's id of the product or price its checkout needs.
-# An empty section is allowed.
+# An empty section is allowed. Two tables, by the adapter's mode (test_mode):
+# providers in test mode, providers_live in live mode — a checkout reads only
+# the table of its mode, never the other.
 providers:
   paddle: {}   # Paddle price ids (pri_...): the Paddle adapter's task
   # Creem product ids (prod_...), one product per package, from the Creem
@@ -57,3 +58,18 @@ providers:
     units-5000-v1: prod_5DTm2EO5XM9Rbm53bRKVps
     units-10000-v1: prod_2u00d6l8qzsfhjeaDTl6FL
     sandbox-test-500: prod_2oJ3Yqnf53wOrikCrQGDtk
+
+# The same in the provider's LIVE mode (operator 2026-11-18). Creem: read
+# while CREEM_API_BASE is the live host, https://api.creem.io/v1 (the adapter's
+# test_mode is False); live product ids (prod_...) from the Creem dashboard
+# outside Test Mode. A package without an id here is not sold in live mode
+# (503) — its test id is never sent to the live API. sandbox-test-500 never
+# goes here.
+providers_live:
+  # Ідентифікатори бойового кабінету Creem, створені 2026-11-18; пакети й ціни —
+  # ті самі, що в каталозі.
+  creem:
+    units-500-v1: prod_641KyNDG0h2IN0GPNJ7zKT
+    units-1500-v1: prod_6JbFesPKLrkcURhHH8F3sk
+    units-5000-v1: prod_5t0ORZST2Hw4ZqW8hV5qC7
+    units-10000-v1: prod_1TE2jSDw0OcglA1TY0TC1O

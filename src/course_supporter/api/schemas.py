@@ -2854,9 +2854,10 @@ class BillingPurchaseState(BaseModel):
     open: bool = Field(description="True when a checkout would be opened.")
     reason: Literal["payment_unavailable", "purchase_not_open"] | None = Field(
         description="Why it is closed; null when open. payment_unavailable: no "
-        "payment provider is switched on; purchase_not_open: the provider is in "
-        "test mode and the holder's account is not marked for test purchases "
-        "(the screen says the purchase is not open yet)."
+        "payment provider is switched on; purchase_not_open: a test purchase (the "
+        "provider is in test mode, or purchases are for marked accounts only) and "
+        "the holder's account is not marked (the screen says the purchase is not "
+        "open yet)."
     )
 
 

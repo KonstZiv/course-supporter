@@ -20,9 +20,12 @@ The port (:class:`PaymentProvider`, a structural ``Protocol``):
       units. While the provider is in test mode only an account marked for
       test purchases may buy (``billing_accounts.test_purchase_allowed``,
       operator 2026-11-15) — :func:`~.checkout.purchase_closed`, for every
-      provider alike. Every adapter answers it; when in doubt, True: a
-      mistake then closes purchases instead of opening them. A purchase the
-      provider reports is credited whatever the mode — it was paid.
+      provider alike; in live mode too while ``BILLING_PURCHASE_MARKED_ONLY``
+      is on. The mode also picks the catalog's table of the provider's ids
+      (``providers`` / ``providers_live``). Every adapter answers it; when in
+      doubt, True: a mistake then closes purchases instead of opening them. A
+      purchase the provider reports is credited whatever the mode — it was
+      paid.
     * :meth:`~PaymentProvider.create_checkout` — a :class:`CheckoutRequest`
       (the account, the package, the platform's own number of the checkout,
       the language, where to return) becomes a :class:`Checkout` (the link to

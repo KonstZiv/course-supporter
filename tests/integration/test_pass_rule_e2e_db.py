@@ -32,12 +32,14 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -61,6 +63,7 @@ from course_supporter.homework.path_stages import (
     CRITERIA_EVALUATION,
     REVIEW_EXPLANATION,
 )
+from course_supporter.homework.text_result import TextResultBuilder
 from course_supporter.models.review_structure import PassRule, ReviewStructureV1
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -279,6 +282,40 @@ async def _author_saves_the_list(
     return view.in_force.source_id
 
 
+@contextmanager
+def _edit_reads_by_the_builder(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> Iterator[list[str]]:
+    """The statements the review's builder sends to the author's edits' table.
+
+    The price the product owner accepted for the rule of 2026-11-17: one read
+    of the edit's row for the author's list with a "must", none otherwise.
+    """
+    reads: list[str] = []
+    building = False
+    build = TextResultBuilder.build
+
+    async def counted(self: TextResultBuilder, context: Any) -> Any:
+        nonlocal building
+        building = True
+        try:
+            return await build(self, context)
+        finally:
+            building = False
+
+    def listen(_conn: Any, _cursor: Any, statement: str, *_: Any) -> None:
+        if building and "task_criteria_overrides" in statement:
+            reads.append(statement)
+
+    engine = session_factory.kw["bind"].sync_engine
+    event.listen(engine, "before_cursor_execute", listen)
+    try:
+        with patch.object(TextResultBuilder, "build", counted):
+            yield reads
+    finally:
+        event.remove(engine, "before_cursor_execute", listen)
+
+
 async def _walk(
     session_factory: async_sessionmaker[AsyncSession],
     world: dict[str, Any],
@@ -288,7 +325,7 @@ async def _walk(
     """One submission of the work, reviewed and delivered; what each place says."""
     webhook = _webhook()
     submission_id, job_id = await _submit(session_factory, world)
-    with capture_logs() as logs:
+    with capture_logs() as logs, _edit_reads_by_the_builder(session_factory) as reads:
         await _run(
             session_factory,
             router,
@@ -319,6 +356,7 @@ async def _walk(
         "verdicts": {row.item_id: row.verdict for row in rows},
         "score": score_percent(rows),
         "own": own,
+        "edit_reads": len(reads),
         # Lock e: the five places that state the pass.
         "passes": {
             "stage": explained["passed"],
@@ -349,6 +387,8 @@ class TestLockD:
         assert first["layer"] is CriteriaLayer.MODEL
         assert first["source_id"] == {world["model_list_id"]}
         assert first["own"] == frozenset()
+        # The model's list: the builder reads no edit of the author's.
+        assert first["edit_reads"] == 0
         assert first["verdicts"]["c1"] == "not_met"
         assert first["score"] == first["submission"].score == 82
         assert first["passes"] == dict.fromkeys(first["passes"], True)
@@ -371,6 +411,9 @@ class TestLockD:
         assert second["layer"] is CriteriaLayer.AUTHOR
         assert second["source_id"] == {kept_id}
         assert second["own"] == frozenset()
+        # The author's list with a "must" row: one read of the edit, at most
+        # (none when the row is still in the session's identity map).
+        assert second["edit_reads"] <= 1
         assert second["verdicts"] == first["verdicts"]
         assert second["score"] == second["submission"].score == 82
         assert second["passes"] == dict.fromkeys(second["passes"], True)
@@ -389,6 +432,7 @@ class TestLockD:
         assert third["layer"] is CriteriaLayer.AUTHOR
         assert third["source_id"] == {own_id}
         assert third["own"] == {"c1"}
+        assert third["edit_reads"] <= 1
         assert third["verdicts"] == first["verdicts"]
         assert third["score"] == third["submission"].score == 82
         assert third["passes"] == dict.fromkeys(third["passes"], False)

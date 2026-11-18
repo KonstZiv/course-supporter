@@ -374,8 +374,10 @@ _C1, _C2, _C3 = _MODEL
 class TestMustByAuthor:
     """The rule of 2026-11-17, row by row: which "must" the author made theirs.
 
-    ``mark_must_by_author``'s table; the model's list ``_MODEL`` has c1
-    "must", c2 "should", c3 "may".
+    ``mark_must_by_author``'s table, with the clarification of 2026-11-18: an
+    explicit choice of the author's survives a later edit that does not send
+    the field. The model's list ``_MODEL`` has c1 "must", c2 "should", c3
+    "may".
     """
 
     def test_a_new_must_is_the_authors(self) -> None:
@@ -453,6 +455,67 @@ class TestMustByAuthor:
         second = _stored_edit([_kept(first[0], must_by_author=None)], previous=first)
 
         assert _marks(second) == {"c1": False}
+
+    def test_an_own_must_sent_false_stays_no_in_the_next_edit_without_it(
+        self,
+    ) -> None:
+        """(a): a new "must" and a raised one the author said "no" to."""
+        first = _stored_edit(
+            [
+                _kept(_C1),
+                _kept(_C3, weight="must", must_by_author=False),
+                _edit(weight="must", must_by_author=False),
+            ]
+        )
+        assert _marks(first) == {"c1": False, "c3": False, "c4": False}
+
+        second = _stored_edit(
+            [
+                _kept(first[0], must_by_author=None),
+                _kept(first[1], must_by_author=None, text="Readable names, always"),
+                _kept(first[2], must_by_author=None),
+            ],
+            previous=first,
+        )
+
+        assert _marks(second) == {"c1": False, "c3": False, "c4": False}
+
+    def test_a_kept_must_sent_true_stays_yes_in_the_next_edit_without_it(
+        self,
+    ) -> None:
+        """(a): the model's "must" the author made mandatory stays so."""
+        first = _stored_edit([_kept(_C1, must_by_author=True)])
+
+        second = _stored_edit(
+            [_kept(first[0], must_by_author=None, text="Handles n = 0 and n = 1")],
+            previous=first,
+        )
+
+        assert _marks(second) == {"c1": True}
+
+    def test_a_must_lowered_and_raised_back_without_the_field_is_the_authors(
+        self,
+    ) -> None:
+        """(b): raised to "must" by this edit, from the edit it replaces."""
+        lowered = _stored_edit([_kept(_C1, weight="should")])
+        assert _marks(lowered) == {"c1": False}
+
+        raised = _stored_edit(
+            [_kept(lowered[0], weight="must", must_by_author=None)], previous=lowered
+        )
+
+        assert _marks(raised) == {"c1": True}
+
+    def test_an_id_the_replaced_edit_lacks_reads_the_models_list(self) -> None:
+        """(c) with an edit to replace: what it does not have, the model says."""
+        replaced = _stored_edit([_kept(_C2)])
+        new = _C1.model_copy(update={"id": "c9"})
+
+        marked = mark_must_by_author(
+            [(_C1, None), (new, None)], model=_MODEL, previous=replaced
+        )
+
+        assert _marks(marked) == {"c1": False, "c9": True}
 
     def test_an_edit_after_a_reset_inherits_nothing(self) -> None:
         """A reset leaves no edit to replace: a kept "must" is the model's again."""

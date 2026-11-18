@@ -648,20 +648,26 @@ def mark_must_by_author(
     the author chose (``criteria_verdicts.pass_decision``), never by the marks
     the model put, which an author who corrected one word keeps with the
     whole list. The mark is settled once, when the edit is stored, from what
-    the author sent, the model's list and the edit this one replaces:
+    the author sent, the edit this one replaces and the model's list; an
+    explicit choice of the author's is never changed by a later edit that
+    does not send the field (the clarification of 2026-11-18). The rows, in
+    this order — the first that fits decides:
 
-    ========  ========  ==============================  =======================
-    weight    sent      the criterion's ``id``          ``must_by_author``
-    ========  ========  ==============================  =======================
-    not must  ``true``  —                               refused
-    not must  other     —                               ``False``
-    must      a value   —                               the value sent
-    must      omitted   not in the model's list (new)   ``True``
-    must      omitted   not a "must" there (raised)     ``True``
-    must      omitted   a "must" there                  the replaced edit's
-                                                        mark of it; ``False``
-                                                        without one (kept)
-    ========  ========  ==============================  =======================
+    ======  ========  =====================================  ===================
+    weight  sent      the criterion's ``id``                 ``must_by_author``
+    ======  ========  =====================================  ===================
+    other   ``true``  —                                      refused
+    other   other     —                                      ``False``
+    must    a value   —                                      the value sent
+    must    omitted   a "must" in the replaced edit (a)      its mark there
+    must    omitted   in the replaced edit, not a "must" (b) ``True`` (raised)
+    must    omitted   not in the model's list (c)            ``True`` (new)
+    must    omitted   in the model's list, not a "must" (c)  ``True`` (raised)
+    must    omitted   a "must" in the model's list (c)       ``False`` (kept)
+    ======  ========  =====================================  ===================
+
+    Rows (c) are read when there is no replaced edit or it has no such
+    ``id``.
 
     Args:
         edited: Each criterion of the edit as it is stored (:func:`apply_edit`
@@ -678,20 +684,27 @@ def mark_must_by_author(
     Raises:
         CriteriaRefusedError: ``MUST_BY_AUTHOR_WITHOUT_MUST``.
 
-    >>> def criterion(cid, weight):
+    >>> def criterion(cid, weight, mark=None):
     ...     return Criterion(
     ...         id=cid, text="t", evidence="e", weight=weight,
     ...         check_method="model_verdict", soft_descent=False,
-    ...         concepts=(), mandatory_points=(),
+    ...         concepts=(), mandatory_points=(), must_by_author=mark,
     ...     )
     >>> model = [criterion("c1", "must"), criterion("c2", "should")]
-    >>> marked = mark_must_by_author(
+    >>> first = mark_must_by_author(
     ...     [(criterion("c1", "must"), None), (criterion("c2", "must"), None),
-    ...      (criterion("c3", "must"), None), (criterion("c4", "may"), None)],
+    ...      (criterion("c3", "must"), False), (criterion("c4", "may"), None)],
     ...     model=model, previous=(),
     ... )
-    >>> [criterion.must_by_author for criterion in marked]
-    [False, True, True, False]
+    >>> [criterion.must_by_author for criterion in first]
+    [False, True, False, False]
+    >>> second = mark_must_by_author(
+    ...     [(criterion("c1", "must"), None), (criterion("c3", "must"), None),
+    ...      (criterion("c4", "must"), None)],
+    ...     model=model, previous=first,
+    ... )
+    >>> [criterion.must_by_author for criterion in second]
+    [False, False, True]
     """
     refused = [
         f"criteria.{index}"
@@ -704,18 +717,22 @@ def mark_must_by_author(
             f"{refused} send must_by_author true on a criterion whose weight is "
             "not 'must'; make it a 'must' or leave must_by_author out",
         )
-    models = {criterion.id: criterion for criterion in model}
-    marks = {criterion.id: criterion.must_by_author is True for criterion in previous}
+    replaced = {criterion.id: criterion for criterion in previous}
+    proposed = {criterion.id: criterion for criterion in model}
 
     def mark(criterion: Criterion, sent: bool | None) -> bool:
         if criterion.weight is not WeightCategory.MUST:
             return False
         if sent is not None:
             return sent
-        proposed = models.get(criterion.id)
-        if proposed is None or proposed.weight is not WeightCategory.MUST:
-            return True
-        return marks.get(criterion.id, False)
+        before = replaced.get(criterion.id)
+        if before is not None and before.weight is WeightCategory.MUST:
+            return before.must_by_author is True  # (a) the author's choice stands
+        if before is not None:
+            return True  # (b) raised by this edit
+        # (c) nothing of the author's to go by: the model's list.
+        model_said = proposed.get(criterion.id)
+        return model_said is None or model_said.weight is not WeightCategory.MUST
 
     return tuple(
         criterion.model_copy(update={"must_by_author": mark(criterion, sent)})

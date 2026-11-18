@@ -1165,9 +1165,9 @@ class CriteriaOverrideRequest(BaseModel):
             "characters; there exactly when ``check_method`` is "
             "``mandatory_points``) and, for a ``must``, ``must_by_author`` — "
             "``true`` makes it mandatory for the pass, ``false`` leaves it to "
-            "weigh in the score; omitted, a new ``must`` or one whose weight was "
-            "raised is mandatory, and a ``must`` of the model's list keeps the "
-            "value of the edit this one replaces, ``false`` without one. "
+            "weigh in the score; omitted, a ``must`` of the edit this one "
+            "replaces keeps its value there, one raised to ``must`` and a new one "
+            "are mandatory, and a ``must`` of the model's list is not. "
             "``soft_descent`` is the code's and is not sent."
         ),
     )

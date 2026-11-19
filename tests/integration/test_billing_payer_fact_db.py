@@ -253,6 +253,40 @@ class TestWhoPaysWhichCall:
         (student,) = (await report(session_factory, w)).students
         assert student.spend.platform_usd == 0
 
+    async def test_the_facts_of_several_reviews_are_each_reviews_fact(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """``review_facts_usd`` reads the one condition, grouped by submission:
+        every row the payer does not pay for is out of each review's fact."""
+        many = [await bil.make_world(session_factory) for _ in range(3)]
+        mixed, simple, _empty = many
+        job = mixed.homework_job_id
+        await attempt(session_factory, job, "0.04", FIRST)
+        await attempt(session_factory, job, "0.01", ITEM_REPEAT)
+        await attempt(session_factory, job, "0.03", STRUCTURAL)
+        await attempt(session_factory, job, "0.05", INFRA)
+        await attempt(session_factory, job, "0.02", FIRST, outcome=FAILED)
+        await attempt(session_factory, job, "0.07", FIRST, action=REPLY_SAFETY_ACTION)
+        await attempt(session_factory, job, "0.06", FIRST, action="key_explanation")
+        await attempt(
+            session_factory, job, "0.08", FIRST, action="criteria_decomposition"
+        )
+        await attempt(session_factory, simple.homework_job_id, "0.02", FIRST)
+        ids = [w.submission_id for w in many]
+
+        async with session_factory() as session:
+            together = await charging.review_facts_usd(session, ids)
+        one_by_one = {
+            w.submission_id: await review_fact(session_factory, w) for w in many
+        }
+
+        assert together == one_by_one
+        assert list(together.values()) == [
+            Decimal("0.05"),
+            Decimal("0.02"),
+            Decimal(0),
+        ]
+
 
 class TestTheJournal:
     async def test_the_review_charges_the_payers_fact_in_the_same_movements(

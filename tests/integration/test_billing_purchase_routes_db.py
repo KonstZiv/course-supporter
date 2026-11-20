@@ -501,8 +501,18 @@ class TestPackages:
             response = await client.get(f"{who}/packages")
         assert response.status_code == 200
         assert response.json()["packages"] == [
-            {"id": "starter", "units": 1000, "prices_minor": {"EUR": 990}},
-            {"id": "large", "units": 5000, "prices_minor": {"EUR": 3990}},
+            {
+                "id": "starter",
+                "units": 1000,
+                "prices_minor": {"EUR": 990},
+                "validity_months": 6,
+            },
+            {
+                "id": "large",
+                "units": 5000,
+                "prices_minor": {"EUR": 3990},
+                "validity_months": 6,
+            },
         ]
         assert "fake_price" not in response.text
         assert "prod_" not in response.text

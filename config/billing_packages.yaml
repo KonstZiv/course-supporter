@@ -2,8 +2,10 @@
 # src/course_supporter/billing/payments/catalog.py. Read once per process.
 #
 # A package: its id, its units (a whole number), its price in minor units
-# (cents) per currency — EUR always, others where set — and whether it is on
-# sale (active). The units of a purchase are read from here when the provider
+# (cents) per currency — EUR always, others where set — whether it is on
+# sale (active) and, optionally, its tax_mode (inclusive: the tax is in the
+# price; exclusive: the tax is added on top — as the product is set up at the
+# merchant of record). The units of a purchase are read from here when the provider
 # says it was paid, so an id stands for its units and prices for good: to
 # change a package, give it a new id.
 #
@@ -18,21 +20,29 @@ packages:
     prices_minor:
       EUR: 999
     active: true
+    # Рішення оператора 2026-11-20: податок додається зверху (налаштування товару в Creem).
+    tax_mode: exclusive
   - id: units-1500-v1
     units: 1500
     prices_minor:
       EUR: 1499
     active: true
+    # Рішення оператора 2026-11-20: податок додається зверху (налаштування товару в Creem).
+    tax_mode: exclusive
   - id: units-5000-v1
     units: 5000
     prices_minor:
       EUR: 3999
     active: true
+    # Рішення оператора 2026-11-20: податок додається зверху (налаштування товару в Creem).
+    tax_mode: exclusive
   - id: units-10000-v1
     units: 10000
     prices_minor:
       EUR: 6999
     active: true
+    # Рішення оператора 2026-11-20: податок додається зверху (налаштування товару в Creem).
+    tax_mode: exclusive
 
   # SANDBOX ONLY, not on sale since 2026-11-15; remove before switching Creem to live mode
   - id: sandbox-test-500

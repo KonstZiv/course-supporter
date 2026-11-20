@@ -134,6 +134,14 @@ class Settings(BaseSettings):
     billing_reminder_author_days: int = Field(default=3, ge=1)
     # Units of a batch that expires within this many days are announced.
     billing_expiry_notice_days: int = Field(default=14, ge=1)
+    # Public numbers (BIL-PUBLIC-NUMBERS, billing.public_numbers): the sample
+    # of what a review costs is the finished reviews submitted within this many
+    # days before the app's start, over every tenant.
+    public_numbers_window_days: int = Field(
+        default=90,
+        ge=1,
+        description="Days of finished reviews the public numbers are computed from.",
+    )
 
     # --- Payments (BIL-PAY) ---
     # The payment providers a checkout may use, by adapter name, as a JSON list

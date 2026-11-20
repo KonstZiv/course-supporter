@@ -147,6 +147,7 @@ async def get_current_student(
         login=credential.login,
         display_name=student.display_name,
         preferred_language=student.preferred_language,
+        interface_language=student.interface_language,
     )
 
 

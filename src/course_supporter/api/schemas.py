@@ -1615,6 +1615,12 @@ class PortalLoginResponse(BaseModel):
     display_name: str | None = Field(
         default=None, description="Student's portal display name, if set."
     )
+    interface_language: str | None = Field(
+        default=None,
+        description="Canonical ISO 639-3 language of the portal pages the "
+        "student picked, as stored at login, or null if they never picked one. "
+        "Returned here so the portal switches its pages right after login.",
+    )
 
 
 class PortalMeResponse(BaseModel):
@@ -1637,6 +1643,41 @@ class PortalMeResponse(BaseModel):
         description="Canonical ISO 639-3 language the student last asked a "
         "review in, or null if they never asked. The submission form opens on "
         "it, so a standing preference is visible instead of only remembered.",
+    )
+    interface_language: str | None = Field(
+        default=None,
+        description="Canonical ISO 639-3 language of the portal pages the "
+        "student picked, or null if they never picked one. Kept apart from "
+        "the review language: it changes the pages only.",
+    )
+
+
+class InterfaceLanguageRequest(BaseModel):
+    """Request body for PUT /portal/me/interface-language (M-3).
+
+    Validated as the review-language fields are (``_validate_language``):
+    ISO 639-1, 639-3 or an English name is accepted, the canonical 639-3
+    code is what is stored, and a language outside ``config/languages.yaml``
+    is a 422. There is no null: the route sets a choice, never clears it.
+    """
+
+    language: str = Field(
+        description="Language of the portal pages; ISO 639-1 or 639-3 "
+        "accepted, stored as 639-3.",
+        examples=["en", "ukr"],
+    )
+
+    @field_validator("language")
+    @classmethod
+    def _check_language(cls, raw: str) -> str:
+        return _validate_language(raw)
+
+
+class InterfaceLanguageResponse(BaseModel):
+    """Response for PUT /portal/me/interface-language (M-3)."""
+
+    interface_language: str = Field(
+        description="The stored portal pages' language, canonical ISO 639-3."
     )
 
 

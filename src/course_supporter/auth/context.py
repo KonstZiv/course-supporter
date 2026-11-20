@@ -44,3 +44,9 @@ class StudentContext:
     # Defaulted so the three route-test stubs that build a context by hand
     # keep working without knowing about a field they do not exercise.
     preferred_language: str | None = None
+    # The portal pages' language the student picked (ISO 639-3), or None
+    # until they pick one (M-3). A field apart from ``preferred_language``:
+    # the review language is never read from it. On the context for the same
+    # reason: the resolver already holds the row, and the PUT route compares
+    # against it to skip a write that would change nothing.
+    interface_language: str | None = None

@@ -1613,6 +1613,11 @@ class Student(SoftDeleteMixin, Base):
         comment="Language the student last asked their review in: ISO 639-3, "
         "normalized on entry (e.g. ukr, eng).",
     )
+    interface_language: Mapped[str | None] = mapped_column(
+        String(10),
+        comment="мова сторінок порталу, обрана студентом; ISO 639-3, "
+        "нормалізована на вході; NULL — ще не обирав",
+    )
     mentor_preferences: Mapped[str | None] = mapped_column(
         Text,
         comment="D7-global: student's standing preferences on review "

@@ -130,14 +130,36 @@ class TestShippedCatalog:
         assert set(expected_live) == {p.id for p in catalog.active()}
 
     def test_its_packages_have_exactly_the_locked_fields(self) -> None:
+        """A package on sale states every field; one off sale may leave out
+        its tax mode (added on 2026-11-20 to the packages on sale only)."""
         raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
         for package in raw["packages"]:
-            assert set(package) == set(Package.model_fields)
+            optional = set() if package["active"] else {"tax_mode"}
+            assert set(Package.model_fields) - optional <= set(package)
+            assert set(package) <= set(Package.model_fields)
+
+    def test_the_tax_is_added_on_top_of_every_package_on_sale(self) -> None:
+        """Operator 2026-11-20: the tax is added on top (the products in Creem)."""
+        catalog = load_catalog(SHIPPED)
+        assert {p.id: p.tax_mode for p in catalog.active()} == {
+            "units-500-v1": "exclusive",
+            "units-1500-v1": "exclusive",
+            "units-5000-v1": "exclusive",
+            "units-10000-v1": "exclusive",
+        }
+        sandbox = catalog.package("sandbox-test-500")
+        assert sandbox is not None and sandbox.tax_mode is None
 
 
 def test_the_shape_is_locked() -> None:
     """Adding a field to a package or to the file is a decision, not a drift."""
-    assert set(Package.model_fields) == {"id", "units", "prices_minor", "active"}
+    assert set(Package.model_fields) == {
+        "id",
+        "units",
+        "prices_minor",
+        "active",
+        "tax_mode",
+    }
     assert set(Catalog.model_fields) == {"packages", "providers", "providers_live"}
 
 
@@ -196,6 +218,7 @@ def test_each_mode_reads_its_own_table(tmp_path: Path) -> None:
         (_package(active="yes"), "valid boolean"),
         (_package(id="Starter Pack"), "pattern"),
         (_package(colour="red"), "Extra inputs"),
+        (_package(tax_mode="included"), "'inclusive' or 'exclusive'"),
         ({k: v for k, v in _package().items() if k != "active"}, "Field required"),
     ],
 )

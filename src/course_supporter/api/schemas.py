@@ -2846,6 +2846,10 @@ class BillingPackageResponse(BaseModel):
         description="Price per currency (ISO 4217) in its minor units (cents); "
         "EUR always."
     )
+    validity_months: int = Field(
+        description="How long the package's units are valid from the day of "
+        "purchase, in months."
+    )
 
 
 class BillingPurchaseState(BaseModel):
@@ -3056,3 +3060,94 @@ class BillingCheckoutStateResponse(BaseModel):
     balance_after: int | None = Field(
         description="Credited: the units available now; null otherwise."
     )
+
+
+# ── Public numbers (BIL-PUBLIC-NUMBERS) ──────────────────────────────
+
+
+class _PublicShape(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class PublicRules(_PublicShape):
+    reserve_multiplier: int = Field(
+        description="A review's start holds this many times its expected cost."
+    )
+
+
+class PublicPackage(_PublicShape):
+    """One package on sale in one currency."""
+
+    id: str = Field(description="The package's id.")
+    units: int = Field(description="Units the package brings.")
+    price_minor: int = Field(description="Its price in minor units (cents).")
+    currency: str = Field(description="ISO 4217; EUR always among the lines.")
+    validity_months: int = Field(
+        description="How long the units are valid from the day of purchase, in months."
+    )
+    tax_mode: Literal["inclusive", "exclusive"] | None = Field(
+        description="inclusive: the tax is in the price; exclusive: the tax is "
+        "added on top (as the product is set up at the merchant of record); "
+        "null: not stated."
+    )
+
+
+class PublicActual(_PublicShape):
+    """The actual cost of one finished review, in units."""
+
+    min: int | None
+    typical: float | None = Field(description="The median.")
+    max: int | None
+
+
+class PublicStartThreshold(_PublicShape):
+    """The price before a review (what the doors need available), in units."""
+
+    typical: float | None = Field(description="The median.")
+    max: int | None
+
+
+class PublicSmallestPackageReviews(_PublicShape):
+    """How many reviews in a row the smallest package lets through."""
+
+    low: int | None = Field(description="The least over the tasks of the sample.")
+    typical: int | None = Field(description="With the typical price and cost.")
+    high: int | None = Field(description="The most over the tasks of the sample.")
+
+
+class PublicSample(_PublicShape):
+    reviews: int = Field(description="Finished reviews with a cost in the sample.")
+    window_days: int = Field(description="The sample's days before as_of.")
+    includes_internal: bool = Field(
+        description="The platform's own (test) students are in the sample."
+    )
+
+
+class PublicReviewGroup(_PublicShape):
+    status: Literal["ready", "insufficient_data", "not_charged"] = Field(
+        description="ready: the sample has a finished review; insufficient_data: "
+        "it has none (numbers null); not_charged: this kind of review charges no "
+        "units today (numbers null)."
+    )
+    actual: PublicActual
+    start_threshold: PublicStartThreshold
+    smallest_package_reviews: PublicSmallestPackageReviews
+    sample: PublicSample
+
+
+class PublicReviewCost(_PublicShape):
+    homework: PublicReviewGroup = Field(description="Tasks and short tasks.")
+    project: PublicReviewGroup = Field(description="Projects.")
+
+
+class PublicNumbersResponse(_PublicShape):
+    """GET /public/numbers: what a review costs and how far a package goes,
+    from the platform's data; the same until the server's next start."""
+
+    contract_version: int = Field(description="The version of this shape: 1.")
+    as_of: datetime = Field(description="When the numbers were computed (UTC).")
+    rules: PublicRules
+    packages: list[PublicPackage] = Field(
+        description="Packages on sale, fewest units first; a line per currency."
+    )
+    review_cost: PublicReviewCost

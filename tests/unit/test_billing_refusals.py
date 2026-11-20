@@ -33,6 +33,7 @@ def test_the_codes_and_statuses() -> None:
         "checkout_not_found": 404,
         "invalid_cursor": 422,
         "invalid_period": 422,
+        "numbers_unavailable": 503,
     }
 
 

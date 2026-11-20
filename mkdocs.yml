@@ -8,6 +8,15 @@ theme:
   font: false             # no Google Fonts: fonts come from docs/assets/fonts
   custom_dir: overrides   # header with links to the site
 
+extra:
+  alternate:
+    - name: Українська
+      link: /uk/
+      lang: uk
+    - name: English
+      link: /en/
+      lang: en
+
 extra_css:
   - stylesheets/extra.css
 
@@ -26,12 +35,18 @@ plugins:
       javascript: javascripts/mermaid.min.js
   - panzoom               # zoomable diagrams/images (Phase 2)
 
+hooks:
+  - hooks/languages.py
+
 # A link to an anchor its page does not have fails `mkdocs build --strict`
 # (the default only logs it): the errors page links every code to its section
 # on the authors' API page.
 validation:
   links:
     anchors: warn
+
+exclude_docs: |
+  /en/
 
 # Root docs/index.md is a redirect / -> /uk/, intentionally kept out of nav.
 not_in_nav: |

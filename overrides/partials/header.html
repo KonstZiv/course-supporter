@@ -2,6 +2,25 @@
   Material for MkDocs 9.7.2, partials/header.html, with two changes: the logo link is replaced by the
   site wordmark, and links to the public site are added after it. Compare with the original on upgrade.
 -#}
+{%- set header_nav = {
+  "uk": {
+    "site": "https://pythoncourse.me/uk/",
+    "home": "Головна",
+    "pricing": "https://pythoncourse.me/uk/pricing/",
+    "pricing_label": "Ціни",
+    "docs": "Документація",
+    "signin": "Увійти"
+  },
+  "en": {
+    "site": "https://pythoncourse.me/en/",
+    "home": "Home",
+    "pricing": "https://pythoncourse.me/en/pricing/",
+    "pricing_label": "Pricing",
+    "docs": "Documentation",
+    "signin": "Sign in"
+  }
+} -%}
+{%- set current_nav = header_nav.get(config.theme.language, header_nav["uk"]) -%}
 {% set class = "md-header" %}
 {% if "navigation.tabs.sticky" in features %}
   {% set class = class ~ " md-header--shadow md-header--lifted" %}
@@ -14,7 +33,7 @@
       {% set icon = config.theme.icon.menu or "material/menu" %}
       {% include ".icons/" ~ icon ~ ".svg" %}
     </label>
-    <a class="site-wordmark" href="https://pythoncourse.me/uk/">Course Supporter</a>
+    <a class="site-wordmark" href="{{ current_nav.site }}">Course Supporter</a>
     <div class="md-header__title" data-md-component="header-title">
       <div class="md-header__ellipsis">
         <div class="md-header__topic">
@@ -34,10 +53,10 @@
       </div>
     </div>
     <ul class="site-links">
-      <li><a class="site-link" href="https://pythoncourse.me/uk/">Головна</a></li>
-      <li><a class="site-link" href="https://pythoncourse.me/uk/pricing/">Ціни</a></li>
-      <li><a class="site-link" href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" aria-current="page">Документація</a></li>
-      <li><a class="site-signin" href="https://panel.pythoncourse.me/">Увійти</a></li>
+      <li><a class="site-link" href="{{ current_nav.site }}">{{ current_nav.home }}</a></li>
+      <li><a class="site-link" href="{{ current_nav.pricing }}">{{ current_nav.pricing_label }}</a></li>
+      <li><a class="site-link" href="{{ config.extra.homepage | d(nav.homepage.url, true) | url }}" aria-current="page">{{ current_nav.docs }}</a></li>
+      <li><a class="site-signin" href="https://panel.pythoncourse.me/">{{ current_nav.signin }}</a></li>
     </ul>
     {% if config.theme.palette %}
       {% if not config.theme.palette is mapping %}

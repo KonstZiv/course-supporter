@@ -308,8 +308,14 @@ class ActionEstimate:
 # ── Units: one rounding per action ──
 
 
-def _ceil(value: Decimal) -> int:
+def round_up(value: Decimal) -> int:
+    """Up to a whole unit: the rounding of a price and a reserve."""
     return int(value.to_integral_value(rounding=ROUND_CEILING))
+
+
+def round_half_up(value: Decimal) -> int:
+    """To the nearest whole unit, a half up: the rounding of a fact."""
+    return int(value.to_integral_value(rounding=ROUND_HALF_UP))
 
 
 def price_units(
@@ -318,7 +324,7 @@ def price_units(
     """P in units: ``ceil(E * (1 + margin) * K)``; ``None`` while K is not set."""
     if units_per_usd is None:
         return None
-    return _ceil(e_usd * (1 + margin) * units_per_usd)
+    return round_up(e_usd * (1 + margin) * units_per_usd)
 
 
 def reserve_units(e_usd: Decimal, *, units_per_usd: Decimal | None) -> int | None:
@@ -330,7 +336,7 @@ def reserve_units(e_usd: Decimal, *, units_per_usd: Decimal | None) -> int | Non
     """
     if units_per_usd is None:
         return None
-    return _ceil(RESERVE_MULTIPLIER * e_usd * units_per_usd)
+    return round_up(RESERVE_MULTIPLIER * e_usd * units_per_usd)
 
 
 def fact_units(usd: Decimal, *, units_per_usd: Decimal | None) -> int | None:
@@ -342,7 +348,7 @@ def fact_units(usd: Decimal, *, units_per_usd: Decimal | None) -> int | None:
         return None
     if usd <= 0:
         return 0
-    units = int((usd * units_per_usd).to_integral_value(rounding=ROUND_HALF_UP))
+    units = round_half_up(usd * units_per_usd)
     return max(units, 1)
 
 

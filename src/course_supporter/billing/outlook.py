@@ -236,8 +236,9 @@ async def student_outlook(
     if numbers is None:
         return StudentOutlook(None, None, soon, "self", enabled)
     homework = numbers.review_cost.homework
-    price = homework.start_threshold.typical
-    typical_fact = homework.actual.typical
+    # Whole units of the public numbers, taken as they are (rounded there once).
+    price: float | None = homework.start_threshold.typical
+    typical_fact: float | None = homework.actual.typical
     if homework.status != "ready" or not price:
         price = await _price_of_a_course_task(
             session,

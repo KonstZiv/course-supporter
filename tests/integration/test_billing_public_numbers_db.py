@@ -135,6 +135,24 @@ class TestTheNumbers:
 
         assert found.start_threshold.typical == found.start_threshold.max == 270
 
+    async def test_an_even_count_gives_whole_numbers(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """P 216 and 217: the median 216.5 up to 217; F 45 and 108: the median
+        76.5 a half up to 77. The package's number is of those very two."""
+        w = await bil.make_world(session_factory)
+        await review(session_factory, w, [("0.05", FIRST)], e_usd="0.2")  # 45, 216
+        await review(session_factory, w, [("0.12", FIRST)], e_usd="0.2005")  # 108, 217
+
+        found = (await numbers(session_factory, w)).review_cost.homework
+
+        assert (found.start_threshold.typical, found.actual.typical) == (217, 77)
+        assert isinstance(found.start_threshold.typical, int)
+        assert isinstance(found.actual.typical, int)
+        left = found.smallest_package_reviews
+        # 1 + (500 - 217) // 77, the one task's the same
+        assert (left.low, left.typical, left.high) == (4, 4, 4)
+
     async def test_two_tasks_with_different_p_and_f_give_different_low_and_high(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:

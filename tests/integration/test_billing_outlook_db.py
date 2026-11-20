@@ -322,7 +322,9 @@ class TestReviewsLeft:
 
         assert numbers.packages[0].units == 500
         site = numbers.review_cost.homework.smallest_package_reviews.typical
-        assert found.reviews_left == site == 4  # P 270, F 76.5: 1 + 230 // 76.5
+        # P 270; F the median 76.5, rounded as a fact: 77 -> 1 + 230 // 77
+        # (unrounded it would be 1 + 230 // 76.5 = 4)
+        assert found.reviews_left == site == 3
 
     async def test_the_numbers_of_the_start_not_the_base_of_now(
         self, session_factory: async_sessionmaker[AsyncSession]

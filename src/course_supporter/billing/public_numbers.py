@@ -20,16 +20,23 @@ Purpose:
       - ``actual`` — the fact F of each review in units
         (:func:`.charging.review_facts_usd` in one query,
         :func:`.charging.fact_of`), facts of 0 (a copy, nothing called) left
-        out: the smallest, the median, the largest;
+        out: the smallest, the median rounded as a charged fact (a half up,
+        :func:`~course_supporter.cost_estimate.core.round_half_up`), the
+        largest;
       - ``start_threshold`` — the price before P of the estimate of each
         review with a fact,
         today's :func:`.charging.price_of` of its ``e_usd`` (not the stored
         ``p_units``, written at the rate of its day), 0 left out: the median
-        and the largest;
+        rounded up (a threshold is never understated) and the largest;
       - ``smallest_package_reviews`` — :func:`.outlook.reviews_left` of the
         smallest package's units: ``typical`` with the group's typical P and
         F; ``low`` and ``high`` the least and the most of the same number
-        computed per task (its median P and F) that has both.
+        computed per task (its median P and F, rounded the same way) that
+        has both.
+
+      Every number is a whole unit, rounded once here: the site, the portal
+      and :func:`.outlook.student_outlook` take these very numbers and round
+      nothing of their own.
 
       ``status``: ``ready`` — the sample has a review with a fact;
       ``insufficient_data`` — it has none (numbers null); ``not_charged`` — no
@@ -63,6 +70,7 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
@@ -75,7 +83,11 @@ from course_supporter.billing.journal import VALIDITY_MONTHS
 from course_supporter.billing.kinds import ActionKind
 from course_supporter.billing.outlook import reviews_left
 from course_supporter.billing.payments.catalog import Catalog, get_catalog
-from course_supporter.cost_estimate.core import RESERVE_MULTIPLIER
+from course_supporter.cost_estimate.core import (
+    RESERVE_MULTIPLIER,
+    round_half_up,
+    round_up,
+)
 from course_supporter.homework.path_config import (
     PathConfig,
     ServedBy,
@@ -128,13 +140,13 @@ class PackageLine:
 @dataclass(frozen=True, slots=True)
 class Actual:
     min: int | None
-    typical: float | None
+    typical: int | None
     max: int | None
 
 
 @dataclass(frozen=True, slots=True)
 class StartThreshold:
-    typical: float | None
+    typical: int | None
     max: int | None
 
 
@@ -215,8 +227,19 @@ def _packages(catalog: Catalog) -> tuple[PackageLine, ...]:
     )
 
 
-def _median(values: Sequence[int]) -> float:
-    return float(statistics.median(values))
+def _median(values: Sequence[int]) -> Decimal:
+    """The exact median: of an even count, the half of the two middle ones."""
+    return Decimal(statistics.median(map(Decimal, values)))
+
+
+def _typical_price(prices: Sequence[int]) -> int:
+    """The median P up to a whole unit: a threshold is never understated."""
+    return round_up(_median(prices))
+
+
+def _typical_fact(facts: Sequence[int]) -> int:
+    """The median F rounded as a charged fact is (a half up)."""
+    return round_half_up(_median(facts))
 
 
 def _empty_group(status: Status, window_days: int) -> ReviewGroup:
@@ -272,8 +295,8 @@ async def _group(
         if sid is not None and (p := charging.price_of(e)) > 0
     }
 
-    typical_f = _median(list(facts.values()))
-    typical_p = _median(list(prices.values())) if prices else None
+    typical_f = _typical_fact(list(facts.values()))
+    typical_p = _typical_price(list(prices.values())) if prices else None
     per_task_f: dict[uuid.UUID, list[int]] = defaultdict(list)
     per_task_p: dict[uuid.UUID, list[int]] = defaultdict(list)
     for sid, fact in facts.items():
@@ -284,7 +307,11 @@ async def _group(
     left = SmallestPackageReviews(None, None, None)
     if smallest_units is not None and typical_p is not None:
         per_task = [
-            reviews_left(smallest_units, _median(per_task_p[t]), _median(per_task_f[t]))
+            reviews_left(
+                smallest_units,
+                _typical_price(per_task_p[t]),
+                _typical_fact(per_task_f[t]),
+            )
             for t in per_task_f
             if t in per_task_p
         ]

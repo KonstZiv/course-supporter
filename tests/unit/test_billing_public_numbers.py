@@ -32,6 +32,8 @@ from course_supporter.billing.public_numbers import (
     StartThreshold,
     _empty_group,
     _packages,
+    _typical_fact,
+    _typical_price,
     dump,
     start_key,
 )
@@ -70,8 +72,8 @@ def make_numbers(reviews: int = 3) -> PublicNumbers:
         review_cost=ReviewCost(
             homework=ReviewGroup(
                 status="ready",
-                actual=Actual(45, 90.0, 135),
-                start_threshold=StartThreshold(270.0, 324),
+                actual=Actual(45, 90, 135),
+                start_threshold=StartThreshold(270, 324),
                 smallest_package_reviews=SmallestPackageReviews(2, 3, 4),
                 sample=Sample(reviews, window, includes_internal=True),
             ),
@@ -238,6 +240,26 @@ class TestTheAddress:
         ] == {"$ref": "#/components/schemas/PublicNumbersResponse"}
         assert "numbers_unavailable" in operation["responses"]["503"]["description"]
         assert "304" in operation["responses"]
+
+
+class TestTheTypicalNumbersAreWholeUnits:
+    @pytest.mark.parametrize(
+        ("values", "price", "fact"),
+        [
+            ([216, 217], 217, 217),  # 216.5: P up, F a half up
+            ([45, 108], 77, 77),  # 76.5
+            ([2, 3], 3, 3),  # 2.5: a half up, not to the even 2
+            ([2, 3, 4, 5], 4, 4),  # 3.5
+            ([1, 2, 4], 2, 2),  # odd count: the middle one
+            ([10, 13], 12, 12),  # 11.5
+        ],
+    )
+    def test_an_even_count_is_rounded_once(
+        self, values: list[int], price: int, fact: int
+    ) -> None:
+        found = (_typical_price(values), _typical_fact(values))
+        assert found == (price, fact)
+        assert all(type(n) is int for n in found)
 
 
 class TestThePackages:

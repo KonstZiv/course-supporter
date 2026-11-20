@@ -3096,14 +3096,16 @@ class PublicActual(_PublicShape):
     """The actual cost of one finished review, in units."""
 
     min: int | None
-    typical: float | None = Field(description="The median.")
+    typical: int | None = Field(
+        description="The median, rounded as a charged fact is (a half up)."
+    )
     max: int | None
 
 
 class PublicStartThreshold(_PublicShape):
     """The price before a review (what the doors need available), in units."""
 
-    typical: float | None = Field(description="The median.")
+    typical: int | None = Field(description="The median, rounded up.")
     max: int | None
 
 

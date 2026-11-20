@@ -267,10 +267,13 @@ covered_units}}`.
 * `review_cost.homework` (`task`, `short_task`) і `review_cost.project` — вибірка: подачі останніх
   `PUBLIC_NUMBERS_WINDOW_DAYS` (типово 90) днів у стані `completed` / `delivered`. `actual` — факт
   кожної (`charging.review_facts_usd` одним запитом, `charging.fact_of`), нульові відкинуто: min,
-  медіана, max. `start_threshold` — P оцінки кожної перевірки з фактом, чинна `charging.price_of`
-  її `e_usd` (не збережений `p_units`): медіана й max. `smallest_package_reviews` —
+  медіана (округлена, як факт при списанні, — половина вгору, `core.round_half_up`), max.
+  `start_threshold` — P оцінки кожної перевірки з фактом, чинна `charging.price_of` її `e_usd` (не
+  збережений `p_units`): медіана, округлена вгору (`core.round_up`: поріг не применшується), і max. `smallest_package_reviews` —
   `outlook.reviews_left` для юнітів найменшого пакета: `typical` — з типових P і F групи; `low` /
-  `high` — найменше й найбільше з того самого числа по завданнях вибірки (медіани P і F завдання).
+  `high` — найменше й найбільше з того самого числа по завданнях вибірки (медіани P і F завдання,
+  округлені так само). Усі числа — цілі юніти, округлені один раз у знімку: сайт, портал і
+  нагадування беруть саме їх і власного округлення не мають.
   `status`: `ready` — є перевірка з фактом; `insufficient_data` — немає (числа `null`);
   `not_charged` — тип зараз не списує юнітів (нинішній Ментор або тестовий режим шляху,
   `config/submission_paths.yaml`; проєкт сьогодні — нинішній Ментор). `sample.includes_internal` —

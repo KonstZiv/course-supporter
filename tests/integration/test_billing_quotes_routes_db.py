@@ -906,9 +906,16 @@ class TestStudentOutlook:
     async def test_reviews_left_from_the_average_and_the_warnings(
         self, session_factory: async_sessionmaker[AsyncSession], world: World
     ) -> None:
-        await buy(session_factory, world.student, 500)
-        await charged_reviews(session_factory, world.student, world.student, [100, 100])
+        """The doors let in at P (the course task's typical price) and charge
+        the average fact 100: N = 1 + (available - P) // 100."""
         async with _client() as client:
+            price = (
+                await client.post(f"/api/v1/portal/tasks/{world.task_id}/estimate")
+            ).json()["price_units"]
+            await buy(session_factory, world.student, price + 400)
+            await charged_reviews(
+                session_factory, world.student, world.student, [100, 100]
+            )
             three = (await client.get("/api/v1/portal/billing/outlook")).json()
             await charged_reviews(
                 session_factory, world.student, world.student, [100, 100]

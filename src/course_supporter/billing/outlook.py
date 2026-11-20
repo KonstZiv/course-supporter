@@ -6,12 +6,25 @@ Purpose:
     (BIL-E3): an owner without one reads as an empty account. Every threshold
     is a setting.
 
-    * :func:`student_outlook` — about how many reviews the student's units
-      cover: ``floor(available / the average charge of their latest
-      reviews)`` over the last :data:`REVIEW_HISTORY` reviews charged to
-      their account; without such history, the median price P of the latest
-      review estimates of the tasks of their course (of every course they
-      are enrolled in, or of the one named). ``low`` below
+    * :func:`student_outlook` — about how many reviews the doors of a
+      submission let the student through: they let a review in while
+      ``available >= P`` (the price before, :mod:`.quotes`) and then charge
+      its fact F, so with a typical P and F (:func:`reviews_left`)::
+
+          N = 0                                  if available < P
+          N = 1 + floor((available - P) / F)     otherwise
+
+      P — the median of the latest :data:`TYPICAL_HISTORY` review estimates
+      of the student's course (of every course they are enrolled in, or of the
+      one named), each priced again from its ``e_usd`` by today's
+      :func:`.charging.price_of`: the stored ``p_units`` were written at the
+      rate of their day (K was cut almost by half on 2026-11-15);
+      without estimates, the price of the course's first task at its typical
+      size. F — the average charge of the student's own latest
+      :data:`REVIEW_HISTORY` reviews; without them, the median fact of the
+      course's latest finished reviews of a task (the rule the end of a
+      review settles by, :func:`.charging.review_facts_usd`; facts of 0 left
+      out); without those either, F = P. No P — no number. ``low`` below
       ``billing_reminder_low_reviews``; ``next_may_fail`` below one. When the
       author pays for their reviews under a rule, nothing about units is said.
       ``charging_enabled`` — charging applies to that payer
@@ -26,6 +39,7 @@ Purpose:
 
 from __future__ import annotations
 
+import math
 import statistics
 import uuid
 from dataclasses import dataclass
@@ -42,6 +56,7 @@ from course_supporter.storage.orm import (
     ActionCostEstimate,
     AuthoredDocument,
     BillingMovement,
+    HomeworkStatus,
     HomeworkSubmission,
     StudentEnrollment,
 )
@@ -55,7 +70,17 @@ REVIEW_HISTORY: Final = 10
 """How many of the student's latest charged reviews make their average."""
 
 TYPICAL_HISTORY: Final = 20
-"""How many of the course's latest review estimates make the typical price."""
+"""How many of the course's latest review estimates make the typical price,
+and how many of its latest finished reviews make the typical fact."""
+
+PAID_TASK_TYPES: Final = (AssignmentType.TASK.value, AssignmentType.SHORT_TASK.value)
+"""The task types a review is paid for (a ``test`` is checked against the key)."""
+
+FINISHED_REVIEWS: Final = (
+    HomeworkStatus.COMPLETED.value,
+    HomeworkStatus.DELIVERED.value,
+)
+"""The submission states of a review that ran to its end."""
 
 StudentWarning = Literal["low", "next_may_fail"]
 AuthorWarning = Literal["runs_out_soon"]
@@ -83,6 +108,16 @@ class AuthorOutlook:
     days_left: int | None
     warning: AuthorWarning | None
     expiring_soon: Expiring | None
+
+
+def reviews_left(available: float, price: float, fact: float) -> int:
+    """How many reviews in a row the doors let through (module docstring).
+
+    ``price`` and ``fact`` are positive.
+    """
+    if available < price:
+        return 0
+    return 1 + math.floor((available - price) / fact)
 
 
 async def expiring_soon(
@@ -128,55 +163,96 @@ async def _average_review_charge(
     return sum(charges) / len(charges) if charges else None
 
 
+async def _courses_of(
+    session: AsyncSession, student_id: uuid.UUID, course_id: uuid.UUID | None
+) -> list[uuid.UUID]:
+    """The course named, else every course the student is enrolled in."""
+    if course_id is not None:
+        return [course_id]
+    return list(
+        (
+            await session.execute(
+                select(StudentEnrollment.course_node_id).where(
+                    StudentEnrollment.student_id == student_id
+                )
+            )
+        ).scalars()
+    )
+
+
 async def _typical_review_price(
     session: AsyncSession,
     *,
     tenant_id: uuid.UUID,
     student_id: uuid.UUID,
-    course_id: uuid.UUID | None,
+    courses: list[uuid.UUID],
 ) -> float | None:
-    """The median P of the latest review estimates of the student's course(s)."""
-    courses = (
-        [course_id]
-        if course_id is not None
-        else list(
-            (
-                await session.execute(
-                    select(StudentEnrollment.course_node_id).where(
-                        StudentEnrollment.student_id == student_id
-                    )
-                )
-            ).scalars()
-        )
-    )
+    """The median P of the latest review estimates of the courses.
+
+    Each P is today's :func:`.charging.price_of` of the estimate's ``e_usd``,
+    not its stored ``p_units``: those were written at the rate of their day.
+    """
     if not courses:
         return None
-    prices = [
-        p
-        for p in (
-            await session.execute(
-                select(ActionCostEstimate.p_units)
-                .join(
-                    HomeworkSubmission,
-                    HomeworkSubmission.id == ActionCostEstimate.submission_id,
-                )
-                .where(
-                    ActionCostEstimate.action_kind == ActionKind.REVIEW.value,
-                    HomeworkSubmission.tenant_id == tenant_id,
-                    HomeworkSubmission.course_node_id.in_(courses),
-                    ActionCostEstimate.p_units > 0,
-                )
-                .order_by(ActionCostEstimate.created_at.desc())
-                .limit(TYPICAL_HISTORY)
-            )
-        ).scalars()
-        if p is not None
-    ]
+    estimates = await session.execute(
+        select(ActionCostEstimate.e_usd)
+        .join(
+            HomeworkSubmission,
+            HomeworkSubmission.id == ActionCostEstimate.submission_id,
+        )
+        .where(
+            ActionCostEstimate.action_kind == ActionKind.REVIEW.value,
+            HomeworkSubmission.tenant_id == tenant_id,
+            HomeworkSubmission.course_node_id.in_(courses),
+            ActionCostEstimate.p_units > 0,
+        )
+        .order_by(ActionCostEstimate.created_at.desc())
+        .limit(TYPICAL_HISTORY)
+    )
+    prices = [p for p in map(charging.price_of, estimates.scalars()) if p > 0]
     if prices:
         return float(statistics.median(prices))
     return await _price_of_a_course_task(
         session, tenant_id=tenant_id, student_id=student_id, courses=courses
     )
+
+
+async def _typical_review_fact(
+    session: AsyncSession, *, tenant_id: uuid.UUID, courses: list[uuid.UUID]
+) -> float | None:
+    """The median fact F of the courses' latest finished reviews of a task.
+
+    The latest :data:`TYPICAL_HISTORY` submissions ``completed`` or
+    ``delivered`` of a ``task`` or ``short_task``; F is what the review's end
+    would settle (:func:`.charging.review_facts_usd`, :func:`.charging.fact_of`).
+    Facts of 0 — a copy of the same work, nothing called — are left out.
+    """
+    if not courses:
+        return None
+    finished = list(
+        (
+            await session.execute(
+                select(HomeworkSubmission.id)
+                .join(
+                    AuthoredDocument,
+                    AuthoredDocument.id == HomeworkSubmission.authored_document_id,
+                )
+                .where(
+                    HomeworkSubmission.tenant_id == tenant_id,
+                    HomeworkSubmission.course_node_id.in_(courses),
+                    HomeworkSubmission.status.in_(FINISHED_REVIEWS),
+                    AuthoredDocument.task_type.in_(PAID_TASK_TYPES),
+                )
+                .order_by(
+                    HomeworkSubmission.created_at.desc(), HomeworkSubmission.id.desc()
+                )
+                .limit(TYPICAL_HISTORY)
+            )
+        ).scalars()
+    )
+    usd = await charging.review_facts_usd(session, finished)
+    facts = [f for f in map(charging.fact_of, usd.values()) if f > 0]
+    return float(statistics.median(facts)) if facts else None
 
 
 async def _price_of_a_course_task(
@@ -199,9 +275,7 @@ async def _price_of_a_course_task(
             select(AuthoredDocument)
             .where(
                 AuthoredDocument.course_root_id.in_(courses),
-                AuthoredDocument.task_type.in_(
-                    [AssignmentType.TASK.value, AssignmentType.SHORT_TASK.value]
-                ),
+                AuthoredDocument.task_type.in_(PAID_TASK_TYPES),
                 AuthoredDocument.deleted_at.is_(None),
             )
             .order_by(AuthoredDocument.created_at, AuthoredDocument.id)
@@ -244,14 +318,18 @@ async def student_outlook(
     )
     if payer.kind is AccountKind.AUTHOR:
         return StudentOutlook(None, None, soon, "author", enabled)
-    cost = await _average_review_charge(session, own) if own is not None else None
-    if cost is None:
-        cost = await _typical_review_price(
-            session, tenant_id=tenant_id, student_id=student_id, course_id=course_id
-        )
-    if not cost:
+    courses = await _courses_of(session, student_id, course_id)
+    price = await _typical_review_price(
+        session, tenant_id=tenant_id, student_id=student_id, courses=courses
+    )
+    if not price:
         return StudentOutlook(None, None, soon, "self", enabled)
-    left = int(await charging.available_units(session, own, now=now) // cost)
+    fact = await _average_review_charge(session, own) if own is not None else None
+    if not fact:
+        fact = await _typical_review_fact(session, tenant_id=tenant_id, courses=courses)
+    left = reviews_left(
+        await charging.available_units(session, own, now=now), price, fact or price
+    )
     warning: StudentWarning | None = None
     if left < 1:
         warning = "next_may_fail"

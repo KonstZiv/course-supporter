@@ -106,6 +106,8 @@ from course_supporter.storage.orm import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from course_supporter.config import Settings
@@ -688,28 +690,42 @@ Apart from the kind: a call of the reply screen is never the payer's
 Says nothing about whether a row is priced: each reader keeps its own test
 for that. The rest of a row's cost — ``NOT PAID_BY_PAYER`` — is what the
 platform took on (``billing.costs``, ``platform_usd``). The facts of the
-journal (:func:`review_fact_usd`, :func:`job_fact_usd`) and the calibration
+journal (:func:`review_facts_usd`, :func:`job_fact_usd`) and the calibration
 report (``scripts/cost_estimate_report.py``) read this one condition.
 """  # noqa: RUF001 - the operator's words, quoted as said
 
 
-async def review_fact_usd(session: AsyncSession, submission_id: uuid.UUID) -> Decimal:
-    """What the review's calls cost the payer (:data:`PAID_BY_PAYER`): every job
-    of the submission, without the task's preparation run inside them (as the
-    cost report, ``billing.costs``)."""
-    jobs = select(Job.id).where(
-        Job.subject_type == JOB_SUBJECT_TYPE[JobType.HOMEWORK_PROCESSING],
-        Job.subject_id == submission_id,
-    )
-    total = await session.scalar(
-        select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0)).where(
-            ExternalServiceCall.job_id.in_(jobs),
+async def review_facts_usd(
+    session: AsyncSession, submission_ids: Collection[uuid.UUID]
+) -> dict[uuid.UUID, Decimal]:
+    """What each review's calls cost the payer (:data:`PAID_BY_PAYER`): every
+    job of the submission, without the task's preparation run inside them (as
+    the cost report, ``billing.costs``). One query, grouped by submission; a
+    submission without such calls is 0."""
+    if not submission_ids:
+        return {}
+    rows = await session.execute(
+        select(Job.subject_id, func.sum(ExternalServiceCall.cost_usd))
+        .join(Job, Job.id == ExternalServiceCall.job_id)
+        .where(
+            Job.subject_type == JOB_SUBJECT_TYPE[JobType.HOMEWORK_PROCESSING],
+            Job.subject_id.in_(submission_ids),
             _PRICED_CALL,
             PAID_BY_PAYER,
             ExternalServiceCall.action.not_in(PREPARATION_STAGES),
         )
+        .group_by(Job.subject_id)
     )
-    return Decimal(total or 0)
+    facts = dict.fromkeys(submission_ids, Decimal(0))
+    for submission_id, total in rows.tuples():
+        if submission_id is not None:  # matched the IN; the column is nullable
+            facts[submission_id] = Decimal(total or 0)
+    return facts
+
+
+async def review_fact_usd(session: AsyncSession, submission_id: uuid.UUID) -> Decimal:
+    """:func:`review_facts_usd` of one review — the fact its end settles."""
+    return (await review_facts_usd(session, [submission_id]))[submission_id]
 
 
 async def job_fact_usd(

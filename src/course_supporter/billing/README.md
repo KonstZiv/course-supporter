@@ -140,6 +140,34 @@ uv run python scripts/billing_admin.py show-account --account <id>   # рядо�
 `--dry-run` — транзакція READ ONLY: той самий вивід, нічого не записано. Вивід — рахунок (id і
 вид, без ідентифікаторів власника), партія, `voided`, `left reserved`, `left held`; у кінці підсумок.
 
+## Тестовий студент (`students.is_test_student`, Б-5, DD-BIL-CAL)
+
+Наші службові студенти — контрольні, репетиційні, студенти перевіряльника посередника оплати.
+Їхні роботи перевіряються по-справжньому, але спотворюють калібрування оцінки вартості перевірки
+(контрольні архіви набагато більші за типову роботу). Позначка — поле студента (не рахунку білінгу),
+типово `false`; міграція `biltest_student_flag` нічого не заповнила.
+
+* **Хто ставить** — адміністратор: `billing_admin.py test-student --student <id> --mark | --unmark
+  --actor <ім'я>` (друкує «було → стало»; повтор нічого не змінює; невідомий чи видалений студент —
+  відмова) і `test-student --list` (лише читання: id студента й орендаря, кількість). Зміна — рядок
+  журналу `student_test_mark_set` з `actor`, `student_id`, `before`, `after`, **не** запис
+  `billing_audit_log`: п'ятирічне знищення журналу аудиту (`retention.py`) іде за рахунками, а
+  позначка не на рахунку — запис про студента лишився б назавжди.
+* **Хто читає** — лише звіт калібрування (`scripts/cost_estimate_report.py`,
+  `cost_estimate.report.select_reviews`): перевірки тестових студентів за замовчуванням не входять,
+  `--include-test-students` повертає їх; рядок звіту — скільки виключено і скільки різних нетестових
+  студентів у вибірці review. Оцінки обробки й підготовки фільтр не чіпає.
+* **Свідомо не читають** — шлях перевірки (homework/, agents/, llm/, workers/; замок —
+  `tests/unit/test_test_student_not_read.py`), публічні числа (`public_numbers.py`: поки рахуються
+  разом зі службовими, `includes_internal = true`), нагадування, ворота подачі, резерв, списання.
+  Назовні (схеми API) поле не віддається.
+
+```bash
+uv run python scripts/billing_admin.py test-student --student <id> --mark --actor <ім'я>
+uv run python scripts/billing_admin.py test-student --list
+uv run python scripts/cost_estimate_report.py [--include-test-students]
+```
+
 ## Бойовий режим до схвалення магазину (BIL-LIVE, рішення оператора 18.11)
 
 Creem перевіряє магазин лише в бойовому режимі: перевіряльник купує одноразовим кодом знижки 100 %

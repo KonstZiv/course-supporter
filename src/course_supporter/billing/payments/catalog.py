@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Final, Self
+from typing import Final, Literal, Self
 
 import yaml
 from pydantic import (
@@ -65,6 +65,10 @@ class Package(_Frozen):
     """Currency (ISO 4217) → price in its minor units (cents), tax included
     or not as the operator decides; the provider charges its own figure."""
     active: StrictBool
+    tax_mode: Literal["inclusive", "exclusive"] | None = None
+    """inclusive — the tax is already in the price; exclusive — the tax is
+    added on top; as the product is set up at the merchant of record. None —
+    not stated."""
 
     @field_validator("prices_minor")
     @classmethod

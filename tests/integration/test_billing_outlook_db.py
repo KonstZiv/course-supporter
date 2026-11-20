@@ -1,10 +1,12 @@
 """The student's reminder against the doors (BIL-OUTLOOK-N), on a live database.
 
 ``reviews_left`` is how many reviews in a row the doors let through: in while
-``available >= P``, then the fact F is charged. P — the median of the course's
-latest review estimates, each priced again from its ``e_usd``; F — the
-student's own average charge, else the median fact of the course's finished
-reviews, else P.
+``available >= P``, then the fact F is charged. P and F are the typical ones
+of the public numbers (``billing.public_numbers``, here of the test's own
+world): P their ``start_threshold.typical`` (each estimate priced again from
+its ``e_usd``); F the student's own average charge, else their
+``actual.typical``. Numbers not ready — the way back: P the price of the
+course's task at its typical size, F the student's own average, else P.
 
 Numbers: K = 900, margin 0.20 (``config/cost_estimate.yaml``): E = $0.25 is
 P = ceil(0.25 x 1.2 x 900) = 270; a call of $0.10 is F = 90.
@@ -22,8 +24,9 @@ import pytest
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from course_supporter.billing import admin, ledger, outlook
+from course_supporter.billing import admin, ledger, outlook, quotes
 from course_supporter.billing.kinds import ActionKind, PayerSource, RuleScope
+from course_supporter.billing.public_numbers import PublicNumbers
 from course_supporter.call_outcome import RequestKind
 from course_supporter.config import get_settings
 from course_supporter.jobs.job_type import JobType
@@ -33,6 +36,7 @@ from course_supporter.storage.orm import (
     HomeworkSubmission,
 )
 from tests._helpers.billing_cleanup import drop_billing_of_tenant
+from tests._helpers.public_numbers import numbers_of
 from tests.integration import test_billing_charging_db as bil
 from tests.integration.test_billing_payer_fact_db import attempt
 
@@ -158,23 +162,45 @@ async def charged(
         await session.commit()
 
 
+OF_THE_WORLD = object()
+"""The numbers of the world as it is at the call."""
+
+
 async def student_outlook(
     session_factory: async_sessionmaker[AsyncSession],
     w: bil.World,
     *,
     low_reviews: int = 2,
+    numbers: PublicNumbers | None | object = OF_THE_WORLD,
 ) -> outlook.StudentOutlook:
     settings = get_settings().model_copy(
         update={"billing_reminder_low_reviews": low_reviews}
     )
+    if numbers is OF_THE_WORLD:
+        numbers = await numbers_of(session_factory, w.tenant_id)
+    assert numbers is None or isinstance(numbers, PublicNumbers)
     async with session_factory() as session:
         return await outlook.student_outlook(
             session,
             tenant_id=w.tenant_id,
             student_id=w.student_id,
             settings=settings,
+            numbers=numbers,
             course_id=w.course_id,
         )
+
+
+async def typical_price(
+    session_factory: async_sessionmaker[AsyncSession], w: bil.World
+) -> int:
+    """The price of a review of the world's task at its typical size."""
+    async with session_factory() as session:
+        task = await session.get(AuthoredDocument, w.task_id)
+        assert task is not None
+        found = await quotes.review_price(
+            session, task=task, tenant_id=w.tenant_id, student_id=w.student_id
+        )
+    return found.units
 
 
 FIRST = RequestKind.FIRST
@@ -242,16 +268,23 @@ class TestReviewsLeft:
         # 1 + 230 // 112.5; with the zeros (F = 45): 6; with the rest (292.5): 1
         assert found.reviews_left == 3
 
-    async def test_a_course_without_finished_reviews_takes_the_price_as_the_fact(
+    async def test_not_ready_the_way_back_the_price_of_a_course_task(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
+        """No finished review: the numbers are not ready, so P is the price of
+        the course's task at its typical size and F = P (an estimate of an
+        unfinished review is not in the numbers)."""
         w = await bil.make_world(session_factory)
         await estimate(session_factory, w, w.submission_id, P_USD, p_units=270)
         await bil.buy(session_factory, w.student, 809)
+        numbers = await numbers_of(session_factory, w.tenant_id)
+        price = await typical_price(session_factory, w)
 
-        found = await student_outlook(session_factory, w)
+        found = await student_outlook(session_factory, w, numbers=numbers)
 
-        assert found.reviews_left == 809 // 270
+        assert numbers.review_cost.homework.status == "insufficient_data"
+        assert price > 0
+        assert found.reviews_left == 809 // price
 
     @pytest.mark.parametrize(
         ("units", "left", "warning"),
@@ -264,13 +297,67 @@ class TestReviewsLeft:
         left: int,
         warning: str | None,
     ) -> None:
+        """P = F = 270: a review of $0.30 estimated at $0.25."""
         w = await bil.make_world(session_factory)
-        await estimate(session_factory, w, w.submission_id, P_USD, p_units=270)
+        await review(session_factory, w, [("0.30", FIRST)], e_usd=P_USD)
         await bil.buy(session_factory, w.student, units)
 
         found = await student_outlook(session_factory, w, low_reviews=2)
 
         assert (found.reviews_left, found.warning) == (left, warning)
+
+    async def test_without_own_history_the_sites_number_for_the_smallest_package(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """With the smallest package's units (500), the portal says what the
+        public numbers say for it."""
+        w = await bil.make_world(session_factory)
+        short = await task(session_factory, w, "short_task")
+        await review(session_factory, w, [("0.05", FIRST)], e_usd="0.2")
+        await review(session_factory, w, [("0.12", FIRST)], e_usd="0.3", task_id=short)
+        await bil.buy(session_factory, w.student, 500)
+        numbers = await numbers_of(session_factory, w.tenant_id)
+
+        found = await student_outlook(session_factory, w, numbers=numbers)
+
+        assert numbers.packages[0].units == 500
+        site = numbers.review_cost.homework.smallest_package_reviews.typical
+        # P 270; F the median 76.5, rounded as a fact: 77 -> 1 + 230 // 77
+        # (unrounded it would be 1 + 230 // 76.5 = 4)
+        assert found.reviews_left == site == 3
+
+    async def test_the_numbers_of_the_start_not_the_base_of_now(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A review finished after the numbers were computed changes nothing
+        until the next start."""
+        w = await bil.make_world(session_factory)
+        await review(session_factory, w, [("0.10", FIRST)], e_usd=P_USD)
+        await bil.buy(session_factory, w.student, 500)
+        numbers = await numbers_of(session_factory, w.tenant_id)
+        before = await student_outlook(session_factory, w, numbers=numbers)
+
+        await review(session_factory, w, [("0.50", FIRST)], e_usd="1.0")
+        after = await student_outlook(session_factory, w, numbers=numbers)
+        anew = await student_outlook(session_factory, w)
+
+        assert before.reviews_left == after.reviews_left == 3  # 1 + 230 // 90
+        assert anew.reviews_left != before.reviews_left
+
+    async def test_no_numbers_no_number(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        w = await bil.make_world(session_factory)
+        await review(session_factory, w, [("0.10", FIRST)], e_usd=P_USD)
+        await bil.buy(session_factory, w.student, 500)
+
+        found = await student_outlook(session_factory, w, numbers=None)
+
+        assert (found.reviews_left, found.warning, found.paid_by) == (
+            None,
+            None,
+            "self",
+        )
 
     async def test_the_author_paying_says_nothing_about_units(
         self, session_factory: async_sessionmaker[AsyncSession]

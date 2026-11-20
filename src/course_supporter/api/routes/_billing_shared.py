@@ -58,6 +58,7 @@ from course_supporter.api.schemas import (
     BillingStatementItem,
     BillingStatementResponse,
 )
+from course_supporter.billing.journal import VALIDITY_MONTHS
 from course_supporter.billing.payments.catalog import Catalog
 from course_supporter.billing.payments.checkout import (
     PackageNotOnSaleError,
@@ -116,6 +117,10 @@ class Refusal(StrEnum):
     INVALID_PERIOD = "invalid_period"
     """A period whose start is after its end (422)."""
 
+    NUMBERS_UNAVAILABLE = "numbers_unavailable"
+    """The public numbers could not be computed yet (503); the next request
+    tries again."""
+
 
 STATUS: Final[dict[Refusal, int]] = {
     Refusal.PAYMENT_UNAVAILABLE: 503,
@@ -128,6 +133,7 @@ STATUS: Final[dict[Refusal, int]] = {
     Refusal.CHECKOUT_NOT_FOUND: 404,
     Refusal.INVALID_CURSOR: 422,
     Refusal.INVALID_PERIOD: 422,
+    Refusal.NUMBERS_UNAVAILABLE: 503,
 }
 """The status of each code (module docstring)."""
 
@@ -181,6 +187,7 @@ def packages_of(
                 id=package.id,
                 units=package.units,
                 prices_minor=dict(package.prices_minor),
+                validity_months=VALIDITY_MONTHS,
             )
             for package in catalog.active()
         ],

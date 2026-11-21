@@ -61,3 +61,9 @@ class TestTtl:
     def test_ttl_display_matches_purposes(self) -> None:
         assert ttl_display(PURPOSE_PASSWORD_RESET) == "30 хвилин"
         assert ttl_display(PURPOSE_EMAIL_CONFIRM) == "24 години"
+
+    def test_ttl_display_english_and_none(self) -> None:
+        assert ttl_display(PURPOSE_PASSWORD_RESET, "eng") == "30 minutes"
+        assert ttl_display(PURPOSE_EMAIL_CONFIRM, "eng") == "24 hours"
+        assert ttl_display(PURPOSE_PASSWORD_RESET, None) == "30 хвилин"
+        assert ttl_display(PURPOSE_EMAIL_CONFIRM, None) == "24 години"

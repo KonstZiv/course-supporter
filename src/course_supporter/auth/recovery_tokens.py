@@ -34,11 +34,16 @@ _TTL: Final[dict[str, timedelta]] = {
     PURPOSE_EMAIL_CONFIRM: EMAIL_CONFIRM_TTL,
 }
 
-# Human-readable Ukrainian TTL phrases for the email {ttl} placeholder — kept in
-# sync with the timedeltas above ("Посилання дійсне {ttl}").
+# Human-readable Ukrainian and English TTL phrases for the email {ttl} placeholder —
+# kept in sync with the timedeltas above ("Посилання дійсне {ttl}").
 _TTL_DISPLAY: Final[dict[str, str]] = {
     PURPOSE_PASSWORD_RESET: "30 хвилин",
     PURPOSE_EMAIL_CONFIRM: "24 години",
+}
+
+_TTL_DISPLAY_EN: Final[dict[str, str]] = {
+    PURPOSE_PASSWORD_RESET: "30 minutes",
+    PURPOSE_EMAIL_CONFIRM: "24 hours",
 }
 
 # URL-safe secret byte count → a ~43-char raw token; its SHA-256 hex is always
@@ -61,6 +66,8 @@ def ttl_for(purpose: str) -> timedelta:
     return _TTL[purpose]
 
 
-def ttl_display(purpose: str) -> str:
-    """Return the Ukrainian TTL phrase for a purpose's email ``{ttl}``."""
+def ttl_display(purpose: str, language: str | None = None) -> str:
+    """Return the human-readable TTL phrase for a purpose's email ``{ttl}``."""
+    if language == "eng":
+        return _TTL_DISPLAY_EN[purpose]
     return _TTL_DISPLAY[purpose]

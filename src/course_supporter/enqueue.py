@@ -605,6 +605,7 @@ async def enqueue_email(
     message_id: str,
     to: str,
     context: dict[str, str],
+    language: str | None = None,
 ) -> None:
     """Enqueue a transactional email on the default queue (Phase 6 R1/R2).
 
@@ -626,6 +627,7 @@ async def enqueue_email(
         message_id=message_id,
         to=to,
         context=context,
+        language=language,
         _queue_name=default_queue_name,
     )
     log.info("email_enqueued")

@@ -56,6 +56,7 @@ class FakeRemarkComments:
         self.marks: dict[uuid.UUID, ScreenMark] = {}
         self.added: list[NewReply] = []
         self.tenants: list[uuid.UUID] = []
+        self.asked_for: list[tuple[uuid.UUID, ...]] = []
 
     async def lock_replies(self, submission_id: uuid.UUID) -> None:
         self.locked.append(submission_id)
@@ -102,14 +103,15 @@ class FakeRemarkComments:
         )
 
     async def unanswered_student_replies(
-        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID
+        self, *, tenant_id: uuid.UUID, submission_ids: Collection[uuid.UUID]
     ) -> list[CommentRecord]:
         self.tenants.append(tenant_id)
+        self.asked_for.append(tuple(submission_ids))
         return sorted(
             (
                 c
                 for c in self.comments
-                if c.submission_id == submission_id
+                if c.submission_id in submission_ids
                 and c.author is CommentAuthor.STUDENT
                 and c.answered_in_submission_id is None
             ),

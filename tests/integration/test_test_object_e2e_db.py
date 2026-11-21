@@ -1133,9 +1133,9 @@ class TestAcceptance:
             assert "**Question 6:** Correct" in markdown, "step 8: the added question"
             assert "**Question 5:** Incorrect" in markdown, "step 8: wrong on 5"
             assert f"- {_MODEL_2['5']}" in markdown, "step 8: version 2's explanations"
-            assert "The explanation is provided in the course language." in markdown, (
-                "step 8: in the course language, and the line that says so"
-            )
+            assert (
+                "Explanations are given in the language of the course." in markdown
+            ), "step 8: in the course language, and the line that says so"
             assert "## Passed" in markdown, (
                 "step 8: graded by version 2 — its pass mark of 80, not version 3's 90"
             )

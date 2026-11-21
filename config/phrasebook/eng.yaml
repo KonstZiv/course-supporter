@@ -1,47 +1,126 @@
-# Machine translation, not reviewed.
-#
-# Written by scripts/translate_phrasebook.py from the Ukrainian source.
-# A phrase a human has gone over carries ``reviewed: true`` and the script
-# leaves it alone; this header stays until every phrase in the file does.
-verdict.passed: Passed
-verdict.failed: Failed
-section.fixed: Fixed
-section.new_remarks: New remarks
-section.open: Remains open
-section.broken: Broken
-section.mentor_voice: From the Mentor
-section.replies: Replies to your comments
-section.verification: How it was checked
-section.progress: Your progress
-remark.what: What's wrong
-remark.why: Why it's important
-remark.todo: What to do
-remark.read: Where to read
-verification.by_run: Checked by running
-verification.by_reading: Checked by reading
-reply.kind.question: Your question
-reply.kind.objection: Your objection
-reply.kind.comment: Your comment
-reply.answer: Answer
-position.video: video, {time}
-position.slide: slide {number}
-position.paragraph: paragraph {number}
-position.file: file {name}
-review.title: Review
-section.test: Test questions
-test.question: Question {number}
-test.correct: Correct
-test.incorrect: Incorrect
-test.correct_answer: Correct answer
-test.score: 'Score: {number}%'
-test.try_again: Try taking the test again.
-test.no_explanation: No explanation for this question.
-test.explanations_in_course_language: The explanation is provided in the course language.
-position.audio: audio, {time}
-link.later_in_course: More on this later in the course
-review.unchanged: The work has not changed since the previous attempt (attempt {attempt}), so the review is repeated without a new check.
-verdict.rule.author_musts_met: You met all of the author's mandatory criteria and scored {score} out of 100. For tasks with the author's mandatory criteria the pass threshold is {threshold}, so the work has passed.
-verdict.rule.author_musts_unmet: The author's mandatory criteria are not met, so the work has not passed. Your score is {score} out of 100.
-verdict.rule.author_musts_below_threshold: You met all of the author's mandatory criteria, but scored {score} out of 100, below the threshold of {threshold} for tasks with the author's mandatory criteria, so the work has not passed.
-verdict.rule.no_author_musts_passed: The author has not approved mandatory criteria for this task. For such tasks the pass threshold is {threshold} out of 100; your score is {score}, so the work has passed.
-verdict.rule.no_author_musts_failed: The author has not approved mandatory criteria for this task. For such tasks the pass threshold is {threshold} out of 100; your score is {score}, so the work has not passed.
+verdict.passed:
+  text: Passed
+  reviewed: true
+verdict.failed:
+  text: Not passed
+  reviewed: true
+section.fixed:
+  text: Fixed
+  reviewed: true
+section.new_remarks:
+  text: New remarks
+  reviewed: true
+section.open:
+  text: Still open
+  reviewed: true
+section.broken:
+  text: No longer works
+  reviewed: true
+section.mentor_voice:
+  text: From the Mentor
+  reviewed: true
+section.replies:
+  text: Answers to your replies
+  reviewed: true
+section.verification:
+  text: How it was checked
+  reviewed: true
+section.progress:
+  text: Your progress
+  reviewed: true
+remark.what:
+  text: What's wrong
+  reviewed: true
+remark.why:
+  text: Why it matters
+  reviewed: true
+remark.todo:
+  text: What to do
+  reviewed: true
+remark.read:
+  text: Read more
+  reviewed: true
+verification.by_run:
+  text: Checked by running
+  reviewed: true
+verification.by_reading:
+  text: Checked by reading
+  reviewed: true
+reply.kind.question:
+  text: Your question
+  reviewed: true
+reply.kind.objection:
+  text: Your objection
+  reviewed: true
+reply.kind.comment:
+  text: Your comment
+  reviewed: true
+reply.answer:
+  text: Answer
+  reviewed: true
+position.video:
+  text: video, {time}
+  reviewed: true
+position.slide:
+  text: slide {number}
+  reviewed: true
+position.paragraph:
+  text: paragraph {number}
+  reviewed: true
+position.file:
+  text: file {name}
+  reviewed: true
+review.title:
+  text: Review
+  reviewed: true
+section.test:
+  text: Test questions
+  reviewed: true
+test.question:
+  text: Question {number}
+  reviewed: true
+test.correct:
+  text: Correct
+  reviewed: true
+test.incorrect:
+  text: Incorrect
+  reviewed: true
+test.correct_answer:
+  text: Correct answer
+  reviewed: true
+test.score:
+  text: 'Score: {number}%'
+  reviewed: true
+test.try_again:
+  text: Try the test again.
+  reviewed: true
+test.no_explanation:
+  text: No explanation for this question.
+  reviewed: true
+test.explanations_in_course_language:
+  text: Explanations are given in the language of the course.
+  reviewed: true
+position.audio:
+  text: audio, {time}
+  reviewed: true
+link.later_in_course:
+  text: More on this later in the course
+  reviewed: true
+review.unchanged:
+  text: Your work has not changed since the previous attempt (attempt {attempt}), so the same review is shown again, without a new check.
+  reviewed: true
+verdict.rule.author_musts_met:
+  text: You met all of the author's required criteria and scored {score} out of 100. For tasks with required criteria from the author, the pass mark is {threshold}, so your work has passed.
+  reviewed: true
+verdict.rule.author_musts_unmet:
+  text: Not all of the author's required criteria are met, so your work has not passed. Your score is {score} out of 100.
+  reviewed: true
+verdict.rule.author_musts_below_threshold:
+  text: You met all of the author's required criteria, but scored {score} out of 100 — below the pass mark of {threshold} for tasks with required criteria from the author — so your work has not passed.
+  reviewed: true
+verdict.rule.no_author_musts_passed:
+  text: The author has not set required criteria for this task. For such tasks, the pass mark is {threshold} out of 100; your score is {score}, so your work has passed.
+  reviewed: true
+verdict.rule.no_author_musts_failed:
+  text: The author has not set required criteria for this task. For such tasks, the pass mark is {threshold} out of 100; your score is {score}, so your work has not passed.
+  reviewed: true

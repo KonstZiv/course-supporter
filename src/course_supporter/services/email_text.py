@@ -1,9 +1,10 @@
 """Transactional-email templates (student portal password-recovery).
 
-Email texts live here as a flat ``message-id -> template`` mapping rather than
-inline f-strings in the send-service, so the send path stays text-agnostic and
-a future i18n dimension keys by language beside the message-id (the selector
-already exists as ``Student.interface_language``). uk-only MVP; no i18n library.
+Email texts live here as a ``language -> message-id -> template`` mapping
+rather than inline f-strings in the send-service, so the send path stays
+text-agnostic. Templates are keyed by language (``ukr`` and ``eng``; any
+other language falls back to Ukrainian), selected by
+``Student.interface_language``.
 
 Bodies carry ``str.format`` placeholders (e.g. ``{reset_url}``, ``{ttl}``)
 filled at send time. R1 ships the texts only; the reset/confirm routes that

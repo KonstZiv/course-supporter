@@ -18,13 +18,15 @@ modules do not:
    each reply's ``reply_safety`` check is asked and registered before the first
    paid stage. The lists are read from the configuration the app sees, and the
    two lists are different. The state picks its list at
-   ``homework/path_selection.py:164`` (``choose_path``:
+   ``homework/path_selection.py:165`` (``choose_path``:
    ``declared.paths[state]``).
-3. **A known finding, as a strict expected failure.** A reply the screen could
-   not judge (its safety check failed) is not picked up by the next submission
-   — ``pending_replies`` (``homework/remark_comments.py``) reads the replies to
-   the student's latest previous attempt alone — so it stays unanswered for
-   good.
+3. **A reply the screen could not judge waits for the submission after.**
+   Its safety check failed during the second submission: the reply stays
+   unjudged and that review does not answer it. The third submission picks
+   it up — ``pending_replies`` (``homework/remark_comments.py``) names the
+   unanswered replies to every attempt at the version in force, the first
+   among them (product owner's decision, 2026-11-20) — judges it under
+   ``reply_safety`` and answers it.
 
 The switch of the replies is on for this module alone, and where the app
 reads it: the loader's cache (``path_config._config``, which
@@ -505,7 +507,7 @@ class TestTheStudentsRoadOverHttp:
 
 
 class TestTheStateChoosesTheStages:
-    """The state picks its list at ``homework/path_selection.py:164``."""
+    """The state picks its list at ``homework/path_selection.py:165``."""
 
     def test_the_two_states_have_different_lists(self, replies_on: PathConfig) -> None:
         seen = path_config.get_path_config()
@@ -549,7 +551,7 @@ class TestTheStateChoosesTheStages:
         assert actions.index(with_replies[0]) == replies
 
 
-# ── 3. The known finding: a reply the screen could not judge ───────────────
+# ── 3. A reply the screen could not judge, answered by the one after ───────
 
 
 async def _a_reply_the_screen_could_not_judge(
@@ -597,17 +599,9 @@ class TestAReplyTheScreenCouldNotJudge:
         world: dict[str, Any],
         s3: S3Client,
     ) -> None:
-        """The precondition of the finding, red on its own if it breaks."""
+        """The precondition of the case, red on its own if it breaks."""
         await _a_reply_the_screen_could_not_judge(portal, session_factory, world, s3)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason=(
-            "знахідка гейту №686: репліку, яку екран не оцінив, наступна подача "
-            "не підхоплює; виправлення — наступним словом агентові №686"
-        ),
-    )
     async def test_the_submission_after_it_judges_and_answers_the_reply(
         self,
         portal: AsyncClient,
@@ -623,8 +617,8 @@ class TestAReplyTheScreenCouldNotJudge:
         router = _RepliesRouter(session_factory)
         await _run_queue_task(session_factory, world, s3, third_id, router)
 
-        # The finding: the reply is not judged again — the third submission
-        # does not see it (it reads the replies to the second review alone).
+        # The reply to the first review is judged now — the third submission
+        # reads the unanswered replies to every attempt at the version.
         assert router.screened == [_ON_THE_WORK], router.calls
         comments = _comments(await _threads(portal, auth, third_id))
         (stored,) = [c for c in comments if uuid.UUID(c["id"]) == reply]

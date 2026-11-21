@@ -14,5 +14,8 @@ theme:
 nav:
   - Home: index.md
 
+extra_css:
+  - ../stylesheets/extra.css
+
 extra:
   language_build: en

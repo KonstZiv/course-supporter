@@ -285,15 +285,19 @@ class SqlRemarkCommentRepository:
         return [_record(row) for row in rows]
 
     async def unanswered_student_replies(
-        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID
+        self, *, tenant_id: uuid.UUID, submission_ids: Collection[uuid.UUID]
     ) -> list[CommentRecord]:
-        """The student's replies on this submission no review has answered.
+        """The student's replies on these submissions no review has answered.
 
-        Oldest first, judged or not; a live submission and a live student only.
+        One query for the whole set, each reply once; oldest first (by
+        ``created_at``, then by ``id``) across the submissions, judged or not;
+        live submissions and a live student only. No submissions, no query.
         """
+        if not submission_ids:
+            return []
         stmt = _live(select(RemarkComment)).where(
             RemarkComment.tenant_id == tenant_id,
-            RemarkComment.submission_id == submission_id,
+            RemarkComment.submission_id.in_(list(submission_ids)),
             RemarkComment.author == _STUDENT,
             RemarkComment.answered_in_submission_id.is_(None),
         )

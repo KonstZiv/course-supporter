@@ -514,6 +514,53 @@ class TestTheSameWorkAndRepliesBesideIt:
         rows = await _comments(session_factory, task_world["student_id"])
         assert len([r for r in rows if r.author == CommentAuthor.MENTOR.value]) == 2
 
+    async def test_a_reply_to_an_older_attempt_of_the_version_is_a_full_check(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """The same work a third time; a reply on the work no review answered
+        waits on the FIRST attempt, the second being a copy of it. The reply
+        is one to answer (``pending_replies``: every attempt at the version
+        in force), so the third is no copy: it is checked in full and answers
+        the reply."""
+        first = await _first_review(session_factory, task_world, tmp_path)
+        second_id = await _walk_with_replies(
+            session_factory, task_world, tmp_path, _NoModelRouter()
+        )
+        second = await _row(session_factory, second_id)
+        assert second.attempt_receipt is not None
+        assert second.attempt_receipt[DEDUP_RECEIPT_KEY] == 1
+        waiting = await _reply(
+            session_factory,
+            first,
+            item_id="c3",
+            body=_ON_THE_WORK,
+            minute=0,
+            mark=CommentTopic.ON_TOPIC,
+        )
+        router = _RepliesRouter(session_factory)
+
+        third_id = await _walk_with_replies(
+            session_factory, task_world, tmp_path, router
+        )
+
+        third = await _row(session_factory, third_id)
+        assert third.status == "delivered"
+        assert third.attempt_receipt is not None
+        assert DEDUP_RECEIPT_KEY not in third.attempt_receipt
+        assert router.calls == [
+            SAFETY,
+            CRITERIA_EVALUATION_WITH_REPLIES,
+            REVIEW_EXPLANATION_WITH_REPLIES,
+        ]
+        rows = await _comments(session_factory, task_world["student_id"])
+        (reply,) = [r for r in rows if r.id == waiting]
+        assert reply.answered_in_submission_id == third_id
+        (answer,) = [r for r in rows if r.author == CommentAuthor.MENTOR.value]
+        assert (answer.parent_id, answer.submission_id) == (waiting, third_id)
+
     async def test_a_reply_the_screen_could_not_judge_is_a_full_check(
         self,
         session_factory: async_sessionmaker[AsyncSession],

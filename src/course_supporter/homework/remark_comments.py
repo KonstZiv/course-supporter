@@ -25,18 +25,24 @@ Interface:
 
 What "the replies to answer" are:
     The student's replies that no review has answered yet
-    (``answered_in_submission_id`` empty) to the remarks of their PREVIOUS
-    ATTEMPT — the latest live submission of theirs on the task that got a
-    review, the attempt ledger's own notion
-    (:meth:`~course_supporter.storage.homework_repository.HomeworkRepository.attempts_before`)
-    — when that attempt was read against the version of the task in force
-    now. Replies to a review of an earlier version are not answered: after
-    the author changed the task, its criteria — and so the remarks — may be
-    other ones under the same ids. An attempt with no recorded version (one
-    reviewed before the attempt ledger) has no replies: K1's table keys every
-    comment by a version. A type that takes no replies
-    (:func:`~course_supporter.homework.path_config.replies_enabled`) has none,
-    and nothing is asked of the store.
+    (``answered_in_submission_id`` empty) to the remarks of ANY of their
+    attempts at the task read against the version of the task in force now
+    — every live submission of theirs on the task that got a review, the
+    attempt ledger's own notion
+    (:meth:`~course_supporter.storage.homework_repository.HomeworkRepository.attempts_at_version`),
+    but the one asking — not of the previous attempt alone: a reply the
+    reply screen could not judge during one submission is left unanswered by
+    it, and the next submission picks it up (product owner's decision,
+    2026-11-20). The student's replies only, never the Mentor's comments;
+    each reply once, oldest first; live submissions and a live student,
+    within the tenant. Replies to a review of another version are not
+    answered: after the author changed the task, its criteria — and so the
+    remarks — may be other ones under the same ids. An attempt with no
+    recorded version (one reviewed before the attempt ledger) has no
+    replies: K1's table keys every comment by a version. A type that takes
+    no replies
+    (:func:`~course_supporter.homework.path_config.replies_enabled`) has
+    none, and nothing is asked of the store.
 """
 
 from __future__ import annotations
@@ -119,11 +125,12 @@ class RemarkCommentRepository(Protocol):
         ...
 
     async def unanswered_student_replies(
-        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID
+        self, *, tenant_id: uuid.UUID, submission_ids: Collection[uuid.UUID]
     ) -> list[CommentRecord]:
-        """The student's replies on this submission no review has answered.
+        """The student's replies on these submissions no review has answered.
 
-        Oldest first, judged or not.
+        Each reply once, oldest first across the submissions, judged or not;
+        no submissions, no replies.
         """
         ...
 
@@ -202,28 +209,32 @@ async def pending_replies(
     """The replies the submission ``submission_id`` is to answer (module docstring).
 
     Asked by the submission's state (``path_selection``), by the reply screen
-    in the doors and by the rule of the same work (``attempt_dedup``) — one
-    definition for the three. A type that takes no replies costs nothing:
+    in the doors, by the rule of the same work (``attempt_dedup``) and by the
+    source of the Mentor's answers (``reply_source``) — one definition for
+    the four. A type that takes no replies costs nothing:
     the switch is read before any query. ``comments`` defaults to the store
     :func:`build_remark_comment_repository` chooses; ``config`` to the cached
-    submission-path file.
+    submission-path file. Three queries at most — the version in force,
+    the attempts at it, their replies — and each step that finds nothing
+    ends the read.
     """
     if not replies_enabled(task_type, config):
         return []
-    _, previous_id, previous_version = await HomeworkRepository(
-        session
-    ).attempts_before(
+    version = await current_task_version(session, authored_document_id)
+    if version is None:
+        return []
+    attempts = await HomeworkRepository(session).attempts_at_version(
+        tenant_id=tenant_id,
         student_id=student_id,
         authored_document_id=authored_document_id,
+        task_version=version,
         excluding=submission_id,
     )
-    if previous_id is None or previous_version is None:
-        return []
-    if previous_version != await current_task_version(session, authored_document_id):
+    if not attempts:
         return []
     store = (
         comments if comments is not None else build_remark_comment_repository(session)
     )
     return await store.unanswered_student_replies(
-        tenant_id=tenant_id, submission_id=previous_id
+        tenant_id=tenant_id, submission_ids=attempts
     )

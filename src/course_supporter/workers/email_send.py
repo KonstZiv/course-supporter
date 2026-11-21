@@ -29,8 +29,9 @@ async def arq_send_email(
     message_id: str,
     to: str,
     context: dict[str, str] | None = None,
+    language: str | None = None,
 ) -> dict[str, Any]:
-    """Render a uk email template by message-id and send it via SMTP.
+    """Render a transactional email template by message-id and send it via SMTP.
 
     ``ctx`` is unused — the SMTP connection is opened per-send inside
     ``send_email`` — but is required by the ARQ task signature.
@@ -48,7 +49,7 @@ async def arq_send_email(
         when a permanent rejection was swallowed.
     """
     log = logger.bind(message_id=message_id)
-    rendered = render_email(message_id, **(context or {}))
+    rendered = render_email(message_id, language=language, **(context or {}))
 
     try:
         await send_email(to=to, subject=rendered.subject, body=rendered.body)

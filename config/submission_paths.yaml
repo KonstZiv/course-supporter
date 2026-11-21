@@ -20,9 +20,10 @@
 # 12a, K3, homework/path_selection.py). `replies_enabled` (absent means false)
 # is the one switch of the replies: the comment routes, the reply screen in
 # the doors, this state and the rule of the same work all read it. It is off
-# for every type until the answers (K4) and the portal (K5) come with it;
-# until then both repeat states list the same stages — a prepared place, not
-# a duplicate.
+# for every type until the portal (K5) comes with it. The text types' path of
+# that state walks the two stages of task 12a, K4 —
+# `criteria_evaluation_with_replies` and `review_explanation_with_replies` —
+# and every other path is what it was.
 
 stages:
   # Model safety check of the student's submission. Starting content is a copy
@@ -351,6 +352,100 @@ stages:
         reasoning: null
         max_output_tokens: 8192
 
+  # Verdicts on the criteria of a text task whose student replied to the
+  # previous review (task 12a, K4): the executor of `criteria_evaluation`
+  # under its own name and with its own prompt — a copy of v1 with one marked
+  # block: the student's replies that await an answer, on the topic and not
+  # hostile (homework/student_replies.py), shown as claims, never evidence; a
+  # quote only from the student's files; a place a reply points to is read.
+  # Ladder, flags, ratio and ceilings are `criteria_evaluation`'s, copied.
+  criteria_evaluation_with_replies:
+    deterministic: true
+    prompt_ref: "prompts/criteria_evaluation/v1_with_replies.md"
+    requires: [json_mode]
+    input_budget_ratio: 0.5
+    record_output: false
+    ceilings:
+      tool_steps: 0
+      output_tokens: 32768
+      # не калібровано — калібрує живий вимір 12а (2026-11-18). The number is
+      # `criteria_evaluation`'s, copied. Its arithmetic at the largest
+      # realistic input, at the router's 3.5 characters a token:
+      #   the base stage's input (see `criteria_evaluation`)        56 021
+      #   this prompt over v1: 5 975 - 4 446 = 1 529 characters        437
+      #   the replies at their budget, EVALUATION_BUDGET_CHARS
+      #   (homework/student_replies.py): 12 000 characters            3 429
+      #   in all                                                     59 887
+      # at the registry rates (config/external_services.yaml, read 2026-11-16):
+      #   qwen3.7-max, 16 384 out:     59 887 x 0.00165/1k + 16 384 x 0.004951/1k = 0.179931
+      #   deepseek-v4-pro, 32 768 out: 59 887 x 0.00066/1k + 32 768 x 0.00198/1k  = 0.104406
+      #   the repeat on qwen3.7-max (it shows the replies too):                       0.179931
+      #   qwen's reasoning, 10 000 tokens on each of its two requests: 2 x 0.049510 = 0.099020
+      #   total 0.563288 — 0.013 above the copied 0.55, inside the reserve for
+      # qwen's reasoning, which the router's estimate does not count: every
+      # rung stays reachable (0.179931, then 0.104406 of the 0.370069 left).
+      money_usd: 0.55
+    ladder:
+      - provider: dashscope
+        model: qwen3.7-max
+        reasoning: null
+        max_output_tokens: 16384
+      - provider: deepseek_thinking
+        model: deepseek-v4-pro
+        reasoning: null
+        max_output_tokens: 32768
+
+  # The verdicts of a text task explained to its student, and an answer to
+  # every reply of the student that awaits one (task 12a, K4): the executor
+  # of `review_explanation` under its own name and with its own prompt — a
+  # copy of v3 with marked blocks: the threads under the remarks in the order
+  # of time, a hostile reply shown by its category alone, the replies to
+  # answer now — answered, folded on the third round off the topic, or a
+  # joke in a style the code chose — and `replies` in the answer. A reply from
+  # the fourth round off the topic is answered by the phrasebook, without the
+  # model; a joke that fails its check by the phrasebook's fallback
+  # (homework/verdict_explanation.py). Ladder, flags, ratio and ceilings are
+  # `review_explanation`'s, copied.
+  review_explanation_with_replies:
+    deterministic: false
+    prompt_ref: "prompts/review_explanation/v3_with_replies.md"
+    requires: [json_mode]
+    input_budget_ratio: 0.5
+    record_output: false
+    ceilings:
+      tool_steps: 0
+      # The answers to the replies share it with the explanation: twelve
+      # answers of ~400 characters are ~2 400 tokens of Cyrillic. Copied;
+      # the live measurement of 12a reads what is left of it.
+      output_tokens: 8192
+      # не калібровано — калібрує живий вимір 12а (2026-11-18). The number is
+      # `review_explanation`'s, copied. Its arithmetic at the largest
+      # realistic input, at the router's 3.5 characters a token:
+      #   the base stage's input (see `review_explanation`)          77 399
+      #   this prompt over v3: 13 315 - 9 182 = 4 133 characters      1 181
+      #   the threads at their budget, THREADS_BUDGET_CHARS
+      #   (homework/student_replies.py): 24 000 characters            6 857
+      #   twelve replies to answer, four of them jokes with their
+      #   style and sentence: ~3 000 characters                         857
+      #   in all                                                     86 294
+      # at the registry rates (config/external_services.yaml, read 2026-11-17):
+      #   qwen3.7-max, 8 192 out:    86 294 x 0.00165/1k + 8 192 x 0.004951/1k = 0.182944
+      #   deepseek-flash, 8 192 out: 86 294 x 0.00015/1k + 8 192 x 0.0006/1k   = 0.017859
+      #   qwen's reasoning, 10 000 tokens:                10 000 x 0.004951/1k = 0.049510
+      #   total 0.250313 — 0.010 above the copied 0.24, inside the reserve for
+      # qwen's reasoning, which the router's estimate does not count: both
+      # rungs stay reachable (0.182944, then 0.017859 of the 0.057056 left).
+      money_usd: 0.24
+    ladder:
+      - provider: dashscope
+        model: qwen3.7-max
+        reasoning: null
+        max_output_tokens: 8192
+      - provider: deepseek
+        model: deepseek-flash
+        reasoning: null
+        max_output_tokens: 8192
+
 task_types:
   # A test makes no model call on any path. On the new path since task 07:
   # answered with its answers and scored against the author's key
@@ -373,15 +468,16 @@ task_types:
   short_task:
     served_by: new_path
     # Students' replies to the remarks of a review (task 12a): off until the
-    # answers (K4) and the portal (K5) are switched on with them.
+    # portal (K5) is switched on with them; the answers are K4's.
     replies_enabled: false
     paths:
       first:
         [safety, attempt_classifier, criteria_evaluation, course_link_lookup, review_explanation]
       repeat_without_replies:
         [safety, criteria_evaluation, course_link_lookup, review_explanation]
+      # Task 12a, K4: the replies seen by the verdicts and answered.
       repeat_with_replies:
-        [safety, criteria_evaluation, course_link_lookup, review_explanation]
+        [safety, criteria_evaluation_with_replies, course_link_lookup, review_explanation_with_replies]
 
   task:
     served_by: new_path
@@ -392,8 +488,9 @@ task_types:
         [safety, attempt_classifier, criteria_evaluation, course_link_lookup, review_explanation]
       repeat_without_replies:
         [safety, criteria_evaluation, course_link_lookup, review_explanation]
+      # Task 12a, K4: the replies seen by the verdicts and answered.
       repeat_with_replies:
-        [safety, criteria_evaluation, course_link_lookup, review_explanation]
+        [safety, criteria_evaluation_with_replies, course_link_lookup, review_explanation_with_replies]
 
   project:
     served_by: todays_mentor

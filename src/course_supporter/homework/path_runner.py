@@ -887,6 +887,7 @@ async def _run_stage(
             door=reading,
             work=reading.files,
             arq=arq,
+            config=config,
         )
     )
 

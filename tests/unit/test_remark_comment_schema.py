@@ -40,10 +40,14 @@ def test_the_evaluator_is_where_it_was() -> None:
     attempts change what a review says — verdict rules 6 -> 7, the version
     ``ev1:3cddefc447c114ed`` -> ``ev1:985d508925abb6c7``. K1 itself moved
     nothing.
+
+    Moved on purpose by task 12a, K4: the two stages of
+    ``repeat_with_replies`` and the answers to the replies — verdict rules
+    7 -> 8, the version ``ev1:985d508925abb6c7`` -> ``ev1:7840954a86ae3e16``.
     """
     shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
     for task_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
         version = evaluator_version(task_type, shipped, prompt_base_path=_REPO_ROOT)
-        assert version == "ev1:985d508925abb6c7", task_type
-    assert criteria_verdicts.VERDICT_RULES_VERSION == 7
+        assert version == "ev1:7840954a86ae3e16", task_type
+    assert criteria_verdicts.VERDICT_RULES_VERSION == 8

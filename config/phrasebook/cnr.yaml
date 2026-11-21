@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Obavezni kriterijumi autora nijesu ispunjeni, p
 verdict.rule.author_musts_below_threshold: Ispunili ste sve obavezne kriterijume autora, ali ste ostvarili {score} od 100 — ispod praga {threshold} za zadatke sa obaveznim kriterijumima autora, pa rad nije prihvaćen.
 verdict.rule.no_author_musts_passed: Autor nije potvrdio obavezne kriterijume za ovaj zadatak. Za takve zadatke prag za prihvatanje je {threshold} od 100; vaš rezultat je {score}, pa je rad prihvaćen.
 verdict.rule.no_author_musts_failed: Autor nije potvrdio obavezne kriterijume za ovaj zadatak. Za takve zadatke prag za prihvatanje je {threshold} od 100; vaš rezultat je {score}, pa rad nije prihvaćen.
+reply.work_only: Ocjenjujemo samo rad — datoteke s rješenjem, a ne ono što je napisano pored.
+reply.hostile.fallback: Zanimljiv potez! Ocjenjujemo samo rad — datoteke s rješenjem, a ne ono što je napisano pored. Da biste poboljšali rezultat, doradite rješenje prema primjedbama iz ove recenzije.
+reply.off_topic.wrap_up: 'O tome se može dugo pričati, ali čeka nas rad i vrijeme je bolje utrošiti na kurs „{course}”. Razgovori koštaju: spreman sam da komuniciram vječno, ali običan četbot će to uraditi jeftinije, a sa mnom je bolje učiti „{course}”.'
+reply.said.withheld: (tekst ove replike ne navodimo u recenziji)

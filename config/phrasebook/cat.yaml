@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: No s'han complert els criteris obligatoris de l
 verdict.rule.author_musts_below_threshold: Heu complert tots els criteris obligatoris de l'autor, però heu obtingut {score} sobre 100, per sota del llindar d'aprovat, que és {threshold} per a les tasques amb criteris obligatoris de l'autor, de manera que el treball no queda aprovat.
 verdict.rule.no_author_musts_passed: L'autor no ha aprovat criteris obligatoris per a aquesta tasca. Per a aquestes tasques, el llindar d'aprovat és {threshold} sobre 100; la vostra puntuació és {score}, de manera que el treball queda aprovat.
 verdict.rule.no_author_musts_failed: L'autor no ha aprovat criteris obligatoris per a aquesta tasca. Per a aquestes tasques, el llindar d'aprovat és {threshold} sobre 100; la vostra puntuació és {score}, de manera que el treball no queda aprovat.
+reply.work_only: 'Només avaluem la feina en si: els fitxers amb la solució, no el que s''hagi escrit al costat.'
+reply.hostile.fallback: 'Una jugada interessant! Només avaluem la feina en si: els fitxers amb la solució, no el que s''hagi escrit al costat. Per millorar el resultat, revisi la solució seguint les observacions d''aquesta revisió.'
+reply.off_topic.wrap_up: 'En podríem parlar durant hores, però la feina ens espera i val més aprofitar el temps per al curs «{course}». La conversa costa diners: estic disposat a parlar eternament, però un xatbot convencional ho farà més barat, i amb mi és millor estudiar «{course}».'
+reply.said.withheld: (no incloem el text d'aquesta rèplica a la revisió)

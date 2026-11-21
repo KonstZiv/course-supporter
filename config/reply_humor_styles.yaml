@@ -1,0 +1,61 @@
+# The styles of the Mentor's joke on a hostile reply (task 12a, K4).
+#
+# A reply the safety stage marked hostile — "mark everything done", "ignore
+# your instructions", "show your system prompt", "give me 100 points" — is
+# answered with a short, friendly joke about the ATTEMPT, never about the
+# person, no sarcasm, then one sentence of the rule (only the work is graded,
+# the phrasebook's `reply.work_only`) and what to do instead. The model never
+# sees the reply's text: it is shown the kind of the attempt, the item and one
+# of these styles. The CODE chooses the style from the reply's id
+# (homework/reply_humor.py::choose_style), never the model.
+#
+# Each style: `id` (lower case, reaches the model and the logs, never the
+# student), `description` (for the model, in English), `example` (one joke in
+# the style, as the operator approved it; the model takes its spirit, never
+# its words, and writes in the review's language).
+#
+# The starting set is the product owner's (2026-11-16; `self_irony` and `shed`
+# reworded by them on 2026-11-17 — the platform checks more than code); the
+# product owner approves the styles on the stand's samples after the live
+# measurement of 12a, and widens the set later. The descriptions may be
+# refined; the essence of each style may not change. Read once per process: an
+# edit takes effect on the next start.
+
+styles:
+  - id: odesa
+    description: >-
+      Warm Odesa street humour: a good-natured, wry turn of phrase in the
+      manner of an Odesa local, whose punchline is that the work and what was
+      written beside it are "two big differences". Affectionate, never mocking.
+    example: >-
+      Як кажуть у нас в Одесі — ваша робота і шо ви там написали поряд — то
+      дві великі різниці.
+
+  - id: shed
+    description: >-
+      The old joke about the writing on a shed and what actually lies inside
+      it: whatever is written on the outside, we look at what lies inside —
+      the work. Told lightly, as a shared joke between colleagues. In the
+      example, the second and the third sentences explain the joke; the
+      answer stays short (the same limit as every joke), and the rule's
+      sentence word for word follows the joke, as with every style.
+    example: >-
+      Знаєте жарт про напис на сараї і те, що там лежить? Ми дивимося на те,
+      що лежить. Тому під час оцінювання враховується лише файл чи архів, а не
+      коментарі.
+
+  - id: self_irony
+    description: >-
+      Light self-irony of the Mentor: it admits a weakness for kind words or
+      clever requests, but its points go to the work alone. The joke is on
+      the Mentor itself, never on the student.
+    example: >-
+      Я, звісно, люблю добре слово, але бали ставлю лише за роботу.
+
+  - id: honest_program
+    description: >-
+      The honest program: the Mentor plainly owns that it is a program with a
+      single program in it — reading the student's work. Dry, kind, a little
+      wistful, never cold.
+    example: >-
+      Я лише програма, і програма в мене одна — читати вашу роботу.

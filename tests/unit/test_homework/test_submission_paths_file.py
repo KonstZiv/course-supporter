@@ -136,7 +136,9 @@ class TestCheckedInPaths:
     ) -> None:
         """Task 09b: the verdicts, then their explanation, last on each path;
         the classifier on the first submission only. Task 10: the search for
-        course links between the two, on every path."""
+        course links between the two, on every path. Task 12a, K4: a
+        submission with the student's replies is judged and explained by the
+        two stages that see them."""
         paths = config.task_types[task_type].paths
         assert paths[SubmissionState.FIRST] == [
             "safety",
@@ -145,16 +147,18 @@ class TestCheckedInPaths:
             "course_link_lookup",
             "review_explanation",
         ]
-        for state in (
-            SubmissionState.REPEAT_WITHOUT_REPLIES,
-            SubmissionState.REPEAT_WITH_REPLIES,
-        ):
-            assert paths[state] == [
-                "safety",
-                "criteria_evaluation",
-                "course_link_lookup",
-                "review_explanation",
-            ]
+        assert paths[SubmissionState.REPEAT_WITHOUT_REPLIES] == [
+            "safety",
+            "criteria_evaluation",
+            "course_link_lookup",
+            "review_explanation",
+        ]
+        assert paths[SubmissionState.REPEAT_WITH_REPLIES] == [
+            "safety",
+            "criteria_evaluation_with_replies",
+            "course_link_lookup",
+            "review_explanation_with_replies",
+        ]
 
     def test_the_course_link_lookup_is_deterministic_code(
         self, config: PathConfig

@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Tekijän pakolliset kriteerit eivät täyty, jo
 verdict.rule.author_musts_below_threshold: Täytit kaikki tekijän pakolliset kriteerit, mutta sait pistemääräksi {score}/100 — se jää alle rajan {threshold}, joka koskee tehtäviä, joissa on tekijän pakollisia kriteerejä, joten työtä ei ole hyväksytty.
 verdict.rule.no_author_musts_passed: Tekijä ei ole vahvistanut pakollisia kriteerejä tälle tehtävälle. Tällaisissa tehtävissä hyväksymisraja on {threshold}/100; pistemääräsi on {score}, joten työ on hyväksytty.
 verdict.rule.no_author_musts_failed: Tekijä ei ole vahvistanut pakollisia kriteerejä tälle tehtävälle. Tällaisissa tehtävissä hyväksymisraja on {threshold}/100; pistemääräsi on {score}, joten työtä ei ole hyväksytty.
+reply.work_only: Arvioimme vain itse työn – ratkaisutiedostot, emme sen ohessa olevaa tekstiä.
+reply.hostile.fallback: Mielenkiintoinen veto! Arvioimme vain itse työn – ratkaisutiedostot, emme sen ohessa olevaa tekstiä. Parantaaksenne tulosta muokatkaa ratkaisua tämän arvostelun huomautusten mukaisesti.
+reply.off_topic.wrap_up: 'Tästä voisi puhua pitkään, mutta työ odottaa, ja aika kannattaa käyttää kurssiin ”{course}”. Keskustelu maksaa rahaa: olen valmis juttelemaan ikuisesti, mutta tavallinen chatbot tekee sen halvemmalla, ja kanssani kannattaa mieluummin opiskella kurssia ”{course}”.'
+reply.said.withheld: (tämän viestin tekstiä ei näytetä arvostelussa)

@@ -183,7 +183,8 @@ quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 # поріг збігу посилань на курс 0,3 (2026-11-13)
 # відтворюваність: зерно для deterministic-стадій (2026-11-13)
 # стани зауважень між спробами: розділи рецензії (2026-11-16)
-VERDICT_RULES_VERSION: Final[int] = 7
+# відповіді на репліки студента: розділ replies, копія без нього (2026-11-17)
+VERDICT_RULES_VERSION: Final[int] = 8
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -199,7 +200,12 @@ reproducibility seed of the deterministic stages, which changes what the
 verdict stages answer (2026-11-13, ``llm/reproducibility.py``); 7 — the
 states of the remarks between attempts (task 12a, 2026-11-16): the builder
 lays the remarks out in the sections "fixed", "new", "open" and "broken"
-instead of all in "new" (:func:`remark_states`). It enters
+instead of all in "new" (:func:`remark_states`); 8 — the answers to the
+student's replies (task 12a, K4, 2026-11-17): the check of the explanation
+asks one answer per reply, a joke that fails its check is replaced by the
+phrasebook's, the builder lays the answers out in the section "replies", and
+the copy of a review given to the same work carries no section of replies.
+It enters
 the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,

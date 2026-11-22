@@ -26,12 +26,13 @@ One event, one transaction:
          ``checkout_ref``), so the screen asking the checkout's state finds
          it credited; a purchase that names no checkout, or not its own, is
          credited all the same. No test-mode guard here: what was paid is
-         credited. But a purchase credited while the provider that signed the
-         event is in its test mode (``test_mode``, the adapter's
-         :attr:`~.port.PaymentProvider.test_mode`) is MARKED as a test
-         purchase in the same transaction (:func:`..testmark.mark`,
-         BIL-TESTMARK): its units are taken out by one administrator's
-         command before charging is switched on. In live mode, no mark.
+         credited. But a test purchase (``test_purchases``: the provider that
+         signed the event is in its test mode, or
+         ``BILLING_PURCHASE_MARKED_ONLY`` is on —
+         :func:`.checkout.is_test_purchase`) is MARKED as such in the same
+         transaction as its credit (:func:`..testmark.mark`, BIL-TESTMARK):
+         its units are taken out by one administrator's command before
+         charging is switched on. In live mode with the setting off, no mark.
        * :class:`~.port.RefundApproved` / :class:`~.port.RefundRejected` —
          :func:`.refunds.refund_approve` / :func:`.refunds.refund_reject` of
          the provider's adjustment. An approval of an adjustment the journal
@@ -116,13 +117,14 @@ async def handle_events(
     events: Sequence[ProviderEvent],
     body_sha256: str,
     catalog: Catalog,
-    test_mode: bool,
+    test_purchases: bool,
     now: datetime | None = None,
 ) -> list[Handled]:
     """Handle each event in a transaction of its own (module docstring).
 
-    ``test_mode``: the provider that checked the events' signature is in its
-    test mode — a purchase is then marked as a test purchase.
+    ``test_purchases``: a purchase credited now is a test purchase
+    (:func:`.checkout.is_test_purchase` of the provider that checked the
+    events' signature) — its batch is marked.
 
     Commits and rolls back ``session`` itself: give it a session with nothing
     to keep.
@@ -140,7 +142,7 @@ async def handle_events(
                 event=event,
                 body_sha256=body_sha256,
                 catalog=catalog,
-                test_mode=test_mode,
+                test_purchases=test_purchases,
                 now=at,
             )
             await session.commit()
@@ -187,7 +189,7 @@ async def _handle(
     event: ProviderEvent,
     body_sha256: str,
     catalog: Catalog,
-    test_mode: bool,
+    test_purchases: bool,
     now: datetime,
 ) -> Handled:
     await _lock(session, provider, event.event_id)
@@ -199,7 +201,7 @@ async def _handle(
         provider=provider,
         event=event,
         catalog=catalog,
-        test_mode=test_mode,
+        test_purchases=test_purchases,
         now=now,
     )
     await _write(
@@ -221,14 +223,19 @@ async def _act(
     provider: str,
     event: ProviderEvent,
     catalog: Catalog,
-    test_mode: bool,
+    test_purchases: bool,
     now: datetime,
 ) -> tuple[EventState, str | None]:
     """The journal's action; the event's state and, when it failed, why."""
     match event:
         case PurchaseCompleted():
             return await _credit(
-                session, provider, event, catalog, test_mode=test_mode, now=now
+                session,
+                provider,
+                event,
+                catalog,
+                test_purchases=test_purchases,
+                now=now,
             )
         case RefundApproved():
             await _approve(session, provider, event, now)
@@ -320,7 +327,7 @@ async def _credit(
     event: PurchaseCompleted,
     catalog: Catalog,
     *,
-    test_mode: bool,
+    test_purchases: bool,
     now: datetime,
 ) -> tuple[EventState, str | None]:
     account = (
@@ -359,7 +366,7 @@ async def _credit(
         provider_line_id=event.line_id,
         now=now,
     )
-    if test_mode and credit.created:
+    if test_purchases and credit.created:
         await testmark.mark(
             session, batch_id=credit.batch.id, origin=MarkOrigin.CREDIT, now=now
         )

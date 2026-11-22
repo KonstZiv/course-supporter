@@ -46,6 +46,11 @@ from course_supporter.llm.registry import ModelConfig
 MONEY_QUANTUM: Final = Decimal("1e-12")
 """The scale of E, as of every money column of the register."""
 
+RESERVE_MULTIPLIER: Final = 2
+"""How many E a start holds (``reserve_units``): a review may cost more than
+expected, so its reserve covers twice the estimate. The public numbers
+(``billing.public_numbers``) say the same figure."""
+
 _PER_1K: Final = Decimal(1000)
 _SECONDS_PER_MINUTE: Final = Decimal(60)
 
@@ -303,8 +308,14 @@ class ActionEstimate:
 # ── Units: one rounding per action ──
 
 
-def _ceil(value: Decimal) -> int:
+def round_up(value: Decimal) -> int:
+    """Up to a whole unit: the rounding of a price and a reserve."""
     return int(value.to_integral_value(rounding=ROUND_CEILING))
+
+
+def round_half_up(value: Decimal) -> int:
+    """To the nearest whole unit, a half up: the rounding of a fact."""
+    return int(value.to_integral_value(rounding=ROUND_HALF_UP))
 
 
 def price_units(
@@ -313,18 +324,19 @@ def price_units(
     """P in units: ``ceil(E * (1 + margin) * K)``; ``None`` while K is not set."""
     if units_per_usd is None:
         return None
-    return _ceil(e_usd * (1 + margin) * units_per_usd)
+    return round_up(e_usd * (1 + margin) * units_per_usd)
 
 
 def reserve_units(e_usd: Decimal, *, units_per_usd: Decimal | None) -> int | None:
-    """The reserve in units: ``ceil(2 * E * K)``; ``None`` while K is not set.
+    """The reserve in units: ``ceil(RESERVE_MULTIPLIER * E * K)`` (2E); ``None``
+    while K is not set.
 
     The amount actually held at the start is the smaller of this and the
     available units — decided by whoever holds them, not here.
     """
     if units_per_usd is None:
         return None
-    return _ceil(2 * e_usd * units_per_usd)
+    return round_up(RESERVE_MULTIPLIER * e_usd * units_per_usd)
 
 
 def fact_units(usd: Decimal, *, units_per_usd: Decimal | None) -> int | None:
@@ -336,7 +348,7 @@ def fact_units(usd: Decimal, *, units_per_usd: Decimal | None) -> int | None:
         return None
     if usd <= 0:
         return 0
-    units = int((usd * units_per_usd).to_integral_value(rounding=ROUND_HALF_UP))
+    units = round_half_up(usd * units_per_usd)
     return max(units, 1)
 
 

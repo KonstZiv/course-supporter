@@ -15,6 +15,13 @@ the product or price its checkout needs (a Paddle price id, say). An empty
 section, or none, is allowed; whether a provider can sell a package without
 one is its adapter's business.
 
+Two tables of such sections, by the provider's mode (its adapter's
+``test_mode``), since a provider's test and live environments know different
+products: ``providers`` — of the test mode; ``providers_live`` — of the live
+mode (operator 2026-11-18). A checkout in live mode reads ``providers_live``
+only: a package without an id there is not sold in live mode (Creem: 503),
+never through its test id.
+
 The shape is checked when the file is read, as for the other config files;
 a broken catalog fails the first request that needs it, not the boot.
 """
@@ -23,7 +30,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Final, Self
+from typing import Final, Literal, Self
 
 import yaml
 from pydantic import (
@@ -58,6 +65,10 @@ class Package(_Frozen):
     """Currency (ISO 4217) → price in its minor units (cents), tax included
     or not as the operator decides; the provider charges its own figure."""
     active: StrictBool
+    tax_mode: Literal["inclusive", "exclusive"] | None = None
+    """inclusive — the tax is already in the price; exclusive — the tax is
+    added on top; as the product is set up at the merchant of record. None —
+    not stated."""
 
     @field_validator("prices_minor")
     @classmethod
@@ -80,7 +91,10 @@ class Catalog(_Frozen):
 
     packages: tuple[Package, ...]
     providers: dict[str, dict[str, str]] = Field(default_factory=dict)
-    """Provider's name → package id → the provider's id of it."""
+    """Provider's name → package id → the provider's id of it, in its test
+    mode."""
+    providers_live: dict[str, dict[str, str]] = Field(default_factory=dict)
+    """The same, in the provider's live mode (module docstring)."""
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
@@ -89,21 +103,23 @@ class Catalog(_Frozen):
         if repeated:
             msg = f"package ids repeat: {repeated}"
             raise ValueError(msg)
-        for provider, items in self.providers.items():
-            if PROVIDER_NAME.fullmatch(provider) is None:
-                msg = f"{provider!r} is not a provider's name"
-                raise ValueError(msg)
-            unknown = sorted(set(items) - set(ids))
-            if unknown:
-                msg = f"the {provider} section names no such package: {unknown}"
-                raise ValueError(msg)
-            for package_id, item in items.items():
-                if not item or len(item) > _MAX_ITEM_ID:
-                    msg = (
-                        f"the {provider} id of {package_id} must be 1 to "
-                        f"{_MAX_ITEM_ID} characters"
-                    )
+        tables = {"providers": self.providers, "providers_live": self.providers_live}
+        for table, sections in tables.items():
+            for provider, items in sections.items():
+                if PROVIDER_NAME.fullmatch(provider) is None:
+                    msg = f"{provider!r} is not a provider's name ({table})"
                     raise ValueError(msg)
+                unknown = sorted(set(items) - set(ids))
+                if unknown:
+                    msg = f"{table}.{provider} names no such package: {unknown}"
+                    raise ValueError(msg)
+                for package_id, item in items.items():
+                    if not item or len(item) > _MAX_ITEM_ID:
+                        msg = (
+                            f"{table}.{provider} id of {package_id} must be 1 to "
+                            f"{_MAX_ITEM_ID} characters"
+                        )
+                        raise ValueError(msg)
         return self
 
     def package(self, package_id: str) -> Package | None:
@@ -114,9 +130,14 @@ class Catalog(_Frozen):
         """The packages on sale, in the file's order."""
         return tuple(p for p in self.packages if p.active)
 
-    def provider_item(self, provider: str, package_id: str) -> str | None:
-        """The provider's id of the package; None when its section has none."""
-        return self.providers.get(provider, {}).get(package_id)
+    def provider_item(
+        self, provider: str, package_id: str, *, test_mode: bool
+    ) -> str | None:
+        """The provider's id of the package in its mode (``providers`` in test
+        mode, ``providers_live`` in live mode); None when that section has
+        none."""
+        table = self.providers if test_mode else self.providers_live
+        return table.get(provider, {}).get(package_id)
 
 
 def load_catalog(config_path: Path) -> Catalog:

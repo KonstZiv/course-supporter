@@ -2,9 +2,10 @@
 
 Read-only. For every action with a shadow estimate (``action_cost_estimates``)
 it prints E against the fact from ``external_service_calls``, the deviation per
-step and the share of calls whose cost is unknown. The arithmetic and the rule
-of which rows belong to which action are in
-``course_supporter.cost_estimate.report``.
+step and the share of calls whose cost is unknown. The fact is the payer's —
+the rows of ``billing.charging.PAID_BY_PAYER``, the definition the journal
+charges by. The arithmetic and the rule of which rows belong to which action
+are in ``course_supporter.cost_estimate.report``.
 
 Usage::
 
@@ -29,6 +30,7 @@ from pathlib import Path
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from course_supporter.billing.charging import PAID_BY_PAYER
 from course_supporter.config import get_settings
 from course_supporter.cost_estimate.report import (
     CallRow,
@@ -103,8 +105,12 @@ async def _load(
     by_job: dict[uuid.UUID, list[CallRow]] = defaultdict(list)
     if job_ids:
         esc = ExternalServiceCall
+        # The payer's rows only: the fact E is calibrated against is the one
+        # the journal charges (operator 2026-11-17).
         calls = await session.execute(
-            select(esc).where(esc.job_id.in_(job_ids), esc.provider.is_not(None))
+            select(esc).where(
+                esc.job_id.in_(job_ids), esc.provider.is_not(None), PAID_BY_PAYER
+            )
         )
         for c in calls.scalars():
             by_job[c.job_id].append(

@@ -29,8 +29,9 @@ The rules (operator 2026-10-30, 2026-11-04, 2026-11-11, 2026-11-15):
     * Start: a reserve of ``min(2E, the ceiling, available)`` units
       (:func:`reserve_for`; the ledger caps it by what is available, so it
       may be 0).
-    * End: the fact F — the cost of the action's calls in the register, in
-      units (:func:`fact_of`) — is settled (:func:`finish`). A payer without
+    * End: the fact F — the cost of the action's calls in the register that
+      the payer pays (:data:`PAID_BY_PAYER`, operator 2026-11-17), in units
+      (:func:`fact_of`) — is settled (:func:`finish`). A payer without
       credit (every student, an author without credit) is charged at most the
       reserve; the excess is ``platform_covered``. An author with credit
       keeps the ledger's difference. The author's benefit applies first,
@@ -67,10 +68,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_CEILING, Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, and_, func, not_, or_, select
 
 from course_supporter.billing import ledger
 from course_supporter.billing.errors import BillingConflictError
@@ -90,8 +91,10 @@ from course_supporter.billing.payer import (
     find_payer,
     resolve_payer,
 )
+from course_supporter.call_outcome import CallOutcome, RequestKind
 from course_supporter.cost_estimate.core import fact_units, price_units, reserve_units
 from course_supporter.cost_estimate.settings import get_estimate_settings
+from course_supporter.homework.path_config import REPLY_SAFETY_ACTION
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.storage.orm import (
     BillingAccount,
@@ -103,6 +106,8 @@ from course_supporter.storage.orm import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from course_supporter.config import Settings
@@ -626,30 +631,110 @@ _PRICED_CALL = ExternalServiceCall.unit_type.is_not(None)
 """A row of a call that was made and priced (the register's
 ``ck_esc_priced_call``); the funds-port and metrics rows have none."""
 
+PAYER_REQUEST_KINDS: Final = (RequestKind.FIRST.value, RequestKind.ITEM_REPEAT.value)
+"""The kinds of request whose cost is the payer's (:data:`PAID_BY_PAYER`)."""
 
-async def review_fact_usd(session: AsyncSession, submission_id: uuid.UUID) -> Decimal:
-    """What the review's calls cost: every job of the submission, without the
-    task's preparation run inside them (as the cost report, ``billing.costs``)."""
-    jobs = select(Job.id).where(
-        Job.subject_type == JOB_SUBJECT_TYPE[JobType.HOMEWORK_PROCESSING],
-        Job.subject_id == submission_id,
-    )
-    total = await session.scalar(
-        select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0)).where(
-            ExternalServiceCall.job_id.in_(jobs),
+REPLY_SCREEN_ACTIONS: Final = frozenset({REPLY_SAFETY_ACTION})
+"""The actions the reply screen's calls are recorded under (task 12a, K3,
+``homework/reply_screen.py``): today its safety check alone — the topic port
+is a placeholder that calls no model. A topic adapter with an action of its
+own joins this set."""
+
+REPLY_SCREEN_CALL: Final[ColumnElement[bool]] = ExternalServiceCall.action.in_(
+    REPLY_SCREEN_ACTIONS
+)
+"""A call of the reply screen — never in the payer's fact, whatever its kind.
+
+The billing session, 2026-11-17 ~21:30, on the Mentor's remark (an addition to
+BIL-FACT): the screen of a student's replies to the remarks of the last review
+runs in the submission's job, before the funds port and outside the shadow
+estimate, and its cost is not the fact of the review. An exclusion of its own,
+apart from ``request_kind``; it is the platform's (``billing.costs``,
+``platform_usd``). Whether replies are ever paid for separately is a decision
+of its own, not made here.
+"""
+
+_PAYER_REQUEST: Final[ColumnElement[bool]] = and_(
+    or_(
+        ExternalServiceCall.request_kind.is_(None),
+        ExternalServiceCall.request_kind.in_(PAYER_REQUEST_KINDS),
+    ),
+    ExternalServiceCall.outcome.is_distinct_from(CallOutcome.TRANSPORT_ERROR.value),
+)
+"""The request half of :data:`PAID_BY_PAYER`: its kind and its own failure."""
+
+PAID_BY_PAYER: Final[ColumnElement[bool]] = and_(
+    _PAYER_REQUEST, not_(REPLY_SCREEN_CALL)
+)
+"""A register row whose cost the payer pays — THE definition of the fact.
+
+The operator, 2026-11-17 (15:51, confirmed 16:01): «Платник платить за перший
+запит стадії і за повтор сумнівного пункту. Повтори через поламану структуру
+відповіді й через збій мережі несе платформа. Оцінка ціни калібрується за тим
+самим визначенням факту.» It stands on ``request_kind``
+(:class:`~course_supporter.call_outcome.RequestKind`):
+
+* the payer's — ``first``, ``item_repeat`` and ``NULL`` (speech-to-text
+  attempts, rows written before the column; rows of no call carry no cost);
+* the platform's — ``structural_retry``, ``infra_retry``, and any attempt that
+  itself ended in an infrastructure failure (``outcome = 'transport_error'``:
+  a timeout, 429, 5xx, a dropped connection), whatever its kind — a ``first``
+  and a ``NULL`` row too. One rule for every failed attempt: the billing
+  session's reading (vision-rules#24), confirmed by the coordinator, and its
+  answer of 2026-11-17 ~21:55 on the rows without a kind (a failed
+  speech-to-text attempt is the platform's).
+
+Apart from the kind: a call of the reply screen is never the payer's
+(:data:`REPLY_SCREEN_CALL`).
+
+Says nothing about whether a row is priced: each reader keeps its own test
+for that. The rest of a row's cost — ``NOT PAID_BY_PAYER`` — is what the
+platform took on (``billing.costs``, ``platform_usd``). The facts of the
+journal (:func:`review_facts_usd`, :func:`job_fact_usd`) and the calibration
+report (``scripts/cost_estimate_report.py``) read this one condition.
+"""  # noqa: RUF001 - the operator's words, quoted as said
+
+
+async def review_facts_usd(
+    session: AsyncSession, submission_ids: Collection[uuid.UUID]
+) -> dict[uuid.UUID, Decimal]:
+    """What each review's calls cost the payer (:data:`PAID_BY_PAYER`): every
+    job of the submission, without the task's preparation run inside them (as
+    the cost report, ``billing.costs``). One query, grouped by submission; a
+    submission without such calls is 0."""
+    if not submission_ids:
+        return {}
+    rows = await session.execute(
+        select(Job.subject_id, func.sum(ExternalServiceCall.cost_usd))
+        .join(Job, Job.id == ExternalServiceCall.job_id)
+        .where(
+            Job.subject_type == JOB_SUBJECT_TYPE[JobType.HOMEWORK_PROCESSING],
+            Job.subject_id.in_(submission_ids),
             _PRICED_CALL,
+            PAID_BY_PAYER,
             ExternalServiceCall.action.not_in(PREPARATION_STAGES),
         )
+        .group_by(Job.subject_id)
     )
-    return Decimal(total or 0)
+    facts = dict.fromkeys(submission_ids, Decimal(0))
+    for submission_id, total in rows.tuples():
+        if submission_id is not None:  # matched the IN; the column is nullable
+            facts[submission_id] = Decimal(total or 0)
+    return facts
+
+
+async def review_fact_usd(session: AsyncSession, submission_id: uuid.UUID) -> Decimal:
+    """:func:`review_facts_usd` of one review — the fact its end settles."""
+    return (await review_facts_usd(session, [submission_id]))[submission_id]
 
 
 async def job_fact_usd(
     session: AsyncSession, job_id: uuid.UUID, *, action: str | None = None
 ) -> Decimal:
-    """What one job's calls cost — all of them, or those of one ``action``."""
+    """What one job's calls cost the payer (:data:`PAID_BY_PAYER`) — all of
+    them, or those of one ``action``."""
     stmt = select(func.coalesce(func.sum(ExternalServiceCall.cost_usd), 0)).where(
-        ExternalServiceCall.job_id == job_id, _PRICED_CALL
+        ExternalServiceCall.job_id == job_id, _PRICED_CALL, PAID_BY_PAYER
     )
     if action is not None:
         stmt = stmt.where(ExternalServiceCall.action == action)

@@ -450,7 +450,7 @@ class TestCourseLinks:
         )
 
         assert (
-            "- **Where to read:** [Environment variables](https://example.test/env) "
+            "- **Read more:** [Environment variables](https://example.test/env) "
             "(audio, 1:02:05)"
         ) in assembled.splitlines()
         assert "later in the course" not in assembled
@@ -464,8 +464,7 @@ class TestCourseLinks:
         )
 
         assert (
-            "- **Where to read:** Environment variables "
-            "(More on this later in the course)"
+            "- **Read more:** Environment variables (More on this later in the course)"
         ) in assemble_review(review).splitlines()
 
     def test_the_excerpt_and_the_fragment_id_are_not_printed(self) -> None:
@@ -529,7 +528,7 @@ class TestSections:
         assert len(headings) == len(SECTION_ORDER)
         # The verdict's heading is the verdict itself; the other eight are the
         # section names, in order.
-        assert headings[0] == "## Failed"
+        assert headings[0] == "## Not passed"
         assert headings[-1] == "## Your progress"
 
     def test_a_half_empty_verification_prints_only_the_half_it_has(self) -> None:

@@ -6,6 +6,8 @@ Routes
   bearer session token.
 - ``GET  /portal/me``    — the authenticated student's identity (the minimal
   protected endpoint proving a token grants access; read-path is T2).
+- ``PUT  /portal/me/interface-language`` — the student picks the language of
+  the portal pages (M-3); it is kept on the student's record.
 
 These live on the native session path: no API key, no scope. Tenant is
 resolved explicitly from the request, never guessed.
@@ -21,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_current_student, get_session
 from course_supporter.api.schemas import (
+    InterfaceLanguageRequest,
+    InterfaceLanguageResponse,
     PortalLoginRequest,
     PortalLoginResponse,
     PortalMeResponse,
@@ -33,6 +37,7 @@ from course_supporter.storage.orm import Student, Tenant
 from course_supporter.storage.student_credential_repository import (
     StudentCredentialRepository,
 )
+from course_supporter.storage.student_repository import StudentRepository
 
 logger = structlog.get_logger()
 
@@ -95,18 +100,21 @@ async def portal_login(
         access_token=token,
         student_id=credential.student_id,
         display_name=student.display_name if student is not None else None,
+        interface_language=(
+            student.interface_language if student is not None else None
+        ),
     )
 
 
 @router.get("/portal/me", response_model=PortalMeResponse)
 async def portal_me(student: StudentDep, session: SessionDep) -> PortalMeResponse:
-    """Return the student's identity, recovery-email status and language.
+    """Return the student's identity, recovery-email status and languages.
 
-    ``preferred_language`` comes off the session context rather than a
-    second read: authenticating already loaded the ``Student`` row. It is
-    here rather than on its own endpoint because the portal fetches this
-    once at boot and the submission form needs the value to open on the
-    student's standing choice.
+    ``preferred_language`` and ``interface_language`` come off the session
+    context rather than a second read: authenticating already loaded the
+    ``Student`` row. They are here rather than on their own endpoints because
+    the portal fetches this once at boot: the submission form opens on the
+    review language, and the pages switch to the interface language.
     """
     cred_repo = StudentCredentialRepository(session)
     credential = await cred_repo.get_by_student_id(student.student_id)
@@ -121,4 +129,31 @@ async def portal_me(student: StudentDep, session: SessionDep) -> PortalMeRespons
             and credential.recovery_email_confirmed_at is not None
         ),
         preferred_language=student.preferred_language,
+        interface_language=student.interface_language,
     )
+
+
+@router.put("/portal/me/interface-language", response_model=InterfaceLanguageResponse)
+async def set_interface_language(
+    body: InterfaceLanguageRequest,
+    student: StudentDep,
+    session: SessionDep,
+) -> InterfaceLanguageResponse:
+    """Keep the language of the portal pages the student picked (M-3).
+
+    Only the student of the token is changed — tenant and student both come
+    from the session, never from the body. The language arrives already
+    canonical (the schema validates it), and an unchanged choice costs no
+    write. The review language (``preferred_language``) is not touched.
+    """
+    if student.interface_language != body.language:
+        await StudentRepository(session).set_interface_language(
+            student.tenant_id, student.student_id, body.language
+        )
+        await session.commit()
+        logger.info(
+            "student_interface_language_updated",
+            student_id=str(student.student_id),
+            language=body.language,
+        )
+    return InterfaceLanguageResponse(interface_language=body.language)

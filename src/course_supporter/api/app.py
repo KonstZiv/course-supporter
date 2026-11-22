@@ -55,6 +55,9 @@ from course_supporter.api.routes.portal_recovery import (
 from course_supporter.api.routes.portal_submissions import (
     router as portal_submissions_router,
 )
+from course_supporter.api.routes.public_numbers import (
+    router as public_numbers_router,
+)
 from course_supporter.api.routes.references import router as references_router
 from course_supporter.api.routes.storage import router as storage_router
 from course_supporter.api.routes.students import router as students_router
@@ -62,6 +65,11 @@ from course_supporter.api.routes.test_objects import router as test_objects_rout
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
 from course_supporter.auth.scopes import rate_limiter
 from course_supporter.billing.payments.registry import payment_registry
+from course_supporter.billing.public_numbers import (
+    PublicNumbersStore,
+    compute_with,
+    start_key,
+)
 from course_supporter.config import Settings, settings
 from course_supporter.logging_config import configure_logging
 from course_supporter.storage.database import async_session, engine
@@ -90,6 +98,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     Startup:
         - Create StageRouter (KD16) with ladder config + providers.
+        - Compute (or read) the public numbers of this start.
         - Start rate limiter cleanup task.
     Shutdown:
         - Cancel cleanup task.
@@ -118,6 +127,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         expires_extra_ms=settings.intake_job_expires_ms,
     )
     app.state.arq_redis = arq_redis
+
+    # The public numbers of this start (billing.public_numbers): computed by
+    # the first process, read by the rest. A failure stops nothing — the
+    # public address answers 503 and tries again on its next request.
+    app.state.public_numbers = PublicNumbersStore(
+        arq_redis,
+        start_key(),
+        compute_with(async_session, window_days=settings.public_numbers_window_days),
+    )
+    await app.state.public_numbers.get()
 
     # Start rate limiter cleanup loop
     cleanup_task = asyncio.create_task(_cleanup_loop(rate_limiter))
@@ -308,3 +327,4 @@ app.include_router(portal_materials_router, prefix="/api/v1")
 app.include_router(portal_courses_router, prefix="/api/v1")
 app.include_router(portal_recovery_router, prefix="/api/v1")
 app.include_router(students_router, prefix="/api/v1")
+app.include_router(public_numbers_router, prefix="/api/v1")

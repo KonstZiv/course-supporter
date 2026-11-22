@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_current_student, get_session
+from course_supporter.api.routes.public_numbers import NumbersDep
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.billing import charging
@@ -78,8 +79,10 @@ class ExpiringSoon(BaseModel):
 
 class StudentOutlookResponse(BaseModel):
     reviews_left: int | None = Field(
-        description="About how many reviews the available units cover; null "
-        "when the author pays or nothing is known to price a review."
+        description="About how many reviews the available units cover, at the "
+        "typical price and cost of GET /public/numbers (the student's own average "
+        "cost when they have one); null when the author pays, the public numbers "
+        "are not computed yet, or nothing is known to price a review."
     )
     warning: Literal["low", "next_may_fail"] | None
     expiring_soon: ExpiringSoon | None
@@ -125,6 +128,7 @@ def _expiring(found: Expiring | None) -> ExpiringSoon | None:
 async def get_student_outlook(
     student: StudentDep,
     session: SessionDep,
+    numbers: NumbersDep,
     course_id: Annotated[
         uuid.UUID | None,
         Query(description="The course (root) whose payment rule counts."),
@@ -136,6 +140,7 @@ async def get_student_outlook(
         tenant_id=student.tenant_id,
         student_id=student.student_id,
         settings=get_settings(),
+        numbers=numbers.numbers if numbers is not None else None,
         course_id=course_id,
     )
     return StudentOutlookResponse(

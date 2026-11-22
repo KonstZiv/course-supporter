@@ -23,22 +23,26 @@ The checkout's number (``checkout_ref``):
     number (:func:`checkout_view`): coming back from the provider proves no
     payment.
 
-Test mode (operator 2026-11-15):
+Test purchases (operator 2026-11-15, 2026-11-18):
     While the provider serving the purchase is in its test mode
-    (:attr:`~.port.PaymentProvider.test_mode` — on production, for the
-    provider's review of the shop), a test card pays and real units are
-    credited. So the purchase is open then only to an account the
-    administrator marked (``billing_accounts.test_purchase_allowed``,
-    ``scripts/billing_admin.py test-purchase``): the provider's reviewer's
-    demo author, our own test accounts. :func:`purchase_closed` is the one
-    place that decides it, for both checkouts and for the screens' packages
-    block, whatever the provider; in live mode the mark is not read. The
-    purchase's webhook is not guarded: what was paid is credited.
+    (:attr:`~.port.PaymentProvider.test_mode`), a test card pays and real
+    units are credited; in its live mode before it approves the shop
+    (``BILLING_PURCHASE_MARKED_ONLY``), its reviewer buys with a 100 %
+    discount code. Either way a purchase is a test purchase
+    (:func:`is_test_purchase`): open only to an account the administrator
+    marked (``billing_accounts.test_purchase_allowed``,
+    ``scripts/billing_admin.py test-purchase``) — the provider's reviewer's
+    demo author, our own test accounts — and its batch is marked when
+    credited (``webhooks.py``). :func:`purchase_closed` is the one place that
+    decides who may buy, for both checkouts and for the screens' packages
+    block, whatever the provider; in live mode with the setting off the mark
+    is not read. The purchase's webhook is not guarded: what was paid is
+    credited.
 
 Refusals:
     :class:`PaymentUnavailableError` (503) — no provider is switched on, or
     the one asked cannot sell the package; :class:`PurchaseNotOpenError`
-    (403) — the provider is in test mode and the account is not marked;
+    (403) — a test purchase and the account is not marked;
     :class:`CheckoutNotFoundError` (404) — no such package on sale
     (:class:`PackageNotOnSaleError`), or the provider named is not switched on
     (:class:`ProviderNotSwitchedOnError`). A provider's API failing raises
@@ -77,8 +81,8 @@ class PaymentUnavailableError(Exception):
 
 
 class PurchaseNotOpenError(Exception):
-    """The provider is in test mode and the account is not marked for test
-    purchases (module docstring)."""
+    """A test purchase, and the account is not marked for test purchases
+    (module docstring)."""
 
 
 class CheckoutNotFoundError(Exception):
@@ -100,21 +104,33 @@ class PurchaseClosed(StrEnum):
     """No payment provider is switched on."""
 
     PURCHASE_NOT_OPEN = "purchase_not_open"
-    """The provider is in test mode and the account is not marked."""
+    """A test purchase, and the account is not marked."""
+
+
+def is_test_purchase(provider: PaymentProvider, *, marked_only: bool) -> bool:
+    """Whether a purchase through ``provider`` now is a test purchase (module
+    docstring): the provider is in its test mode, or ``marked_only``
+    (``BILLING_PURCHASE_MARKED_ONLY``,
+    :attr:`~.registry.ProviderRegistry.purchase_marked_only`) is on."""
+    return provider.test_mode or marked_only
 
 
 def purchase_closed(
-    provider: PaymentProvider | None, account: BillingAccount | None
+    provider: PaymentProvider | None,
+    account: BillingAccount | None,
+    *,
+    marked_only: bool,
 ) -> PurchaseClosed | None:
     """Why a purchase through ``provider`` is closed to ``account``; None when
     it is open (module docstring).
 
     ``provider`` None: none is switched on. ``account`` None: the holder has
-    none yet — an account that does not exist is not marked.
+    none yet — an account that does not exist is not marked. ``marked_only``:
+    as :func:`is_test_purchase`.
     """
     if provider is None:
         return PurchaseClosed.PAYMENT_UNAVAILABLE
-    if provider.test_mode and not (
+    if is_test_purchase(provider, marked_only=marked_only) and not (
         account is not None and account.test_purchase_allowed
     ):
         return PurchaseClosed.PURCHASE_NOT_OPEN
@@ -163,8 +179,8 @@ async def start_checkout(
     Raises:
         PaymentUnavailableError: no provider is switched on, or the provider
             cannot sell this package.
-        PurchaseNotOpenError: the provider is in test mode and the account
-            is not marked.
+        PurchaseNotOpenError: a test purchase, and the account is not
+            marked.
         CheckoutNotFoundError: no such package on sale; the named provider
             is not switched on.
         PaymentProviderError: the provider's API failed.
@@ -177,13 +193,19 @@ async def start_checkout(
     if provider is None:
         msg = f"provider {provider_name!r} is not switched on"
         raise ProviderNotSwitchedOnError(msg)
-    if purchase_closed(provider, account) is PurchaseClosed.PURCHASE_NOT_OPEN:
+    closed = purchase_closed(
+        provider, account, marked_only=registry.purchase_marked_only
+    )
+    if closed is PurchaseClosed.PURCHASE_NOT_OPEN:
         log.info(
             "billing_purchase_not_open",
             provider=provider.name,
             account_id=str(account.id),
         )
-        msg = f"{provider.name} is in test mode; account {account.id} is not marked"
+        msg = (
+            f"{provider.name} is in test mode or purchases are for marked "
+            f"accounts only; account {account.id} is not marked"
+        )
         raise PurchaseNotOpenError(msg)
     package = catalog.package(package_id)
     if package is None or not package.active:
@@ -196,7 +218,9 @@ async def start_checkout(
                 account_id=account.id,
                 checkout_ref=checkout_ref,
                 package=package,
-                provider_item=catalog.provider_item(provider.name, package.id),
+                provider_item=catalog.provider_item(
+                    provider.name, package.id, test_mode=provider.test_mode
+                ),
                 language=language,
                 success_url=success_url,
                 cancel_url=cancel_url,

@@ -53,6 +53,7 @@ from course_supporter.agents.key_explainer import (
     STAGE_NAME,
     KeyExplainerAgent,
 )
+from course_supporter.billing.charging import job_fact_usd
 from course_supporter.billing.estimates import (
     key_explanation_task_chars,
     preparation_e_usd,
@@ -225,7 +226,10 @@ async def arq_explain_key(
         await session.commit()
 
         spent = await _spent_on(session, uuid.UUID(job_id))
-        await port.account_version_work_cost(context, spent)
+        # The payer's fact (billing.charging.PAID_BY_PAYER, operator 2026-11-17):
+        # retries are the platform's, so not every dollar ``spent`` is charged.
+        fact = await job_fact_usd(session, uuid.UUID(job_id), action=STAGE_NAME)
+        await port.account_version_work_cost(context, float(fact))
         log.info(
             "key_explanation.ready",
             version=version.version,

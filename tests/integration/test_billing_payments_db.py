@@ -776,6 +776,7 @@ class TestPortalCheckout:
                     "id": "starter",
                     "units": 1000,
                     "prices_minor": {"EUR": 990, "USD": 1090},
+                    "validity_months": 6,
                 }
             ],
             "purchase": {"open": True, "reason": None},  # the account is marked

@@ -177,7 +177,10 @@ class TestTheNumbers:
         found = await numbers(session_factory, w)
 
         declared = load_path_config(SHIPPED_PATHS).task_types[AssignmentType.PROJECT]
-        assert declared.served_by is ServedBy.TODAYS_MENTOR
+        # Project chain K8: the project is on the new path in test mode —
+        # served by it, not charged for — so its numbers are "not_charged".
+        assert declared.served_by is ServedBy.NEW_PATH
+        assert declared.test_mode
         for group, status in (
             (found.review_cost.homework, "insufficient_data"),
             (found.review_cost.project, "not_charged"),
@@ -203,7 +206,9 @@ class TestTheNumbers:
         project = await task(session_factory, w, "project")
         await review(session_factory, w, [("0.10", FIRST)], e_usd="0.25")
         await review(session_factory, w, [("0.20", FIRST)], task_id=project, e_usd="1")
-        config = paths_with(project={"served_by": ServedBy.NEW_PATH.value})
+        config = paths_with(
+            project={"served_by": ServedBy.NEW_PATH.value, "test_mode": False}
+        )
 
         found = await numbers(session_factory, w, path_config=config)
 

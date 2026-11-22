@@ -260,6 +260,24 @@ class TestTheRemarks:
                 language="ukr",
             )
 
+    def test_an_own_must_the_rows_do_not_hold_as_a_must_is_a_defect(self) -> None:
+        """The builder never counts a pass by marks read from another list.
+
+        A mark on a row that is no "must" means the marks and the rows come
+        from different lists (``pass_decision``); the review is refused, not
+        given with a pass counted in either branch.
+        """
+        rows = [_criterion("c1", MUST, MET), _criterion("c2", SHOULD, MET)]
+
+        with pytest.raises(ValueError, match="not 'must' criteria of the rows"):
+            build_text_review(
+                layer=AUTHOR,
+                author_musts={"c1", "c2"},
+                rows=rows,
+                explanation=_explanation(),
+                language="ukr",
+            )
+
     def test_a_remark_on_a_point_is_a_defect(self) -> None:
         """Remarks are on criteria; a point's id has no place among them."""
         rows = [_criterion("c1", MUST, NOT_MET), _point("c1.p1", NOT_MET)]

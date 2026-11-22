@@ -349,6 +349,7 @@ class TestTheSectionOfReplies:
         structure, _ = build_text_review(
             layer=AUTHOR,
             rows=rows,
+            author_musts=_own_musts(rows),
             explanation=_explanation("c1"),
             language="ukr",
             replies=self._REPLIES,
@@ -363,11 +364,16 @@ class TestTheSectionOfReplies:
         explanation = _explanation("c1")
 
         without, score = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=explanation, language="ukr"
+            layer=AUTHOR,
+            rows=rows,
+            author_musts=_own_musts(rows),
+            explanation=explanation,
+            language="ukr",
         )
         with_replies, same_score = build_text_review(
             layer=AUTHOR,
             rows=rows,
+            author_musts=_own_musts(rows),
             explanation=explanation,
             language="ukr",
             replies=self._REPLIES,

@@ -58,7 +58,8 @@ _NEW = {
     _EVALUATION: "5b90a8c0161c3c5806f75923489a768f818db368c51977a32070d5e2d3fe4865",
     _EXPLANATION: "21c5d783e0a4c517e96017de753eb9d9bb7587e066a685f30affaf48a14bdb4c",
 }
-# sha256 of every prompt the other paths read, as on main before 12a K4.
+# sha256 of every prompt the other paths read, as on main before 12a K4; the
+# project's prompts as in project chain K8 (2026-11-22).
 _CALIBRATED = {
     "prompts/safety_check/v2.md": (
         "04d5a1d0ddb18b58506a963e1744640c8aaca95340f37c7d68372702822ac9b7"
@@ -71,6 +72,12 @@ _CALIBRATED = {
     ),
     "prompts/review_explanation/v3.md": (
         "6b1bca3ca00762c5beabe84ca4bc415f16b75630024c8fe6ff76357c362ca435"
+    ),
+    "prompts/criteria_evaluation_project/v1.md": (
+        "bcb9cdc0ebb8527d343ce4bd6b4e80427f1f2409f73c1e1ac5748d5032b6b9b7"
+    ),
+    "prompts/review_explanation_project/v1.md": (
+        "c7d933baa239583991e3404be08a1f306bd7cf84b47c5e799a5fc5ab8ea82c3c"
     ),
 }
 _WITH_REPLIES = {

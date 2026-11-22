@@ -39,8 +39,10 @@ Purpose:
       {"price_units", "available_units", "missing_units"}}}``
       (:meth:`UnitsRefusedError.detail_body`).
 
-    ``charging_enabled`` is the switch AND the path not in test mode; while it
-    is false nothing is refused and ``enough`` is true.
+    ``charging_enabled`` is: charging applies to the payer of this action
+    (:func:`.charging.charging_applies` — every payer, or a marked one), AND,
+    for a student's review, the path not in test mode; while it is false
+    nothing is refused and ``enough`` is true.
 """
 
 from __future__ import annotations
@@ -410,7 +412,6 @@ async def review_quote(
     """
     config = config if config is not None else get_path_config()
     task_type = AssignmentType(task.task_type or "")
-    enabled = charging.charging_enabled() and not in_test_mode(task_type, config)
     payer = await charging.find_payer_of(
         session,
         action_kind=ActionKind.REVIEW,
@@ -418,6 +419,9 @@ async def review_quote(
         course_node_id=task.course_root_id,
         student_id=student_id,
     )
+    enabled = await charging.charging_applies(
+        session, payer.account_id
+    ) and not in_test_mode(task_type, config)
     sent = reading is not None or read_error is not None
     basis: Basis = "file" if sent else "typical"
     if payer.for_someone_else:
@@ -474,7 +478,6 @@ async def author_quote(
     refused in advance, its start checks the threshold on its real features
     (BIL-E3; the route says why there is no price).
     """
-    enabled = charging.charging_enabled()
     payer = await charging.find_payer_of(
         session,
         action_kind=action_kind,
@@ -482,6 +485,7 @@ async def author_quote(
         course_node_id=course_node_id,
         student_id=None,
     )
+    enabled = await charging.charging_applies(session, payer.account_id)
     if e_usd is None:
         available = await charging.available_units(session, payer.account_id)
         return Quote(None, available, True, None, enabled)

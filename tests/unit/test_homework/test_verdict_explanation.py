@@ -193,7 +193,7 @@ class TestTheFacts:
 
         for layer in CriteriaLayer:
             facts = _facts(rows, layer)
-            assert facts.passed is is_passed(rows, layer=layer) is True
+            assert facts.passed is is_passed(rows, layer=layer, author_musts=()) is True
             assert facts.score == score_percent(rows) == 83
             assert facts.unmet == ("c2",)
 
@@ -209,7 +209,9 @@ class TestTheFacts:
         for layer in CriteriaLayer:
             facts = _facts(rows, layer)
             assert facts.score == 66
-            assert facts.passed is is_passed(rows, layer=layer) is False
+            assert (
+                facts.passed is is_passed(rows, layer=layer, author_musts=()) is False
+            )
 
     def test_an_unmet_must_fails_the_pass(self) -> None:
         facts = _facts(_rows(c1="not_met"))

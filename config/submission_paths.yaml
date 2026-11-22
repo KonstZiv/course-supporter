@@ -166,8 +166,9 @@ stages:
   # The places of the course that explain the criteria the student failed
   # (mentor-rebuild task 10, K5): code alone — the course-link finder over the
   # criteria's concepts (homework/course_links.py). No model is called and
-  # nothing is paid for. On every path of `task` and `short_task`, between the
-  # verdicts and their explanation, which is shown what it found.
+  # nothing is paid for. On every path of `task`, `short_task` and `project`
+  # (chain K8), between the verdicts and their explanation, which is shown
+  # what it found.
   course_link_lookup:
     code: true
     # The same verdicts and the same course give the same places.
@@ -260,9 +261,9 @@ stages:
   # when the marked text still fits the project's input budget below; the
   # marks never push the work past it (chain K5). The work is the student's
   # files and the base is the author's (chain K3), from the project's door.
-  # Ladder, flags, ratio and output ceiling as on `criteria_evaluation`. On no
-  # path yet: the switch of `project` is a later change, with its own live
-  # measurement.
+  # Ladder, flags, ratio and output ceiling as on `criteria_evaluation`. On
+  # every path of `project` since chain K8 (test mode); the live measurement
+  # after the deploy calibrates its ceilings.
   project_criteria_evaluation:
     deterministic: true
     prompt_ref: "prompts/criteria_evaluation_project/v1.md"
@@ -312,7 +313,9 @@ stages:
   # finished solution, nothing put into the mouth of the course, no rule of
   # the pass (the review's builder prints it), and a criterion that fell for
   # the author's code said in plain words. Ladder, flags, ratio and output
-  # ceiling as on `review_explanation`. On no path yet, as above.
+  # ceiling as on `review_explanation`. Last on every path of `project` since
+  # chain K8, as above: the review is laid out from its answer and the
+  # verdicts by the text types' builder (homework/text_result.py).
   project_review_explanation:
     deterministic: false
     prompt_ref: "prompts/review_explanation_project/v1.md"
@@ -460,12 +463,13 @@ task_types:
   # The two text types (mentor-rebuild task 09b): verdicts on the criteria,
   # the places of the course for the failed ones (task 10), their
   # explanation, and the review laid out by code (homework/text_result.py).
-  # On the new path in test mode since task 10 (K5): served by the new path,
-  # not charged for. Nothing reads test_mode yet — the funds port is
-  # AlwaysEnoughFundsPort; the billing adapter will.
+  # On the new path. Whether a review is charged for is decided by the billing
+  # switches, not by this file: BILLING_CHARGING_ENABLED (every payer; off in
+  # production) and BILLING_CHARGING_MARKED (only the accounts marked "a test
+  # purchase is allowed"). The two types left test mode on 2026-11-17 (operator),
+  # so a marked payer sees the price, the reserve, the charge and the statement.
   short_task:
     served_by: new_path
-    test_mode: true
     # Students' replies to the remarks of a review (task 12a): off until the
     # portal (K5) is switched on with them; the answers are K4's.
     replies_enabled: false
@@ -480,7 +484,6 @@ task_types:
 
   task:
     served_by: new_path
-    test_mode: true
     # As on short_task.
     replies_enabled: false
     paths:
@@ -492,9 +495,19 @@ task_types:
       repeat_with_replies:
         [safety, criteria_evaluation_with_replies, course_link_lookup, review_explanation_with_replies]
 
+  # A project (project chain K8): the stages of a text task under the
+  # project's own names — its verdicts on the criteria over its delta context,
+  # the places of the course for the failed ones, their explanation — and the
+  # review laid out by the text types' builder. On the new path in test mode:
+  # served by the new path, not charged for. `todays_mentor` here, without
+  # `test_mode`, is the way back.
   project:
-    served_by: todays_mentor
+    served_by: new_path
+    test_mode: true
     paths:
-      first: [safety, attempt_classifier]
-      repeat_without_replies: [safety]
-      repeat_with_replies: [safety]
+      first:
+        [safety, attempt_classifier, project_criteria_evaluation, course_link_lookup, project_review_explanation]
+      repeat_without_replies:
+        [safety, project_criteria_evaluation, course_link_lookup, project_review_explanation]
+      repeat_with_replies:
+        [safety, project_criteria_evaluation, course_link_lookup, project_review_explanation]

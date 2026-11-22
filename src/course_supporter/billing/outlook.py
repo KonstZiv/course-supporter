@@ -6,14 +6,28 @@ Purpose:
     (BIL-E3): an owner without one reads as an empty account. Every threshold
     is a setting.
 
-    * :func:`student_outlook` — about how many reviews the student's units
-      cover: ``floor(available / the average charge of their latest
-      reviews)`` over the last :data:`REVIEW_HISTORY` reviews charged to
-      their account; without such history, the median price P of the latest
-      review estimates of the tasks of their course (of every course they
-      are enrolled in, or of the one named). ``low`` below
-      ``billing_reminder_low_reviews``; ``next_may_fail`` below one. When the
-      author pays for their reviews under a rule, nothing about units is said.
+    * :func:`student_outlook` — about how many reviews the doors of a
+      submission let the student through: they let a review in while
+      ``available >= P`` (the price before, :mod:`.quotes`) and then charge
+      its fact F, so with a typical P and F (:func:`reviews_left`)::
+
+          N = 0                                  if available < P
+          N = 1 + floor((available - P) / F)     otherwise
+
+      P and F are the typical ones of the public numbers of this start of the
+      app (:mod:`.public_numbers`, ``review_cost.homework``): P its
+      ``start_threshold.typical``; F the average charge of the student's own
+      latest :data:`REVIEW_HISTORY` reviews, else its ``actual.typical``. So a
+      student without a history of their own sees the number the site shows
+      for the smallest package when they hold its units, and it changes only
+      with a new start of the app. No public numbers (the address would answer
+      503) — no number. While they are not ``ready`` (or have no P), the way
+      back: P the price of the course's first task at its typical size
+      (:func:`_price_of_a_course_task`), F the student's own average, else P.
+      ``low`` below ``billing_reminder_low_reviews``; ``next_may_fail`` below
+      one. When the author pays for their reviews under a rule, nothing about
+      units is said. ``charging_enabled`` — charging applies to that payer
+      (:func:`.charging.charging_applies`): the one ``paid_by`` names.
     * :func:`author_outlook` — about how many days the author's units last at
       the pace of the last ``billing_reminder_pace_days`` days (their charges
       over those days ÷ the days); no charges — nothing is said.
@@ -24,7 +38,7 @@ Purpose:
 
 from __future__ import annotations
 
-import statistics
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -37,23 +51,22 @@ from course_supporter.billing.journal import available, positions
 from course_supporter.billing.kinds import AccountKind, ActionKind, MovementKind
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.orm import (
-    ActionCostEstimate,
     AuthoredDocument,
     BillingMovement,
-    HomeworkSubmission,
     StudentEnrollment,
 )
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from course_supporter.billing.public_numbers import PublicNumbers
     from course_supporter.config import Settings
 
 REVIEW_HISTORY: Final = 10
 """How many of the student's latest charged reviews make their average."""
 
-TYPICAL_HISTORY: Final = 20
-"""How many of the course's latest review estimates make the typical price."""
+PAID_TASK_TYPES: Final = (AssignmentType.TASK.value, AssignmentType.SHORT_TASK.value)
+"""The task types a review is paid for (a ``test`` is checked against the key)."""
 
 StudentWarning = Literal["low", "next_may_fail"]
 AuthorWarning = Literal["runs_out_soon"]
@@ -73,6 +86,7 @@ class StudentOutlook:
     warning: StudentWarning | None
     expiring_soon: Expiring | None
     paid_by: Literal["self", "author"]
+    charging_enabled: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +94,16 @@ class AuthorOutlook:
     days_left: int | None
     warning: AuthorWarning | None
     expiring_soon: Expiring | None
+
+
+def reviews_left(available: float, price: float, fact: float) -> int:
+    """How many reviews in a row the doors let through (module docstring).
+
+    ``price`` and ``fact`` are positive.
+    """
+    if available < price:
+        return 0
+    return 1 + math.floor((available - price) / fact)
 
 
 async def expiring_soon(
@@ -125,54 +149,20 @@ async def _average_review_charge(
     return sum(charges) / len(charges) if charges else None
 
 
-async def _typical_review_price(
-    session: AsyncSession,
-    *,
-    tenant_id: uuid.UUID,
-    student_id: uuid.UUID,
-    course_id: uuid.UUID | None,
-) -> float | None:
-    """The median P of the latest review estimates of the student's course(s)."""
-    courses = (
-        [course_id]
-        if course_id is not None
-        else list(
-            (
-                await session.execute(
-                    select(StudentEnrollment.course_node_id).where(
-                        StudentEnrollment.student_id == student_id
-                    )
-                )
-            ).scalars()
-        )
-    )
-    if not courses:
-        return None
-    prices = [
-        p
-        for p in (
+async def _courses_of(
+    session: AsyncSession, student_id: uuid.UUID, course_id: uuid.UUID | None
+) -> list[uuid.UUID]:
+    """The course named, else every course the student is enrolled in."""
+    if course_id is not None:
+        return [course_id]
+    return list(
+        (
             await session.execute(
-                select(ActionCostEstimate.p_units)
-                .join(
-                    HomeworkSubmission,
-                    HomeworkSubmission.id == ActionCostEstimate.submission_id,
+                select(StudentEnrollment.course_node_id).where(
+                    StudentEnrollment.student_id == student_id
                 )
-                .where(
-                    ActionCostEstimate.action_kind == ActionKind.REVIEW.value,
-                    HomeworkSubmission.tenant_id == tenant_id,
-                    HomeworkSubmission.course_node_id.in_(courses),
-                    ActionCostEstimate.p_units > 0,
-                )
-                .order_by(ActionCostEstimate.created_at.desc())
-                .limit(TYPICAL_HISTORY)
             )
         ).scalars()
-        if p is not None
-    ]
-    if prices:
-        return float(statistics.median(prices))
-    return await _price_of_a_course_task(
-        session, tenant_id=tenant_id, student_id=student_id, courses=courses
     )
 
 
@@ -196,9 +186,7 @@ async def _price_of_a_course_task(
             select(AuthoredDocument)
             .where(
                 AuthoredDocument.course_root_id.in_(courses),
-                AuthoredDocument.task_type.in_(
-                    [AssignmentType.TASK.value, AssignmentType.SHORT_TASK.value]
-                ),
+                AuthoredDocument.task_type.in_(PAID_TASK_TYPES),
                 AuthoredDocument.deleted_at.is_(None),
             )
             .order_by(AuthoredDocument.created_at, AuthoredDocument.id)
@@ -219,10 +207,14 @@ async def student_outlook(
     tenant_id: uuid.UUID,
     student_id: uuid.UUID,
     settings: Settings,
+    numbers: PublicNumbers | None,
     course_id: uuid.UUID | None = None,
     now: datetime | None = None,
 ) -> StudentOutlook:
-    """The student's reminders (module docstring); creates no account."""
+    """The student's reminders (module docstring); creates no account.
+
+    ``numbers`` — the public numbers of this start; None while there are none.
+    """
     payer = await charging.find_payer_of(
         session,
         action_kind=ActionKind.REVIEW,
@@ -231,6 +223,7 @@ async def student_outlook(
         student_id=student_id,
     )
     own = payer.lookup.beneficiary_account_id
+    enabled = await charging.charging_applies(session, payer.account_id, settings)
     soon = (
         await expiring_soon(
             session, own, within_days=settings.billing_expiry_notice_days, now=now
@@ -239,21 +232,35 @@ async def student_outlook(
         else None
     )
     if payer.kind is AccountKind.AUTHOR:
-        return StudentOutlook(None, None, soon, "author")
-    cost = await _average_review_charge(session, own) if own is not None else None
-    if cost is None:
-        cost = await _typical_review_price(
-            session, tenant_id=tenant_id, student_id=student_id, course_id=course_id
+        return StudentOutlook(None, None, soon, "author", enabled)
+    if numbers is None:
+        return StudentOutlook(None, None, soon, "self", enabled)
+    homework = numbers.review_cost.homework
+    # Whole units of the public numbers, taken as they are (rounded there once).
+    price: float | None = homework.start_threshold.typical
+    typical_fact: float | None = homework.actual.typical
+    if homework.status != "ready" or not price:
+        price = await _price_of_a_course_task(
+            session,
+            tenant_id=tenant_id,
+            student_id=student_id,
+            courses=await _courses_of(session, student_id, course_id),
         )
-    if not cost:
-        return StudentOutlook(None, None, soon, "self")
-    left = int(await charging.available_units(session, own, now=now) // cost)
+        typical_fact = price
+    if not price:
+        return StudentOutlook(None, None, soon, "self", enabled)
+    fact = await _average_review_charge(session, own) if own is not None else None
+    left = reviews_left(
+        await charging.available_units(session, own, now=now),
+        price,
+        fact or typical_fact or price,
+    )
     warning: StudentWarning | None = None
     if left < 1:
         warning = "next_may_fail"
     elif left < settings.billing_reminder_low_reviews:
         warning = "low"
-    return StudentOutlook(left, warning, soon, "self")
+    return StudentOutlook(left, warning, soon, "self", enabled)
 
 
 async def author_outlook(

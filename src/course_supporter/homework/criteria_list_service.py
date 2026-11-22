@@ -87,6 +87,7 @@ from course_supporter.homework.criteria_form import (
     CRITERIA_FORM_VERSION,
     CriteriaComposition,
     Criterion,
+    author_criteria_from_document,
     criteria_from_document,
     criteria_to_document,
 )
@@ -163,7 +164,8 @@ class CriteriaInForce:
     """The criteria a review of a task version uses.
 
     Attributes:
-        criteria: The criteria, in the task-08 form.
+        criteria: The criteria, in the task-08 form; the author's each with
+            ``must_by_author`` (``criteria_form.author_criteria_from_document``).
         layer: The author's edit or the model's list.
         source_id: The row they were read from — ``task_criteria_overrides``
             for the author's layer, ``task_criteria_lists`` for the model's. A
@@ -239,7 +241,7 @@ def choose_in_force(
         and _is_current(override, document)
     ):
         return CriteriaInForce(
-            criteria=criteria_from_document(override.criteria),
+            criteria=author_criteria_from_document(override.criteria),
             layer=CriteriaLayer.AUTHOR,
             source_id=override.id,
         )

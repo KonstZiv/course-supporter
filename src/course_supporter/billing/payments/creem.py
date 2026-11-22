@@ -12,7 +12,8 @@ Read from Creem's documentation on 2026-11-14:
   mistaken address closes purchases rather than opens them.
 * Checkout: ``POST /v1/checkouts`` —
   https://docs.creem.io/api-reference/endpoint/create-checkout. Sent:
-  ``product_id`` (the catalog's ``providers.creem`` id of the package),
+  ``product_id`` (the catalog's id of the package: ``providers.creem`` in
+  test mode, ``providers_live.creem`` in live mode),
   ``units`` 1, ``success_url``, ``metadata`` {``account_id``,
   ``package_id``, ``checkout_ref``}; answered: ``id`` (``ch_…``) and
   ``checkout_url``. Creem takes no cancel URL and no locale, so neither is

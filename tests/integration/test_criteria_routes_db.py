@@ -490,7 +490,11 @@ class TestTheLayersAreReadApart:
 
         body = (await ac.get(_read(world["text_task"]))).json()
 
-        edit = [{**_MODEL[0], "text": "Handles n = 0 and n = 1"}]
+        # The model's "must", kept by an author who corrected a word: not
+        # made mandatory (2026-11-17).
+        edit = [
+            {**_MODEL[0], "text": "Handles n = 0 and n = 1", "must_by_author": False}
+        ]
         assert body["status"] == "ready"
         assert body["model"] == _MODEL
         assert body["author"] == edit
@@ -617,6 +621,167 @@ class TestAReplacementKeepsIdentifiers:
         assert first.criteria[0]["text"] == "First wording"
         assert second.deleted_at is None
         assert second.criteria[0]["text"] == "Second wording"
+
+
+class TestMustByAuthor:
+    """The author's own "must" (2026-11-17), through the routes.
+
+    The server settles ``must_by_author`` once, when the edit is stored, and
+    every answer shows it on the author's criteria; the model's list has none.
+    """
+
+    async def test_the_answers_carry_the_mark_on_the_authors_criteria_alone(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _compose(session_factory, world["text_task"])
+        ac, _ = client
+
+        put = await ac.put(
+            _write(world["text_task"]),
+            json={
+                "criteria": [
+                    _edited(_MODEL[0]),
+                    _edited(_MODEL[2], weight="must"),
+                    _new(weight="must"),
+                    _new(weight="must", must_by_author=False),
+                ]
+            },
+        )
+
+        assert put.status_code == 200, put.text
+        body = put.json()
+        assert [c["must_by_author"] for c in body["author"]] == [
+            False,
+            True,
+            True,
+            False,
+        ]
+        assert body["in_force"] == {"layer": "author", "criteria": body["author"]}
+        assert all("must_by_author" not in c for c in body["model"])
+        assert (await ac.get(_read(world["text_task"]))).json() == body
+        [row] = await _edits(session_factory, world["text_task"])
+        assert [c["must_by_author"] for c in row.criteria] == [False, True, True, False]
+
+    async def test_the_models_list_in_force_has_no_mark(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _compose(session_factory, world["text_task"])
+        ac, _ = client
+
+        body = (await ac.get(_read(world["text_task"]))).json()
+
+        assert body["in_force"]["layer"] == "model"
+        assert all("must_by_author" not in c for c in body["in_force"]["criteria"])
+
+    async def test_true_on_a_criterion_that_is_not_a_must_is_refused_with_its_code(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _compose(session_factory, world["text_task"])
+        ac, _ = client
+
+        resp = await ac.put(
+            _write(world["text_task"]),
+            json={
+                "criteria": [
+                    _edited(_MODEL[0]),
+                    _edited(_MODEL[2], must_by_author=True),
+                ]
+            },
+        )
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"]["code"] == "MUST_BY_AUTHOR_WITHOUT_MUST"
+        assert "criteria.1" in resp.json()["detail"]["details"]
+        assert await _edits(session_factory, world["text_task"]) == []
+
+    async def test_a_second_edit_without_the_field_keeps_the_marks(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _compose(session_factory, world["text_task"])
+        ac, _ = client
+        first = await ac.put(
+            _write(world["text_task"]),
+            json={
+                "criteria": [
+                    _edited(_MODEL[0], must_by_author=True),
+                    _edited(_MODEL[1]),
+                ]
+            },
+        )
+        assert first.status_code == 200, first.text
+
+        second = await ac.put(
+            _write(world["text_task"]),
+            json={
+                "criteria": [
+                    _edited(_MODEL[0], text="Handles n = 0 and n = 1"),
+                    _edited(_MODEL[1]),
+                ]
+            },
+        )
+
+        assert second.status_code == 200, second.text
+        assert [c["must_by_author"] for c in second.json()["author"]] == [True, False]
+
+    async def test_an_edit_after_a_reset_inherits_no_mark(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _compose(session_factory, world["text_task"])
+        ac, _ = client
+        marked = await ac.put(
+            _write(world["text_task"]),
+            json={"criteria": [_edited(_MODEL[0], must_by_author=True)]},
+        )
+        assert marked.json()["author"][0]["must_by_author"] is True
+        assert (await ac.delete(_write(world["text_task"]))).status_code == 200
+
+        after = await ac.put(
+            _write(world["text_task"]), json={"criteria": [_edited(_MODEL[0])]}
+        )
+
+        assert after.status_code == 200, after.text
+        assert after.json()["author"][0]["must_by_author"] is False
+
+    async def test_an_edit_stored_before_the_mark_reads_false_and_is_not_rewritten(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _compose(session_factory, world["text_task"])
+        async with session_factory() as session:
+            session.add(
+                TaskCriteriaOverride(
+                    authored_document_id=world["text_task"],
+                    source_content_hash=_HASH,
+                    source_task_type="task",
+                    criteria=_MODEL,
+                )
+            )
+            await session.commit()
+        ac, _ = client
+
+        body = (await ac.get(_read(world["text_task"]))).json()
+
+        assert [c["must_by_author"] for c in body["author"]] == [False, False, False]
+        assert body["in_force"]["layer"] == "author"
+        [row] = await _edits(session_factory, world["text_task"])
+        assert row.criteria == _MODEL
 
 
 class TestAResetIsSoft:

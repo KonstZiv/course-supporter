@@ -514,3 +514,100 @@ class TestForgotRateLimit:
         assert (
             await client.post("/api/v1/portal/password/forgot", json=body)
         ).status_code == 429
+
+
+class TestInterfaceLanguageEmails:
+    async def test_student_with_english_interface_language(
+        self,
+        client: AsyncClient,
+        seed: dict[str, uuid.UUID],
+        fake_arq: _FakeArq,
+    ) -> None:
+        tenant_id = seed["tenant_id"]
+        await _provision(client, "alice_en")
+        token = await _token(client, tenant_id, "alice_en")
+
+        # Set student's interface_language to "eng"
+        resp = await client.put(
+            "/api/v1/portal/me/interface-language",
+            json={"language": "eng"},
+            headers=_auth(token),
+        )
+        assert resp.status_code == 200
+
+        # 1. set_recovery_email -> email_confirm
+        fake_arq.clear()
+        setr = await client.post(
+            "/api/v1/portal/recovery-email",
+            json={"email": "alice_en@example.com"},
+            headers=_auth(token),
+        )
+        assert setr.status_code == 200
+        confirm_mails = fake_arq.emails("email_confirm")
+        assert len(confirm_mails) == 1
+        assert confirm_mails[0]["language"] == "eng"
+        assert confirm_mails[0]["context"]["ttl"] == "24 hours"
+
+        # Confirm the email so we can test forgot_password
+        confirm_token = _token_from_url(confirm_mails[0]["context"]["confirm_url"])
+        conf = await client.post(
+            "/api/v1/portal/recovery-email/confirm",
+            json={"token": confirm_token},
+        )
+        assert conf.status_code == 204
+
+        # 2. forgot_password -> password_reset
+        fake_arq.clear()
+        forgot = await client.post(
+            "/api/v1/portal/password/forgot",
+            json={"tenant_id": str(tenant_id), "login": "alice_en"},
+        )
+        assert forgot.status_code == 202
+        reset_mails = fake_arq.emails("password_reset")
+        assert len(reset_mails) == 1
+        assert reset_mails[0]["language"] == "eng"
+        assert reset_mails[0]["context"]["ttl"] == "30 minutes"
+
+    async def test_student_with_null_interface_language(
+        self,
+        client: AsyncClient,
+        seed: dict[str, uuid.UUID],
+        fake_arq: _FakeArq,
+    ) -> None:
+        tenant_id = seed["tenant_id"]
+        await _provision(client, "alice_null")
+        token = await _token(client, tenant_id, "alice_null")
+
+        # By default interface_language is NULL (None)
+        # 1. set_recovery_email -> email_confirm
+        fake_arq.clear()
+        setr = await client.post(
+            "/api/v1/portal/recovery-email",
+            json={"email": "alice_null@example.com"},
+            headers=_auth(token),
+        )
+        assert setr.status_code == 200
+        confirm_mails = fake_arq.emails("email_confirm")
+        assert len(confirm_mails) == 1
+        assert confirm_mails[0]["language"] is None
+        assert confirm_mails[0]["context"]["ttl"] == "24 години"
+
+        # Confirm the email
+        confirm_token = _token_from_url(confirm_mails[0]["context"]["confirm_url"])
+        conf = await client.post(
+            "/api/v1/portal/recovery-email/confirm",
+            json={"token": confirm_token},
+        )
+        assert conf.status_code == 204
+
+        # 2. forgot_password -> password_reset
+        fake_arq.clear()
+        forgot = await client.post(
+            "/api/v1/portal/password/forgot",
+            json={"tenant_id": str(tenant_id), "login": "alice_null"},
+        )
+        assert forgot.status_code == 202
+        reset_mails = fake_arq.emails("password_reset")
+        assert len(reset_mails) == 1
+        assert reset_mails[0]["language"] is None
+        assert reset_mails[0]["context"]["ttl"] == "30 хвилин"

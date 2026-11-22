@@ -88,6 +88,8 @@ CATALOG = Catalog(
         FAKE: {"starter": "fake_price_starter", "large": "fake_price_large"},
         CREEM: {"starter": "prod_starter", "large": "prod_large"},
     },
+    # Live mode: "large" has no live product (BIL-LIVE).
+    providers_live={CREEM: {"starter": "prod_live_starter"}},
 )
 SHA = "e" * 64
 WEBHOOK = f"/api/v1/billing/webhooks/{FAKE}"
@@ -114,6 +116,8 @@ class World:
     """The providers switched on (the fake by default)."""
     sent: list[httpx.Request] = field(default_factory=list)
     """What a Creem adapter sent to Creem's API."""
+    marked_only: bool = False
+    """BILLING_PURCHASE_MARKED_ONLY of the registry the routes get."""
 
     def creem(self, api_base: str = LIVE_API_BASE) -> CreemProvider:
         """Creem behind a mock of its API."""
@@ -248,7 +252,7 @@ def signed_in(
     app.dependency_overrides[get_current_student] = lambda: world.student
     app.dependency_overrides[get_current_tenant] = lambda: world.tenant
     app.dependency_overrides[get_payment_registry] = lambda: ProviderRegistry(
-        world.providers
+        world.providers, purchase_marked_only=world.marked_only
     )
     app.dependency_overrides[get_billing_catalog] = lambda: CATALOG
     yield
@@ -359,7 +363,7 @@ class TestGuard:
         assert response.status_code == 200, response.text
         [sent] = world.sent
         assert sent.url.host == "api.creem.io"
-        assert json.loads(sent.content)["product_id"] == "prod_starter"
+        assert json.loads(sent.content)["product_id"] == "prod_live_starter"
 
     async def test_the_mark_of_the_author_does_not_open_the_students(
         self, session_factory: async_sessionmaker[AsyncSession], world: World
@@ -388,6 +392,94 @@ class TestGuard:
         assert (batch.units, batch.provider) == (1000, FAKE)
 
 
+# ── Live mode before the shop is approved (BIL-LIVE, operator 2026-11-18) ──
+
+
+@pytest.mark.usefixtures("signed_in")
+class TestLiveMarkedOnly:
+    """Creem live, BILLING_PURCHASE_MARKED_ONLY on: only a marked account buys."""
+
+    @pytest.fixture(autouse=True)
+    def _live_marked_only(self, world: World) -> None:
+        world.providers[:] = [world.creem(LIVE_API_BASE)]
+        world.marked_only = True
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_no_account_yet_is_not_open(self, who: str) -> None:
+        async with _client() as client:
+            response = await client.get(f"{who}/packages")
+        assert response.json()["purchase"] == {
+            "open": False,
+            "reason": "purchase_not_open",
+        }
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_an_unmarked_account_is_not_open_and_its_checkout_403(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        who: str,
+    ) -> None:
+        async with _client() as client:
+            await _consent(client, who)
+            await _mark(session_factory, world, who, allowed=False)
+            packages = await client.get(f"{who}/packages")
+            response = await _buy(client, who)
+        assert packages.json()["purchase"] == {
+            "open": False,
+            "reason": "purchase_not_open",
+        }
+        assert (response.status_code, _code(response)) == (403, "purchase_not_open")
+        assert world.sent == []  # Creem was not asked
+
+    @pytest.mark.parametrize("who", PAYERS, ids=PAYER_IDS)
+    async def test_a_marked_account_buys_with_the_live_product(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: World,
+        who: str,
+    ) -> None:
+        async with _client() as client:
+            await _consent(client, who)
+            await _mark(session_factory, world, who)
+            packages = await client.get(f"{who}/packages")
+            response = await _buy(client, who)
+        assert packages.json()["purchase"] == {"open": True, "reason": None}
+        assert response.status_code == 200, response.text
+        [sent] = world.sent
+        assert sent.url.host == "api.creem.io"
+        assert json.loads(sent.content)["product_id"] == "prod_live_starter"
+
+
+@pytest.mark.usefixtures("signed_in")
+class TestLiveCatalog:
+    """The catalog's table by Creem's mode (BIL-LIVE)."""
+
+    async def test_live_mode_without_a_live_product_is_503_not_the_test_id(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        world.providers[:] = [world.creem(LIVE_API_BASE)]
+        async with _client() as client:
+            await _consent(client, Who.AUTHOR)
+            response = await _buy(client, Who.AUTHOR, "large")
+        assert (response.status_code, _code(response)) == (503, "payment_unavailable")
+        assert world.sent == []  # prod_large (the test id) never sent live
+        assert await _checkouts(session_factory, world) == 0
+
+    async def test_test_mode_sends_the_test_product(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        world.providers[:] = [world.creem("https://test-api.creem.io/v1")]
+        async with _client() as client:
+            await _consent(client, Who.AUTHOR)
+            await _mark(session_factory, world, Who.AUTHOR)
+            response = await _buy(client, Who.AUTHOR, "large")
+        assert response.status_code == 200, response.text
+        [sent] = world.sent
+        assert sent.url.host == "test-api.creem.io"
+        assert json.loads(sent.content)["product_id"] == "prod_large"
+
+
 # ── Packages ───────────────────────────────────────────────────────────
 
 
@@ -409,8 +501,18 @@ class TestPackages:
             response = await client.get(f"{who}/packages")
         assert response.status_code == 200
         assert response.json()["packages"] == [
-            {"id": "starter", "units": 1000, "prices_minor": {"EUR": 990}},
-            {"id": "large", "units": 5000, "prices_minor": {"EUR": 3990}},
+            {
+                "id": "starter",
+                "units": 1000,
+                "prices_minor": {"EUR": 990},
+                "validity_months": 6,
+            },
+            {
+                "id": "large",
+                "units": 5000,
+                "prices_minor": {"EUR": 3990},
+                "validity_months": 6,
+            },
         ]
         assert "fake_price" not in response.text
         assert "prod_" not in response.text

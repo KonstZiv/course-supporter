@@ -7,14 +7,18 @@ Purpose:
     environment. Operator 2026-11-16: such a batch is marked in the database,
     and its units are taken out by one administrator's command before
     charging is switched on (``BILLING_CHARGING_ENABLED``) — until then no
-    unit is spent on anything.
+    unit is spent on anything. Operator 2026-11-18: the same in the
+    provider's live mode while ``BILLING_PURCHASE_MARKED_ONLY`` is on (before
+    the provider approves the shop, its reviewer's demo purchase).
 
 The mark (``billing_test_batches``, :class:`MarkOrigin`):
-    * ``credit`` — the purchase was credited while the provider that signed
-      its event was in its test mode (:attr:`~.payments.port.PaymentProvider.
-      test_mode`): :func:`mark` in the same transaction as the credit
-      (``payments/webhooks.py``), so there is never a batch without its mark
-      nor a mark without its batch. In live mode nothing is marked.
+    * ``credit`` — the purchase was credited as a test purchase (the provider
+      that signed its event was in its test mode, or
+      ``BILLING_PURCHASE_MARKED_ONLY`` was on:
+      :func:`~.payments.checkout.is_test_purchase`): :func:`mark` in the same
+      transaction as the credit (``payments/webhooks.py``), so there is never
+      a batch without its mark nor a mark without its batch. In live mode
+      with the setting off nothing is marked.
     * ``backfill`` — the migration ``biltestmark_test_batches`` marked every
       Creem purchase made before the marks.
 

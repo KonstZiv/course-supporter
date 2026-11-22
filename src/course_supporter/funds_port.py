@@ -14,7 +14,7 @@ Purpose:
     Two implementations: :class:`AlwaysEnoughFundsPort` (charging off) and
     the journal's :class:`~course_supporter.billing.funds.LedgerFundsPort`
     (charging on, BIL-E); :func:`build_funds_port` picks one by
-    ``BILLING_CHARGING_ENABLED``.
+    ``BILLING_CHARGING_ENABLED`` or ``BILLING_CHARGING_MARKED``.
 
 Input and output:
     Each operation takes a :class:`SubmissionContext` — tenant, student,
@@ -359,15 +359,16 @@ class AlwaysEnoughFundsPort:
 
 
 def build_funds_port(session_factory: async_sessionmaker[AsyncSession]) -> FundsPort:
-    """The port a job uses: the journal's while charging is on, else the first one.
+    """The port a job uses: the journal's while charging is possible, else the first.
 
-    ``BILLING_CHARGING_ENABLED`` off (the default) keeps
-    :class:`AlwaysEnoughFundsPort`: nothing reaches the journal and nothing is
-    refused for want of units (BIL-E, A6).
+    Both switches off (the default) keep :class:`AlwaysEnoughFundsPort`: nothing
+    reaches the journal and nothing is refused for want of units (BIL-E, A6).
+    With ``BILLING_CHARGING_MARKED`` only, the journal's port answers a payer
+    charging does not apply to as the first one does.
     """
-    from course_supporter.billing.charging import charging_enabled
+    from course_supporter.billing.charging import charging_possible
 
-    if charging_enabled():
+    if charging_possible():
         from course_supporter.billing.funds import LedgerFundsPort
 
         return LedgerFundsPort(session_factory)

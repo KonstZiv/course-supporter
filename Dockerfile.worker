@@ -13,8 +13,11 @@ FROM python:3.13-slim AS builder
 
 WORKDIR /build
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Install uv (pinned to v0.13.9 by multi-arch digest; floating :latest invalidated
+# the dependency cache layer on prod deployments, causing +1.3 GB disk churn and
+# +6 min deploy times, 2026-11-17). Update via a dedicated PR updating both
+# Dockerfile and Dockerfile.worker; the first deploy will rebuild the cache layer.
+COPY --from=ghcr.io/astral-sh/uv@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d /uv /usr/local/bin/uv
 
 # Install dependencies (cached layer)
 COPY pyproject.toml uv.lock .python-version ./

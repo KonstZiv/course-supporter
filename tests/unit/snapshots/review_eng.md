@@ -1,6 +1,6 @@
 # Review
 
-## Failed
+## Not passed
 
 Score: 50%
 
@@ -8,7 +8,7 @@ Two of the four requirements are met.
 
 ## Test questions
 
-The explanation is provided in the course language.
+Explanations are given in the language of the course.
 
 **Question 1:** Correct
 
@@ -24,14 +24,14 @@ The explanation is provided in the course language.
 
 **Question 4:** Correct
 
-Try taking the test again.
+Try the test again.
 
 ## Fixed
 
 *file main.py*
 
 - **What's wrong:** The loop read past the end of the list.
-- **Why it's important:** It crashed on an empty input.
+- **Why it matters:** It crashed on an empty input.
 - **What to do:** It is fixed — the bound is now len(items).
 
 ## New remarks
@@ -39,35 +39,35 @@ Try taking the test again.
 *video, 03:41*
 
 - **What's wrong:** The password is written in the source.
-- **Why it's important:** Everyone who opens the file can see it.
+- **Why it matters:** Everyone who opens the file can see it.
 - **What to do:** Move it into an environment variable.
-- **Where to read:** [Keeping secrets](https://example.test/s), [Environment](https://example.test/e)
+- **Read more:** [Keeping secrets](https://example.test/s), [Environment](https://example.test/e)
 
 *paragraph 7*
 
 - **What's wrong:** The function does three things.
-- **Why it's important:** A reader has to hold all three at once.
+- **Why it matters:** A reader has to hold all three at once.
 - **What to do:** Split it where the comments already divide it.
 
-## Remains open
+## Still open
 
 *slide 12*
 
 - **What's wrong:** There are still no tests for the error path.
-- **Why it's important:** A change there would break silently.
+- **Why it matters:** A change there would break silently.
 - **What to do:** Add one test for the empty input.
 
-## Broken
+## No longer works
 
 - **What's wrong:** Sorting no longer keeps equal items in order.
-- **Why it's important:** It worked in the previous submission.
+- **Why it matters:** It worked in the previous submission.
 - **What to do:** Use a stable sort.
 
 ## From the Mentor
 
 You are close. The structure is right; the details are not yet.
 
-## Replies to your comments
+## Answers to your replies
 
 - **Your question:** Why is a global variable bad here?
 - **Answer:** Because two parts of the program can change it at once.

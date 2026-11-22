@@ -28,6 +28,7 @@ from pydantic import SecretStr
 from structlog.testing import capture_logs
 
 from course_supporter import boot
+from course_supporter.billing.public_numbers import PublicNumbersStore
 from course_supporter.config import Settings
 from course_supporter.llm import factory
 from course_supporter.storage import s3 as s3_module
@@ -89,6 +90,8 @@ def _no_io(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(app_module, "configure_logging", MagicMock())
     monkeypatch.setattr("course_supporter.worker.configure_logging", MagicMock())
     monkeypatch.setattr(app_module, "create_pool", AsyncMock())
+    # The public numbers live in Redis (billing.public_numbers): none here.
+    monkeypatch.setattr(PublicNumbersStore, "get", AsyncMock(return_value=None))
     monkeypatch.setattr(factory, "PROVIDER_REGISTRY", {"gemini": _FakeProvider})
     monkeypatch.setattr(
         Settings,

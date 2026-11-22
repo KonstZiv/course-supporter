@@ -1180,7 +1180,7 @@ class TestAShortWholeLineIsAQuote:
         assert (point.retried, point.quote_not_found) == (False, False)
         assert rows["c1"].verdict == VerdictValue.MET
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is True
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is True
         assert score_percent(stored) == 100
 
     async def test_the_venv_line_of_a_gitignore_is_met_without_a_repeat(
@@ -1258,7 +1258,7 @@ class TestAMetTakenBackAfterItsQuoteFell:
             True,
         )
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is True
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is True
         # 3 (c1, unconfirmed, counted as met) + 2 (c2) of 5 -> 100.
         assert score_percent(stored) == 100
 
@@ -1327,7 +1327,7 @@ class TestARealNotMetStays:
             False,
         )
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is False
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(stored) == 40
 
@@ -1365,7 +1365,7 @@ class TestARealNotMetStays:
             False,
         )
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is False
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(stored) == 40
 
@@ -1399,7 +1399,7 @@ class TestARealNotMetStays:
             False,
         )
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is False
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(stored) == 40
 
@@ -1475,7 +1475,7 @@ class TestAQuoteOfTheProjectsBase:
             if log["event"] == ("criteria_evaluation_quote_from_base")
         ] == ["c1"]
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is False
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is False
         # c1 "must" (3) not met, c2 (2) not met: 0 of 5.
         assert score_percent(stored) == 0
 
@@ -1517,7 +1517,7 @@ class TestAQuoteOfTheProjectsBase:
         )
         assert (row.quote_from_base, row.quote_not_found) == (True, False)
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is False
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is False
 
     async def test_a_criterion_carries_its_points_flag(
         self, db_session: AsyncSession, submission: HomeworkSubmission

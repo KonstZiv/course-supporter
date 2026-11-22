@@ -12,6 +12,12 @@ Two lists:
   none by default. With none, payment is unavailable: a checkout answers 503
   and no webhook address answers at all (404).
 
+The registry also carries ``BILLING_PURCHASE_MARKED_ONLY``
+(:attr:`ProviderRegistry.purchase_marked_only`): the routes of the packages,
+the checkout and the webhook already hold the registry, so they read it from
+there (:func:`~.checkout.is_test_purchase`), and a test switches it by the
+registry it gives the routes — no settings are patched.
+
 :func:`build_registry` turns the setting into a :class:`ProviderRegistry`; a
 name no adapter answers to is a :class:`PaymentConfigError`, and the API
 refuses to start on it (``api/app.py``), as on any other broken setting.
@@ -77,7 +83,15 @@ def adapters(environment: Environment) -> dict[str, Factory]:
 class ProviderRegistry:
     """The providers switched on, by name, in order of preference."""
 
-    def __init__(self, providers: Iterable[PaymentProvider] = ()) -> None:
+    def __init__(
+        self,
+        providers: Iterable[PaymentProvider] = (),
+        *,
+        purchase_marked_only: bool = False,
+    ) -> None:
+        self.purchase_marked_only: Final = purchase_marked_only
+        """``BILLING_PURCHASE_MARKED_ONLY``: every purchase is a test purchase,
+        whatever the providers' mode (:func:`~.checkout.is_test_purchase`)."""
         self._providers: dict[str, PaymentProvider] = {}
         for provider in providers:
             name = provider.name
@@ -107,7 +121,8 @@ class ProviderRegistry:
 
 
 def build_registry(settings: Settings) -> ProviderRegistry:
-    """The providers ``settings.billing_providers`` switches on.
+    """The providers ``settings.billing_providers`` switches on, and
+    ``settings.billing_purchase_marked_only``.
 
     Raises:
         PaymentConfigError: a name without an adapter in this environment,
@@ -122,7 +137,8 @@ def build_registry(settings: Settings) -> ProviderRegistry:
         )
         raise PaymentConfigError(msg)
     return ProviderRegistry(
-        known[name](settings) for name in settings.billing_providers
+        (known[name](settings) for name in settings.billing_providers),
+        purchase_marked_only=settings.billing_purchase_marked_only,
     )
 
 

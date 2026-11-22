@@ -306,10 +306,10 @@ class TestChoosePath:
         Since task 07 the shipped file puts ``test`` on the new path, and a
         first submission of it walks ``test/first`` with no stage. Since task
         10 (K5) ``task`` and ``short_task`` are on the new path too, in test
-        mode, and a first submission walks their five stages; ``project`` is
-        on today's Mentor and answers ``None``. Before task 07 every type
-        answered ``None`` — the production fact of task 03's acceptance
-        criterion 13.
+        mode, and a first submission walks their five stages; since project
+        chain K8 ``project`` is as well, and walks its own five. No type
+        answers ``None`` any more. Before task 07 every type answered
+        ``None`` — the production fact of task 03's acceptance criterion 13.
         """
         student = await StudentRepository(db_session).create(
             tenant_id=seed_tenant.id, external_id="ext-shipped-switch"
@@ -341,7 +341,19 @@ class TestChoosePath:
             assert text_choice is not None, f"{text_type} is on the new path"
             assert text_choice.key == PathKey(text_type, SubmissionState.FIRST)
             assert text_choice.stages == text_path
-        assert chosen == {AssignmentType.PROJECT: None}, "project is on today's Mentor"
+        project_choice = chosen.pop(AssignmentType.PROJECT)
+        assert project_choice is not None, "project is on the new path (K8)"
+        assert project_choice.key == PathKey(
+            AssignmentType.PROJECT, SubmissionState.FIRST
+        )
+        assert project_choice.stages == (
+            "safety",
+            "attempt_classifier",
+            "project_criteria_evaluation",
+            "course_link_lookup",
+            "project_review_explanation",
+        )
+        assert chosen == {}
 
     async def test_first_submission_walks_the_first_path(
         self,

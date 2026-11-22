@@ -115,7 +115,8 @@ class AuditAction(StrEnum):
     ACCOUNT_ANONYMIZE = "account.anonymize"
     ACCOUNT_TEST_PURCHASE = "account.test_purchase"
     """The account may (or may no longer) buy while the payment provider is
-    in its test mode (BIL-PAY, operator 2026-11-15)."""
+    in its test mode or ``BILLING_PURCHASE_MARKED_ONLY`` is on (BIL-PAY,
+    operator 2026-11-15, 2026-11-18)."""
 
     BATCH_ADMIN_CREDIT = "batch.admin_credit"
     BATCH_INVOICE_CREDIT = "batch.invoice_credit"
@@ -159,7 +160,7 @@ class MarkOrigin(StrEnum):
 
     CREDIT = "credit"
     """Marked as it was credited: the provider that signed the purchase's
-    event was in its test mode."""
+    event was in its test mode, or ``BILLING_PURCHASE_MARKED_ONLY`` was on."""
 
     BACKFILL = "backfill"
     """Marked by the migration that brought the marks: a Creem purchase made

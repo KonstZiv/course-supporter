@@ -89,7 +89,7 @@ from course_supporter.criteria_kinds import (
     VerdictItemKind,
     VerdictValue,
 )
-from course_supporter.homework.criteria_form import CheckMethod, Criterion
+from course_supporter.homework.criteria_form import CheckMethod, Criterion, author_musts
 from course_supporter.homework.criteria_verdicts import (
     QuotePlace,
     is_passed,
@@ -244,7 +244,8 @@ def explanation_facts(
     the review's builder counts them — nothing derived is stored. ``layer``
     is whose list it is (the rows' address,
     :func:`~course_supporter.homework.judged_list.judged_layer`): the pass
-    rule depends on it.
+    rule depends on it, and on the "must" criteria of ``criteria`` the author
+    made mandatory themselves (``must_by_author``).
 
     Raises:
         ValueError: The rows were not written against this list: a criterion
@@ -290,7 +291,7 @@ def explanation_facts(
         msg = f"verdict rows of items the list does not have: {foreign}"
         raise ValueError(msg)
     return ExplanationFacts(
-        passed=is_passed(stored, layer=layer),
+        passed=is_passed(stored, layer=layer, author_musts=author_musts(criteria)),
         score=score_percent(stored),
         criteria=tuple(facts),
     )

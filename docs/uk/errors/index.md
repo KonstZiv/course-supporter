@@ -51,6 +51,7 @@ error_codes:
   - UNKNOWN_CRITERION_ID
   - CHECK_METHOD_NOT_ADMITTED
   - UNKNOWN_CONCEPT
+  - MUST_BY_AUTHOR_WITHOUT_MUST
 keywords:
   - помилки
   - коди помилок
@@ -189,3 +190,4 @@ last_updated: 2026-11-16
 | [`UNKNOWN_CRITERION_ID`](../authors/api.md#UNKNOWN_CRITERION_ID) | 422 | `id` критерію чи пункту, якого немає в чинному переліку | прочитати перелік знову; новий критерій — без `id` |
 | [`CHECK_METHOD_NOT_ADMITTED`](../authors/api.md#CHECK_METHOD_NOT_ADMITTED) | 422 | `code_test` не в проєкті | вибрати `model_verdict` чи `mandatory_points` |
 | [`UNKNOWN_CONCEPT`](../authors/api.md#UNKNOWN_CONCEPT) | 422 | поняття не з `concepts` читання | вибрати поняття з `concepts` або прибрати його |
+| [`MUST_BY_AUTHOR_WITHOUT_MUST`](../authors/api.md#MUST_BY_AUTHOR_WITHOUT_MUST) | 422 | `must_by_author: true` у критерію, вага якого не `must` | поставити вагу `must` або прибрати `must_by_author` |

@@ -20,7 +20,11 @@ When the payer can pay:
     its ceiling — the task's typical price, else ``available > 0``
     (:func:`.held.price_of_held`, :func:`.quotes.ceiling_threshold`). A test
     needs a balance above 0. An author with credit is never waited for: their
-    reviews are continued at once.
+    reviews are continued at once. Neither is a payer charging no longer
+    applies to (:func:`.charging.charging_applies` — the mark was taken off
+    while the review waited, operator 2026-11-17): the review is continued at
+    once, and its run reserves and charges nothing, as with charging off,
+    where nothing is held.
 
 Idempotent: a submission with a job in flight is skipped
 (``start_continuation_job``), and a continued one leaves ``awaiting_funds``
@@ -71,6 +75,8 @@ async def can_pay(session: AsyncSession, submission: HomeworkSubmission) -> bool
     if payer is None:
         return False
     if payer.credit_allowed:
+        return True
+    if not await charging.charging_applies(session, payer.account_id):
         return True
     if task.task_type == AssignmentType.TEST.value:
         return await charging.test_allowed(session, payer)

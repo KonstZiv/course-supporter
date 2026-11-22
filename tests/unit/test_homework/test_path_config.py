@@ -9,6 +9,8 @@ import pytest
 import yaml
 
 from course_supporter.homework.path_config import (
+    REPLY_SAFETY_ACTION,
+    REPLY_SCREEN_STAGE,
     CodeStage,
     ModelStage,
     PathKey,
@@ -18,6 +20,7 @@ from course_supporter.homework.path_config import (
     load_path_config,
     model_stages,
     path_ceiling_estimate,
+    replies_enabled,
     validate_path_config,
 )
 from course_supporter.llm.registry import ModelRegistryConfig
@@ -330,6 +333,95 @@ class TestTestMode:
         data["task_types"]["task"]["test_mode"] = "yes"
 
         assert "task_types.task.test_mode" in _load_error(tmp_path, data)
+
+
+class TestRepliesEnabled:
+    """Task 12a, K3: the one switch of students' replies, and where it may stand."""
+
+    def test_absent_means_no_replies(self, tmp_path: Path) -> None:
+        data = _config()
+        data["task_types"]["task"]["served_by"] = "new_path"
+        config = load_path_config(_write(tmp_path, data))
+
+        assert not any(replies_enabled(t, config) for t in AssignmentType)
+
+    def test_a_type_on_the_new_path_may_take_replies(self, tmp_path: Path) -> None:
+        data = _config()
+        data["task_types"]["task"].update(served_by="new_path", replies_enabled=True)
+        config = load_path_config(_write(tmp_path, data))
+        validate_path_config(config, _registry(), prompt_base_path=tmp_path)
+
+        assert replies_enabled(AssignmentType.TASK, config) is True
+        assert replies_enabled(AssignmentType.SHORT_TASK, config) is False
+
+    def test_replies_on_todays_mentor_are_refused(self, tmp_path: Path) -> None:
+        """Nothing on today's Mentor screens or answers a reply."""
+        data = _config()
+        data["task_types"]["task"]["replies_enabled"] = True
+
+        assert (
+            "Task type 'task' takes replies but is served by 'todays_mentor'"
+        ) in _validation_error(tmp_path, data)
+
+    def test_the_reader_answers_no_off_the_new_path(self, tmp_path: Path) -> None:
+        """Even a file the boot would refuse cannot turn a type's replies on."""
+        data = _config()
+        data["task_types"]["task"]["replies_enabled"] = True
+        config = load_path_config(_write(tmp_path, data))
+
+        assert replies_enabled(AssignmentType.TASK, config) is False
+
+    def test_replies_on_a_test_are_refused(self, tmp_path: Path) -> None:
+        data = _config()
+        data["task_types"]["test"].update(served_by="new_path", replies_enabled=True)
+
+        assert (
+            "Task type 'test' takes replies: a test's review has no remark a "
+            "reply could name"
+        ) in _validation_error(tmp_path, data)
+
+    def test_replies_need_the_model_stage_the_screen_runs(self, tmp_path: Path) -> None:
+        data = _config()
+        data["stages"] = {"check": _stage(0.05), "classifier": _stage(0.02)}
+        data["task_types"]["task"] = {
+            "served_by": "new_path",
+            "replies_enabled": True,
+            "paths": {
+                "first": ["check", "classifier"],
+                "repeat_without_replies": ["check"],
+                "repeat_with_replies": ["check"],
+            },
+        }
+
+        assert (
+            f"Task type 'task' takes replies, but no model stage "
+            f"'{REPLY_SCREEN_STAGE}' is defined"
+        ) in _validation_error(tmp_path, data)
+
+    def test_no_stage_takes_the_reply_screens_name(self, tmp_path: Path) -> None:
+        """The register keys a call's cost on the name: two users would sum."""
+        data = _config()
+        data["stages"][REPLY_SAFETY_ACTION] = _stage(0.01)
+
+        assert (
+            f"Stage '{REPLY_SAFETY_ACTION}' takes the name the reply screen's "
+            f"calls are recorded under"
+        ) in _validation_error(tmp_path, data)
+
+    def test_replies_enabled_is_a_strict_bool(self, tmp_path: Path) -> None:
+        data = _config()
+        data["task_types"]["task"]["replies_enabled"] = "yes"
+
+        assert "task_types.task.replies_enabled" in _load_error(tmp_path, data)
+
+    def test_the_shipped_file_takes_no_replies(self) -> None:
+        """Production: off for every type until K4 and K5 come with it."""
+        shipped = load_path_config(
+            Path(__file__).parents[3] / "config" / "submission_paths.yaml"
+        )
+
+        assert not any(replies_enabled(t, shipped) for t in AssignmentType)
+        assert not any(d.replies_enabled for d in shipped.task_types.values())
 
 
 class TestValidation:

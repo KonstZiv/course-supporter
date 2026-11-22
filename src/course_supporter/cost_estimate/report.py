@@ -1,7 +1,8 @@
 """Shadow estimate against fact — the arithmetic of the calibration report (BIL-D).
 
-Pure: the CLI (``scripts/cost_estimate_report.py``) reads the rows, this
-module compares them. For one action with a shadow estimate:
+Pure: the CLI (``scripts/cost_estimate_report.py``) reads the rows — only those
+the payer pays for (``billing.charging.PAID_BY_PAYER``) — and this module
+compares them. For one action with a shadow estimate:
 
 * the fact is the sum of its register rows — ``exact`` and ``estimated`` as
   written, ``unknown`` by ``core.expected_call_cost`` (the row's model and

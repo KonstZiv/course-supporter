@@ -1,0 +1,21 @@
+INHERIT: mkdocs.yml
+
+site_name: Course Supporter — Documentation
+site_url: https://about.pythoncourse.me/en/
+site_description: Course Supporter platform documentation
+
+docs_dir: docs/en
+exclude_docs: ""
+not_in_nav: ""
+
+theme:
+  language: en
+
+nav:
+  - Home: index.md
+
+extra_css:
+  - ../stylesheets/extra.css
+
+extra:
+  language_build: en

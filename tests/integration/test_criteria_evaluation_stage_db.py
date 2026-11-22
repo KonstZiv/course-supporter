@@ -766,6 +766,154 @@ class TestTheSafeguard:
         assert rows["c1"].safeguard_submission_id is None
 
 
+# Task 12a, K2: an earlier attempt judged against the model's list, and an
+# author's edit of it — the same ids, and c4 added — that the next is judged by.
+_BEFORE = (*_CRITERIA, _criterion("c3", "may"))
+_AFTER = (*_BEFORE, _criterion("c4", "may"))
+_REWORKED = (
+    "def fib(n):\n"  # 1
+    "    if n < 2:\n"  # 2
+    "        return n\n"  # 3
+    "    return fib(n - 1) + fib(n - 2)\n"  # 4
+    "\n"  # 5
+    "def test_fib():\n"  # 6
+    "    assert fib(10) == 55\n"  # 7
+)
+
+
+class TestTheStateOfEachRemark:
+    """Task 12a, K2: the stage writes each row's state with the rows.
+
+    Against the student's earlier attempt at the same version of the task —
+    whatever list either was judged by: the items are matched by id. A run of
+    the stage again writes the same states.
+    """
+
+    @staticmethod
+    async def _attempts(
+        session: AsyncSession,
+        *,
+        tenant: Tenant,
+        student: Student,
+        root: CourseNode,
+        doc: AuthoredDocument,
+    ) -> tuple[HomeworkSubmission, HomeworkSubmission]:
+        """The first attempt, reviewed and judged; the second, to be judged."""
+        first, second = [
+            await _submission(
+                session, tenant=tenant, student=student, root=root, doc=doc
+            )
+            for _ in range(2)
+        ]
+        await _evaluate(
+            session,
+            _Router(
+                _answer(
+                    _met("c1", _C1_QUOTE),
+                    _met("c2.p1", _P1_QUOTE),
+                    _not_met("c2.p2"),
+                    _not_met("c3"),
+                )
+            ),
+            first,
+            source=_Source(
+                CriteriaInForce(
+                    criteria=_BEFORE, layer=CriteriaLayer.MODEL, source_id=_LIST_ID
+                )
+            ),
+        )
+        first.status = "delivered"
+        first.task_version = second.task_version = "v1"
+        await session.flush()
+        return first, second
+
+    @staticmethod
+    async def _judge_the_second(
+        session: AsyncSession, second: HomeworkSubmission, call: uuid.UUID
+    ) -> dict[str, SubmissionCriterionVerdict]:
+        await _evaluate(
+            session,
+            _Router(
+                _answer(
+                    _not_met("c1", "Функції fibonacci немає."),
+                    _met("c2.p1", "return fib(n - 1) + fib(n - 2)"),
+                    _met("c2.p2", "assert fib(10) == 55"),
+                    _not_met("c3"),
+                    _not_met("c4"),
+                ),
+                call_ids=(call,),
+            ),
+            second,
+            source=_Source(
+                CriteriaInForce(
+                    criteria=_AFTER,
+                    layer=CriteriaLayer.AUTHOR,
+                    source_id=_OTHER_LIST_ID,
+                )
+            ),
+            work=(WorkFile("solution.py", _REWORKED, True),),
+            submission_text=_REWORKED,
+        )
+        return await _rows(session, second)
+
+    async def test_every_row_has_its_state_beside_the_calls_traces(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        student: Student,
+        root: CourseNode,
+        doc: AuthoredDocument,
+    ) -> None:
+        first, second = await self._attempts(
+            db_session, tenant=seed_tenant, student=student, root=root, doc=doc
+        )
+        (call,) = await TestTheTracesOfTheCalls._calls(db_session, second, 1)
+
+        rows = await self._judge_the_second(db_session, second, call)
+
+        # The first attempt had nothing to compare with: what it did not
+        # credit is new.
+        assert {
+            item: row.remark_state
+            for item, row in (await _rows(db_session, first)).items()
+        } == {"c1": None, "c2": "new", "c2.p1": None, "c2.p2": "new", "c3": "new"}
+        # The second, row by row, by the table.
+        assert {item: row.remark_state for item, row in rows.items()} == {
+            "c1": "broken",  # credited then, not now
+            "c2": "fixed",  # its points all met now
+            "c2.p1": None,  # credited then and now
+            "c2.p2": "fixed",  # not credited then, credited now
+            "c3": "open",  # not credited then or now
+            "c4": "new",  # the author added it: not in the earlier attempt
+        }
+        # The traces of the calls (#682) stand beside the state.
+        assert {item: row.answered_by_call_id for item, row in rows.items()} == {
+            item: None if item == "c2" else call for item in rows
+        }
+
+    async def test_the_stage_run_again_writes_the_same_states(
+        self,
+        db_session: AsyncSession,
+        seed_tenant: Tenant,
+        student: Student,
+        root: CourseNode,
+        doc: AuthoredDocument,
+    ) -> None:
+        """The rows are deleted and written anew — the states with them."""
+        _, second = await self._attempts(
+            db_session, tenant=seed_tenant, student=student, root=root, doc=doc
+        )
+        (call,) = await TestTheTracesOfTheCalls._calls(db_session, second, 1)
+
+        once = await self._judge_the_second(db_session, second, call)
+        states = {item: row.remark_state for item, row in once.items()}
+        assert set(states.values()) == {"broken", "fixed", "open", "new", None}
+        again = await self._judge_the_second(db_session, second, call)
+
+        assert {item: row.remark_state for item, row in again.items()} == states
+        assert len(again) == len(once) == 6
+
+
 class TestWithoutAList:
     """Lock 6: no list — the revision is held, and nothing is asked."""
 
@@ -1032,7 +1180,7 @@ class TestAShortWholeLineIsAQuote:
         assert (point.retried, point.quote_not_found) == (False, False)
         assert rows["c1"].verdict == VerdictValue.MET
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is True
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is True
         assert score_percent(stored) == 100
 
     async def test_the_venv_line_of_a_gitignore_is_met_without_a_repeat(
@@ -1110,7 +1258,7 @@ class TestAMetTakenBackAfterItsQuoteFell:
             True,
         )
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is True
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is True
         # 3 (c1, unconfirmed, counted as met) + 2 (c2) of 5 -> 100.
         assert score_percent(stored) == 100
 
@@ -1179,7 +1327,7 @@ class TestARealNotMetStays:
             False,
         )
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is False
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(stored) == 40
 
@@ -1217,7 +1365,7 @@ class TestARealNotMetStays:
             False,
         )
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is False
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(stored) == 40
 
@@ -1251,7 +1399,7 @@ class TestARealNotMetStays:
             False,
         )
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is False
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is False
         # 2 (c2) of 5 -> 40.
         assert score_percent(stored) == 40
 
@@ -1327,7 +1475,7 @@ class TestAQuoteOfTheProjectsBase:
             if log["event"] == ("criteria_evaluation_quote_from_base")
         ] == ["c1"]
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is False
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is False
         # c1 "must" (3) not met, c2 (2) not met: 0 of 5.
         assert score_percent(stored) == 0
 
@@ -1369,7 +1517,7 @@ class TestAQuoteOfTheProjectsBase:
         )
         assert (row.quote_from_base, row.quote_not_found) == (True, False)
         stored = list(rows.values())
-        assert is_passed(stored, layer=judged_layer(stored)) is False
+        assert is_passed(stored, layer=judged_layer(stored), author_musts=()) is False
 
     async def test_a_criterion_carries_its_points_flag(
         self, db_session: AsyncSession, submission: HomeworkSubmission

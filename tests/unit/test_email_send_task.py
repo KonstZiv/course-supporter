@@ -43,6 +43,42 @@ class TestHappyPath:
         assert "https://portal.example/t/reset?token=abc" in kwargs["body"]
 
 
+class TestLanguageSelection:
+    @patch(_SEND, new_callable=AsyncMock)
+    async def test_without_language_sends_ukrainian(self, mock_send: AsyncMock) -> None:
+        result = await arq_send_email(
+            _ctx(),
+            message_id="password_reset",
+            to="student@example.com",
+            context=_reset_context(),
+        )
+        assert result == {"sent": True}
+        mock_send.assert_awaited_once()
+        kwargs = mock_send.await_args.kwargs
+        assert kwargs["subject"] == "Відновлення пароля"
+        assert "30 хвилин" in kwargs["body"]
+
+    @patch(_SEND, new_callable=AsyncMock)
+    async def test_with_english_language_sends_english(
+        self, mock_send: AsyncMock
+    ) -> None:
+        result = await arq_send_email(
+            _ctx(),
+            message_id="password_reset",
+            to="student@example.com",
+            context={
+                "reset_url": "https://portal.example/t/reset?token=abc",
+                "ttl": "30 minutes",
+            },
+            language="eng",
+        )
+        assert result == {"sent": True}
+        mock_send.assert_awaited_once()
+        kwargs = mock_send.await_args.kwargs
+        assert kwargs["subject"] == "Password reset"
+        assert "30 minutes" in kwargs["body"]
+
+
 class TestPermanentSwallowed:
     """5xx and recipients-refused are permanent — return, do not raise."""
 

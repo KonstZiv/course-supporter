@@ -144,6 +144,26 @@ class StudentRepository:
         await self._session.execute(stmt)
         await self._session.flush()
 
+    async def set_interface_language(
+        self,
+        tenant_id: uuid.UUID,
+        student_id: uuid.UUID,
+        language: str,
+    ) -> None:
+        """Remember the portal pages' language the student picked (M-3).
+
+        Scoped by tenant as well as student: both come from the session
+        token, so a row of another tenant is never touched even if an id
+        were reused. ``language`` is already canonical ISO 639-3.
+        """
+        stmt = (
+            update(Student)
+            .where(Student.tenant_id == tenant_id, Student.id == student_id)
+            .values(interface_language=language)
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
     async def get_by_id(self, student_id: uuid.UUID) -> Student | None:
         """Get a student by primary key."""
         return await self._session.get(Student, student_id)

@@ -4,14 +4,17 @@
 here without a database: the score and the pass are the code's, counted from
 the rows (``TASK.md`` locks 1 and 2); ``passed`` never comes from the
 explanation; the remarks go heaviest first, then by the criterion's number;
-the review is in the explanation's language. Reading the rows and the
-explanation from the database, and the refusal when either is missing, are
-pinned through the body in ``tests/integration/test_text_review_e2e_db.py``.
+each remark in the section of its criterion's state since the earlier
+attempt (task 12a); the review is in the explanation's language. Reading the
+rows and the explanation from the database, the states counted from the two
+attempts, and the refusal when either part is missing, are pinned through the
+body in ``tests/integration/test_text_review_e2e_db.py``.
 """
 
 from __future__ import annotations
 
 import doctest
+from collections.abc import Sequence
 
 import pytest
 
@@ -22,9 +25,11 @@ from course_supporter.criteria_kinds import (
     WeightCategory,
 )
 from course_supporter.homework import text_result
+from course_supporter.homework.criteria_form import Criterion
 from course_supporter.homework.review_assembler import assemble_review
 from course_supporter.homework.text_result import (
     REVIEW_PARTS_MISSING,
+    FixedWords,
     build_text_review,
     link_authenticity,
 )
@@ -38,6 +43,7 @@ from course_supporter.models.review_structure import (
     Remark,
     Verdict,
 )
+from course_supporter.remark_kinds import RemarkState
 from course_supporter.storage.submission_verdict_repository import VerdictRecord
 
 
@@ -76,6 +82,19 @@ AUTHOR = CriteriaLayer.AUTHOR
 MUST, SHOULD, MAY = WeightCategory.MUST, WeightCategory.SHOULD, WeightCategory.MAY
 
 
+def _own_musts(rows: Sequence[VerdictRecord]) -> frozenset[str]:
+    """Every "must" criterion of ``rows``, as one the author marked themselves.
+
+    The builder's pass is ``pass_decision``'s; these tests read its strict
+    branch, where the "must" criteria are the author's own (2026-11-17).
+    """
+    return frozenset(
+        row.item_id
+        for row in rows
+        if row.item_kind == VerdictItemKind.CRITERION and row.weight == MUST
+    )
+
+
 class TestTheScore:
     """Lock 1: the score is the hand count — weights 3 / 2 / 1, points inside."""
 
@@ -94,7 +113,11 @@ class TestTheScore:
         ]
 
         _, score = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=_explanation("c2"), language="ukr"
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c2"),
+            language="ukr",
         )
 
         assert score == 66
@@ -103,7 +126,11 @@ class TestTheScore:
         rows = [_criterion("c1", MUST, MET), _criterion("c2", MAY, MET)]
 
         _, score = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=_explanation(), language="ukr"
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation(),
+            language="ukr",
         )
 
         assert score == 100
@@ -121,6 +148,7 @@ class TestThePassIsTheCodes:
 
         structure, score = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", passed=True),
             language="ukr",
@@ -143,6 +171,7 @@ class TestThePassIsTheCodes:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c2", passed=False),
             language="ukr",
@@ -156,6 +185,7 @@ class TestThePassIsTheCodes:
 
         structure, score = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", "c2"),
             language="ukr",
@@ -182,6 +212,7 @@ class TestTheRemarks:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", "c10", "c2", "c11", "c3"),
             language="ukr",
@@ -195,16 +226,24 @@ class TestTheRemarks:
             "Як зроблено c1.",
         ]
 
-    def test_a_remark_keeps_the_three_parts_and_nothing_else(self) -> None:
+    def test_a_remark_keeps_the_three_parts_and_its_item(self) -> None:
+        """The three parts, and the criterion it is about (task 12a)."""
         rows = [_criterion("c1", MUST, NOT_MET)]
 
         structure, _ = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=_explanation("c1"), language="ukr"
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c1"),
+            language="ukr",
         )
 
         assert structure.new_remarks == [
             Remark(
-                what="Як зроблено c1.", why="Чому c1 не гаразд.", todo="Як зробити c1."
+                what="Як зроблено c1.",
+                why="Чому c1 не гаразд.",
+                todo="Як зробити c1.",
+                item_id="c1",
             )
         ]
 
@@ -214,6 +253,7 @@ class TestTheRemarks:
         with pytest.raises(ValueError, match=r"\['c7'\]"):
             build_text_review(
                 layer=AUTHOR,
+                author_musts=_own_musts(rows),
                 rows=rows,
                 explanation=_explanation("c1", "c7"),
                 language="ukr",
@@ -226,6 +266,7 @@ class TestTheRemarks:
         with pytest.raises(ValueError, match=r"\['c1\.p1'\]"):
             build_text_review(
                 layer=AUTHOR,
+                author_musts=_own_musts(rows),
                 rows=rows,
                 explanation=_explanation("c1.p1"),
                 language="ukr",
@@ -237,7 +278,11 @@ class TestTheRestOfTheReview:
         rows = [_criterion("c1", MUST, MET)]
 
         structure, _ = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=_explanation(), language="eng"
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation(),
+            language="eng",
         )
 
         assert structure.language == "eng"
@@ -250,6 +295,7 @@ class TestTheRestOfTheReview:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation(voice=voice),
             language="ukr",
@@ -261,7 +307,11 @@ class TestTheRestOfTheReview:
         """Nothing in the builder writes text: the one assembler does."""
         rows = [_criterion("c1", MUST, NOT_MET)]
         structure, _ = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=_explanation("c1"), language="ukr"
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c1"),
+            language="ukr",
         )
 
         markdown = assemble_review(structure)
@@ -274,6 +324,7 @@ class TestTheRestOfTheReview:
         with pytest.raises(ValueError, match="without a criterion"):
             build_text_review(
                 layer=AUTHOR,
+                author_musts=(),
                 rows=[_point("c1.p1", MET)],
                 explanation=_explanation(),
                 language="ukr",
@@ -295,6 +346,7 @@ class TestTheCourseLinks:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", "c2", passed=False),
             language="ukr",
@@ -306,6 +358,7 @@ class TestTheCourseLinks:
     def test_without_reading_no_remark_has_any(self) -> None:
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts={"c1"},
             rows=[_criterion("c1", MUST, NOT_MET)],
             explanation=_explanation("c1", passed=False),
             language="ukr",
@@ -336,3 +389,320 @@ class TestDocstrings:
 
         assert results.attempted > 0
         assert results.failed == 0
+
+
+class TestTheSectionsByState:
+    """Task 12a, K2: each remark in the section of its criterion's state."""
+
+    @staticmethod
+    def _earlier(cid: str) -> CriterionRemark:
+        return CriterionRemark(
+            id=cid,
+            what=f"Раніше {cid} не було.",
+            why=f"Без {cid} не працювало.",
+            todo=f"Додайте {cid}.",
+            links=(f"{cid}.l1",),
+        )
+
+    @staticmethod
+    def _words(*remarks: CriterionRemark, criteria: tuple[str, ...] = ()) -> FixedWords:
+        return FixedWords(
+            remarks={remark.id: remark for remark in remarks},
+            criteria={
+                cid: Criterion.model_validate(
+                    {
+                        "id": cid,
+                        "text": f"Вимога {cid}",
+                        "evidence": f"Що показує {cid}",
+                        "weight": "should",
+                        "check_method": "model_verdict",
+                        "soft_descent": False,
+                        "concepts": [],
+                        "mandatory_points": [],
+                    }
+                )
+                for cid in criteria
+            },
+        )
+
+    def test_each_remark_goes_to_its_states_section(self) -> None:
+        rows = [
+            _criterion("c1", MUST, NOT_MET),
+            _criterion("c2", SHOULD, NOT_MET),
+            _criterion("c3", MAY, NOT_MET),
+            _criterion("c4", SHOULD, MET),
+        ]
+        states = {
+            "c1": RemarkState.OPEN,
+            "c2": RemarkState.BROKEN,
+            "c3": RemarkState.NEW,
+            "c4": RemarkState.FIXED,
+        }
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c3", "c2", "c1", passed=False),
+            language="ukr",
+            states=states,
+            fixed_words=self._words(self._earlier("c4")),
+        )
+
+        assert structure.fixed == [
+            Remark(
+                what="Раніше c4 не було.",
+                why="Без c4 не працювало.",
+                todo="Додайте c4.",
+                item_id="c4",
+            )
+        ]
+        assert [remark.what for remark in structure.new_remarks] == ["Як зроблено c3."]
+        assert [remark.what for remark in structure.open] == ["Як зроблено c1."]
+        assert [remark.what for remark in structure.broken] == ["Як зроблено c2."]
+
+    @pytest.mark.parametrize(
+        "states",
+        [None, {"c1": RemarkState.NEW, "c2": RemarkState.NEW, "c3": None}],
+        ids=["no-states", "a-first-attempt"],
+    )
+    def test_with_nothing_to_compare_with_every_remark_is_new(
+        self, states: dict[str, RemarkState | None] | None
+    ) -> None:
+        """As before the states: a first attempt's review is unchanged."""
+        rows = [
+            _criterion("c1", MUST, NOT_MET),
+            _criterion("c2", SHOULD, NOT_MET),
+            _criterion("c3", MAY, MET),
+        ]
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c2", "c1", passed=False),
+            language="ukr",
+            states=states,
+        )
+
+        assert [remark.what for remark in structure.new_remarks] == [
+            "Як зроблено c1.",
+            "Як зроблено c2.",
+        ]
+        assert structure.fixed == structure.open == structure.broken == []
+
+    def test_every_section_reads_heaviest_first_then_by_number(self) -> None:
+        rows = [
+            _criterion("c1", MAY, NOT_MET),
+            _criterion("c2", SHOULD, NOT_MET),
+            _criterion("c3", MUST, NOT_MET),
+            _criterion("c4", MAY, MET),
+            _criterion("c10", SHOULD, MET),
+            _criterion("c11", MUST, MET),
+        ]
+        states = {
+            "c1": RemarkState.OPEN,
+            "c2": RemarkState.OPEN,
+            "c3": RemarkState.OPEN,
+            "c4": RemarkState.FIXED,
+            "c10": RemarkState.FIXED,
+            "c11": RemarkState.FIXED,
+        }
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c1", "c2", "c3", passed=False),
+            language="ukr",
+            states=states,
+            fixed_words=self._words(
+                self._earlier("c4"), self._earlier("c10"), self._earlier("c11")
+            ),
+        )
+
+        assert [remark.what for remark in structure.open] == [
+            "Як зроблено c3.",
+            "Як зроблено c2.",
+            "Як зроблено c1.",
+        ]
+        assert [remark.what for remark in structure.fixed] == [
+            "Раніше c11 не було.",
+            "Раніше c10 не було.",
+            "Раніше c4 не було.",
+        ]
+
+    def test_a_fixed_remark_keeps_no_reading_and_no_place_of_the_earlier_work(
+        self,
+    ) -> None:
+        """The earlier remark is closed: its links and its place were the
+        earlier work's. A criterion fixed and unconfirmed now has a remark of
+        this submission too — new, with its own reading."""
+        link = Reference(title="Рекурсія", segment_id="s-1")
+        rows = [
+            VerdictRecord(
+                "c1",
+                VerdictItemKind.CRITERION,
+                MUST,
+                NOT_MET,
+                MET,
+                quote_not_found=True,
+            ),
+        ]
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c1"),
+            language="ukr",
+            reading={"c1": [link]},
+            states={"c1": RemarkState.FIXED},
+            fixed_words=self._words(self._earlier("c1")),
+        )
+
+        [fixed] = structure.fixed
+        assert (fixed.what, fixed.read, fixed.position) == (
+            "Раніше c1 не було.",
+            [],
+            None,
+        )
+        [new] = structure.new_remarks
+        assert (new.what, new.read) == ("Як зроблено c1.", [link])
+
+    def test_without_an_earlier_remark_the_criterions_own_words(self) -> None:
+        rows = [_criterion("c1", MUST, MET)]
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation(),
+            language="ukr",
+            states={"c1": RemarkState.FIXED},
+            fixed_words=self._words(criteria=("c1",)),
+        )
+
+        assert structure.fixed == [
+            Remark(
+                what="Вимога c1", why="Вимога c1", todo="Що показує c1", item_id="c1"
+            )
+        ]
+
+    def test_a_fixed_criterion_without_words_is_a_defect(self) -> None:
+        with pytest.raises(ValueError, match="c1 is fixed"):
+            build_text_review(
+                layer=AUTHOR,
+                author_musts={"c1"},
+                rows=[_criterion("c1", MUST, MET)],
+                explanation=_explanation(),
+                language="ukr",
+                states={"c1": RemarkState.FIXED},
+            )
+
+    def test_a_points_state_places_no_remark(self) -> None:
+        """A remark is its criterion's: the criterion's own state places it."""
+        rows = [
+            _criterion("c1", MUST, NOT_MET),
+            _point("c1.p1", MET),
+            _point("c1.p2", NOT_MET),
+        ]
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c1", passed=False),
+            language="ukr",
+            states={
+                "c1": RemarkState.OPEN,
+                "c1.p1": RemarkState.FIXED,
+                "c1.p2": RemarkState.OPEN,
+            },
+        )
+
+        assert structure.fixed == []
+        assert [remark.what for remark in structure.open] == ["Як зроблено c1."]
+
+    def test_every_remark_in_every_section_names_its_criterion(self) -> None:
+        """Task 12a: the portal ties a student's reply to a remark by its
+        ``item_id`` — in each of the four sections, the earlier attempt's
+        remark under "fixed" included. The markdown does not print it."""
+        rows = [
+            _criterion("c1", MUST, NOT_MET),
+            _criterion("c2", SHOULD, NOT_MET),
+            _criterion("c3", MAY, NOT_MET),
+            _criterion("c4", SHOULD, MET),
+        ]
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c1", "c2", "c3", passed=False),
+            language="ukr",
+            states={
+                "c1": RemarkState.OPEN,
+                "c2": RemarkState.BROKEN,
+                "c3": RemarkState.NEW,
+                "c4": RemarkState.FIXED,
+            },
+            fixed_words=self._words(self._earlier("c4")),
+        )
+
+        assert {
+            section: [remark.item_id for remark in getattr(structure, section)]
+            for section in ("fixed", "new_remarks", "open", "broken")
+        } == {
+            "fixed": ["c4"],
+            "new_remarks": ["c3"],
+            "open": ["c1"],
+            "broken": ["c2"],
+        }
+        # Not printed: the same markdown as the review without the handles.
+        sections = ("fixed", "new_remarks", "open", "broken")
+        without = structure.model_copy(
+            update={
+                section: [
+                    remark.model_copy(update={"item_id": None})
+                    for remark in getattr(structure, section)
+                ]
+                for section in sections
+            }
+        )
+        assert assemble_review(structure) == assemble_review(without)
+
+    def test_the_markdown_prints_the_sections_in_their_order(self) -> None:
+        rows = [
+            _criterion("c1", MUST, NOT_MET),
+            _criterion("c2", SHOULD, NOT_MET),
+            _criterion("c3", MAY, NOT_MET),
+            _criterion("c4", SHOULD, MET),
+        ]
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c1", "c2", "c3", passed=False),
+            language="ukr",
+            states={
+                "c1": RemarkState.OPEN,
+                "c2": RemarkState.BROKEN,
+                "c3": RemarkState.NEW,
+                "c4": RemarkState.FIXED,
+            },
+            fixed_words=self._words(self._earlier("c4")),
+        )
+        markdown = assemble_review(structure)
+
+        headings = [line for line in markdown.splitlines() if line.startswith("## ")]
+        assert headings == [
+            "## Не зараховано",
+            "## Виправлено",
+            "## Нові зауваження",
+            "## Лишилося відкритим",
+            "## Зламалося",
+            "## Від Ментора",
+        ]
+        assert markdown.index("Раніше c4 не було.") < markdown.index("Як зроблено c3.")

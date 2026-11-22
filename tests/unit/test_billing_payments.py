@@ -19,6 +19,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from course_supporter.billing.errors import BillingInvalidError
@@ -344,6 +345,17 @@ def test_no_provider_is_switched_on_by_default() -> None:
     assert registry.get(FAKE) is None
 
 
+@pytest.mark.parametrize("marked_only", [False, True])
+def test_the_registry_carries_billing_purchase_marked_only(marked_only: bool) -> None:
+    """BIL-LIVE: the routes read the setting from the registry they hold."""
+    assert Settings().billing_purchase_marked_only is False  # off by default
+    assert ProviderRegistry().purchase_marked_only is False
+    settings = Settings(
+        environment=Environment.TESTING, billing_purchase_marked_only=marked_only
+    )
+    assert build_registry(settings).purchase_marked_only is marked_only
+
+
 @pytest.mark.parametrize(
     ("names", "error"),
     [(["paddle"], "names \\['paddle'\\]"), ([FAKE, FAKE], "switched on twice")],
@@ -506,35 +518,56 @@ def test_the_fake_is_always_in_test_mode() -> None:
 
 
 LIVE = _creem(LIVE_API_BASE)
+TEST = FakeProvider()
+MARKED, UNMARKED = _account(), _account(marked=False)
+NOT_OPEN = PurchaseClosed.PURCHASE_NOT_OPEN
 
 
 @pytest.mark.parametrize(
-    ("provider", "account", "closed"),
+    ("provider", "marked_only", "account", "closed"),
     [
-        (None, None, PurchaseClosed.PAYMENT_UNAVAILABLE),
-        (None, _account(), PurchaseClosed.PAYMENT_UNAVAILABLE),
-        (FakeProvider(), None, PurchaseClosed.PURCHASE_NOT_OPEN),
-        (FakeProvider(), _account(marked=False), PurchaseClosed.PURCHASE_NOT_OPEN),
-        (FakeProvider(), _account(), None),
-        (LIVE, None, None),
-        (LIVE, _account(marked=False), None),
-        (LIVE, _account(), None),
+        (None, False, None, PurchaseClosed.PAYMENT_UNAVAILABLE),
+        (None, True, MARKED, PurchaseClosed.PAYMENT_UNAVAILABLE),
+        # test mode: the setting changes nothing
+        (TEST, False, MARKED, None),
+        (TEST, False, UNMARKED, NOT_OPEN),
+        (TEST, False, None, NOT_OPEN),
+        (TEST, True, MARKED, None),
+        (TEST, True, UNMARKED, NOT_OPEN),
+        (TEST, True, None, NOT_OPEN),
+        # live mode without the setting: open to anyone, as before (regression)
+        (LIVE, False, MARKED, None),
+        (LIVE, False, UNMARKED, None),
+        (LIVE, False, None, None),
+        # live mode with BILLING_PURCHASE_MARKED_ONLY: the mark is read
+        (LIVE, True, MARKED, None),
+        (LIVE, True, UNMARKED, NOT_OPEN),
+        (LIVE, True, None, NOT_OPEN),
     ],
     ids=[
         "no provider, no account",
         "no provider, a marked account",
-        "test mode, no account yet",
-        "test mode, not marked",
-        "test mode, marked",
-        "live, no account yet",
-        "live, not marked: the mark is not read",
+        "test, marked",
+        "test, not marked",
+        "test, no account yet",
+        "test + marked only, marked",
+        "test + marked only, not marked",
+        "test + marked only, no account yet",
         "live, marked",
+        "live, not marked: the mark is not read",
+        "live, no account yet",
+        "live + marked only, marked",
+        "live + marked only, not marked",
+        "live + marked only, no account yet",
     ],
 )
 def test_purchase_closed(
-    provider: Any, account: BillingAccount | None, closed: PurchaseClosed | None
+    provider: Any,
+    marked_only: bool,
+    account: BillingAccount | None,
+    closed: PurchaseClosed | None,
 ) -> None:
-    assert purchase_closed(provider, account) is closed
+    assert purchase_closed(provider, account, marked_only=marked_only) is closed
 
 
 async def test_an_unmarked_account_opens_no_checkout_in_test_mode() -> None:
@@ -542,6 +575,23 @@ async def test_an_unmarked_account_opens_no_checkout_in_test_mode() -> None:
     with pytest.raises(PurchaseNotOpenError, match="test mode"):
         await _start(ProviderRegistry([fake]), account=_account(marked=False))
     assert fake.checkouts == {}  # the provider was not asked
+
+
+async def test_live_mode_and_marked_only_opens_no_checkout_for_the_unmarked() -> None:
+    def answer(_: Any) -> Any:  # pragma: no cover - the guard comes first
+        raise AssertionError("creem was asked")
+
+    live = CreemProvider(
+        api_key="k",
+        webhook_secret="s",
+        api_base=LIVE_API_BASE,
+        transport=httpx.MockTransport(answer),
+    )
+    with pytest.raises(PurchaseNotOpenError, match="marked accounts only"):
+        await _start(
+            ProviderRegistry([live], purchase_marked_only=True),
+            account=_account(marked=False),
+        )
 
 
 async def test_the_guard_comes_before_the_package() -> None:

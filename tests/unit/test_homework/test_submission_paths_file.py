@@ -83,13 +83,15 @@ class TestCheckedInPaths:
                 f"stage {name!r} names a prompt that is not there: {stage.prompt_ref}"
             )
 
-    def test_every_type_is_on_the_new_path_and_the_reviewed_in_test_mode(
+    def test_every_type_is_on_the_new_path_and_only_the_project_in_test_mode(
         self, config: PathConfig
     ) -> None:
-        """Project chain K8: ``project`` moves onto the new path in test mode —
-        served by it, not charged for — as ``task`` and ``short_task`` did in
-        task 10, K5 (lock g); ``test`` stays on the new path as it was, charged
-        as usual (it costs nothing).
+        """Task 10, K5 (lock g), BIL-TESTMODE (2026-11-17) and project chain K8:
+        every type is on the new path. ``task`` and ``short_task`` are out of
+        test mode — whether a review is charged for is the billing switches'
+        decision, not the file's; ``project`` is in test mode — served by the
+        new path, not charged for; ``test`` stays as it was, charged as usual
+        (it costs nothing).
 
         Until task 07 every type stood on today's Mentor; task 07 moved
         ``test``, task 10 the text types, K8 the project. A type moves by an
@@ -104,8 +106,8 @@ class TestCheckedInPaths:
         }
         assert {t: in_test_mode(t, config) for t in AssignmentType} == {
             AssignmentType.TEST: False,
-            AssignmentType.SHORT_TASK: True,
-            AssignmentType.TASK: True,
+            AssignmentType.SHORT_TASK: False,
+            AssignmentType.TASK: False,
             AssignmentType.PROJECT: True,
         }
 

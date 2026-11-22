@@ -15,9 +15,14 @@
 # at startup, after the checks pass, so an edit takes effect on the next start.
 #
 # Submission states: first | repeat_without_replies | repeat_with_replies.
-# `repeat_with_replies` is described but unreachable until student replies
-# exist as records (task 12); until then both repeat states list the same
-# stages — a prepared place, not a duplicate.
+# `repeat_with_replies` is reached only by a type with `replies_enabled: true`
+# whose student's last review has replies no review has answered yet (task
+# 12a, K3, homework/path_selection.py). `replies_enabled` (absent means false)
+# is the one switch of the replies: the comment routes, the reply screen in
+# the doors, this state and the rule of the same work all read it. It is off
+# for every type until the answers (K4) and the portal (K5) come with it;
+# until then both repeat states list the same stages — a prepared place, not
+# a duplicate.
 
 stages:
   # Model safety check of the student's submission. Starting content is a copy
@@ -363,12 +368,16 @@ task_types:
   # The two text types (mentor-rebuild task 09b): verdicts on the criteria,
   # the places of the course for the failed ones (task 10), their
   # explanation, and the review laid out by code (homework/text_result.py).
-  # On the new path in test mode since task 10 (K5): served by the new path,
-  # not charged for. Nothing reads test_mode yet — the funds port is
-  # AlwaysEnoughFundsPort; the billing adapter will.
+  # On the new path. Whether a review is charged for is decided by the billing
+  # switches, not by this file: BILLING_CHARGING_ENABLED (every payer; off in
+  # production) and BILLING_CHARGING_MARKED (only the accounts marked "a test
+  # purchase is allowed"). The two types left test mode on 2026-11-17 (operator),
+  # so a marked payer sees the price, the reserve, the charge and the statement.
   short_task:
     served_by: new_path
-    test_mode: true
+    # Students' replies to the remarks of a review (task 12a): off until the
+    # answers (K4) and the portal (K5) are switched on with them.
+    replies_enabled: false
     paths:
       first:
         [safety, attempt_classifier, criteria_evaluation, course_link_lookup, review_explanation]
@@ -379,7 +388,8 @@ task_types:
 
   task:
     served_by: new_path
-    test_mode: true
+    # As on short_task.
+    replies_enabled: false
     paths:
       first:
         [safety, attempt_classifier, criteria_evaluation, course_link_lookup, review_explanation]

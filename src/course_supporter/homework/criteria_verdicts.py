@@ -29,7 +29,12 @@ Interface:
     and the pass, from rows; :func:`pass_decision`, :class:`PassDecision` —
     the pass with the branch of the rule that decided it, for the review's
     phrase; :data:`PASS_THRESHOLD_AUTHOR_MUSTS`,
-    :data:`PASS_THRESHOLD_NO_AUTHOR_MUSTS` — its two thresholds.
+    :data:`PASS_THRESHOLD_NO_AUTHOR_MUSTS` — its two thresholds;
+    :func:`is_credited` — whether the score counts a row as met.
+    :func:`credited_items`, :func:`remark_states` — where the remark on each
+    item stands since the student's earlier attempt (task 12a), in the words
+    of :class:`~course_supporter.remark_kinds.RemarkState`;
+    :func:`with_remark_states` — the rows to store, each with its state.
 
 The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
 9.8, 9.10; the item-level repeat, ratified 2026-10-02; the whole line and
@@ -66,11 +71,14 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
 * The score is the share of the weights of the met criteria (3 / 2 / 1) in
   the sum of all weights, in whole percent, rounded DOWN — 100 only when
   everything is met or unconfirmed.
-* The pass (the product owner's decision of 2026-11-12) depends on whose
-  list the rows were judged against. The author's list with a "must": every
-  "must" met or unconfirmed AND a score of 70 or more. Any other list — the
-  model's, or the author's without a "must": a score of 80 or more; a "must"
-  the model put weighs in the score and is shown, but blocks nothing alone.
+* The pass (the product owner's decisions of 2026-11-12 and 2026-11-17)
+  depends on whose list the rows were judged against and on the "must"
+  criteria the author made mandatory themselves (``must_by_author``,
+  ``criteria_form``). The author's list with such a "must": each of them met
+  or unconfirmed AND a score of 70 or more. Any other list — the model's, or
+  the author's with no "must" of their own: a score of 80 or more. A "must"
+  without the author's mark — the model's, or one the author kept from it —
+  weighs in the score and is shown, but blocks nothing alone.
 * The resubmission safeguard: a "not met" on an item whose LATEST earlier
   verdict on the same list was "met", and whose quote is still in the work
   word for word, stays "met" — and says so in its row.
@@ -101,6 +109,15 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
   "met" and an item fallen for the base's quote do not — their quote was
   failed evidence, not a place. The text types' stage does not ask: their
   "not met" keeps no quote, as before.
+* The state of a remark between attempts (task 12a; the product owner's
+  decision of 2026-11-16: the code counts it from the verdicts, never the
+  model). An item is compared, by its id, with its row on the student's
+  earlier attempt at the same version of the task; "credited" is the
+  score's own rule — met, or unconfirmed (:func:`is_credited`). Not
+  credited now: "new" when there is nothing to compare with or the earlier
+  attempt had no such item, "open" when it was not credited then either,
+  "broken" when it was. Credited now: "fixed" when it was not credited
+  then, no state otherwise.
 
 Replacing:
     The stage depends on the functions above and on their value types; a new
@@ -110,7 +127,9 @@ Replacing:
     single verdict stand is ``_repeat_reason`` alone, which of the model's
     words an item is settled on is ``_word_to_settle`` alone, the safeguard's
     condition is ``_kept_by_safeguard`` alone, where a "not met"'s problem
-    stands is ``_problem_place`` alone. A change of any of these rules raises
+    stands is ``_problem_place`` alone, what the score counts as met is
+    :func:`is_credited` alone, the state of a remark between attempts is
+    ``_STATES`` alone. A change of any of these rules raises
     :data:`VERDICT_RULES_VERSION` — as does any other change of code that
     changes what a review says.
 """
@@ -144,6 +163,7 @@ from course_supporter.homework.criteria_form import (
 from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.llm.error_categories import StructuralRetryError
 from course_supporter.models.review_structure import PassBasis
+from course_supporter.remark_kinds import RemarkState
 from course_supporter.storage.submission_verdict_repository import VerdictRecord
 
 MAX_QUOTE_CHARS: Final = 200
@@ -165,7 +185,9 @@ quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 # і пороги 70 / 80 (2026-11-12)  # noqa: RUF003
 # поріг збігу посилань на курс 0,3 (2026-11-13)
 # відтворюваність: зерно для deterministic-стадій (2026-11-13)
-VERDICT_RULES_VERSION: Final[int] = 6
+# стани зауважень між спробами: розділи рецензії (2026-11-16)
+# сувора гілка заліку — лише власні must автора (2026-11-17)
+VERDICT_RULES_VERSION: Final[int] = 8
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -178,7 +200,13 @@ quote of the base's code is not the student's; 4 — the pass rule of
 2026-11-12: the author's "must" criteria and the thresholds 70 / 80; 5 — the
 course-link score threshold of 2026-11-13 (``MIN_COURSE_LINK_SCORE``); 6 — the
 reproducibility seed of the deterministic stages, which changes what the
-verdict stages answer (2026-11-13, ``llm/reproducibility.py``). It enters
+verdict stages answer (2026-11-13, ``llm/reproducibility.py``); 7 — the
+states of the remarks between attempts (task 12a, 2026-11-16): the builder
+lays the remarks out in the sections "fixed", "new", "open" and "broken"
+instead of all in "new" (:func:`remark_states`); 8 — the strict branch of the
+pass by the author's own "must" criteria alone (2026-11-17,
+:func:`pass_decision`): a "must" the author kept from the model's list no
+longer blocks the pass. It enters
 the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,
@@ -994,12 +1022,36 @@ class ScoredItem(Protocol):
     def quote_not_found(self) -> bool: ...
 
 
-class _Outcome(NamedTuple):
-    """One criterion as the score and the pass read it."""
+def is_credited(item: ScoredItem) -> bool:
+    """Whether the score counts ``item`` as met: met, or unconfirmed.
 
+    An unconfirmed item counts as met: the model said "done" and the check
+    could not bear it out, which is no evidence the work lacks it — a score
+    that took its weight off would read a fault of the check as the
+    student's. The Mentor session's own choice of 2026-11-07, beside the
+    operator's on the pass (:func:`pass_decision`); undone by dropping
+    ``or _unconfirmed(item)`` here alone. The states of the remarks between
+    attempts read "credited" by this rule too (:func:`remark_states`, task
+    12a), so they move with the score.
+
+    A criterion or a point alike: a point is credited on the same terms.
+    """
+    return item.verdict == VerdictValue.MET or _unconfirmed(item)
+
+
+class _Outcome(NamedTuple):
+    """One criterion as the score and the pass read it.
+
+    ``credited`` is the score's rule (:func:`is_credited`); ``met`` and
+    ``unconfirmed`` are what the pass reads. The two agree today, and stay
+    two decisions (:func:`score_percent`, :func:`pass_decision`).
+    """
+
+    item_id: str
     weight: WeightCategory
     met: bool
     unconfirmed: bool
+    credited: bool
 
 
 def _criteria_outcomes(items: Iterable[ScoredItem]) -> list[_Outcome]:
@@ -1013,9 +1065,11 @@ def _criteria_outcomes(items: Iterable[ScoredItem]) -> list[_Outcome]:
             raise ValueError(msg)
         outcomes.append(
             _Outcome(
+                item_id=item.item_id,
                 weight=WeightCategory(item.weight),
                 met=item.verdict == VerdictValue.MET,
                 unconfirmed=_unconfirmed(item),
+                credited=is_credited(item),
             )
         )
     return outcomes
@@ -1025,8 +1079,9 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
     """The share of the met criteria's weights, in whole percent, rounded down.
 
     Rounded down so a score never overstates and 100 means everything is met
-    — or unconfirmed (below) — (``PRE-FLIGHT.md`` 9.10); the portal reads 100
-    as "correct". Points do not count on their own — their criterion does.
+    — or unconfirmed (:func:`is_credited`) — (``PRE-FLIGHT.md`` 9.10); the
+    portal reads 100 as "correct". Points do not count on their own — their
+    criterion does.
 
     Raises:
         ValueError: There is no criterion among ``items``, or one has no
@@ -1046,13 +1101,8 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
     for outcome in _criteria_outcomes(items):
         number = WEIGHT_NUMBERS[outcome.weight]
         total += number
-        # An unconfirmed criterion counts as met: the model said "done" and
-        # the check could not bear it out, which is no evidence the work
-        # lacks it — a score that took its weight off would read a fault of
-        # the check as the student's. The Mentor session's own choice of
-        # 2026-11-07, beside the operator's on the pass (is_passed); undone
-        # by dropping ``or outcome.unconfirmed`` here alone.
-        if outcome.met or outcome.unconfirmed:
+        # Met or unconfirmed: the rule and its reason are is_credited's.
+        if outcome.credited:
             met += number
     if total == 0:
         msg = "verdicts without a criterion have no score"
@@ -1063,19 +1113,24 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
 # The product owner's decision of 2026-11-12: the pass of a work judged by a
 # criteria list. The control submission of 2026-11-12 showed a "must" the
 # model put on its own list blocking the pass where the model misjudged it.
+# The decision of 2026-11-17: the author who corrected one word keeps the
+# whole list as their own, the model's "must" marks with it — the control
+# submission of 2026-11-16 failed on one. Only the "must" criteria the author
+# made mandatory themselves (``must_by_author``) make the pass strict.
 PASS_THRESHOLD_AUTHOR_MUSTS: Final = 70
-"""The score a work needs when the author's list has a "must" and every one is met.
+"""The score a work needs when the author made a "must" mandatory and each is met.
 
-The author approved those "must" criteria by saving the list
-(``PUT /documents/{id}/criteria/override``), so they decide the pass with
-this threshold beside them.
+The author marked those "must" criteria themselves
+(``PUT /documents/{id}/criteria/override``, ``must_by_author``), so they
+decide the pass with this threshold beside them.
 """
 
 PASS_THRESHOLD_NO_AUTHOR_MUSTS: Final = 80
-"""The score a work needs when no "must" of the author's stands behind the list.
+"""The score a work needs when no "must" of the author's own stands behind the list.
 
-The model's list, or the author's without a "must": a "must" the model put is
-judged, shown and weighed in the score, but does not block the pass alone.
+The model's list, or the author's with no "must" they marked themselves: a
+"must" the model put — kept by the author or not — is judged, shown and
+weighed in the score, but does not block the pass alone.
 """
 
 
@@ -1097,16 +1152,22 @@ class PassDecision:
     threshold: int
 
 
-def pass_decision(items: Iterable[ScoredItem], *, layer: CriteriaLayer) -> PassDecision:
-    """The pass of a work judged by a criteria list, and why (2026-11-12).
+def pass_decision(
+    items: Iterable[ScoredItem],
+    *,
+    layer: CriteriaLayer,
+    author_musts: Collection[str],
+) -> PassDecision:
+    """The pass of a work judged by a criteria list, and why (2026-11-12, 2026-11-17).
 
-    * The AUTHOR's list with at least one "must": passed when every "must" is
-      met or unconfirmed AND the score is :data:`PASS_THRESHOLD_AUTHOR_MUSTS`
-      or more.
-    * Otherwise — the MODEL's list, or the author's without a "must": passed
-      when the score is :data:`PASS_THRESHOLD_NO_AUTHOR_MUSTS` or more. A
-      "must" the model put still counts in the score by its weight and is
-      shown met or not met, but does not block the pass on its own.
+    * The AUTHOR's list with at least one "must" the author made mandatory
+      themselves (``author_musts``): passed when each of them is met or
+      unconfirmed AND the score is :data:`PASS_THRESHOLD_AUTHOR_MUSTS` or more.
+    * Otherwise — the MODEL's list, or the author's with no "must" of their
+      own: passed when the score is :data:`PASS_THRESHOLD_NO_AUTHOR_MUSTS` or
+      more. A "must" outside ``author_musts`` — the model's, or one the author
+      kept from it — still counts in the score by its weight and is shown met
+      or not met, but does not block the pass on its own, in either branch.
 
     An unconfirmed "must" does not fail the work (the operator's decision of
     2026-11-07): the model said "done", and that no line of the work could
@@ -1117,33 +1178,45 @@ def pass_decision(items: Iterable[ScoredItem], *, layer: CriteriaLayer) -> PassD
         items: The verdict rows, criteria and points alike.
         layer: Whose list the rows were judged against — the address the rows
             carry (``homework/judged_list.py``, ``judged_layer``).
+        author_musts: The ids of the criteria of that list the author made
+            mandatory themselves — ``must_by_author``
+            (``criteria_form.author_musts``); empty for the model's list and
+            for an edit stored before the mark.
 
     Raises:
-        ValueError: See :func:`score_percent`.
+        ValueError: See :func:`score_percent`; or an id of ``author_musts``
+            is not a "must" criterion among the rows — they were not judged
+            against the list it was read from.
 
-    >>> def criterion(weight, verdict):
+    >>> def criterion(cid, weight, verdict):
     ...     return VerdictRecord(
-    ...         "c1", VerdictItemKind.CRITERION, weight, verdict, model_verdict=None
+    ...         cid, VerdictItemKind.CRITERION, weight, verdict, model_verdict=None
     ...     )
-    >>> rows = [criterion("must", "not_met"), criterion("should", "met"),
-    ...         criterion("should", "met"), criterion("should", "met"),
-    ...         criterion("should", "met"), criterion("should", "met"),
-    ...         criterion("should", "met")]
-    >>> pass_decision(rows, layer=CriteriaLayer.MODEL)
-    PassDecision(passed=True, basis='no_author_musts_passed', score=80, threshold=80)
-    >>> pass_decision(rows, layer=CriteriaLayer.AUTHOR).basis
-    'author_musts_unmet'
+    >>> rows = [criterion("c1", "must", "not_met"),
+    ...         *(criterion(f"c{n}", "should", "met") for n in range(2, 8))]
+    >>> pass_decision(rows, layer=CriteriaLayer.AUTHOR, author_musts={"c1"})
+    PassDecision(passed=False, basis='author_musts_unmet', score=80, threshold=70)
+    >>> pass_decision(rows, layer=CriteriaLayer.AUTHOR, author_musts=()).basis
+    'no_author_musts_passed'
     """
     rows = list(items)
     score = score_percent(rows)
-    musts = [
+    outcomes = _criteria_outcomes(rows)
+    strangers = sorted(
+        set(author_musts)
+        - {o.item_id for o in outcomes if o.weight is WeightCategory.MUST}
+    )
+    if strangers:
+        msg = f"the author's own musts {strangers} are not 'must' criteria of the rows"
+        raise ValueError(msg)
+    required = [
         outcome
-        for outcome in _criteria_outcomes(rows)
-        if outcome.weight is WeightCategory.MUST
+        for outcome in outcomes
+        if layer is CriteriaLayer.AUTHOR and outcome.item_id in author_musts
     ]
-    if layer is CriteriaLayer.AUTHOR and musts:
+    if required:
         threshold = PASS_THRESHOLD_AUTHOR_MUSTS
-        if not all(outcome.met or outcome.unconfirmed for outcome in musts):
+        if not all(outcome.met or outcome.unconfirmed for outcome in required):
             return PassDecision(False, "author_musts_unmet", score, threshold)
         if score < threshold:
             return PassDecision(False, "author_musts_below_threshold", score, threshold)
@@ -1154,11 +1227,106 @@ def pass_decision(items: Iterable[ScoredItem], *, layer: CriteriaLayer) -> PassD
     return PassDecision(True, "no_author_musts_passed", score, threshold)
 
 
-def is_passed(items: Iterable[ScoredItem], *, layer: CriteriaLayer) -> bool:
+def is_passed(
+    items: Iterable[ScoredItem],
+    *,
+    layer: CriteriaLayer,
+    author_musts: Collection[str],
+) -> bool:
     """Whether the work is passed: :func:`pass_decision`, its answer alone.
 
     Every place that counts the pass of a criteria list — the explanation's
     facts, the review's builder, a recount from the stored rows — counts it
     here; the webhook and the portal read the verdict the builder stored.
     """
-    return pass_decision(items, layer=layer).passed
+    return pass_decision(items, layer=layer, author_musts=author_musts).passed
+
+
+# The table of the product owner's decision of 2026-11-16, row for row: by
+# (credited on the earlier attempt — None when it had no such item or there is
+# none to compare with — and credited now), the item's state.
+_STATES: Final[Mapping[tuple[bool | None, bool], RemarkState | None]] = (
+    MappingProxyType(
+        {
+            (None, False): RemarkState.NEW,
+            (None, True): None,
+            (False, False): RemarkState.OPEN,
+            (False, True): RemarkState.FIXED,
+            (True, False): RemarkState.BROKEN,
+            (True, True): None,
+        }
+    )
+)
+
+
+def credited_items(rows: Iterable[ScoredItem]) -> dict[str, bool]:
+    """By item id, whether each row is credited (:func:`is_credited`).
+
+    What :func:`remark_states` reads of the earlier attempt's rows: criteria
+    and points alike.
+    """
+    return {row.item_id: is_credited(row) for row in rows}
+
+
+def remark_states(
+    earlier: Mapping[str, bool] | None, rows: Iterable[ScoredItem]
+) -> dict[str, RemarkState | None]:
+    """The state of each item of ``rows`` since the earlier attempt (task 12a).
+
+    Items are matched by their id alone: an author's edit keeps the ids of
+    the criteria it keeps (task 08), whatever the address of the list.
+
+    Args:
+        earlier: By item id, whether the earlier attempt credited it
+            (:func:`credited_items`); ``None`` when there is nothing to
+            compare with — a first attempt, or none earlier at the same
+            version of the task.
+        rows: The submission's verdict rows, criteria and points alike.
+
+    Returns:
+        By the item id of each row, its state, or ``None`` when it has none.
+        An item only the earlier attempt had has no row now and is not here.
+
+    >>> def row(item_id, verdict):
+    ...     return VerdictRecord(
+    ...         item_id, VerdictItemKind.CRITERION, "should", verdict, verdict
+    ...     )
+    >>> remark_states(
+    ...     {"c1": False, "c2": True, "c3": False},
+    ...     [row("c1", "not_met"), row("c2", "not_met"), row("c3", "met"),
+    ...      row("c4", "not_met")],
+    ... )  # doctest: +NORMALIZE_WHITESPACE
+    {'c1': <RemarkState.OPEN: 'open'>, 'c2': <RemarkState.BROKEN: 'broken'>,
+     'c3': <RemarkState.FIXED: 'fixed'>, 'c4': <RemarkState.NEW: 'new'>}
+    """
+    return {
+        row.item_id: _STATES[
+            (None if earlier is None else earlier.get(row.item_id), is_credited(row))
+        ]
+        for row in rows
+    }
+
+
+def with_remark_states(
+    records: Sequence[VerdictRecord], earlier: Iterable[ScoredItem] | None
+) -> tuple[VerdictRecord, ...]:
+    """The records to store, each with its remark's state (task 12a).
+
+    What the evaluation stage writes: the states of :func:`remark_states`
+    against the earlier attempt's rows
+    (``SubmissionVerdictRepository.earlier_attempt``), put on the records it
+    settled — after the settling, so a state cannot change a verdict. The
+    same settled records against the same earlier rows give the same states,
+    so a stage run again writes them again as they were.
+
+    Args:
+        records: The settled records (:func:`settle_verdicts`).
+        earlier: The earlier attempt's rows; ``None`` when there is nothing
+            to compare with.
+    """
+    states = remark_states(
+        None if earlier is None else credited_items(earlier), records
+    )
+    return tuple(
+        replace(record, remark_state=states[record.item_id]) for record in records
+    )

@@ -35,6 +35,7 @@ from course_supporter.api.deps import (
     get_payment_registry,
     get_s3_client,
 )
+from course_supporter.api.routes.public_numbers import current_numbers
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.billing import admin, audit, charging, held, outlook, quotes
 from course_supporter.billing.accounts import (
@@ -61,6 +62,7 @@ from course_supporter.storage.orm import (
 )
 from tests._helpers.billing_cleanup import drop_billing_of_tenant
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.public_numbers import numbers_of, serve_numbers_of
 
 pytestmark = pytest.mark.requires_db
 
@@ -181,6 +183,9 @@ def signed_in(
     app.dependency_overrides[get_billing_catalog] = lambda: CATALOG
     app.dependency_overrides[get_s3_client] = lambda: MagicMock()
     app.dependency_overrides[get_arq_redis] = lambda: AsyncMock()
+    app.dependency_overrides[current_numbers] = serve_numbers_of(
+        session_factory, world.tenant_id
+    )
     yield
     app.dependency_overrides.clear()
 
@@ -385,6 +390,7 @@ class TestReadsCreateNothing:
         self, session_factory: async_sessionmaker[AsyncSession], world: World
     ) -> None:
         """In one session, before any commit: no INSERT reaches the table."""
+        numbers = await numbers_of(session_factory, world.tenant_id)
         async with session_factory() as session:
             task = await session.get(AuthoredDocument, world.task_id)
             submission = await session.get(HomeworkSubmission, world.held_id)
@@ -407,6 +413,7 @@ class TestReadsCreateNothing:
                 tenant_id=world.tenant_id,
                 student_id=world.student_id,
                 settings=get_settings(),
+                numbers=numbers,
             )
             assert await held.waiting_for_author(session, [submission]) == frozenset()
             await admin.get_author_settings(session, world.tenant_id)

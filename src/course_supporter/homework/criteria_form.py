@@ -20,7 +20,21 @@ Interface:
     Its result, :class:`CriteriaComposition`, is what one composition yields.
     :func:`criteria_from_document` and :func:`criteria_to_document` — the
     stored JSON document and back, the whole form checked on the way in.
+    :func:`author_criteria_from_document` — the author's edit, read so that
+    every criterion carries ``must_by_author``; :func:`author_musts` — the
+    criteria the author made mandatory themselves.
     :func:`check_methods_for` — the check methods a task type admits.
+
+The author's own "must" (the product owner's decision of 2026-11-17):
+    A criterion of the author's edit carries ``must_by_author``: whether the
+    author made it mandatory themselves, or kept a "must" the model put. The
+    edit service sets it once, when the edit is stored
+    (``criteria_edit_service.mark_must_by_author``), and only these criteria
+    make the pass strict (``criteria_verdicts.pass_decision``). The model's
+    list never carries it: the field is ``None`` there and is not stored, so
+    a list composed in this form is stored exactly as before. An edit stored
+    before the field reads ``False`` for every criterion — the rows are not
+    rewritten.
 
 Extending:
     The form is versioned: :data:`CRITERIA_FORM_VERSION` is stored with every
@@ -28,11 +42,13 @@ Extending:
     ``prompts/criteria_decomposition/v2.md``. A new form is a new prompt file,
     a new version number and readers that know both — never an in-place edit
     of this one, because lists composed in it stay in storage.
+    ``must_by_author`` is no new form: it is not the composer's, and every
+    list stored without it reads as it did.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
@@ -148,6 +164,11 @@ _PointText = Annotated[
 _Concept = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
+def _absent(value: bool | None) -> bool:
+    """Whether a criterion carries no ``must_by_author``: the model's list."""
+    return value is None
+
+
 def _points_follow_method(method: CheckMethod, points: int) -> None:
     """Mandatory points belong to the ``mandatory_points`` method, and it to them."""
     if method is CheckMethod.MANDATORY_POINTS and not points:
@@ -178,6 +199,11 @@ class Criterion(BaseModel):
     named on its own and still says whose it is. The weight number is
     computed, never stored.
 
+    ``must_by_author`` is the author's layer's alone (module): ``True`` — the
+    author made this "must" mandatory themselves; ``False`` — they did not;
+    ``None`` — the model's list, which has no such mark. ``None`` is neither
+    stored nor answered, so the model's list keeps its form.
+
     >>> criterion = Criterion(
     ...     id="c1",
     ...     text="Handles an empty list",
@@ -204,6 +230,16 @@ class Criterion(BaseModel):
     mandatory_points: Annotated[
         tuple[MandatoryPoint, ...], Field(max_length=MAX_POINTS)
     ]
+    must_by_author: bool | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description=(
+            "The author's edit only: ``true`` — the author made this ``must`` "
+            "mandatory for the pass themselves; ``false`` — not (a ``must`` the "
+            "automatic check proposed weighs in the score alone). Absent from the "
+            "model's list."
+        ),
+    )
 
     @property
     def weight_number(self) -> int:
@@ -213,6 +249,11 @@ class Criterion(BaseModel):
     @model_validator(mode="after")
     def _check_consistency(self) -> Self:
         _points_follow_method(self.check_method, len(self.mandatory_points))
+        if self.must_by_author and self.weight is not WeightCategory.MUST:
+            raise ValueError(
+                f"must_by_author marks a 'must' criterion; {self.id} weighs "
+                f"{self.weight.value!r}"
+            )
         # Nothing runs code tests in the first echelon, so the mark and the
         # method go together; an executor would make code_test without the
         # mark legal, and this rule is where that change lands.
@@ -289,6 +330,12 @@ class CriterionEdit(BaseModel):
     limits are the stored form's. Whether an identifier, a check method or a
     concept fits the task is decided against the task, by the author's edit
     service, not here.
+
+    ``must_by_author`` is the author's explicit word on a "must": ``True`` —
+    make it mandatory for the pass, ``False`` — do not; ``None`` — not said,
+    and the edit service settles it
+    (``criteria_edit_service.mark_must_by_author``), as it refuses ``True`` on
+    a criterion that is not a "must".
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -302,6 +349,18 @@ class CriterionEdit(BaseModel):
     mandatory_points: Annotated[
         tuple[MandatoryPointEdit, ...], Field(max_length=MAX_POINTS)
     ] = ()
+    must_by_author: bool | None = Field(
+        default=None,
+        description=(
+            "For a ``must`` criterion: ``true`` — mandatory for the pass, "
+            "``false`` — weighs in the score alone. Omitted — a ``must`` of the "
+            "edit this one replaces keeps its value there; one this edit raises "
+            "to ``must`` (from that edit, or from the model's list when that "
+            "edit has no such criterion) and a new one are mandatory; a ``must`` "
+            "of the model's list is not. ``true`` on a criterion that is not a "
+            "``must`` is refused."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_points(self) -> Self:
@@ -476,6 +535,46 @@ def criteria_from_document(
         pydantic.ValidationError: The document is not a list of this form.
     """
     return _DOCUMENT.validate_python(document)
+
+
+def author_criteria_from_document(
+    document: Sequence[Mapping[str, Any]],
+) -> tuple[Criterion, ...]:
+    """Read the author's stored edit: every criterion with ``must_by_author``.
+
+    An edit stored before the mark existed has none, and reads ``False`` for
+    every criterion (2026-11-17): its "must" criteria were kept, not made
+    mandatory. The row is a snapshot verdicts point at, so it is read so, not
+    rewritten.
+
+    >>> document = [{
+    ...     "id": "c1", "text": "Handles []", "evidence": "returns []",
+    ...     "weight": "must", "check_method": "model_verdict",
+    ...     "soft_descent": False, "concepts": [], "mandatory_points": [],
+    ... }]
+    >>> author_criteria_from_document(document)[0].must_by_author
+    False
+
+    Raises:
+        pydantic.ValidationError: See :func:`criteria_from_document`.
+    """
+    return tuple(
+        criterion
+        if criterion.must_by_author is not None
+        else criterion.model_copy(update={"must_by_author": False})
+        for criterion in criteria_from_document(document)
+    )
+
+
+def author_musts(criteria: Iterable[Criterion]) -> frozenset[str]:
+    """The ids of the criteria the author made mandatory themselves.
+
+    Empty for the model's list, which carries no mark, and for an edit
+    stored before it (:func:`author_criteria_from_document`).
+    """
+    return frozenset(
+        criterion.id for criterion in criteria if criterion.must_by_author is True
+    )
 
 
 def criteria_to_document(criteria: Sequence[Criterion]) -> list[dict[str, Any]]:

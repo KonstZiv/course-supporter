@@ -96,6 +96,8 @@ class World:
     student_account: uuid.UUID
     author_account: uuid.UUID
     providers: list[CreemProvider] = field(default_factory=list)
+    marked_only: bool = False
+    """BILLING_PURCHASE_MARKED_ONLY of the registry the webhook route gets."""
 
 
 @pytest.fixture()
@@ -202,14 +204,16 @@ def routes(
 
     app.dependency_overrides[get_session] = _session
     app.dependency_overrides[get_payment_registry] = lambda: ProviderRegistry(
-        world.providers
+        world.providers, purchase_marked_only=world.marked_only
     )
     app.dependency_overrides[get_billing_catalog] = lambda: CATALOG
     yield
     app.dependency_overrides.clear()
 
 
-async def _paid(creem: CreemProvider, account_id: uuid.UUID, order: str) -> Response:
+async def _paid(
+    creem: CreemProvider, account_id: uuid.UUID, order: str, amount_paid: int = 990
+) -> Response:
     """Creem's signed ``checkout.completed`` of the starter package."""
     body = json.dumps(
         {
@@ -221,7 +225,7 @@ async def _paid(creem: CreemProvider, account_id: uuid.UUID, order: str) -> Resp
                 "object": "checkout",
                 "order": {
                     "id": order,
-                    "amount_paid": 990,
+                    "amount_paid": amount_paid,
                     "currency": "EUR",
                     "status": "paid",
                 },
@@ -272,6 +276,50 @@ class TestMarkOnCredit:
         assert response.status_code == 200, response.text
         [(batch, mark)] = await _marks(session_factory, world.student_account)
         assert (batch.provider, mark) == (CREEM, None)
+
+    async def test_live_mode_with_marked_only_marks_in_the_credits_transaction(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        """BIL-LIVE: before the shop is approved any purchase is a test one."""
+        creem = _creem(LIVE_API_BASE)
+        world.providers.append(creem)
+        world.marked_only = True
+
+        response = await _paid(creem, world.student_account, _order())
+
+        assert response.status_code == 200, response.text
+        [(batch, mark)] = await _marks(session_factory, world.student_account)
+        assert (batch.provider, batch.units, batch.amount_paid_minor) == (
+            CREEM,
+            1000,
+            990,
+        )
+        assert mark is not None
+        assert mark.marked_by == MarkOrigin.CREDIT.value
+        assert mark.marked_at == batch.created_at  # one transaction, one instant
+
+    async def test_a_zero_order_in_live_mode_is_credited_and_marked(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        """BIL-LIVE: the reviewer's 100 % discount code — ``amount_paid`` 0 —
+        credits the package's units, paid 0, marked as a test purchase."""
+        creem = _creem(LIVE_API_BASE)
+        world.providers.append(creem)
+        world.marked_only = True
+
+        response = await _paid(creem, world.author_account, _order(), amount_paid=0)
+
+        assert response.status_code == 200, response.text
+        [(batch, mark)] = await _marks(session_factory, world.author_account)
+        assert (batch.units, batch.amount_paid_minor, batch.currency) == (
+            1000,
+            0,
+            "EUR",
+        )
+        assert mark is not None and mark.marked_by == MarkOrigin.CREDIT.value
+        async with session_factory() as session:
+            standing = await ledger.balance(session, world.author_account)
+        assert standing.available == 1000
 
     async def test_a_failure_after_the_credit_leaves_neither_batch_nor_mark(
         self, session_factory: async_sessionmaker[AsyncSession], world: World

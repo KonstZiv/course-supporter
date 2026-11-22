@@ -61,6 +61,7 @@ from course_supporter.storage.student_credential_repository import (
 from course_supporter.storage.student_credential_token_repository import (
     StudentCredentialTokenRepository,
 )
+from course_supporter.storage.student_repository import StudentRepository
 
 logger = structlog.get_logger()
 
@@ -132,7 +133,11 @@ async def set_recovery_email(
         arq=arq,
         message_id=PURPOSE_EMAIL_CONFIRM,
         to=body.email,
-        context={"confirm_url": confirm_url, "ttl": ttl_display(PURPOSE_EMAIL_CONFIRM)},
+        context={
+            "confirm_url": confirm_url,
+            "ttl": ttl_display(PURPOSE_EMAIL_CONFIRM, student.interface_language),
+        },
+        language=student.interface_language,
     )
     logger.info("portal_recovery_email_set", student_id=str(student.student_id))
     return RecoveryEmailResponse(
@@ -215,6 +220,13 @@ async def forgot_password(
     )
     await session.commit()
 
+    student = await StudentRepository(session).get_by_id(credential.student_id)
+    language = (
+        student.interface_language
+        if student is not None and student.tenant_id == credential.tenant_id
+        else None
+    )
+
     reset_url = _recovery_link(
         tenant_id=body.tenant_id,
         route="reset-password",
@@ -224,7 +236,11 @@ async def forgot_password(
         arq=arq,
         message_id=PURPOSE_PASSWORD_RESET,
         to=credential.recovery_email,
-        context={"reset_url": reset_url, "ttl": ttl_display(PURPOSE_PASSWORD_RESET)},
+        context={
+            "reset_url": reset_url,
+            "ttl": ttl_display(PURPOSE_PASSWORD_RESET, language),
+        },
+        language=language,
     )
     logger.info("portal_forgot_sent", credential_id=str(credential.id))
     return None

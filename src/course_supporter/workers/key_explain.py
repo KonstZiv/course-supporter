@@ -39,7 +39,6 @@ Order of the body, and why each step is where it is:
 
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -54,7 +53,11 @@ from course_supporter.agents.key_explainer import (
     STAGE_NAME,
     KeyExplainerAgent,
 )
-from course_supporter.billing.estimates import preparation_e_usd
+from course_supporter.billing.charging import job_fact_usd
+from course_supporter.billing.estimates import (
+    key_explanation_task_chars,
+    preparation_e_usd,
+)
 from course_supporter.call_outcome import FundsDecision
 from course_supporter.cost_estimate.hooks import shadow_task_preparation
 from course_supporter.funds_port import (
@@ -142,7 +145,7 @@ async def arq_explain_key(
             if key.written_text is not None
             else await _task_text(session, document.id)
         )
-        task_chars = len(task_text) + len(json.dumps(key.answers, default=str))
+        task_chars = key_explanation_task_chars(task_text, key.answers)
         context = VersionWorkContext(
             tenant_id=await _tenant_of(session, document),
             authored_document_id=document.id,
@@ -223,7 +226,10 @@ async def arq_explain_key(
         await session.commit()
 
         spent = await _spent_on(session, uuid.UUID(job_id))
-        await port.account_version_work_cost(context, spent)
+        # The payer's fact (billing.charging.PAID_BY_PAYER, operator 2026-11-17):
+        # retries are the platform's, so not every dollar ``spent`` is charged.
+        fact = await job_fact_usd(session, uuid.UUID(job_id), action=STAGE_NAME)
+        await port.account_version_work_cost(context, float(fact))
         log.info(
             "key_explanation.ready",
             version=version.version,

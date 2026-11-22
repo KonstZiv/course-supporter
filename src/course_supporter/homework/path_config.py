@@ -35,11 +35,15 @@ Interface:
       empty for ``test`` — a test makes no model call), or ``{}`` for a type no
       path describes yet. ``test_mode: true`` marks a type served by the new
       path WITHOUT charging for it (:func:`in_test_mode`).
+      ``replies_enabled: true`` lets the students of a type on the new path
+      reply to the remarks of their last review (task 12a, K3;
+      :func:`replies_enabled`).
 
-    No field has a default but ``test_mode``: a description that is missing
-    fails loudly instead of standing in for a guessed value. ``test_mode`` is
-    the exception a type opts into beside its switch; without it the type is
-    charged as usual.
+    No field has a default but ``test_mode`` and ``replies_enabled``: a
+    description that is missing fails loudly instead of standing in for a
+    guessed value. Those two are switches a type opts into beside its
+    ``served_by``; without them the type is charged as usual and takes no
+    replies.
 
     :func:`load_path_config` reads the file and checks its shape; every shape
     fault is reported at once. :func:`get_path_config` is the same read, cached
@@ -50,15 +54,17 @@ Interface:
     resolve, a type has all three states or none, a type switched to the new
     path has paths, a type in test mode is on the new path and is not
     ``test`` (task 10, K6: test mode means not charging, and a test is never
-    charged for), a ``test`` path lists no stage, pins stay under their
-    stage's output ceiling, rungs are admissible against the model registry
-    and carry what the stage requires —
+    charged for), a type taking replies is on the new path, is not ``test``
+    and has the model stage the reply screen runs (task 12a, K3), no stage
+    takes the reply screen's name in the register, a ``test`` path lists no
+    stage, pins stay under their stage's output ceiling, rungs are admissible
+    against the model registry and carry what the stage requires —
     and reports every such fault at once. Both raise ``ValueError`` and are
     meant for startup: a hole should stop the boot, not a live submission.
     :func:`path_ceiling_estimate` sums a path's money ceilings; a code stage
     adds nothing. :func:`model_stages` — the stages a model runs, by name.
     :func:`in_test_mode` — whether a type is served by the new path without
-    charging.
+    charging. :func:`replies_enabled` — whether a type takes students' replies.
 
     Worked cases, executed: :mod:`tests.unit.test_homework.test_path_config`.
 
@@ -77,7 +83,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
 import yaml
 from pydantic import (
@@ -107,13 +113,31 @@ from course_supporter.models.source import AssignmentType
 # silently shadowing a real field, and a loaded config cannot be edited in place.
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 
+REPLY_SCREEN_STAGE: Final = "safety"
+"""The model stage whose prompt and ladder the reply screen runs (task 12a, K3).
+
+The screen judges a student's replies with the same safety check the work
+gets — one description, read twice — rather than with a copy of it that could
+drift (``homework/reply_screen.py``).
+"""
+
+REPLY_SAFETY_ACTION: Final = "reply_safety"
+"""The name the reply screen's calls are recorded under in the call register.
+
+Its own name, not ``safety``: the register keys a call's cost on it, so the
+price of screening replies stays visible apart from the price of screening
+the work. No stage may take it (:func:`validate_path_config`).
+"""
+
 
 class SubmissionState(StrEnum):
     """Where a submission stands, as far as choosing its path goes.
 
-    ``REPEAT_WITH_REPLIES`` is described but unreachable until replies exist as
-    records (task 12): nothing in today's data says a submission carries them,
-    and a guessed signal would be worse than a state nobody reaches.
+    ``REPEAT_WITH_REPLIES`` is reached only by a type that takes replies
+    (:func:`replies_enabled`, task 12a, K3): the student's last review has
+    replies of theirs that no review has answered yet. A type that takes none
+    — every type in production until the replies are switched on together
+    with their answers and the portal — never reaches it.
     """
 
     FIRST = "first"
@@ -242,6 +266,13 @@ class TaskTypePaths(BaseModel):
     not charged for: nobody reads it yet, the funds port is
     ``AlwaysEnoughFundsPort``; the billing adapter will (:func:`in_test_mode`).
     Refused on ``test`` (:func:`validate_path_config`).
+
+    ``replies_enabled`` — the type's students may reply to the remarks of
+    their last review, and the next submission screens the replies and walks
+    ``repeat_with_replies`` (task 12a, K3; :func:`replies_enabled`). Off by
+    default and everywhere in production until it is switched on together
+    with the answers (K4) and the portal (K5). Refused on a type not on the
+    new path and on ``test`` (:func:`validate_path_config`).
     """
 
     model_config = _STRICT
@@ -249,6 +280,7 @@ class TaskTypePaths(BaseModel):
     served_by: ServedBy
     paths: dict[SubmissionState, list[str]]
     test_mode: StrictBool = False
+    replies_enabled: StrictBool = False
 
 
 class PathConfig(BaseModel):
@@ -351,6 +383,13 @@ def validate_path_config(
     * a type switched to the new path describes its paths;
     * a type in test mode is served by the new path: test mode is the new path
       without charging, and today's Mentor has no such mode;
+    * a type taking replies (task 12a, K3) is served by the new path — the
+      reply screen stands in its doors and the replies' state on its paths —
+      and is not ``test``, whose review has no remark a reply could name; and
+      the file defines :data:`REPLY_SCREEN_STAGE` as a model stage, the check
+      the screen runs;
+    * no stage is named :data:`REPLY_SAFETY_ACTION`, the reply screen's name
+      in the register, for the reason a ladder stage's name is refused;
     * a ``test`` path lists no stage — a test makes no model call;
     * every stage name in a path is defined, and appears once in that path.
 
@@ -365,6 +404,11 @@ def validate_path_config(
                 f"Stage '{stage_name}' reuses the name of a stage in the model "
                 f"ladders: a path stage needs its own name, because the call "
                 f"register keys a call's cost on it"
+            )
+        if stage_name == REPLY_SAFETY_ACTION:
+            errors.append(
+                f"Stage '{stage_name}' takes the name the reply screen's calls "
+                f"are recorded under: the call register keys a call's cost on it"
             )
         if isinstance(stage, CodeStage):
             continue
@@ -417,6 +461,8 @@ def validate_path_config(
                 f"Task type '{task_type.value}' is in test mode: test mode is "
                 f"for the types that are charged for, and a test is not"
             )
+        if declared.replies_enabled:
+            errors.extend(_reply_errors(task_type, declared, config))
 
         described = set(declared.paths)
         if not described:
@@ -456,6 +502,39 @@ def validate_path_config(
             "Submission path validation failed:\n"
             + "\n".join(f"  - {e}" for e in errors)
         )
+
+
+def _reply_errors(
+    task_type: AssignmentType, declared: TaskTypePaths, config: PathConfig
+) -> list[str]:
+    """What stops a type from taking replies (task 12a, K3), for the boot.
+
+    The screen of the replies stands in the new path's doors and the state
+    they make is a key of its paths, so a type on today's Mentor would take
+    replies that nothing ever screens or answers. A test's review has no
+    remark with an id a reply could name. And the screen runs
+    :data:`REPLY_SCREEN_STAGE`'s prompt and ladder: without that model stage
+    the first reply would stop a submission instead of the boot.
+    """
+    errors: list[str] = []
+    if declared.served_by is not ServedBy.NEW_PATH:
+        errors.append(
+            f"Task type '{task_type.value}' takes replies but is served by "
+            f"'{declared.served_by.value}': the replies are screened and "
+            f"answered on the new path"
+        )
+    if task_type is AssignmentType.TEST:
+        errors.append(
+            f"Task type '{task_type.value}' takes replies: a test's review has "
+            f"no remark a reply could name"
+        )
+    if not isinstance(config.stages.get(REPLY_SCREEN_STAGE), ModelStage):
+        errors.append(
+            f"Task type '{task_type.value}' takes replies, but no model stage "
+            f"'{REPLY_SCREEN_STAGE}' is defined: the reply screen runs its "
+            f"prompt and ladder"
+        )
+    return errors
 
 
 _config: PathConfig | None = None
@@ -534,4 +613,25 @@ def in_test_mode(task_type: AssignmentType, config: PathConfig | None = None) ->
         declared is not None
         and declared.served_by is ServedBy.NEW_PATH
         and declared.test_mode
+    )
+
+
+def replies_enabled(
+    task_type: AssignmentType, config: PathConfig | None = None
+) -> bool:
+    """Does ``task_type`` take students' replies to its reviews? (task 12a, K3)
+
+    True only for a type on the new path that says ``replies_enabled: true``;
+    a type the file does not declare does not. Every reader of the replies
+    asks this first — the two routes, the reply screen, the submission's
+    state, the rule of the same work — so one switch turns all of them on or
+    off together. ``config`` defaults to the cached file
+    (:func:`get_path_config`); tests pass their own.
+    """
+    cfg = config if config is not None else get_path_config()
+    declared = cfg.task_types.get(task_type)
+    return (
+        declared is not None
+        and declared.served_by is ServedBy.NEW_PATH
+        and declared.replies_enabled
     )

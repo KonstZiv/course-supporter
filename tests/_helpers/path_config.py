@@ -25,6 +25,20 @@ def shipped_with_todays_mentor_for(*task_types: AssignmentType) -> PathConfig:
     raw = load_path_config(_SHIPPED).model_dump(mode="json")
     for task_type in task_types:
         raw["task_types"][task_type.value].update(
-            served_by=ServedBy.TODAYS_MENTOR.value, test_mode=False
+            served_by=ServedBy.TODAYS_MENTOR.value,
+            test_mode=False,
+            replies_enabled=False,
         )
+    return PathConfig.model_validate(raw)
+
+
+def shipped_with_replies_for(*task_types: AssignmentType) -> PathConfig:
+    """The shipped file with students' replies switched on for ``task_types``.
+
+    The shipped file takes no replies (task 12a, K3, phase 1); a test of the
+    replies switches them on in the test alone, on the file's own stages.
+    """
+    raw = load_path_config(_SHIPPED).model_dump(mode="json")
+    for task_type in task_types:
+        raw["task_types"][task_type.value]["replies_enabled"] = True
     return PathConfig.model_validate(raw)

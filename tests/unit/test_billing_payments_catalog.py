@@ -63,7 +63,7 @@ class TestShippedCatalog:
         assert sandbox.prices_minor == {"EUR": 500}
         assert sandbox.active is False
         assert (
-            catalog.provider_item("creem", "sandbox-test-500")
+            catalog.provider_item("creem", "sandbox-test-500", test_mode=True)
             == "prod_2oJ3Yqnf53wOrikCrQGDtk"
         )
 
@@ -87,22 +87,80 @@ class TestShippedCatalog:
             "units-10000-v1": "prod_2u00d6l8qzsfhjeaDTl6FL",
         }
         for package_id, expected_product in expected_creem.items():
-            assert catalog.provider_item("creem", package_id) == expected_product
+            assert (
+                catalog.provider_item("creem", package_id, test_mode=True)
+                == expected_product
+            )
 
         sandbox = catalog.package("sandbox-test-500")
         assert sandbox is not None
         assert sandbox.active is False
 
+    def test_its_live_creem_products(self) -> None:
+        """BIL-LIVE: the live Creem products (the operator's live dashboard,
+        2026-11-18) in live mode, the test ones in test mode — one per active
+        package; never a test id live, never the sandbox package."""
+        catalog = load_catalog(SHIPPED)
+        expected_live = {
+            "units-500-v1": "prod_641KyNDG0h2IN0GPNJ7zKT",
+            "units-1500-v1": "prod_6JbFesPKLrkcURhHH8F3sk",
+            "units-5000-v1": "prod_5t0ORZST2Hw4ZqW8hV5qC7",
+            "units-10000-v1": "prod_1TE2jSDw0OcglA1TY0TC1O",
+        }
+        expected_test = {
+            "units-500-v1": "prod_IjKGKARYgwR25ktF0By1A",
+            "units-1500-v1": "prod_7MjqlyfEXv7zVO37m0vCjN",
+            "units-5000-v1": "prod_5DTm2EO5XM9Rbm53bRKVps",
+            "units-10000-v1": "prod_2u00d6l8qzsfhjeaDTl6FL",
+        }
+        assert catalog.providers_live == {"creem": expected_live}
+        for package_id in expected_live:
+            live = catalog.provider_item("creem", package_id, test_mode=False)
+            test = catalog.provider_item("creem", package_id, test_mode=True)
+            assert (live, test) == (
+                expected_live[package_id],
+                expected_test[package_id],
+            )
+        assert (
+            catalog.provider_item("creem", "sandbox-test-500", test_mode=False) is None
+        )
+        assert not set(expected_live.values()) & set(
+            catalog.providers["creem"].values()
+        )
+        assert set(expected_live) == {p.id for p in catalog.active()}
+
     def test_its_packages_have_exactly_the_locked_fields(self) -> None:
+        """A package on sale states every field; one off sale may leave out
+        its tax mode (added on 2026-11-20 to the packages on sale only)."""
         raw = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
         for package in raw["packages"]:
-            assert set(package) == set(Package.model_fields)
+            optional = set() if package["active"] else {"tax_mode"}
+            assert set(Package.model_fields) - optional <= set(package)
+            assert set(package) <= set(Package.model_fields)
+
+    def test_the_tax_is_added_on_top_of_every_package_on_sale(self) -> None:
+        """Operator 2026-11-20: the tax is added on top (the products in Creem)."""
+        catalog = load_catalog(SHIPPED)
+        assert {p.id: p.tax_mode for p in catalog.active()} == {
+            "units-500-v1": "exclusive",
+            "units-1500-v1": "exclusive",
+            "units-5000-v1": "exclusive",
+            "units-10000-v1": "exclusive",
+        }
+        sandbox = catalog.package("sandbox-test-500")
+        assert sandbox is not None and sandbox.tax_mode is None
 
 
 def test_the_shape_is_locked() -> None:
     """Adding a field to a package or to the file is a decision, not a drift."""
-    assert set(Package.model_fields) == {"id", "units", "prices_minor", "active"}
-    assert set(Catalog.model_fields) == {"packages", "providers"}
+    assert set(Package.model_fields) == {
+        "id",
+        "units",
+        "prices_minor",
+        "active",
+        "tax_mode",
+    }
+    assert set(Catalog.model_fields) == {"packages", "providers", "providers_live"}
 
 
 def test_lookups(tmp_path: Path) -> None:
@@ -122,10 +180,30 @@ def test_lookups(tmp_path: Path) -> None:
     old = catalog.package("old")
     assert old is not None and old.prices_minor == {"EUR": 5, "USD": 6}
     assert catalog.package("nope") is None
-    assert catalog.provider_item("paddle", "starter") == "pri_1"
-    assert catalog.provider_item("paddle", "old") is None
-    assert catalog.provider_item("creem", "starter") is None
-    assert catalog.provider_item("fake", "starter") is None
+    assert catalog.provider_item("paddle", "starter", test_mode=True) == "pri_1"
+    assert catalog.provider_item("paddle", "old", test_mode=True) is None
+    assert catalog.provider_item("creem", "starter", test_mode=True) is None
+    assert catalog.provider_item("fake", "starter", test_mode=True) is None
+
+
+def test_each_mode_reads_its_own_table(tmp_path: Path) -> None:
+    """BIL-LIVE: test mode reads ``providers``, live mode ``providers_live``
+    only — a package without a live id has none in live mode, never the test
+    one."""
+    catalog = load_catalog(
+        _write(
+            tmp_path,
+            {
+                "packages": [_package(), _package(id="other")],
+                "providers": {"creem": {"starter": "prod_test", "other": "prod_t2"}},
+                "providers_live": {"creem": {"starter": "prod_live"}},
+            },
+        )
+    )
+    assert catalog.provider_item("creem", "starter", test_mode=True) == "prod_test"
+    assert catalog.provider_item("creem", "starter", test_mode=False) == "prod_live"
+    assert catalog.provider_item("creem", "other", test_mode=False) is None
+    assert catalog.provider_item("creem", "other", test_mode=True) == "prod_t2"
 
 
 @pytest.mark.parametrize(
@@ -140,6 +218,7 @@ def test_lookups(tmp_path: Path) -> None:
         (_package(active="yes"), "valid boolean"),
         (_package(id="Starter Pack"), "pattern"),
         (_package(colour="red"), "Extra inputs"),
+        (_package(tax_mode="included"), "'inclusive' or 'exclusive'"),
         ({k: v for k, v in _package().items() if k != "active"}, "Field required"),
     ],
 )
@@ -164,6 +243,14 @@ def test_a_bad_package_is_refused(
         ),
         (
             {"packages": [_package()], "providers": {"paddle": {"starter": ""}}},
+            "1 to 64 characters",
+        ),
+        (
+            {"packages": [_package()], "providers_live": {"creem": {"x": "p"}}},
+            "providers_live.creem names no such package",
+        ),
+        (
+            {"packages": [_package()], "providers_live": {"creem": {"starter": ""}}},
             "1 to 64 characters",
         ),
         ({"packages": [_package()], "prices": {}}, "Extra inputs"),

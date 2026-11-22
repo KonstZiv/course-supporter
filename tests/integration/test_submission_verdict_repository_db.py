@@ -17,6 +17,7 @@ Requires ``docker compose up -d``; run with ``--run-db``.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 import pytest
@@ -814,3 +815,182 @@ class TestTheCourseLinkCandidates:
             .where(SubmissionCourseLinkCandidates.submission_id == first.id)
         )
         assert count == 0
+
+
+@dataclass(frozen=True, slots=True)
+class _Place:
+    """Whose submissions, at which task: the four rows a submission names."""
+
+    tenant: Tenant
+    student: Student
+    root: CourseNode
+    doc: AuthoredDocument
+
+
+@pytest.fixture()
+def place(
+    seed_tenant: Tenant,
+    student: Student,
+    seed_root_node: CourseNode,
+    seed_material_entry: AuthoredDocument,
+) -> _Place:
+    return _Place(seed_tenant, student, seed_root_node, seed_material_entry)
+
+
+async def _attempt(
+    session: AsyncSession,
+    at: _Place,
+    *,
+    status: str = "delivered",
+    task_version: str | None = "v1",
+    rows: list[VerdictRecord] | None = None,
+) -> HomeworkSubmission:
+    """A submission at ``task_version`` with ``status`` and, if given, rows."""
+    submission = await _submission(
+        session, tenant=at.tenant, student=at.student, root=at.root, doc=at.doc
+    )
+    submission.status = status
+    submission.task_version = task_version
+    await session.flush()
+    if rows:
+        await _write(session, submission, rows, source_id=uuid.uuid4())
+    return submission
+
+
+async def _earlier(
+    session: AsyncSession, submission: HomeworkSubmission
+) -> tuple[uuid.UUID, list[tuple[str, str]]] | None:
+    """The attempt compared with, as (its id, its rows' items and verdicts)."""
+    found = await SubmissionVerdictRepository(session).earlier_attempt(
+        tenant_id=submission.tenant_id, submission_id=submission.id
+    )
+    if found is None:
+        return None
+    return found.submission_id, [(r.item_id, r.verdict) for r in found.rows]
+
+
+class TestTheEarlierAttempt:
+    """What the remarks of a review are compared with (task 12a, K2).
+
+    The latest earlier attempt of the same student at the same task and the
+    same version of it, that has verdict rows; ``None`` — nothing to compare
+    with. Created in one transaction, the submissions are ordered by id.
+    """
+
+    async def test_the_latest_earlier_attempt_with_its_rows_in_order(
+        self, db_session: AsyncSession, place: _Place
+    ) -> None:
+        await _attempt(db_session, place, rows=[_met("c1", "first")])
+        second = await _attempt(
+            db_session,
+            place,
+            status="completed",
+            rows=[_not_met("c1"), _met("c2", "second")],
+        )
+        current = await _attempt(db_session, place, status="received")
+
+        assert await _earlier(db_session, current) == (
+            second.id,
+            [("c1", "not_met"), ("c2", "met")],
+        )
+
+    async def test_a_copy_of_an_unchanged_work_is_passed_over(
+        self, db_session: AsyncSession, place: _Place
+    ) -> None:
+        """The dedup's copy (``dedup_of``) has no rows: the attempt it
+        repeated is the one compared with."""
+        judged = await _attempt(db_session, place, rows=[_not_met("c1")])
+        copy = await _attempt(db_session, place)
+        copy.attempt_receipt = {"attempt_no": 2, "dedup_of": 1}
+        await db_session.flush()
+        current = await _attempt(db_session, place, status="received")
+
+        assert await _earlier(db_session, current) == (judged.id, [("c1", "not_met")])
+
+    async def test_another_version_of_the_task_is_nothing_to_compare_with(
+        self, db_session: AsyncSession, place: _Place
+    ) -> None:
+        await _attempt(db_session, place, task_version="v0", rows=[_met("c1", "x")])
+        current = await _attempt(db_session, place, status="received")
+
+        assert await _earlier(db_session, current) is None
+
+    async def test_an_attempt_at_another_version_between_is_passed_over(
+        self, db_session: AsyncSession, place: _Place
+    ) -> None:
+        """The version is a condition of the attempt, as the rows are: an
+        edit taken back makes the attempt before it the same version again."""
+        same = await _attempt(db_session, place, rows=[_not_met("c1")])
+        await _attempt(db_session, place, task_version="v2", rows=[_met("c1", "y")])
+        current = await _attempt(db_session, place, status="received")
+
+        assert await _earlier(db_session, current) == (same.id, [("c1", "not_met")])
+
+    @pytest.mark.parametrize("status", ["received", "reviewing", "failed"])
+    async def test_a_submission_in_flight_is_not_an_attempt(
+        self, db_session: AsyncSession, place: _Place, status: str
+    ) -> None:
+        """Two submissions in flight: the other one already has its rows
+        (its evaluation ran) but no review — only the completed attempt
+        before both is compared with. A failed one is no attempt either."""
+        completed = await _attempt(db_session, place, rows=[_not_met("c1")])
+        await _attempt(db_session, place, status=status, rows=[_met("c1", "z")])
+        current = await _attempt(db_session, place, status="received")
+
+        assert await _earlier(db_session, current) == (
+            completed.id,
+            [("c1", "not_met")],
+        )
+
+    async def test_a_first_attempt_has_nothing_to_compare_with(
+        self, db_session: AsyncSession, place: _Place
+    ) -> None:
+        current = await _attempt(db_session, place, status="received")
+
+        assert await _earlier(db_session, current) is None
+
+    async def test_an_unrecorded_version_is_never_the_same(
+        self, db_session: AsyncSession, place: _Place
+    ) -> None:
+        """Before the ledger, or when the doors refused: no ``task_version``."""
+        await _attempt(db_session, place, task_version=None, rows=[_not_met("c1")])
+        current = await _attempt(
+            db_session, place, status="received", task_version=None
+        )
+
+        assert await _earlier(db_session, current) is None
+
+    async def test_a_later_or_deleted_attempt_is_not_compared_with(
+        self, db_session: AsyncSession, place: _Place
+    ) -> None:
+        deleted = await _attempt(db_session, place, rows=[_not_met("c1")])
+        deleted.deleted_at = datetime.now(UTC)
+        current = await _attempt(db_session, place, status="received")
+        await _attempt(db_session, place, rows=[_met("c1", "later")])
+
+        assert await _earlier(db_session, current) is None
+
+    async def test_another_student_task_or_tenant_is_not_this_past(
+        self, db_session: AsyncSession, place: _Place
+    ) -> None:
+        someone_else = replace(place, student=await _student(db_session, place.tenant))
+        another_task = replace(place, doc=await _other_task(db_session, place.root))
+        await _attempt(db_session, someone_else, rows=[_not_met("c1")])
+        await _attempt(db_session, another_task, rows=[_not_met("c1")])
+        current = await _attempt(db_session, place, status="received")
+
+        assert await _earlier(db_session, current) is None
+
+        # The premise: the student's own earlier attempt, beside the others,
+        # is found …
+        judged = await _attempt(db_session, place, rows=[_not_met("c1")])
+        later = await _attempt(db_session, place, status="received")
+        assert await _earlier(db_session, later) == (judged.id, [("c1", "not_met")])
+        # … and never through another tenant.
+        stranger, _ = await _other_tenant(db_session)
+        assert (
+            await SubmissionVerdictRepository(db_session).earlier_attempt(
+                tenant_id=stranger.id, submission_id=later.id
+            )
+            is None
+        )

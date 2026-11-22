@@ -40,9 +40,10 @@ from course_supporter.language import (
     LanguageNotAllowedError,
     normalize_and_validate,
 )
-from course_supporter.models.review_structure import ReviewStructureV1
+from course_supporter.models.review_structure import ReplyKind, ReviewStructureV1
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 from course_supporter.normalizer import Manifest
+from course_supporter.remark_kinds import CommentAuthor, CommentKind
 from course_supporter.storage.course_node_repository import SummaryStatus
 
 # --- Material Tree Nodes ---
@@ -1162,7 +1163,12 @@ class CriteriaOverrideRequest(BaseModel):
             f"``mandatory_points`` (up to {MAX_POINTS}, each an ``id`` — omitted "
             f"for a new point — and a ``text`` of up to {MAX_POINT_CHARS} "
             "characters; there exactly when ``check_method`` is "
-            "``mandatory_points``). ``soft_descent`` is the code's and is not sent."
+            "``mandatory_points``) and, for a ``must``, ``must_by_author`` — "
+            "``true`` makes it mandatory for the pass, ``false`` leaves it to "
+            "weigh in the score; omitted, a ``must`` of the edit this one "
+            "replaces keeps its value there, one raised to ``must`` and a new one "
+            "are mandatory, and a ``must`` of the model's list is not. "
+            "``soft_descent`` is the code's and is not sent."
         ),
     )
 
@@ -1237,7 +1243,8 @@ class CriteriaViewResponse(BaseModel):
         description=(
             "The author's edit for the current version; null when there is none. "
             "An edit of an earlier version is not shown: it is not carried to a "
-            "new one."
+            "new one. Each criterion carries ``must_by_author``: which ``must`` "
+            "criteria the author made mandatory for the pass."
         ),
     )
     in_force: CriteriaInForceResponse | None = Field(
@@ -1614,6 +1621,12 @@ class PortalLoginResponse(BaseModel):
     display_name: str | None = Field(
         default=None, description="Student's portal display name, if set."
     )
+    interface_language: str | None = Field(
+        default=None,
+        description="Canonical ISO 639-3 language of the portal pages the "
+        "student picked, as stored at login, or null if they never picked one. "
+        "Returned here so the portal switches its pages right after login.",
+    )
 
 
 class PortalMeResponse(BaseModel):
@@ -1636,6 +1649,41 @@ class PortalMeResponse(BaseModel):
         description="Canonical ISO 639-3 language the student last asked a "
         "review in, or null if they never asked. The submission form opens on "
         "it, so a standing preference is visible instead of only remembered.",
+    )
+    interface_language: str | None = Field(
+        default=None,
+        description="Canonical ISO 639-3 language of the portal pages the "
+        "student picked, or null if they never picked one. Kept apart from "
+        "the review language: it changes the pages only.",
+    )
+
+
+class InterfaceLanguageRequest(BaseModel):
+    """Request body for PUT /portal/me/interface-language (M-3).
+
+    Validated as the review-language fields are (``_validate_language``):
+    ISO 639-1, 639-3 or an English name is accepted, the canonical 639-3
+    code is what is stored, and a language outside ``config/languages.yaml``
+    is a 422. There is no null: the route sets a choice, never clears it.
+    """
+
+    language: str = Field(
+        description="Language of the portal pages; ISO 639-1 or 639-3 "
+        "accepted, stored as 639-3.",
+        examples=["en", "ukr"],
+    )
+
+    @field_validator("language")
+    @classmethod
+    def _check_language(cls, raw: str) -> str:
+        return _validate_language(raw)
+
+
+class InterfaceLanguageResponse(BaseModel):
+    """Response for PUT /portal/me/interface-language (M-3)."""
+
+    interface_language: str = Field(
+        description="The stored portal pages' language, canonical ISO 639-3."
     )
 
 
@@ -2375,6 +2423,99 @@ class ChannelTouchRequest(PortalTouchRequest):
     )
 
 
+class PortalCommentRequest(BaseModel):
+    """A student's reply to a remark of their review, as it arrives (task 12a).
+
+    The words are checked by the core, not here: an empty, too long or
+    refused text answers with the reply's own codes (``comment_empty``,
+    ``comment_too_long``, ``comment_rejected``), never with a validation
+    error of the schema.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    item_id: str = Field(
+        description="The remark: c3 for a criterion, c3.p2 for a point of it.",
+    )
+    kind: ReplyKind = Field(description="question, objection or comment.")
+    body: str = Field(
+        description="What the student writes: up to 2000 characters, line "
+        "breaks counted once, edges trimmed.",
+    )
+    parent_id: uuid.UUID | None = Field(
+        default=None,
+        description="The comment of the remark's thread this one answers; "
+        "null for a reply to the remark itself.",
+    )
+
+
+class ChannelCommentRequest(PortalCommentRequest):
+    """The same reply, arriving from the caller's channel (task 12a).
+
+    Adds what a tenant key cannot know by itself: WHICH student writes, named
+    by the identifier the caller's own system uses. Never created here.
+    """
+
+    student_external_id: str = Field(
+        min_length=1,
+        description="Student identifier from the caller's system, as used on "
+        "submission. Resolved within the key's tenant; never created here.",
+    )
+
+
+class RemarkComment(BaseModel):
+    """One comment on a remark, as both doors serve it (task 12a).
+
+    A student's reply or the Mentor's answer to one. What the reply screen
+    made of a reply — its topic, its hostility — is the platform's and never
+    served.
+    """
+
+    id: uuid.UUID
+    submission_id: uuid.UUID = Field(
+        description="The submission whose review the comment is attached to.",
+    )
+    item_id: str = Field(description="The remark: c3, or c3.p2 for a point.")
+    parent_id: uuid.UUID | None = Field(
+        description="The comment of the same thread this one answers.",
+    )
+    author: CommentAuthor
+    kind: CommentKind = Field(
+        description="question, objection or comment — a student's reply; "
+        "answer — the Mentor's.",
+    )
+    body: str
+    created_at: datetime
+    answered_in_submission_id: uuid.UUID | None = Field(
+        description="For a student's reply: the submission whose review "
+        "answered it; null while none has.",
+    )
+
+
+class RemarkThread(BaseModel):
+    """The comments on one remark, oldest first; nesting is ``parent_id``."""
+
+    item_id: str
+    comments: list[RemarkComment]
+
+
+class RemarkThreads(BaseModel):
+    """The threads on the remarks of one review (task 12a).
+
+    Each runs through every attempt of the student at the same version of the
+    task; a remark nobody commented on has no thread. ``accepting_replies``
+    says whether this review takes a reply now (K3b).
+    """
+
+    accepting_replies: bool = Field(
+        description="Whether a reply to this review would be taken now: the "
+        "task takes replies, and this is the student's latest reviewed "
+        "attempt at the version of the task in force. The limit of replies "
+        "per remark is not counted in.",
+    )
+    threads: list[RemarkThread]
+
+
 class FeedbackTouch(BaseModel):
     """A student's own answer about a review, as it is served back.
 
@@ -2752,6 +2893,10 @@ class BillingPackageResponse(BaseModel):
         description="Price per currency (ISO 4217) in its minor units (cents); "
         "EUR always."
     )
+    validity_months: int = Field(
+        description="How long the package's units are valid from the day of "
+        "purchase, in months."
+    )
 
 
 class BillingPurchaseState(BaseModel):
@@ -2760,9 +2905,10 @@ class BillingPurchaseState(BaseModel):
     open: bool = Field(description="True when a checkout would be opened.")
     reason: Literal["payment_unavailable", "purchase_not_open"] | None = Field(
         description="Why it is closed; null when open. payment_unavailable: no "
-        "payment provider is switched on; purchase_not_open: the provider is in "
-        "test mode and the holder's account is not marked for test purchases "
-        "(the screen says the purchase is not open yet)."
+        "payment provider is switched on; purchase_not_open: a test purchase (the "
+        "provider is in test mode, or purchases are for marked accounts only) and "
+        "the holder's account is not marked (the screen says the purchase is not "
+        "open yet)."
     )
 
 
@@ -2934,8 +3080,8 @@ class BillingSpendingResponse(BaseModel):
 
     period: BillingSpendingPeriod
     charging_enabled: bool = Field(
-        description="BILLING_CHARGING_ENABLED: while false nothing is charged "
-        "and every number is 0."
+        description="Charging applies to the author's account (every account, "
+        "or a marked one): while false nothing is charged and every number is 0."
     )
     totals: BillingSpendingUnits
     courses: list[BillingSpendingCourse]
@@ -2961,3 +3107,96 @@ class BillingCheckoutStateResponse(BaseModel):
     balance_after: int | None = Field(
         description="Credited: the units available now; null otherwise."
     )
+
+
+# ── Public numbers (BIL-PUBLIC-NUMBERS) ──────────────────────────────
+
+
+class _PublicShape(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class PublicRules(_PublicShape):
+    reserve_multiplier: int = Field(
+        description="A review's start holds this many times its expected cost."
+    )
+
+
+class PublicPackage(_PublicShape):
+    """One package on sale in one currency."""
+
+    id: str = Field(description="The package's id.")
+    units: int = Field(description="Units the package brings.")
+    price_minor: int = Field(description="Its price in minor units (cents).")
+    currency: str = Field(description="ISO 4217; EUR always among the lines.")
+    validity_months: int = Field(
+        description="How long the units are valid from the day of purchase, in months."
+    )
+    tax_mode: Literal["inclusive", "exclusive"] | None = Field(
+        description="inclusive: the tax is in the price; exclusive: the tax is "
+        "added on top (as the product is set up at the merchant of record); "
+        "null: not stated."
+    )
+
+
+class PublicActual(_PublicShape):
+    """The actual cost of one finished review, in units."""
+
+    min: int | None
+    typical: int | None = Field(
+        description="The median, rounded as a charged fact is (a half up)."
+    )
+    max: int | None
+
+
+class PublicStartThreshold(_PublicShape):
+    """The price before a review (what the doors need available), in units."""
+
+    typical: int | None = Field(description="The median, rounded up.")
+    max: int | None
+
+
+class PublicSmallestPackageReviews(_PublicShape):
+    """How many reviews in a row the smallest package lets through."""
+
+    low: int | None = Field(description="The least over the tasks of the sample.")
+    typical: int | None = Field(description="With the typical price and cost.")
+    high: int | None = Field(description="The most over the tasks of the sample.")
+
+
+class PublicSample(_PublicShape):
+    reviews: int = Field(description="Finished reviews with a cost in the sample.")
+    window_days: int = Field(description="The sample's days before as_of.")
+    includes_internal: bool = Field(
+        description="The platform's own (test) students are in the sample."
+    )
+
+
+class PublicReviewGroup(_PublicShape):
+    status: Literal["ready", "insufficient_data", "not_charged"] = Field(
+        description="ready: the sample has a finished review; insufficient_data: "
+        "it has none (numbers null); not_charged: this kind of review charges no "
+        "units today (numbers null)."
+    )
+    actual: PublicActual
+    start_threshold: PublicStartThreshold
+    smallest_package_reviews: PublicSmallestPackageReviews
+    sample: PublicSample
+
+
+class PublicReviewCost(_PublicShape):
+    homework: PublicReviewGroup = Field(description="Tasks and short tasks.")
+    project: PublicReviewGroup = Field(description="Projects.")
+
+
+class PublicNumbersResponse(_PublicShape):
+    """GET /public/numbers: what a review costs and how far a package goes,
+    from the platform's data; the same until the server's next start."""
+
+    contract_version: int = Field(description="The version of this shape: 1.")
+    as_of: datetime = Field(description="When the numbers were computed (UTC).")
+    rules: PublicRules
+    packages: list[PublicPackage] = Field(
+        description="Packages on sale, fewest units first; a line per currency."
+    )
+    review_cost: PublicReviewCost

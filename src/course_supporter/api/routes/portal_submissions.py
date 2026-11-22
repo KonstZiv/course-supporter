@@ -8,6 +8,9 @@ Routes
   its key (task 07).
 - ``POST /portal/tasks/{authored_document_id}/test-submissions`` — answer a test
   with its answers (task 07).
+- ``POST`` / ``GET /portal/submissions/{submission_id}/comments`` — reply to a
+  remark of the review, and read the threads of its remarks (task 12a, K3;
+  the core is ``homework/reply_core.py``).
 
 These live on the native session path (bearer token, ``get_current_student``):
 no API key, no scope. The session entry-point reuses the SAME submission core as
@@ -33,7 +36,12 @@ from course_supporter.api.deps import (
     get_s3_client,
     get_session,
 )
-from course_supporter.api.routes._feedback_shared import to_touch
+from course_supporter.api.routes._feedback_shared import (
+    remark_comments,
+    to_remark_comment,
+    to_remark_threads,
+    to_touch,
+)
 from course_supporter.api.routes._portal_shared import (
     curated_not_opened,
     curated_presentation,
@@ -51,17 +59,22 @@ from course_supporter.api.schemas import (
     OptionalLanguageForm,
     PortalBaseDownload,
     PortalBillingNote,
+    PortalCommentRequest,
     PortalDeltaReceipt,
     PortalSubmissionDetail,
     PortalSubmissionListItem,
     PortalSubmitResponse,
     PortalTestSubmitRequest,
     PortalTouchRequest,
+    RemarkComment,
+    RemarkThreads,
     TestStructureResponse,
 )
 from course_supporter.auth.context import StudentContext
 from course_supporter.feedback_kinds import FeedbackTargetKind
 from course_supporter.homework.feedback_core import touch_review
+from course_supporter.homework.remark_comments import RemarkCommentRepository
+from course_supporter.homework.reply_core import post_reply, read_threads
 from course_supporter.homework.submission_core import (
     MAX_HOMEWORK_SIZE,
     PROJECT_SUBMISSION_MAX_UPLOAD_BYTES,
@@ -102,6 +115,7 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StudentDep = Annotated[StudentContext, Depends(get_current_student)]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
 ArqDep = Annotated[ArqRedis, Depends(get_arq_redis)]
+CommentsDep = Annotated[RemarkCommentRepository, Depends(remark_comments)]
 
 # A single generic 404 for every "you cannot submit here" case — unknown task,
 # non-task document, foreign tenant, or not enrolled — so the portal never leaks
@@ -382,7 +396,7 @@ async def _require_units(
     is above 0. A review the author pays for is never refused here: it is
     taken, and waits for the author's units if it must (5a, item 2).
     """
-    from course_supporter.billing.charging import charging_enabled
+    from course_supporter.billing.charging import charging_possible
     from course_supporter.billing.quotes import (
         UnitsRefusedError,
         require_enough,
@@ -390,7 +404,7 @@ async def _require_units(
     )
     from course_supporter.security.exceptions import SecurityRejectedError
 
-    if not charging_enabled():
+    if not charging_possible():
         return
     from course_supporter.api.routes.billing_estimates import (
         FileForQuote,
@@ -773,3 +787,77 @@ async def touch_portal_submission(
     )
     await session.commit()
     return to_touch(row)
+
+
+@router.post(
+    "/portal/submissions/{submission_id}/comments",
+    response_model=RemarkComment,
+    status_code=201,
+)
+async def reply_to_portal_remark(
+    student: StudentDep,
+    session: SessionDep,
+    comments: CommentsDep,
+    body: PortalCommentRequest,
+    submission_id: Annotated[
+        uuid.UUID,
+        Path(description="The submission whose review's remark is answered."),
+    ],
+) -> RemarkComment:
+    """Reply to a remark of the review — the student's own session (task 12a).
+
+    One of two doors into the same core, as for a touch: the student is the
+    session's, and the submission is resolved by the helper the detail route
+    uses, so a foreign, unknown or soft-deleted one reaches the core as
+    ``None`` and comes back as the read path's one 404. A type that takes no
+    replies answers the same 404. Everything else — which review replies go
+    to, the remark, the thread, the limit, the words — is the core's
+    (``homework/reply_core.py``), and its refusals are 422 with
+    ``{code, details}``.
+    """
+    submission = await HomeworkRepository(session).get_owned(
+        submission_id, student.student_id
+    )
+    reply = await post_reply(
+        session,
+        submission=submission,
+        student_id=student.student_id,
+        item_id=body.item_id,
+        kind=body.kind,
+        body=body.body,
+        parent_id=body.parent_id,
+        comments=comments,
+    )
+    await session.commit()
+    return to_remark_comment(reply)
+
+
+@router.get(
+    "/portal/submissions/{submission_id}/comments",
+    response_model=RemarkThreads,
+)
+async def read_portal_remark_threads(
+    student: StudentDep,
+    session: SessionDep,
+    comments: CommentsDep,
+    submission_id: Annotated[
+        uuid.UUID,
+        Path(description="The submission whose review's threads are read."),
+    ],
+) -> RemarkThreads:
+    """The threads on the remarks of the review — the student's own (task 12a).
+
+    Each thread runs through every attempt of the student at the same version
+    of the task, oldest comment first. A type that takes no replies has none;
+    a submission the student cannot read is the read path's one 404.
+    """
+    submission = await HomeworkRepository(session).get_owned(
+        submission_id, student.student_id
+    )
+    threads = await read_threads(
+        session,
+        submission=submission,
+        student_id=student.student_id,
+        comments=comments,
+    )
+    return to_remark_threads(threads)

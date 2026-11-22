@@ -20,8 +20,10 @@ Screens show units only, and pick their words by the codes (``low``,
 ``next_may_fail``, ``runs_out_soon``). The thresholds are settings
 (``BILLING_REMINDER_*``, ``BILLING_EXPIRY_NOTICE_DAYS``).
 
-Both carry ``charging_enabled`` — the switch ``BILLING_CHARGING_ENABLED``
-(:func:`course_supporter.billing.charging.charging_enabled`), the value and the
+Both carry ``charging_enabled`` — does charging apply to the account the
+answer is about (:func:`course_supporter.billing.charging.charging_applies`):
+the author's own; for a student, the payer of their reviews that ``paid_by``
+names (with ``?course_id=``, that course's rule counts). The value and the
 source of ``GET /billing/spending`` and of the estimate routes (BIL-E3). The
 other fields do not depend on it: what to show while charging is off is the
 screen's decision.
@@ -38,6 +40,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_current_student, get_session
+from course_supporter.api.routes.public_numbers import NumbersDep
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.billing import charging
@@ -60,7 +63,8 @@ PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
 
 
 _CHARGING_ENABLED = (
-    "BILLING_CHARGING_ENABLED, as in GET /billing/spending and the estimate "
+    "Charging applies to the account this answer is about (for a student: the "
+    "payer paid_by names), as in GET /billing/spending and the estimate "
     "routes: while false nothing is charged or refused; the other fields are "
     "computed the same either way."
 )
@@ -75,8 +79,10 @@ class ExpiringSoon(BaseModel):
 
 class StudentOutlookResponse(BaseModel):
     reviews_left: int | None = Field(
-        description="About how many reviews the available units cover; null "
-        "when the author pays or nothing is known to price a review."
+        description="About how many reviews the available units cover, at the "
+        "typical price and cost of GET /public/numbers (the student's own average "
+        "cost when they have one); null when the author pays, the public numbers "
+        "are not computed yet, or nothing is known to price a review."
     )
     warning: Literal["low", "next_may_fail"] | None
     expiring_soon: ExpiringSoon | None
@@ -122,6 +128,7 @@ def _expiring(found: Expiring | None) -> ExpiringSoon | None:
 async def get_student_outlook(
     student: StudentDep,
     session: SessionDep,
+    numbers: NumbersDep,
     course_id: Annotated[
         uuid.UUID | None,
         Query(description="The course (root) whose payment rule counts."),
@@ -133,6 +140,7 @@ async def get_student_outlook(
         tenant_id=student.tenant_id,
         student_id=student.student_id,
         settings=get_settings(),
+        numbers=numbers.numbers if numbers is not None else None,
         course_id=course_id,
     )
     return StudentOutlookResponse(
@@ -140,7 +148,7 @@ async def get_student_outlook(
         warning=found.warning,
         expiring_soon=_expiring(found.expiring_soon),
         paid_by=found.paid_by,
-        charging_enabled=charging.charging_enabled(),
+        charging_enabled=found.charging_enabled,
     )
 
 
@@ -167,5 +175,7 @@ async def get_author_outlook(
             oldest_at=held.oldest_at,
             missing_units=held.missing_units,
         ),
-        charging_enabled=charging.charging_enabled(),
+        charging_enabled=await charging.charging_applies(
+            session, account.id if account is not None else None
+        ),
     )

@@ -16,8 +16,8 @@ Two-pass normalization design:
 
 * :func:`normalize_filename` -- NFKC over filename, then unchanged
   for whitelist lookup. Filename rendering attacks like
-  ``homework‮.txt`` (RTL override) become deterministic
-  strings before whitelist comparison; the ``‮`` codepoint
+  ``homework<U+202E>.txt`` (RTL override) become deterministic
+  strings before whitelist comparison; the U+202E codepoint
   survives NFKC -- detection is the unicode_check module's job.
 
 Two distinct callables (rather than ``normalize(text, *, form=...)``)

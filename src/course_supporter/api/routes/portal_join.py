@@ -131,7 +131,8 @@ SIGNUP_EMAIL = "portal_signup_confirm"
 async def get_join_card(
     tenant_id: uuid.UUID, key: CourseKey, session: SessionDep
 ) -> JoinCourseCardResponse:
-    """The course the link leads to: its title, its author and its languages."""
+    """The course the link leads to: its title, its author, its languages and
+    the revision of the terms in force (the signup form agrees to it)."""
     found = await find_open_course(session, tenant_id=tenant_id, key=key)
     if found is None:
         raise refusal(JoinRefusal.COURSE_NOT_FOUND)
@@ -140,6 +141,7 @@ async def get_join_card(
         course_title=found.course.title,
         author_name=found.tenant.name,
         languages=await course_languages(session, found.course),
+        terms_version=get_settings().billing_terms_version,
     )
 
 

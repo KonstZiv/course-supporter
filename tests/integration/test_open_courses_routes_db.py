@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import InstrumentedAttribute
 from structlog.testing import capture_logs
 
+from course_supporter.config import get_settings
 from course_supporter.services.email_text import render_email
 from course_supporter.storage.orm import (
     BillingAccount,
@@ -160,7 +161,26 @@ class TestAuthorLink:
             "course_title": "Python basics",
             "author_name": world.tenant_a_name,
             "languages": ["ukr"],
+            "terms_version": terms(),
         }
+
+    async def test_the_card_gives_the_terms_in_force_and_signup_takes_them(
+        self, client: AsyncClient, world: World
+    ) -> None:
+        key = await open_link(client, world.course)
+        card = await client.get(f"/api/v1/portal/join/{world.tenant_a}/{key}")
+        assert card.status_code == 200, card.text
+        version = card.json()["terms_version"]
+        assert version == get_settings().billing_terms_version
+        resp = await signup(
+            client,
+            world.tenant_a,
+            key,
+            "reader",
+            "r@example.com",
+            terms_version=version,
+        )
+        assert resp.status_code == 202, resp.text
 
     async def test_closed_unknown_and_other_tenant_are_one_404(
         self, client: AsyncClient, world: World

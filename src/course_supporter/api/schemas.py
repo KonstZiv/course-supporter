@@ -1983,6 +1983,10 @@ class JoinCourseCardResponse(BaseModel):
         description="ISO 639-3 languages of the course: its own language "
         "first, then the other languages of its materials."
     )
+    terms_version: str = Field(
+        description="Revision of the billing terms in force: the date it took "
+        "effect, YYYY-MM-DD. Signup sends it back as ``terms_version``."
+    )
 
 
 class JoinSignupRequest(BaseModel):

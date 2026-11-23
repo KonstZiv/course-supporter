@@ -160,6 +160,7 @@ async def rebuild_input(
         submission,
         submission_text=work,
         language=review_language.code,
+        text_type=True,
     )
     stored = await SubmissionVerdictRepository(session).get_explanation(
         tenant_id=submission.tenant_id, submission_id=submission.id

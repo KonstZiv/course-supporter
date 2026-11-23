@@ -1188,7 +1188,7 @@ class CriteriaComposer(Protocol):
 | `course_links.py` | порт пошуку місць курсу (`CourseLinkFinder`), адаптер за поняттями і стадія-код `course_link_lookup`: рядки вердиктів → невиконані критерії → пошук → запис кандидатів |
 | `verdict_explanation.py` | чисті функції: факти для пояснення, форма відповіді, звірка відповіді з фактами, вирізання непоказаних посилань |
 | `review_explanation.py` | стадія `review_explanation`: рядки вердиктів → факти → показані місця курсу → запит → вирізання «вигадки» → запис пояснення |
-| `agents/review_explainer.py` | запит до моделі: промпт стадії — `prompts/review_explanation/v3.md` (v2 і v1 лишаються як історія) або для проєкту `prompts/review_explanation_project/v1.md`, схема відповіді на дроті |
+| `agents/review_explainer.py` | запит до моделі: промпт стадії — `prompts/review_explanation/v4.md` (v3, v2 і v1 лишаються як історія) або для проєкту `prompts/review_explanation_project/v1.md`, схема відповіді на дроті |
 | `agents/wire_schema.py` | схема відповіді на дроті — строга й без описів: вказівки моделі дає лише промпт, а описи полів пишуться для розробників |
 | `course_link_delivery.py` | перевірка посилань перед видачею (задача 10, К6): вибір моделі → місця → чи досі кандидати → заміна або «застарілість» → знімок у рядку кандидатів |
 | `text_result.py` | збирач рецензії `short_task`, `task` і (ланцюг проєкту, К6) `project`: читає рядки й пояснення, рахує, кладе посилання, розкладає зауваження за станами між спробами, складає структуру й markdown; після видачі — мірка справжності |
@@ -1404,6 +1404,17 @@ GROUP BY repeat_reason ORDER BY rows DESC;
    механіки перевірки («автоматична перевірка»); місцю курсу — лише те, що показують назва й
    уривок; без готового розв'язку. Змінні й слоти — ті самі, що у v2, тож user-повідомлення байт у
    байт v2-ве (`tests/unit/test_prompts/test_text_stage_inputs_unchanged.py`).
+   Промпт — `prompts/review_explanation/v4.md` (задача 13, сторона пояснення, 23.11): замість
+   «Never the solution» — **правило прикладів**: приклади разом покривають не більше
+   `result.example_limit` критеріїв (рахує код: `N // 2` від числа критеріїв переліку; у відповіді
+   на одну репліку — `result.reply_example_limit`, `N * 3 // 10`, лише у `v4_with_replies.md`;
+   `verdict_explanation.example_limits`); межа 0 — чинне правило дослівно; приклад — короткий, де
+   можливо на загальнішому випадку; рішення всього завдання — ніколи. І **минуле зауваження**:
+   критерій зі станом `open` отримує `previous_remark` (`what`, `why`, `todo` пояснення попередньої
+   спроби), якщо та спроба є, має пояснення тією самою мовою і зауваження з тим самим `id`
+   (`earlier_review.previous_remarks`; попередню спробу читає одна функція —
+   `earlier_review.read_earlier_review`, нею ж користується збирач для «виправлено»). Проєкт не
+   бачить ні того, ні іншого: його запит байт у байт той самий.
 4. **Звірка з фактами** — на кожній відповіді, на кожному щаблі (`read_explanation`, правила — в
    одній функції `_disagreements`): `passed` дорівнює заліку коду; рівно одне зауваження на кожен
    невиконаний критерій будь-якої ваги й жодного на виконаний чи на пункт; тексти, які друкує
@@ -1850,7 +1861,9 @@ Stage 1 або нормалізації проєкту, до Stage 2). Пода�
 - пошук і перевірка посилань на курс — `course_links`, `course_link_delivery`
   (`settle_course_links`, `replacement_for`), `course_link_position`;
 - збирач — `text_result`, `review_assembler`;
-- стани зауважень між спробами — `is_credited`, `remark_states`, `with_remark_states` (задача 12а).
+- стани зауважень між спробами — `is_credited`, `remark_states`, `with_remark_states` (задача 12а);
+- що бачить пояснення — минуле зауваження й межі прикладів (`earlier_review.previous_remarks`,
+  `verdict_explanation.example_limits`; задача 13, `10`).
 
 Забута — і та сама робота отримає копію рецензії, яку написав старий код. `2` — після виправлення
 перевірки цитат 07.11.
@@ -2182,7 +2195,8 @@ Decision 1 / OpenAI, вибір виміром 17.11): реалізує `classif
 **Стадії.** Ті самі виконавці під іншими іменами, як у проєкту: `criteria_evaluation_with_replies`
 і `review_explanation_with_replies` (`path_stages.py`), власні промпти
 `prompts/criteria_evaluation/v1_with_replies.md` і `prompts/review_explanation/v3_with_replies.md`
-(копії каліброваних із позначеними блоками `{# ── 12a K4 … ── #}`), драбини й стелі — базових
+(копії каліброваних із позначеними блоками `{# ── 12a K4 … ── #}`; з задачі 13 — `v4_with_replies.md`,
+копія `v4.md` з тими самими блоками), драбини й стелі — базових
 стадій (не калібровано — калібрує живий вимір 12а). Перемикання — за назвою стадії всередині
 `criteria_evaluation.evaluate_criteria` і `review_explanation.explain_verdicts`; решта шляхів і
 промптів — байт у байт ті самі (замок — `tests/unit/test_prompts/test_reply_prompts.py`). Стадія

@@ -3,7 +3,10 @@
 Task 12a, K4. Two new prompts beside the calibrated ones, for two new stages:
 ``prompts/criteria_evaluation/v1_with_replies.md`` and
 ``prompts/review_explanation/v3_with_replies.md`` — each a copy of its
-calibrated prompt with marked blocks for the replies. The locks here:
+calibrated prompt with marked blocks for the replies. Since task 13
+(2026-11-23) the explanation's is ``v4_with_replies.md``, a copy of ``v4.md``
+with the same blocks and the limit of examples of an answer to a reply. The
+locks here:
 
 * the new prompts render with the slot lock, and a reply cannot open or close
   a slot;
@@ -41,25 +44,31 @@ from course_supporter.homework.student_replies import (
     plan_replies,
     replies_for_evaluation,
 )
-from course_supporter.homework.verdict_explanation import explanation_facts
+from course_supporter.homework.verdict_explanation import (
+    example_limits,
+    explanation_facts,
+)
 from course_supporter.llm.prompt_loader_md import load_prompt, slot_names
 from course_supporter.models.source import AssignmentType
 from course_supporter.remark_kinds import CommentAuthor, CommentKind, CommentTopic
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _EVALUATION = "prompts/criteria_evaluation/v1_with_replies.md"
-_EXPLANATION = "prompts/review_explanation/v3_with_replies.md"
+_EXPLANATION = "prompts/review_explanation/v4_with_replies.md"
 
 # sha256 of the two new files as written for 12a K4: an edit is a decision
 # made on purpose, with a new digest here — and a new live measurement. The
 # explanation's re-taken in K4's phase 2: K3's categories of a hostile reply
 # and the product owner's new words of the folded conversation (2026-11-17).
+# The explanation's moved on purpose to v4_with_replies by task 13
+# (2026-11-23); v3_with_replies (21c5d783…) stays in the repository as history.
 _NEW = {
     _EVALUATION: "5b90a8c0161c3c5806f75923489a768f818db368c51977a32070d5e2d3fe4865",
-    _EXPLANATION: "21c5d783e0a4c517e96017de753eb9d9bb7587e066a685f30affaf48a14bdb4c",
+    _EXPLANATION: "d41ff085df498f72dc69345fef7f7dae5cc963c48595d994e5d37bc2111d06db",
 }
 # sha256 of every prompt the other paths read, as on main before 12a K4; the
-# project's prompts as in project chain K8 (2026-11-22).
+# project's prompts as in project chain K8 (2026-11-22); the text types'
+# explanation moved on purpose from v3 to v4 by task 13 (2026-11-23).
 _CALIBRATED = {
     "prompts/safety_check/v2.md": (
         "04d5a1d0ddb18b58506a963e1744640c8aaca95340f37c7d68372702822ac9b7"
@@ -70,8 +79,8 @@ _CALIBRATED = {
     "prompts/criteria_evaluation/v1.md": (
         "1067450153909de49254dfcd27d752b27d6753a142d04720149c845eb68d24a0"
     ),
-    "prompts/review_explanation/v3.md": (
-        "6b1bca3ca00762c5beabe84ca4bc415f16b75630024c8fe6ff76357c362ca435"
+    "prompts/review_explanation/v4.md": (
+        "2fde8ef73e2817d12f8d9d171c9bb5a11900713214508e8bf6239e3ed3655113"
     ),
     "prompts/criteria_evaluation_project/v1.md": (
         "bcb9cdc0ebb8527d343ce4bd6b4e80427f1f2409f73c1e1ac5748d5032b6b9b7"
@@ -194,6 +203,7 @@ def _explanation_input(*, replies: bool) -> review_explainer.ExplanationInput:
         language="Ukrainian",
         course_links={},
         replies=plan.view if replies else None,
+        example_limits=example_limits(1),
     )
 
 

@@ -189,7 +189,9 @@ quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 # сувора гілка заліку — лише власні must автора (2026-11-17)
 # відповіді на репліки студента: розділ replies, копія без нього
 # (2026-11-17; злито після суворої гілки 2026-11-22)
-VERDICT_RULES_VERSION: Final[int] = 9
+# пояснення бачить своє минуле зауваження до відкритого критерію,
+# межі прикладів рахує код (задача 13, сторона пояснення, 2026-11-23)
+VERDICT_RULES_VERSION: Final[int] = 10
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -213,7 +215,14 @@ K4, 2026-11-17; merged after the strict branch on 2026-11-22): the check of
 the explanation asks one answer per reply, a joke that fails its check is
 replaced by the phrasebook's, the builder lays the answers out in the section
 "replies", and the copy of a review given to the same work carries no section
-of replies. It enters
+of replies; 10 — the explanation sees its earlier remark on a criterion still
+open, and the code's limits of examples (task 13, explanation side,
+2026-11-23): a criterion whose remark stayed open since the earlier attempt
+is shown the explanation's own remark on it then, in the same language
+(``earlier_review.previous_remarks``), and a text type's request shows how
+many criteria the examples may cover — half of the list's criteria in the
+review, 30 % in one answer to a reply, rounded down
+(``verdict_explanation.example_limits``). It enters
 the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,

@@ -47,10 +47,15 @@ def test_the_evaluator_is_where_it_was() -> None:
     2026-11-22): the two stages of ``repeat_with_replies`` and the answers to
     the replies — verdict rules 8 -> 9, the version ``ev1:575ab64bf49dbf71``
     -> ``ev1:e054de5f5bc7b612``.
+
+    Moved on purpose by task 13 (explanation side, 2026-11-23): prompts v4 and
+    v4_with_replies, the earlier remark on a criterion still open and the
+    code's limits of examples — verdict rules 9 -> 10, the version
+    ``ev1:e054de5f5bc7b612`` -> ``ev1:b7d174917a859921``.
     """
     shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
     for task_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
         version = evaluator_version(task_type, shipped, prompt_base_path=_REPO_ROOT)
-        assert version == "ev1:e054de5f5bc7b612", task_type
-    assert criteria_verdicts.VERDICT_RULES_VERSION == 9
+        assert version == "ev1:b7d174917a859921", task_type
+    assert criteria_verdicts.VERDICT_RULES_VERSION == 10

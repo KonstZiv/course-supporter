@@ -138,6 +138,7 @@ from course_supporter.homework.criteria_verdicts import (
     ScoredItem,
     pass_decision,
 )
+from course_supporter.homework.earlier_review import read_earlier_review
 from course_supporter.homework.judged_list import (
     judged_author_musts,
     judged_layer,
@@ -492,7 +493,8 @@ async def _fixed_words(
     """The words of the fixed criteria, read only when a criterion is fixed.
 
     The explanation of the earlier attempt the stage compared with
-    (``SubmissionVerdictRepository.earlier_attempt``, the same read), when
+    (:func:`~course_supporter.homework.earlier_review.read_earlier_review`,
+    the same read as the evaluation stage's), when
     there is one, and the criteria the rows were judged against
     (:func:`~course_supporter.homework.judged_list.read_judged_list`) for a
     fixed criterion that explanation has no remark on — or when an attempt
@@ -500,20 +502,10 @@ async def _fixed_words(
     """
     if RemarkState.FIXED not in states.values():
         return None
-    stored = SubmissionVerdictRepository(session)
-    earlier = await stored.earlier_attempt(
-        tenant_id=submission.tenant_id, submission_id=submission.id
-    )
-    remarks: tuple[CriterionRemark, ...] = ()
-    if earlier is not None:
-        explained = await stored.get_explanation(
-            tenant_id=submission.tenant_id, submission_id=earlier.submission_id
-        )
-        if explained is not None:
-            remarks = ExplanationAnswer.model_validate(explained.body).remarks
+    earlier = await read_earlier_review(session, submission)
     criteria = await read_judged_list(session, submission, rows)
     return FixedWords(
-        remarks={remark.id: remark for remark in remarks},
+        remarks=dict(earlier.remarks) if earlier is not None else {},
         criteria={criterion.id: criterion for criterion in criteria},
     )
 

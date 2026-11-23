@@ -22,6 +22,15 @@ The recorded input:
     ``homework/explanation_input_rebuild.py`` rebuilds one from a
     submission's rows.
 
+    Since task 13 the record also keeps the remarks made before
+    (``previous_remarks``, only when there are some), and the limits of
+    examples are counted again from the facts' criteria
+    (:func:`~course_supporter.homework.verdict_explanation.example_limits`),
+    as the stage counts them. A prompt written before task 13 never reads
+    them: :func:`as_prompt_reads` renders it from the input without them, so
+    v3 and v4 are measured side by side on the same record, each from what
+    its stage would send.
+
 The request:
     Built by the real router (:class:`~course_supporter.llm.stage_router.StageRouter`)
     from the stage's own description in ``config/submission_paths.yaml`` —
@@ -42,7 +51,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -61,6 +70,8 @@ from course_supporter.homework.verdict_explanation import (
     CriterionFacts,
     ExplanationFacts,
     JudgedItem,
+    PreviousRemark,
+    example_limits,
     read_explanation,
 )
 from course_supporter.llm.error_categories import (
@@ -94,10 +105,33 @@ STAGE_NAME: Final = "review_explanation"
 """The stage whose prompts are measured."""
 
 PROMPT_REFS: Final = (
-    "prompts/review_explanation/v2.md",
     "prompts/review_explanation/v3.md",
+    "prompts/review_explanation/v4.md",
 )
 """The calibrated prompt and its successor, in that order."""
+
+BEFORE_TASK_13: Final = frozenset(
+    {
+        "prompts/review_explanation/v1.md",
+        "prompts/review_explanation/v2.md",
+        "prompts/review_explanation/v3.md",
+    }
+)
+"""The prompts whose request has no limits of examples and no remarks made
+before: their stage was sent neither (:func:`as_prompt_reads`)."""
+
+
+def as_prompt_reads(shown: ExplanationInput, prompt_ref: str) -> ExplanationInput:
+    """``shown`` as the stage of ``prompt_ref`` built it.
+
+    A prompt of :data:`BEFORE_TASK_13` is rendered without the limits of
+    examples and the remarks made before — byte for byte the request it was
+    calibrated on, and the one the call register hashed for it; every other
+    prompt from ``shown`` as it is.
+    """
+    if prompt_ref in BEFORE_TASK_13:
+        return replace(shown, example_limits=None, previous_remarks={})
+    return shown
 
 
 # ── The recorded input ──
@@ -114,7 +148,7 @@ def record_of(
     ``provenance`` is what the recorder knew about where the input came from
     — free-form, carried to the measurement's summary unread.
     """
-    return {
+    record: dict[str, Any] = {
         "format": RECORD_FORMAT,
         "submission_id": submission_id,
         "provenance": dict(provenance or {}),
@@ -135,6 +169,12 @@ def record_of(
             },
         },
     }
+    if shown.previous_remarks:
+        record["input"]["previous_remarks"] = {
+            criterion_id: {"what": r.what, "why": r.why, "todo": r.todo}
+            for criterion_id, r in shown.previous_remarks.items()
+        }
+    return record
 
 
 def input_of(record: Mapping[str, Any]) -> ExplanationInput:
@@ -149,6 +189,7 @@ def input_of(record: Mapping[str, Any]) -> ExplanationInput:
         raise ValueError(msg)
     data = record["input"]
     facts = data["facts"]
+    criteria = tuple(_criterion_of(c) for c in facts["criteria"])
     return ExplanationInput(
         task_title=data["task_title"],
         task_description=data["task_description"],
@@ -156,13 +197,20 @@ def input_of(record: Mapping[str, Any]) -> ExplanationInput:
         facts=ExplanationFacts(
             passed=bool(facts["passed"]),
             score=int(facts["score"]),
-            criteria=tuple(_criterion_of(c) for c in facts["criteria"]),
+            criteria=criteria,
         ),
         submission_text=data["submission_text"],
         language=data["language"],
         course_links={
             criterion_id: tuple(_link_of(link) for link in links)
             for criterion_id, links in data["course_links"].items()
+        },
+        example_limits=example_limits(len(criteria)),
+        previous_remarks={
+            criterion_id: PreviousRemark(
+                what=remark["what"], why=remark["why"], todo=remark["todo"]
+            )
+            for criterion_id, remark in data.get("previous_remarks", {}).items()
         },
     )
 
@@ -362,15 +410,17 @@ async def send_once(
 ) -> Sent:
     """Render ``prompt_ref`` from ``shown`` and send it once to the first rung.
 
-    ``provider`` ``None`` sends nothing: the request is captured, answered
-    with ``{}``, and returned — no network, no key.
+    ``shown`` is rendered as the prompt's stage built it
+    (:func:`as_prompt_reads`). ``provider`` ``None`` sends nothing: the
+    request is captured, answered with ``{}``, and returned — no network, no
+    key.
 
     Raises:
         RuntimeError: Nothing was captured — the router refused to send the
             request (only raised when there is no provider to blame).
     """
     return await send_rendered_once(
-        render_context(shown),
+        render_context(as_prompt_reads(shown, prompt_ref)),
         prompt_ref,
         stage=stage,
         stage_name=STAGE_NAME,

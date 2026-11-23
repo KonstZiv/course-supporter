@@ -7,7 +7,7 @@ what an answer must agree with belong to
 :mod:`course_supporter.homework.verdict_explanation`; the stage that reads the
 verdicts and keeps the answer is :mod:`course_supporter.homework.review_explanation`.
 This module renders the request — with the prompt its stage names:
-``prompts/review_explanation/v3.md`` for a text type,
+``prompts/review_explanation/v4.md`` for a text type,
 ``prompts/review_explanation_project/v1.md`` for a project (chain K4); the
 same variables fill both — holds the answer's form and returns what the model
 said.
@@ -20,12 +20,23 @@ criterion are cut by the stage, not by the check here
 (:func:`~course_supporter.homework.verdict_explanation.drop_unshown_links`).
 
 The stage with the student's replies (task 12a, K4) renders
-``prompts/review_explanation/v3_with_replies.md``: the same variables and one
+``prompts/review_explanation/v4_with_replies.md``: the same variables and one
 more, ``replies`` — the threads under the remarks and the replies to answer
 now (:class:`~course_supporter.homework.student_replies.RepliesView`) — and
 asks through :meth:`ReviewExplainerAgent.explain_with_replies`, whose answer
 has its own form with the answers to the replies. Every other stage renders
 and asks exactly what it did.
+
+Since task 13 (explanation side, 2026-11-23) a text type's request — both
+of its stages, prompts ``v4.md`` and ``v4_with_replies.md`` — also shows the
+limits of examples the code counted from the number of criteria
+(:class:`~course_supporter.homework.verdict_explanation.ExampleLimits`):
+``result.example_limit`` on every request, and ``result.reply_example_limit``
+on the stage with replies; and, beside a criterion whose remark stayed open
+since the earlier attempt, ``previous_remark`` — the explanation's own
+remark on it then
+(:func:`~course_supporter.homework.earlier_review.previous_remarks`). An
+input without them — the project's — renders exactly what it did.
 
 The answer is held twice, as the evaluation's is. On the wire, by the strict
 schema of :class:`~course_supporter.homework.verdict_explanation.ExplanationAnswer`
@@ -44,7 +55,7 @@ Replacing:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
 import structlog
@@ -71,6 +82,10 @@ if TYPE_CHECKING:
         RepliesView,
         ShownAsk,
         ShownEntry,
+    )
+    from course_supporter.homework.verdict_explanation import (
+        ExampleLimits,
+        PreviousRemark,
     )
     from course_supporter.llm.stage_router import StageExecution, StageRouter
     from course_supporter.models.review_structure import Position
@@ -126,6 +141,12 @@ class ExplanationInput:
         replies: The threads and the replies to answer, on the stage with
             replies (task 12a, K4); ``None`` on every other stage, whose
             request has no slot for them and stays what it was.
+        example_limits: How many criteria the examples may cover, on a text
+            type's stage (task 13); ``None`` on the project's, whose request
+            has no field for them and stays what it was.
+        previous_remarks: The explanation's own remark at the earlier
+            attempt, by criterion id, for each criterion whose remark stayed
+            open (task 13); empty when there is none to show.
     """
 
     task_title: str
@@ -136,6 +157,8 @@ class ExplanationInput:
     language: str
     course_links: Mapping[str, tuple[ShownLink, ...]]
     replies: RepliesView | None = None
+    example_limits: ExampleLimits | None = None
+    previous_remarks: Mapping[str, PreviousRemark] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,14 +267,19 @@ def render_context(shown: ExplanationInput) -> dict[str, Any]:
 
     Public so the prompt's locks render exactly what a request renders.
     ``replies`` is a variable only of the stage with replies (task 12a, K4):
-    every other request's variables are what they were.
+    every other request's variables are what they were. The limits of
+    examples and the remarks made before (task 13) are fields of ``result``
+    and of a criterion, present only when the input carries them.
     """
     context: dict[str, Any] = {
         "task_title": shown.task_title,
         "task_description": shown.task_description,
         "task_text": shown.task_text,
-        "result": {"passed": shown.facts.passed, "score": shown.facts.score},
-        "criteria": [_criterion_for_prompt(c) for c in shown.facts.criteria],
+        "result": _result_for_prompt(shown),
+        "criteria": [
+            _criterion_for_prompt(c, shown.previous_remarks.get(c.criterion.id))
+            for c in shown.facts.criteria
+        ],
         "submission_text": shown.submission_text,
         "language": shown.language,
         "course_links": [
@@ -268,6 +296,21 @@ def render_context(shown: ExplanationInput) -> dict[str, Any]:
     if shown.replies is not None:
         context["replies"] = _replies_for_prompt(shown.replies)
     return context
+
+
+def _result_for_prompt(shown: ExplanationInput) -> dict[str, Any]:
+    """The pass and the score; on a text type's stage, the limits of examples.
+
+    ``reply_example_limit`` goes only with the replies it limits: the stage
+    without them has no answer to a reply.
+    """
+    result: dict[str, Any] = {"passed": shown.facts.passed, "score": shown.facts.score}
+    limits = shown.example_limits
+    if limits is not None:
+        result["example_limit"] = limits.review
+        if shown.replies is not None:
+            result["reply_example_limit"] = limits.reply
+    return result
 
 
 def _replies_for_prompt(view: RepliesView) -> dict[str, Any]:
@@ -344,11 +387,15 @@ def _link_for_prompt(link: ShownLink) -> dict[str, Any]:
     }
 
 
-def _criterion_for_prompt(facts: CriterionFacts) -> dict[str, Any]:
+def _criterion_for_prompt(
+    facts: CriterionFacts, previous: PreviousRemark | None
+) -> dict[str, Any]:
     """One criterion with its verdict, as the model reads it.
 
     A criterion judged on its own carries its verdict's fields; one checked
-    by mandatory points carries its points, each with its own.
+    by mandatory points carries its points, each with its own. A criterion
+    whose remark stayed open also carries ``previous_remark`` — on the
+    criterion, never on a point — and only then (task 13).
     """
     criterion = facts.criterion
     shown: dict[str, Any] = {
@@ -366,6 +413,12 @@ def _criterion_for_prompt(facts: CriterionFacts) -> dict[str, Any]:
             {"id": item.id, "text": texts[item.id], **_verdict_for_prompt(item)}
             for item in facts.points
         ]
+    if previous is not None:
+        shown["previous_remark"] = {
+            "what": previous.what,
+            "why": previous.why,
+            "todo": previous.todo,
+        }
     return shown
 
 

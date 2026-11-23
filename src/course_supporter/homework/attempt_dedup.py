@@ -25,8 +25,9 @@ The same work, judged alike:
       — one version per type, whichever path a review walked). An edited
       prompt or another first model on any path of the type, other rules of
       the code — the review is written anew;
-    * for a text task (``short_task``, ``task``): the criteria list its
-      verdicts were judged against is the list in force for the task now.
+    * for a type judged against a criteria list — a text task (``short_task``,
+      ``task``) or a project: the criteria list its verdicts were judged
+      against is the list in force for the task now.
 
     Anything else — no fingerprint (the ledger did not write one), no version,
     no evaluator's version (every review written before it was recorded),
@@ -49,12 +50,15 @@ The version of a criteria list:
     (:func:`~course_supporter.homework.criteria_list_service.load_in_force`,
     no model call) is compared by its address. An attempt with no verdict rows
     was judged against no list — a review by today's Mentor, or a review that
-    was itself repeated — and is the source of no text task's copy; the copy is
-    taken from the attempt that was judged.
+    was itself repeated — and is the source of no copy for a type judged
+    against a list; the copy is taken from the attempt that was judged.
 
-    A project has no list on the new path: its key is the fingerprint and the
-    version alone. Projects are served by today's Mentor; the branch is there
-    for the day they move.
+    A project on the new path is judged against a list as a text task is: its
+    evaluation (``project_criteria_evaluation``) takes the list from the same
+    service (``criteria_list_service``) and its verdict rows carry the same
+    address. So its key carries that address too (project chain K8): an
+    author's edit of a project's list reviews the same archive anew, as it
+    does a text task's file.
 
 What the submission gets:
     The earlier attempt's review — its structure, with
@@ -102,8 +106,8 @@ One rule of the same work (product owner's decision, 2026-11-12):
     (``submission_core``, ``homework_duplicate_detected``) — is not applied
     to it: a file identical byte for byte is a new submission, reaches the
     doors and meets this module — the copy, or an ordinary review once the
-    evaluator changed. A type on today's Mentor (``project``) and a type with
-    no dedup (``test``) keep the entry's check as it was.
+    evaluator changed. A type on today's Mentor and a type with no dedup
+    (``test``) keep the entry's check as it was.
     :func:`same_work_reaches_the_new_path` decides, from the submission-path
     file and the attempt adapter: one place, no list of types.
 
@@ -168,9 +172,15 @@ DEDUP_RECEIPT_KEY: Final = "dedup_of"
 """The receipt's key for the number of the attempt whose review was repeated."""
 
 _JUDGED_AGAINST_A_LIST: Final = frozenset(
-    {AssignmentType.SHORT_TASK.value, AssignmentType.TASK.value}
+    {
+        AssignmentType.SHORT_TASK.value,
+        AssignmentType.TASK.value,
+        AssignmentType.PROJECT.value,
+    }
 )
-"""The types whose review is judged against a criteria list (task 09b)."""
+"""The types whose review is judged against a criteria list: the text types
+(task 09b) and a project, whose evaluation reads its list from the same service
+(project chain K4)."""
 
 
 def same_work_reaches_the_new_path(
@@ -179,8 +189,9 @@ def same_work_reaches_the_new_path(
     """Does the same work of this type go on to this dedup? (the module's rule)
 
     True for a type the new path serves (``served_by``) whose attempt adapter
-    deduplicates (``dedup_enabled``) — ``task`` and ``short_task`` today: the
-    entry does not turn a byte-identical file away. False for every other
+    deduplicates (``dedup_enabled``) — ``task``, ``short_task``, and
+    ``project`` while it is on the new path: the entry does not turn a
+    byte-identical file away. False for every other
     type — on today's Mentor, or never deduplicated — whose entry keeps its
     check by the raw file's hash. ``config`` defaults to the cached
     submission-path file, the one the body serves by.

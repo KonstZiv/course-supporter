@@ -1343,7 +1343,8 @@ class TestTheShippedFileServesTextTasksOnTheNewPathOutOfTestMode:
     BIL-TESTMODE (2026-11-17): the text types are on the new path and out of
     test mode, so whether a review is charged for is the billing switches'
     decision (``BILLING_CHARGING_ENABLED`` / ``BILLING_CHARGING_MARKED``), not
-    the file's. ``test`` and ``project`` are as they were."""
+    the file's. ``test`` is as it was; ``project`` moved onto the new path in
+    test mode in project chain K8 — served by it, not charged for."""
 
     def test_the_file_serves_text_types_on_the_new_path_out_of_test_mode(
         self,
@@ -1356,9 +1357,9 @@ class TestTheShippedFileServesTextTasksOnTheNewPathOutOfTestMode:
         assert shipped.task_types[AssignmentType.TEST].served_by is ServedBy.NEW_PATH
         assert in_test_mode(AssignmentType.TEST, shipped) is False
         assert shipped.task_types[AssignmentType.PROJECT].served_by is (
-            ServedBy.TODAYS_MENTOR
+            ServedBy.NEW_PATH
         )
-        assert in_test_mode(AssignmentType.PROJECT, shipped) is False
+        assert in_test_mode(AssignmentType.PROJECT, shipped) is True
 
     async def test_the_new_path_takes_a_task(
         self,

@@ -127,6 +127,52 @@ class TestCuratedStructure:
             assert structure is None
             assert [entry["event"] for entry in logs] == [_INVALID]
 
+    @pytest.mark.parametrize(
+        ("path", "value", "kind"),
+        [
+            (("verdict", "passed"), MARKER, "bool_parsing"),
+            (("new_remarks", 0, "what"), [MARKER], "string_type"),
+            (("progress",), {"text": MARKER}, "string_type"),
+        ],
+        ids=["a string for a bool", "a list for a string", "a dict for a string"],
+    )
+    def test_the_line_of_a_row_that_does_not_read_has_places_and_kinds_never_values(
+        self, path: tuple[str | int, ...], value: object, kind: str
+    ) -> None:
+        """Pydantic's ``str(exc)`` holds the value that failed: the review's text."""
+        submission_id = uuid.uuid4()
+        stored = stored_review()
+        at(stored, path[:-1])[path[-1]] = value
+
+        with capture_logs() as logs:
+            structure = curated_structure(stored, submission_id=submission_id)
+
+        assert structure is None
+        (entry,) = logs
+        assert entry["event"] == _INVALID
+        assert entry["errors"] == 1
+        assert entry["problems"] == [{"loc": ".".join(map(str, path)), "type": kind}]
+        assert entry["submission_id"] == str(submission_id)
+        assert "detail" not in entry
+        assert MARKER not in repr(logs)
+
+    def test_next_to_an_unknown_field_the_line_still_has_no_value(self) -> None:
+        """The unknown field's value is as private as any other, and the row is
+        one error the more: the unknown field is named, by its path."""
+        stored = with_unknown(stored_review(), ())
+        stored["verdict"]["passed"] = MARKER
+
+        with capture_logs() as logs:
+            assert curated_structure(stored) is None
+
+        (entry,) = logs
+        assert entry["errors"] == 2
+        assert sorted(entry["problems"], key=lambda item: item["loc"]) == [
+            {"loc": UNKNOWN, "type": "extra_forbidden"},
+            {"loc": "verdict.passed", "type": "bool_parsing"},
+        ]
+        assert MARKER not in repr(logs)
+
     def test_the_line_of_a_skipped_field_has_paths_and_never_values(self) -> None:
         submission_id = uuid.uuid4()
         noisy = with_unknown(stored_review(), *_LEVELS.values())

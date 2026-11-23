@@ -22,6 +22,11 @@ Interface:
     unknown fields, so a reader that handles that exception today handles it
     the same way after.
 
+    :func:`problems_without_values` — what a reader writes to its log when a
+    stored row does not read: the ``loc`` and the ``type`` of each error, and
+    never the input. ``str(error)`` of pydantic holds the value of every field
+    that failed, which for a review is the text of the review.
+
 How the fields are found:
     By the ``loc`` of pydantic's ``extra_forbidden`` errors. For every shape
     in the review and explanation models — a nested model, ``Model | None``, a
@@ -137,6 +142,31 @@ def _without_unknown_fields(
         except (KeyError, IndexError, TypeError):
             return None
     return pruned, paths
+
+
+def problems_without_values(error: ValidationError) -> list[dict[str, str]]:
+    """What is wrong with a stored row: the place and the kind of each error.
+
+    For a log line. The input of an error — the value that failed — is the
+    student's work or the Mentor's words about it, so it is neither asked for
+    nor written; ``msg`` and ``ctx`` are left out too, as a rule of a model
+    may put a value into its message.
+
+    >>> from pydantic import BaseModel
+    >>> class Point(BaseModel):
+    ...     x: int
+    >>> try:
+    ...     Point.model_validate({"x": "not a number"})
+    ... except ValidationError as error:
+    ...     problems_without_values(error)
+    [{'loc': 'x', 'type': 'int_parsing'}]
+    """
+    return [
+        {"loc": ".".join(map(str, item["loc"])) or "<root>", "type": item["type"]}
+        for item in error.errors(
+            include_url=False, include_context=False, include_input=False
+        )
+    ]
 
 
 def _dotted(path: _Path) -> str:

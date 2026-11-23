@@ -32,7 +32,7 @@ from course_supporter.models.review_schema import (
     review_schema_version,
 )
 from course_supporter.models.review_structure import ReviewStructureV1
-from course_supporter.models.stored_read import read_stored
+from course_supporter.models.stored_read import problems_without_values, read_stored
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.schemas import ViolationCategory
 from course_supporter.storage.orm import HomeworkStatus
@@ -81,10 +81,13 @@ def curated_structure(
             ReviewStructureV1, review_result, submission_id=submission_id
         )
     except ValidationError as exc:
+        # The place and the kind of each error, never ``str(exc)``: pydantic
+        # puts the value of the failed field into it, and that is the review.
         logger.error(
             "review_structure_invalid",
             errors=exc.error_count(),
-            detail=str(exc),
+            problems=problems_without_values(exc),
+            submission_id=None if submission_id is None else str(submission_id),
         )
         return None
 

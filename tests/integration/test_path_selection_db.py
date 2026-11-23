@@ -593,14 +593,19 @@ class TestTheRepliesState:
 
         assert state is SubmissionState.REPEAT_WITHOUT_REPLIES
 
-    async def test_replies_to_an_earlier_review_than_the_last_do_not_count(
+    async def test_replies_to_an_earlier_review_of_the_version_count(
         self,
         db_session: AsyncSession,
         seed_tenant: Tenant,
         seed_root_node: CourseNode,
         seed_material_entry: AuthoredDocument,
     ) -> None:
-        """The submission answers the replies to its previous attempt alone."""
+        """A reply no review answered, to an attempt before the previous one.
+
+        The submission answers the replies to every attempt at the version in
+        force, not to its previous attempt alone (product owner's decision,
+        2026-11-20): one the screen could not judge waits for the next.
+        """
         student, reviewed, _ = await self._a_repeat(
             db_session, seed_tenant, seed_root_node, seed_material_entry, "earlier"
         )
@@ -626,7 +631,7 @@ class TestTheRepliesState:
 
         state = await self._state(db_session, student, seed_material_entry, later)
 
-        assert state is SubmissionState.REPEAT_WITHOUT_REPLIES
+        assert state is SubmissionState.REPEAT_WITH_REPLIES
 
     async def test_replies_to_a_review_of_another_version_do_not_count(
         self,

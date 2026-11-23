@@ -49,6 +49,13 @@ Replacing one:
     hands the evaluation a project's student files as the work, its base for
     the rule on the author's quotes and its delta context as the text.
 
+    A text type's submission that carries the student's replies (task 12a,
+    K4) is judged and explained by the same two executors under two more
+    names — ``criteria_evaluation_with_replies`` and
+    ``review_explanation_with_replies`` — each with its own prompt; the work
+    each name adds (the replies shown, the answers kept) lives beside the
+    work it adds to, switched on by the stage's name.
+
 Extending:
     A new stage is a definition in the configuration plus a function registered
     here. Nothing in the body changes, and the startup check refuses the
@@ -77,7 +84,7 @@ if TYPE_CHECKING:
 
     from course_supporter.homework.criteria_verdicts import WorkFile
     from course_supporter.homework.doors import DoorReading
-    from course_supporter.homework.path_config import PathKey, PathStage
+    from course_supporter.homework.path_config import PathConfig, PathKey, PathStage
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.security.schemas import CourseContext
     from course_supporter.storage.orm import HomeworkSubmission
@@ -91,6 +98,8 @@ COURSE_LINK_LOOKUP = "course_link_lookup"
 REVIEW_EXPLANATION = "review_explanation"
 PROJECT_CRITERIA_EVALUATION = "project_criteria_evaluation"
 PROJECT_REVIEW_EXPLANATION = "project_review_explanation"
+CRITERIA_EVALUATION_WITH_REPLIES = "criteria_evaluation_with_replies"
+REVIEW_EXPLANATION_WITH_REPLIES = "review_explanation_with_replies"
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +138,11 @@ class StageContext:
     never used for this submission, whose state stays the body's. ``None``
     where no queue is at hand (a test that does not need one); the stage then
     leaves the others to the other two entries.
+
+    ``config`` is the submission-path file the body chose the path by: a
+    stage that reads the student's replies asks it whether the type takes
+    them, as the body did (task 12a, K4). ``None`` — the cached file, the one
+    the body reads in production.
     """
 
     session: AsyncSession
@@ -143,6 +157,7 @@ class StageContext:
     door: DoorReading | None = None
     work: tuple[WorkFile, ...] = ()
     arq: ArqRedis | None = None
+    config: PathConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -429,10 +444,12 @@ async def run_criteria_evaluation_stage(context: StageContext) -> StageOutcome:
 
     The work is ``criteria_evaluation.evaluate_criteria``; this function hands
     it the stage's description translated for the router, as the two executors
-    above hand theirs to today's functions. Registered twice: as
-    ``criteria_evaluation`` for a text type and as
-    ``project_criteria_evaluation`` for a project (chain K4) — one function,
-    two descriptions, each with its own prompt.
+    above hand theirs to today's functions. Registered three times: as
+    ``criteria_evaluation`` for a text type, as
+    ``project_criteria_evaluation`` for a project (chain K4) and as
+    ``criteria_evaluation_with_replies`` for a text type's submission with
+    the student's replies (task 12a, K4) — one function, three descriptions,
+    each with its own prompt.
     """
     from course_supporter.homework.criteria_evaluation import evaluate_criteria
 
@@ -457,9 +474,10 @@ async def run_review_explanation_stage(context: StageContext) -> StageOutcome:
     """The explanation of a task's verdicts, as a stage of the path (09b).
 
     The work is ``review_explanation.explain_verdicts``; this function hands
-    it the stage's description translated for the router. Registered twice,
-    as the evaluation is: ``review_explanation`` and
-    ``project_review_explanation`` (chain K4).
+    it the stage's description translated for the router. Registered three
+    times, as the evaluation is: ``review_explanation``,
+    ``project_review_explanation`` (chain K4) and
+    ``review_explanation_with_replies`` (task 12a, K4).
     """
     from course_supporter.homework.review_explanation import explain_verdicts
 
@@ -475,3 +493,6 @@ register_stage_executor(REVIEW_EXPLANATION, run_review_explanation_stage)
 # stage descriptions — prompts and ceilings — are written under.
 register_stage_executor(PROJECT_CRITERIA_EVALUATION, run_criteria_evaluation_stage)
 register_stage_executor(PROJECT_REVIEW_EXPLANATION, run_review_explanation_stage)
+# The path with the student's replies (task 12a, K4): the same functions again.
+register_stage_executor(CRITERIA_EVALUATION_WITH_REPLIES, run_criteria_evaluation_stage)
+register_stage_executor(REVIEW_EXPLANATION_WITH_REPLIES, run_review_explanation_stage)

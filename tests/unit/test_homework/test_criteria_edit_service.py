@@ -11,6 +11,8 @@ from __future__ import annotations
 import doctest
 import pathlib
 import re
+import uuid
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,13 +20,16 @@ from pydantic import ValidationError
 
 from course_supporter.api.app import app
 from course_supporter.api.schemas import CriteriaOverrideRequest
+from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.homework import criteria_edit_service
 from course_supporter.homework.criteria_edit_service import (
     NOT_COMPOSED_MESSAGES,
+    CriteriaEditService,
     CriteriaReasonCode,
     CriteriaRefusalCode,
     CriteriaRefusedError,
     CriteriaStatus,
+    CriteriaView,
     apply_edit,
     mark_must_by_author,
 )
@@ -36,10 +41,12 @@ from course_supporter.homework.criteria_form import (
     MAX_TEXT_CHARS,
     Criterion,
     CriterionEdit,
+    author_criteria_from_document,
     author_musts,
     criteria_from_document,
     criteria_to_document,
 )
+from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.llm.error_categories import LadderStop
 
 _CONCEPTS = ["Recursion", "Base Case", "HTML Template"]
@@ -586,3 +593,71 @@ class TestTheReadme:
         assert real, "the vocabulary under test is not empty"
         undocumented = sorted(code for code in real if f"`{code}`" not in text)
         assert not undocumented, f"undocumented: {undocumented}"
+
+
+class TestTheServiceCarriesTheMarks:
+    """``CriteriaEditService.replace`` itself, its storage replaced by doubles.
+
+    The table above runs ``mark_must_by_author`` as the service calls it; this
+    runs the service, so a call that stops handing it the edit being replaced
+    fails here and not only on a live database.
+    """
+
+    async def test_a_second_edit_without_the_field_keeps_the_marks(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stored: list[list[dict[str, Any]]] = []
+
+        class _Overrides:
+            def __init__(self, session: object) -> None:
+                del session
+
+            async def replace(
+                self, *, criteria: list[dict[str, Any]], **_: Any
+            ) -> None:
+                stored.append(criteria)
+
+        async def view(_: object) -> CriteriaView:
+            author = author_criteria_from_document(stored[-1]) if stored else None
+            return CriteriaView(
+                status=CriteriaStatus.READY,
+                reason_code=None,
+                waiting_submissions=0,
+                message=None,
+                model=_MODEL,
+                author=author,
+                in_force=CriteriaInForce(
+                    criteria=author or _MODEL,
+                    layer=CriteriaLayer.AUTHOR if author else CriteriaLayer.MODEL,
+                    source_id=uuid.uuid4(),
+                ),
+                contradictions=(),
+                concepts=tuple(_CONCEPTS),
+            )
+
+        async def text_task(task_id: uuid.UUID) -> SimpleNamespace:
+            return SimpleNamespace(
+                document=SimpleNamespace(id=task_id),
+                content_hash="h1",
+                task_type="task",
+            )
+
+        monkeypatch.setattr(
+            criteria_edit_service, "TaskCriteriaOverrideRepository", _Overrides
+        )
+        service = CriteriaEditService(session=None)  # type: ignore[arg-type]
+        monkeypatch.setattr(service, "_require_text_task", text_task)
+        monkeypatch.setattr(service, "_view", view)
+        task_id = uuid.uuid4()
+
+        first = await service.replace(
+            task_id, [_kept(_C1, must_by_author=True), _kept(_C2)]
+        )
+        second = await service.replace(
+            task_id, [_kept(_C1, text="Handles n = 0 and n = 1"), _kept(_C2)]
+        )
+
+        assert first.author is not None and second.author is not None
+        assert _marks(first.author) == {"c1": True, "c2": False}
+        assert _marks(second.author) == {"c1": True, "c2": False}
+        assert author_musts(second.author) == frozenset({"c1"})

@@ -311,6 +311,9 @@ class TestShippedFile:
         Moved on merging main and the strict branch (2026-11-22): the verdict
         rules went 6 -> 8 under this pin (task 12a K2, then the strict branch),
         so the project's version ``ev1:b09ff854f4112f96`` -> ``ev1:9dfee05f5adf1871``.
+        Moved again on merging the answers to the replies after it (task 12a,
+        K4, 2026-11-22): the verdict rules went 8 -> 9, so the project's
+        version ``ev1:9dfee05f5adf1871`` -> ``ev1:dbcfa16ba53d80cb``.
         """
         shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
         before = shipped_with_todays_mentor_for(AssignmentType.PROJECT)
@@ -319,10 +322,10 @@ class TestShippedFile:
             return evaluator_version(task_type, config, prompt_base_path=_REPO_ROOT)
 
         assert version(AssignmentType.PROJECT, before) is None
-        assert version(AssignmentType.PROJECT, shipped) == "ev1:9dfee05f5adf1871"
+        assert version(AssignmentType.PROJECT, shipped) == "ev1:dbcfa16ba53d80cb"
         for text_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
             assert version(text_type, shipped) == version(text_type, before)
-        assert criteria_verdicts.VERDICT_RULES_VERSION == 8
+        assert criteria_verdicts.VERDICT_RULES_VERSION == 9
 
     def test_the_text_types_version_is_unchanged_by_the_traces(self) -> None:
         """Lock (2026-11-16): the call traces leave the evaluator as it was.
@@ -341,11 +344,18 @@ class TestShippedFile:
         author's own "must" criteria alone changes a review's verdict, so the
         verdict rules went 7 -> 8 and the version ``ev1:985d508925abb6c7`` ->
         ``ev1:575ab64bf49dbf71``.
+
+        Moved on purpose by task 12a, K4 (merged after the strict branch on
+        2026-11-22): the two stages of ``repeat_with_replies`` bring their own
+        prompts onto a path of the text types, and the answers to the replies
+        change what a review says (the section of replies, the copy without
+        it), so the verdict rules went 8 -> 9 and the version
+        ``ev1:575ab64bf49dbf71`` -> ``ev1:e054de5f5bc7b612``.
         """
         shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
         assert (
             evaluator_version(AssignmentType.TASK, shipped, prompt_base_path=_REPO_ROOT)
-            == "ev1:575ab64bf49dbf71"
+            == "ev1:e054de5f5bc7b612"
         )
-        assert criteria_verdicts.VERDICT_RULES_VERSION == 8
+        assert criteria_verdicts.VERDICT_RULES_VERSION == 9

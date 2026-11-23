@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Kriteria wajib penulis tidak dipenuhi, jadi ker
 verdict.rule.author_musts_below_threshold: Anda telah memenuhi semua kriteria wajib penulis, tetapi mendapat {score} daripada 100 — di bawah had {threshold} bagi tugasan dengan kriteria wajib penulis, jadi kerja ini gagal.
 verdict.rule.no_author_musts_passed: Penulis tidak meluluskan kriteria wajib untuk tugasan ini. Bagi tugasan seperti ini, had lulus ialah {threshold} daripada 100; skor anda ialah {score}, jadi kerja ini lulus.
 verdict.rule.no_author_musts_failed: Penulis tidak meluluskan kriteria wajib untuk tugasan ini. Bagi tugasan seperti ini, had lulus ialah {threshold} daripada 100; skor anda ialah {score}, jadi kerja ini gagal.
+reply.work_only: Hanya tugasan itu sendiri yang dinilai — fail penyelesaian, bukan apa yang ditulis bersamanya.
+reply.hostile.fallback: Langkah yang menarik! Hanya tugasan itu sendiri yang dinilai — fail penyelesaian, bukan apa yang ditulis bersamanya. Untuk menambah baik keputusan anda, sila kemas kini penyelesaian mengikut ulasan ini.
+reply.off_topic.wrap_up: 'Banyak yang boleh dibincangkan tentang ini, tetapi tugasan sedang menunggu dan lebih baik masa digunakan untuk kursus «{course}». Berbual memerlukan kos: saya boleh bersembang tanpa henti, tetapi bot sembang biasa lebih murah untuk tujuan itu, manakala bersama saya lebih baik belajar «{course}».'
+reply.said.withheld: (teks balasan ini tidak disertakan dalam ulasan)

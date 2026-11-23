@@ -91,6 +91,13 @@ The sections of the remarks (task 12a, K2):
     (:meth:`~course_supporter.storage.submission_verdict_repository.SubmissionVerdictRepository.earlier_attempt`)
     is read here only for the words of a fixed criterion.
 
+The replies (task 12a, K4):
+    The section ``replies`` holds each reply of the student this review
+    answered and the answer, in the order of the replies, as K1's table
+    holds them (:func:`replies_answered`); a hostile reply's words are not
+    repeated in it (``reply.said.withheld``). Only this section is added: the
+    rest of the review is built as before.
+
 Language:
     The explanation's own: the language its texts are written in, as the
     explanation stage resolved it (``PRE-FLIGHT.md`` 9.9) — not the doors'
@@ -120,6 +127,7 @@ from course_supporter.criteria_kinds import (
     VerdictValue,
     WeightCategory,
 )
+from course_supporter.homework import remark_comments
 from course_supporter.homework.course_link_delivery import (
     reference_of,
     settle_course_links,
@@ -151,10 +159,13 @@ from course_supporter.models.review_structure import (
     Position,
     Reference,
     Remark,
+    Reply,
+    ReplyKind,
     ReviewStructureV1,
     Verdict,
 )
-from course_supporter.remark_kinds import RemarkState
+from course_supporter.phrasebook import phrases_for
+from course_supporter.remark_kinds import CommentKind, CommentTopic, RemarkState
 from course_supporter.review_metrics import (
     Claim,
     ReviewMetrics,
@@ -182,6 +193,7 @@ __all__ = [
     "build_text_review",
     "link_authenticity",
     "problem_positions",
+    "replies_answered",
 ]
 
 
@@ -286,6 +298,7 @@ def build_text_review(
     reading: Mapping[str, Sequence[Reference]] | None = None,
     states: Mapping[str, RemarkState | None] | None = None,
     fixed_words: FixedWords | None = None,
+    replies: Sequence[Reply] = (),
 ) -> tuple[ReviewStructureV1, int]:
     """A text task's review as a structure, and its score — a pure function.
 
@@ -304,6 +317,8 @@ def build_text_review(
             item missing here has no state; ``None`` — none has, and every
             remark is new.
         fixed_words: The words of the criteria ``states`` names fixed.
+        replies: What the student wrote to the earlier review and what this
+            review answered, in the order of the replies (task 12a, K4).
 
     Raises:
         ValueError: The rows have no criterion, or a criterion without a
@@ -362,8 +377,54 @@ def build_text_review(
         broken=broken,
         # A blank voice is no voice: the assembler would print its block empty.
         mentor_voice=voice if voice is not None and voice.strip() else None,
+        replies=list(replies),
     )
     return structure, decided.score
+
+
+async def replies_answered(
+    session: AsyncSession, submission: HomeworkSubmission, *, language: str
+) -> list[Reply]:
+    """The review's section of replies: each reply it answered, with the answer.
+
+    Task 12a, K4. Read from K1's table — the answers this submission's
+    review gave, each with its reply, in the order of the replies
+    (``answers_in_review`` of K3's store) — so the review says what the
+    table holds. ``said`` is the student's text from the table; for a hostile
+    reply it is the phrasebook's ``reply.said.withheld`` in the review's
+    ``language``, never the reply's text: a review is read by the school's
+    own systems too. No answer — no section.
+    """
+    answered = await remark_comments.build_remark_comment_repository(
+        session
+    ).answers_in_review(tenant_id=submission.tenant_id, submission_id=submission.id)
+    if not answered:
+        return []
+    withheld = phrases_for(language)["reply.said.withheld"]
+    return [
+        Reply(
+            kind=_reply_kind(pair.reply.kind),
+            said=(
+                withheld
+                if pair.reply.topic is CommentTopic.HOSTILE
+                else pair.reply.body
+            ),
+            answer=pair.answer.body,
+        )
+        for pair in answered
+    ]
+
+
+def _reply_kind(kind: CommentKind) -> ReplyKind:
+    """A student's kind of comment as the review names it — never ``answer``."""
+    if kind is CommentKind.QUESTION:
+        return "question"
+    if kind is CommentKind.OBJECTION:
+        return "objection"
+    if kind is CommentKind.COMMENT:
+        return "comment"
+    msg = f"a reply is a student's comment, not an {kind.value}"
+    raise ValueError(msg)
 
 
 def _weight_order(rows: Iterable[ScoredItem]) -> dict[str, tuple[int, int]]:
@@ -535,6 +596,9 @@ class TextResultBuilder:
             states=states,
             fixed_words=await _fixed_words(
                 context.session, submission, rows, states=states
+            ),
+            replies=await replies_answered(
+                context.session, submission, language=explained.language
             ),
         )
         return BuiltResult(

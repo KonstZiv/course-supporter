@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Obvezna merila avtorja niso izpolnjena, zato de
 verdict.rule.author_musts_below_threshold: Izpolnili ste vsa obvezna merila avtorja, vendar dosegli {score} od 100 — pod pragom {threshold} za naloge z obveznimi merili avtorja, zato delo ni opravljeno.
 verdict.rule.no_author_musts_passed: Avtor za to nalogo ni potrdil obveznih meril. Za takšne naloge je prag za opravljeno {threshold} od 100; vaš rezultat je {score}, zato je delo opravljeno.
 verdict.rule.no_author_musts_failed: Avtor za to nalogo ni potrdil obveznih meril. Za takšne naloge je prag za opravljeno {threshold} od 100; vaš rezultat je {score}, zato delo ni opravljeno.
+reply.work_only: Ocenjujemo samo delo – datoteke z rešitvijo, ne pa tistega, kar je napisano poleg.
+reply.hostile.fallback: Zanimiva poteza! Ocenjujemo samo delo – datoteke z rešitvijo, ne pa tistega, kar je napisano poleg. Če želite izboljšati rezultat, dopolnite rešitev glede na pripombe v tem pregledu.
+reply.off_topic.wrap_up: 'O tem bi lahko govorili dolgo, vendar nas čaka delo in čas je bolje porabiti za tečaj »{course}«. Pogovori stanejo: pripravljen sem se pogovarjati v nedogled, vendar bo običajen klepetalni robot to storil ceneje, z mano pa se je bolje učiti »{course}«.'
+reply.said.withheld: (besedila te replike v pregledu ne navajamo)

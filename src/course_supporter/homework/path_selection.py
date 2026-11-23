@@ -81,8 +81,9 @@ async def resolve_submission_state(
     after it, a repeat — ``REPEAT_WITH_REPLIES`` when the submission has
     replies of the student to answer
     (:func:`~course_supporter.homework.remark_comments.pending_replies`: the
-    type takes replies, and the student's last review of the same version of
-    the task has replies no review answered yet; task 12a, K3), and
+    type takes replies, and a review of one of the student's attempts at the
+    version of the task in force has replies no review answered yet; task
+    12a, K3), and
     ``REPEAT_WITHOUT_REPLIES`` otherwise.
 
     The replies are asked about only for a submission that exists —

@@ -187,7 +187,9 @@ quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 # відтворюваність: зерно для deterministic-стадій (2026-11-13)
 # стани зауважень між спробами: розділи рецензії (2026-11-16)
 # сувора гілка заліку — лише власні must автора (2026-11-17)
-VERDICT_RULES_VERSION: Final[int] = 8
+# відповіді на репліки студента: розділ replies, копія без нього
+# (2026-11-17; злито після суворої гілки 2026-11-22)
+VERDICT_RULES_VERSION: Final[int] = 9
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -206,7 +208,12 @@ lays the remarks out in the sections "fixed", "new", "open" and "broken"
 instead of all in "new" (:func:`remark_states`); 8 — the strict branch of the
 pass by the author's own "must" criteria alone (2026-11-17,
 :func:`pass_decision`): a "must" the author kept from the model's list no
-longer blocks the pass. It enters
+longer blocks the pass; 9 — the answers to the student's replies (task 12a,
+K4, 2026-11-17; merged after the strict branch on 2026-11-22): the check of
+the explanation asks one answer per reply, a joke that fails its check is
+replaced by the phrasebook's, the builder lays the answers out in the section
+"replies", and the copy of a review given to the same work carries no section
+of replies. It enters
 the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,

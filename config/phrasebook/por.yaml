@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Os critérios obrigatórios do autor não foram
 verdict.rule.author_musts_below_threshold: Você cumpriu todos os critérios obrigatórios do autor, mas obteve {score} de 100, abaixo do limite de {threshold} para tarefas com critérios obrigatórios do autor, portanto o trabalho não está aprovado.
 verdict.rule.no_author_musts_passed: O autor não aprovou critérios obrigatórios para esta tarefa. Para essas tarefas, o limite de aprovação é {threshold} de 100; sua pontuação é {score}, portanto o trabalho está aprovado.
 verdict.rule.no_author_musts_failed: O autor não aprovou critérios obrigatórios para esta tarefa. Para essas tarefas, o limite de aprovação é {threshold} de 100; sua pontuação é {score}, portanto o trabalho não está aprovado.
+reply.work_only: Avaliamos apenas o trabalho em si — os arquivos com a resolução, não o que está escrito ao lado.
+reply.hostile.fallback: Jogada interessante! Avaliamos apenas o trabalho em si — os arquivos com a resolução, não o que está escrito ao lado. Para melhorar o resultado, revise a resolução com base nos comentários desta avaliação.
+reply.off_topic.wrap_up: 'Poderíamos conversar muito sobre isso, mas temos trabalho a fazer e é melhor aproveitar o tempo no curso «{course}». Conversar custa caro: estou pronto para bater papo eternamente, mas um chatbot comum fará isso por menos, enquanto comigo é melhor estudar «{course}».'
+reply.said.withheld: (o texto desta mensagem não é exibido na avaliação)

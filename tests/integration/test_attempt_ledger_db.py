@@ -11,7 +11,8 @@ The locks of the commit, one class each:
 * ґ. a new version of the task between attempts is in the receipt;
 * д. the fingerprint is K1's for the same work, in UTF-8 and in CP1251 alike —
   through the real doors;
-* е. a test (the new path) and a project (today's Mentor) get numbers too;
+* е. a test (the new path) and a project (today's Mentor — its way back since
+  project chain K8) get numbers too;
 * є. the review of the same submission — structure and markdown — is the one
   written without the ledger, byte for byte.
 
@@ -916,7 +917,10 @@ def _project_url(raw_key: str) -> str:
 
 @pytest.mark.requires_redis
 class TestLockEProjectOnTodaysMentor:
-    """е. A project, reviewed by today's Mentor, is numbered; є on its stages."""
+    """е. A project, reviewed by today's Mentor, is numbered; є on its stages.
+
+    Since project chain K8 the shipped file serves a project on the new path;
+    these walks take its way back (``_run_full_worker``)."""
 
     async def test_two_attempts_and_the_stages_read_what_they_read(
         self,

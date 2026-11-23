@@ -8,7 +8,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from course_supporter.cost_estimate.report import CallRow, EstimateRow, compare, rows_of
+from course_supporter.cost_estimate.report import (
+    CallRow,
+    EstimateRow,
+    compare,
+    rows_of,
+    select_reviews,
+)
 from course_supporter.llm.registry import load_registry
 
 AT = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
@@ -127,3 +133,70 @@ class TestReport:
         row = compare(estimate, [], models={}).as_csv()
         assert row["fact_usd"] == "0"
         assert row["unknown_share"] == "0"
+
+
+class TestTestStudents:
+    """BIL-5: the reviews of test students are left out unless asked."""
+
+    @staticmethod
+    def _estimate(kind: str, key: str) -> EstimateRow:
+        return EstimateRow(
+            action_kind=kind,
+            action_key=key,
+            job_id=uuid.uuid4(),
+            e_usd=Decimal("0.01"),
+            breakdown=[],
+            created_at=AT,
+        )
+
+    def _sample(self) -> tuple[list[EstimateRow], dict[str, tuple[uuid.UUID, bool]]]:
+        tester, student = uuid.uuid4(), uuid.uuid4()
+        test_sub, sub_a, sub_b = (str(uuid.uuid4()) for _ in range(3))
+        estimates = [
+            self._estimate("review", test_sub),
+            self._estimate("review", sub_a),
+            self._estimate("review", sub_b),  # the same student, a second work
+            self._estimate("processing", str(uuid.uuid4())),
+        ]
+        students = {
+            test_sub: (tester, True),
+            sub_a: (student, False),
+            sub_b: (student, False),
+        }
+        return estimates, students
+
+    def test_by_default_a_test_students_review_is_left_out(self) -> None:
+        estimates, students = self._sample()
+        kept, sample = select_reviews(estimates, students, include_test_students=False)
+        assert kept == estimates[1:]  # the processing estimate stays
+        assert (sample.test_reviews, sample.non_test_students) == (1, 1)
+        assert sample.line() == (
+            "review: 1 estimate(s) of test students excluded; "
+            "1 distinct non-test student(s) in the sample"
+        )
+
+    def test_include_test_students_keeps_every_estimate(self) -> None:
+        estimates, students = self._sample()
+        kept, sample = select_reviews(estimates, students, include_test_students=True)
+        assert kept == estimates
+        assert (sample.test_reviews, sample.non_test_students) == (1, 1)
+        assert "included (--include-test-students)" in sample.line()
+
+    def test_other_actions_are_never_filtered(self) -> None:
+        processing = self._estimate("processing", "k")
+        preparation = self._estimate("task_preparation", "k")
+        # Even a key that happens to name a test student's submission.
+        students = {"k": (uuid.uuid4(), True)}
+        kept, sample = select_reviews(
+            [processing, preparation], students, include_test_students=False
+        )
+        assert kept == [processing, preparation]
+        assert (sample.test_reviews, sample.non_test_students) == (0, 0)
+
+    def test_a_review_of_an_unknown_submission_is_kept_and_names_no_student(
+        self,
+    ) -> None:
+        estimate = self._estimate("review", str(uuid.uuid4()))
+        kept, sample = select_reviews([estimate], {}, include_test_students=False)
+        assert kept == [estimate]
+        assert (sample.test_reviews, sample.non_test_students) == (0, 0)

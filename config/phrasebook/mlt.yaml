@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Il-kriterji obbligatorji tal-awtur mhumiex sodi
 verdict.rule.author_musts_below_threshold: Issodisfajt il-kriterji obbligatorji kollha tal-awtur, iżda ksibt {score} minn 100 — taħt il-limitu ta' {threshold} għall-kompiti b'kriterji obbligatorji tal-awtur, għalhekk ix-xogħol mhuwiex aċċettat.
 verdict.rule.no_author_musts_passed: L-awtur ma approvax kriterji obbligatorji għal dan il-kompitu. Għal kompiti bħal dawn, il-limitu biex tgħaddi huwa {threshold} minn 100; il-punteġġ tiegħek huwa {score}, għalhekk ix-xogħol huwa aċċettat.
 verdict.rule.no_author_musts_failed: L-awtur ma approvax kriterji obbligatorji għal dan il-kompitu. Għal kompiti bħal dawn, il-limitu biex tgħaddi huwa {threshold} minn 100; il-punteġġ tiegħek huwa {score}, għalhekk ix-xogħol mhuwiex aċċettat.
+reply.work_only: Nivvalutaw biss ix-xogħol innifsu — il-fajls bis-soluzzjoni, u mhux dak li hemm miktub maġenbu.
+reply.hostile.fallback: Mossa interessanti! Nivvalutaw biss ix-xogħol innifsu — il-fajls bis-soluzzjoni, u mhux dak li hemm miktub maġenbu. Biex ittejjeb ir-riżultat, aġġorna s-soluzzjoni skont ir-rimarki f'din ir-reviżjoni.
+reply.off_topic.wrap_up: 'Nistgħu nitkellmu fit-tul dwar dan, iżda x-xogħol qed jistenna, u l-ħin ikun aħjar jekk jintuża fuq il-kors «{course}». Il-konversazzjonijiet jiswew il-flus: jien lest li nitkellem għal dejjem, iżda chatbot ordinarju jagħmel dan b''inqas spejjeż, filwaqt li miegħi aħjar titgħallem «{course}».'
+reply.said.withheld: (it-test ta' din it-tweġiba mhux muri fir-reviżjoni)

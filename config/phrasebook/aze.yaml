@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Müəllifin məcburi meyarları yerinə yetiril
 verdict.rule.author_musts_below_threshold: Siz müəllifin bütün məcburi meyarlarını yerinə yetirdiniz, lakin 100 üzərindən {score} bal topladınız — bu, müəllifin məcburi meyarları olan tapşırıqlar üçün {threshold} bal keçid həddindən aşağıdır, buna görə iş qəbul edilmədi.
 verdict.rule.no_author_musts_passed: Müəllif bu tapşırıq üçün məcburi meyarları təsdiqləməyib. Belə tapşırıqlar üçün keçid həddi 100 üzərindən {threshold} baldır; sizin nəticəniz — {score}, buna görə iş qəbul edildi.
 verdict.rule.no_author_musts_failed: Müəllif bu tapşırıq üçün məcburi meyarları təsdiqləməyib. Belə tapşırıqlar üçün keçid həddi 100 üzərindən {threshold} baldır; sizin nəticəniz — {score}, buna görə iş qəbul edilmədi.
+reply.work_only: Yalnız işin özünü — həll fayllarını qiymətləndiririk, yanındakı qeydləri deyil.
+reply.hostile.fallback: Maraqlı addımdır! Yalnız işin özünü — həll fayllarını qiymətləndiririk, yanındakı qeydləri deyil. Nəticəni yaxşılaşdırmaq üçün bu rəydəki iradlar əsasında həlli təkmilləşdirin.
+reply.off_topic.wrap_up: 'Bu barədə çox danışmaq olar, lakin bizi iş gözləyir və vaxtı «{course}» kursuna sərf etmək daha yaxşıdır. Söhbətlər xərc tələb edir: mən sonsuza qədər ünsiyyət qurmağa hazıram, lakin adi çat-bot bunu daha ucuz edər, mənimlə isə «{course}» kursunu öyrənmək daha yaxşıdır.'
+reply.said.withheld: (bu replikanın mətni rəydə təqdim edilmir)

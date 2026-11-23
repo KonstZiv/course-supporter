@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: A szerző kötelező szempontjai nem teljesült
 verdict.rule.author_musts_below_threshold: Ön teljesítette a szerző összes kötelező szempontját, de 100-ból {score} pontot ért el — ez a szerző kötelező szempontjait tartalmazó feladatokra vonatkozó {threshold} pontos küszöb alatt van, ezért a munka nincs elfogadva.
 verdict.rule.no_author_musts_passed: A szerző nem hagyott jóvá kötelező szempontokat ehhez a feladathoz. Az ilyen feladatoknál az elfogadási küszöb 100-ból {threshold} pont; az Ön pontszáma {score}, ezért a munka el van fogadva.
 verdict.rule.no_author_musts_failed: A szerző nem hagyott jóvá kötelező szempontokat ehhez a feladathoz. Az ilyen feladatoknál az elfogadási küszöb 100-ból {threshold} pont; az Ön pontszáma {score}, ezért a munka nincs elfogadva.
+reply.work_only: Kizárólag magát a munkát értékeljük – a megoldást tartalmazó fájlokat, nem pedig a mellé írt szöveget.
+reply.hostile.fallback: Érdekes próbálkozás! Kizárólag magát a munkát értékeljük – a megoldást tartalmazó fájlokat, nem pedig a mellé írt szöveget. Az eredmény javításához dolgozza át a megoldást az értékelés észrevételei alapján.
+reply.off_topic.wrap_up: 'Erről hosszan lehetne beszélni, de munka vár ránk, és az időt érdemesebb a(z) „{course}” kurzusra fordítani. A csevegés pénzbe kerül: készen állok a végtelenségig beszélgetni, de egy hagyományos chatbot ezt olcsóbban megteszi, velem pedig jobb a(z) „{course}” kurzust tanulni.'
+reply.said.withheld: (e hozzászólás szövegét nem jelenítjük meg az értékelésben)

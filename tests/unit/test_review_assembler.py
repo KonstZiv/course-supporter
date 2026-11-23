@@ -184,6 +184,22 @@ def full_review(language: str) -> ReviewStructureV1:
     )
 
 
+# The phrases that reach a reader not through this assembler's own phrases
+# but as the text of a review's ``replies`` (task 12a, K4): the answers the
+# explanation stage and the copy of the same work write, and what the builder
+# shows in place of a hostile reply's words. Their use is locked in
+# ``tests/integration/test_reply_stages_db.py`` and
+# ``tests/integration/test_reply_answers_db.py``.
+_THE_EXPLANATIONS_ANSWERS = frozenset(
+    {
+        "reply.work_only",
+        "reply.hostile.fallback",
+        "reply.off_topic.wrap_up",
+        "reply.said.withheld",
+    }
+)
+
+
 class TestAcceptance:
     """Rule P1: the criterion of this task, proven end to end."""
 
@@ -237,15 +253,18 @@ class TestAcceptance:
             )
         )
 
+        source = phrases_for("ukr")
         unused = [
             key
-            for key, phrase in phrases_for("ukr").items()
-            if not all(
+            for key, phrase in source.items()
+            if key not in _THE_EXPLANATIONS_ANSWERS
+            and not all(
                 part in rendered for part in _PLACEHOLDER.split(phrase) if part.strip()
             )
         ]
 
         assert unused == []
+        assert source.keys() >= _THE_EXPLANATIONS_ANSWERS
 
     def test_no_provider_is_reachable_from_here(self) -> None:
         """The assembler imports nothing that could make a call.

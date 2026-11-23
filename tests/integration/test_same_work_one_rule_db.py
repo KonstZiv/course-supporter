@@ -1,10 +1,11 @@
 """One rule of the same work, end to end through the portal (task 13, lock "ye").
 
 The product owner's decision of 2026-11-12: for a type the new path serves and
-deduplicates (``task``, ``short_task``), the entry's old check — the same file
-by its raw hash, answered "already submitted" with no new submission — is not
-applied. A byte-identical file is a new submission; at the doors the dedup of
-task 13 meets it. A type on today's Mentor (``project``) keeps the old check.
+deduplicates (``task``, ``short_task``, and ``project`` since project chain
+K8), the entry's old check — the same file by its raw hash, answered "already
+submitted" with no new submission — is not applied. A byte-identical file is a
+new submission; at the doors the dedup of task 13 meets it. A type on today's
+Mentor keeps the old check: a project handed back to it, here.
 
 Through the portal's submission route over HTTP, with a live database, the S3
 of the environment (SeaweedFS or moto at ``s3_endpoint``) and the real body of
@@ -41,6 +42,7 @@ from course_supporter.config import get_settings
 from course_supporter.homework.attempt_dedup import DEDUP_RECEIPT_KEY
 from course_supporter.homework.evaluator_version import EVALUATOR_VERSION_RECEIPT_KEY
 from course_supporter.models.review_structure import ReviewStructureV1
+from course_supporter.models.source import AssignmentType
 from course_supporter.storage.orm import (
     AuthoredDocument,
     DocumentSummary,
@@ -49,6 +51,7 @@ from course_supporter.storage.orm import (
     StudentEnrollment,
 )
 from course_supporter.storage.s3 import S3Client
+from tests._helpers.path_config import shipped_with_todays_mentor_for
 from tests.integration.test_attempt_dedup_db import (
     _WORK,
     _NoModelRouter,
@@ -259,7 +262,9 @@ async def _submissions_of(
 class TestLockEOneRuleOfTheSameWork:
     """Lock "ye". A task: a new submission, then the copy.
 
-    A project: "already submitted", as before.
+    A project on the new path (K8): a new submission — its copy is the
+    project's own walk, ``test_project_review_e2e_db`` run 2. A project handed
+    back to today's Mentor: "already submitted", as before K8.
     """
 
     async def test_the_same_archive_for_a_task_is_a_new_submission_and_a_copy(
@@ -321,23 +326,37 @@ class TestLockEOneRuleOfTheSameWork:
             == first.attempt_receipt[EVALUATOR_VERSION_RECEIPT_KEY]
         )
 
-    async def test_the_same_archive_for_a_project_is_already_submitted(
+    async def test_the_same_archive_for_a_project_is_a_new_submission(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         world: dict[str, Any],
     ) -> None:
-        """Today's Mentor serves a project: the entry's raw-hash check stays."""
-        sent = await _submit(world["project_id"], filename="proj.zip")
-        assert sent.json()["duplicate"] is False
-        first_id = uuid.UUID(sent.json()["submission_id"])
-        # Stand in for today's Mentor's review: the check reads a terminal one.
-        async with session_factory() as session:
-            first = await session.get(HomeworkSubmission, first_id)
-            assert first is not None
-            first.status = "completed"
-            await session.commit()
+        """Project chain K8: the new path serves a project, so the entry's
+        raw-hash check is not asked — the dedup at the doors judges the same
+        work."""
+        first_id = await _a_reviewed_project_submission(session_factory, world)
 
         again = await _submit(world["project_id"], filename="proj.zip")
+
+        body = again.json()
+        assert body["duplicate"] is False
+        assert body["status"] == "received"
+        assert body["submission_id"] != str(first_id)
+        assert await _submissions_of(session_factory, world["project_id"]) == 2
+
+    async def test_the_same_archive_for_a_project_handed_back_is_already_submitted(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+    ) -> None:
+        """The way back of K8: today's Mentor serves a project, and the entry's
+        raw-hash check stays."""
+        with patch(
+            "course_supporter.homework.attempt_dedup.get_path_config",
+            return_value=shipped_with_todays_mentor_for(AssignmentType.PROJECT),
+        ):
+            first_id = await _a_reviewed_project_submission(session_factory, world)
+            again = await _submit(world["project_id"], filename="proj.zip")
 
         assert again.json() == {
             "submission_id": str(first_id),
@@ -345,3 +364,22 @@ class TestLockEOneRuleOfTheSameWork:
             "duplicate": True,
         }
         assert await _submissions_of(session_factory, world["project_id"]) == 1
+
+
+async def _a_reviewed_project_submission(
+    session_factory: async_sessionmaker[AsyncSession], world: dict[str, Any]
+) -> uuid.UUID:
+    """A project archive sent through the portal, its review stood in for.
+
+    The entry's raw-hash check reads a terminal submission, so the first one
+    is marked ``completed`` without a review being run.
+    """
+    sent = await _submit(world["project_id"], filename="proj.zip")
+    assert sent.json()["duplicate"] is False
+    first_id = uuid.UUID(sent.json()["submission_id"])
+    async with session_factory() as session:
+        first = await session.get(HomeworkSubmission, first_id)
+        assert first is not None
+        first.status = "completed"
+        await session.commit()
+    return first_id

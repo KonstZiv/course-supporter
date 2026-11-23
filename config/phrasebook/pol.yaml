@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Obowiązkowe kryteria autora nie zostały speł
 verdict.rule.author_musts_below_threshold: Wszystkie obowiązkowe kryteria autora zostały spełnione, ale wynik wynosi {score} na 100 — poniżej progu {threshold} dla zadań z obowiązkowymi kryteriami autora, więc praca nie jest zaliczona.
 verdict.rule.no_author_musts_passed: Autor nie zatwierdził obowiązkowych kryteriów dla tego zadania. Dla takich zadań próg zaliczenia wynosi {threshold} na 100; wynik wynosi {score}, więc praca jest zaliczona.
 verdict.rule.no_author_musts_failed: Autor nie zatwierdził obowiązkowych kryteriów dla tego zadania. Dla takich zadań próg zaliczenia wynosi {threshold} na 100; wynik wynosi {score}, więc praca nie jest zaliczona.
+reply.work_only: Oceniamy wyłącznie samą pracę — pliki z rozwiązaniem, a nie to, co napisano obok.
+reply.hostile.fallback: Ciekawy ruch! Oceniamy wyłącznie samą pracę — pliki z rozwiązaniem, a nie to, co napisano obok. Aby poprawić wynik, proszę dopracować rozwiązanie zgodnie z uwagami w tej recenzji.
+reply.off_topic.wrap_up: 'Można o tym rozmawiać długo, ale czeka na nas praca i ten czas lepiej poświęcić na kurs „{course}”. Rozmowy kosztują: mogę rozmawiać bez końca, ale zwykły chatbot zrobi to taniej, a ze mną lepiej uczyć się „{course}”.'
+reply.said.withheld: (nie przytaczamy treści tej wypowiedzi w recenzji)

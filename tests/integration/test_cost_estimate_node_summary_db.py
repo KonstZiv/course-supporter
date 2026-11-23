@@ -559,7 +559,7 @@ class TestTheReportSeesIt:
         async with session_factory() as session:
             rows = [
                 r
-                for r in await _load(session, None, None)
+                for r in (await _load(session, None, None))[0]
                 if r.action_key == str(job.id)
             ]
 
@@ -612,7 +612,7 @@ class TestTheReportSeesIt:
         async with session_factory() as session:
             [report] = [
                 r
-                for r in await _load(session, None, None)
+                for r in (await _load(session, None, None))[0]
                 if r.action_key == str(job.id)
             ]
 

@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Forfatterens obligatoriske kriterier er ikke op
 verdict.rule.author_musts_below_threshold: Du har oppfylt alle forfatterens obligatoriske kriterier, men fått {score} av 100 — under grensen på {threshold} for oppgaver med forfatterens obligatoriske kriterier, så arbeidet er ikke godkjent.
 verdict.rule.no_author_musts_passed: Forfatteren har ikke godkjent obligatoriske kriterier for denne oppgaven. For slike oppgaver er grensen for godkjenning {threshold} av 100; poengsummen din er {score}, så arbeidet er godkjent.
 verdict.rule.no_author_musts_failed: Forfatteren har ikke godkjent obligatoriske kriterier for denne oppgaven. For slike oppgaver er grensen for godkjenning {threshold} av 100; poengsummen din er {score}, så arbeidet er ikke godkjent.
+reply.work_only: Vi vurderer kun selve arbeidet – løsningsfilene, og ikke det som er skrevet ved siden av.
+reply.hostile.fallback: Interessant trekk! Vi vurderer kun selve arbeidet – løsningsfilene, og ikke det som er skrevet ved siden av. For å forbedre resultatet, vennligst bearbeid løsningen etter merknadene i denne vurderingen.
+reply.off_topic.wrap_up: 'Dette kan man snakke lenge om, men arbeidet venter, og tiden brukes best på kurset «{course}». Prating koster penger: Jeg kan snakke i det uendelige, men en vanlig chatbot gjør det billigere, og med meg er det bedre å lære «{course}».'
+reply.said.withheld: (teksten i denne replikken vises ikke i vurderingen)

@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Kriteria wajib dari penulis tidak terpenuhi, se
 verdict.rule.author_musts_below_threshold: Anda telah memenuhi semua kriteria wajib dari penulis, tetapi mendapat {score} dari 100 — di bawah batas {threshold} untuk tugas dengan kriteria wajib dari penulis, sehingga tugas dinyatakan tidak lulus.
 verdict.rule.no_author_musts_passed: Penulis belum menyetujui kriteria wajib untuk tugas ini. Untuk tugas seperti ini, batas lulus adalah {threshold} dari 100; skor Anda adalah {score}, sehingga tugas dinyatakan lulus.
 verdict.rule.no_author_musts_failed: Penulis belum menyetujui kriteria wajib untuk tugas ini. Untuk tugas seperti ini, batas lulus adalah {threshold} dari 100; skor Anda adalah {score}, sehingga tugas dinyatakan tidak lulus.
+reply.work_only: Kami hanya menilai pekerjaan itu sendiri — berkas solusi, bukan apa yang tertulis di sampingnya.
+reply.hostile.fallback: Langkah yang menarik! Kami hanya menilai pekerjaan itu sendiri — berkas solusi, bukan apa yang tertulis di sampingnya. Untuk meningkatkan hasil, silakan perbaiki solusi Anda berdasarkan catatan ulasan ini.
+reply.off_topic.wrap_up: 'Ini bisa dibahas panjang lebar, tetapi pekerjaan sudah menanti, dan waktu lebih baik digunakan untuk kursus «{course}». Mengobrol memerlukan biaya: saya siap mengobrol selamanya, tetapi bot obrolan biasa bisa melakukannya lebih murah, dan bersama saya lebih baik Anda mempelajari «{course}».'
+reply.said.withheld: (teks tanggapan ini tidak disertakan dalam ulasan)

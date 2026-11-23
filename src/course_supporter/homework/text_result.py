@@ -28,7 +28,10 @@ What is the code's and what is the model's (``PRE-PLAN.md`` decisions 2, 3, 5):
     * The pass rule depends on whose list the rows were judged against — the
       layer of the address the rows carry, read by
       :func:`~course_supporter.homework.judged_list.judged_layer`, the same
-      address the course links read the list by. ``verdict.rule`` keeps the
+      address the course links read the list by — and on the "must"
+      criteria the author made mandatory themselves, read from that list
+      (:func:`~course_supporter.homework.judged_list.judged_author_musts`,
+      2026-11-17). ``verdict.rule`` keeps the
       branch that decided, the score and the threshold; the assembler prints
       its phrase under the verdict (2026-11-12).
     * The reason, the remarks and the Mentor's own word are the explanation's.
@@ -88,6 +91,13 @@ The sections of the remarks (task 12a, K2):
     (:meth:`~course_supporter.storage.submission_verdict_repository.SubmissionVerdictRepository.earlier_attempt`)
     is read here only for the words of a fixed criterion.
 
+The replies (task 12a, K4):
+    The section ``replies`` holds each reply of the student this review
+    answered and the answer, in the order of the replies, as K1's table
+    holds them (:func:`replies_answered`); a hostile reply's words are not
+    repeated in it (``reply.said.withheld``). Only this section is added: the
+    rest of the review is built as before.
+
 Language:
     The explanation's own: the language its texts are written in, as the
     explanation stage resolved it (``PRE-FLIGHT.md`` 9.9) — not the doors'
@@ -107,7 +117,7 @@ Replacing:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -117,6 +127,7 @@ from course_supporter.criteria_kinds import (
     VerdictValue,
     WeightCategory,
 )
+from course_supporter.homework import remark_comments
 from course_supporter.homework.course_link_delivery import (
     reference_of,
     settle_course_links,
@@ -127,7 +138,11 @@ from course_supporter.homework.criteria_verdicts import (
     ScoredItem,
     pass_decision,
 )
-from course_supporter.homework.judged_list import judged_layer, read_judged_list
+from course_supporter.homework.judged_list import (
+    judged_author_musts,
+    judged_layer,
+    read_judged_list,
+)
 from course_supporter.homework.result_builders import (
     BuildContext,
     BuiltResult,
@@ -144,10 +159,14 @@ from course_supporter.models.review_structure import (
     Position,
     Reference,
     Remark,
+    Reply,
+    ReplyKind,
     ReviewStructureV1,
     Verdict,
 )
-from course_supporter.remark_kinds import RemarkState
+from course_supporter.models.stored_read import read_stored
+from course_supporter.phrasebook import phrases_for
+from course_supporter.remark_kinds import CommentKind, CommentTopic, RemarkState
 from course_supporter.review_metrics import (
     Claim,
     ReviewMetrics,
@@ -175,6 +194,7 @@ __all__ = [
     "build_text_review",
     "link_authenticity",
     "problem_positions",
+    "replies_answered",
 ]
 
 
@@ -273,11 +293,13 @@ def build_text_review(
     *,
     rows: Sequence[ReviewedItem],
     layer: CriteriaLayer,
+    author_musts: Collection[str],
     explanation: ExplanationAnswer,
     language: str,
     reading: Mapping[str, Sequence[Reference]] | None = None,
     states: Mapping[str, RemarkState | None] | None = None,
     fixed_words: FixedWords | None = None,
+    replies: Sequence[Reply] = (),
 ) -> tuple[ReviewStructureV1, int]:
     """A text task's review as a structure, and its score — a pure function.
 
@@ -285,6 +307,8 @@ def build_text_review(
         rows: The submission's verdict rows, criteria and points alike.
         layer: Whose list the rows were judged against: the pass rule
             depends on it.
+        author_musts: The criteria of that list the author made mandatory
+            themselves: the pass rule depends on them too.
         explanation: The explanation stage's answer.
         language: The language the explanation is written in.
         reading: By criterion id, what its remark gives to read — the course
@@ -294,6 +318,8 @@ def build_text_review(
             item missing here has no state; ``None`` — none has, and every
             remark is new.
         fixed_words: The words of the criteria ``states`` names fixed.
+        replies: What the student wrote to the earlier review and what this
+            review answered, in the order of the replies (task 12a, K4).
 
     Raises:
         ValueError: The rows have no criterion, or a criterion without a
@@ -301,7 +327,7 @@ def build_text_review(
             or the explanation remarks on a criterion the rows do not have;
             or a criterion is fixed and ``fixed_words`` has no words for it.
     """
-    decided = pass_decision(rows, layer=layer)
+    decided = pass_decision(rows, layer=layer, author_musts=author_musts)
     places = problem_positions(rows)
     order = _weight_order(rows)
     state_of = states or {}
@@ -352,8 +378,54 @@ def build_text_review(
         broken=broken,
         # A blank voice is no voice: the assembler would print its block empty.
         mentor_voice=voice if voice is not None and voice.strip() else None,
+        replies=list(replies),
     )
     return structure, decided.score
+
+
+async def replies_answered(
+    session: AsyncSession, submission: HomeworkSubmission, *, language: str
+) -> list[Reply]:
+    """The review's section of replies: each reply it answered, with the answer.
+
+    Task 12a, K4. Read from K1's table — the answers this submission's
+    review gave, each with its reply, in the order of the replies
+    (``answers_in_review`` of K3's store) — so the review says what the
+    table holds. ``said`` is the student's text from the table; for a hostile
+    reply it is the phrasebook's ``reply.said.withheld`` in the review's
+    ``language``, never the reply's text: a review is read by the school's
+    own systems too. No answer — no section.
+    """
+    answered = await remark_comments.build_remark_comment_repository(
+        session
+    ).answers_in_review(tenant_id=submission.tenant_id, submission_id=submission.id)
+    if not answered:
+        return []
+    withheld = phrases_for(language)["reply.said.withheld"]
+    return [
+        Reply(
+            kind=_reply_kind(pair.reply.kind),
+            said=(
+                withheld
+                if pair.reply.topic is CommentTopic.HOSTILE
+                else pair.reply.body
+            ),
+            answer=pair.answer.body,
+        )
+        for pair in answered
+    ]
+
+
+def _reply_kind(kind: CommentKind) -> ReplyKind:
+    """A student's kind of comment as the review names it — never ``answer``."""
+    if kind is CommentKind.QUESTION:
+        return "question"
+    if kind is CommentKind.OBJECTION:
+        return "objection"
+    if kind is CommentKind.COMMENT:
+        return "comment"
+    msg = f"a reply is a student's comment, not an {kind.value}"
+    raise ValueError(msg)
 
 
 def _weight_order(rows: Iterable[ScoredItem]) -> dict[str, tuple[int, int]]:
@@ -439,7 +511,9 @@ async def _fixed_words(
             tenant_id=submission.tenant_id, submission_id=earlier.submission_id
         )
         if explained is not None:
-            remarks = ExplanationAnswer.model_validate(explained.body).remarks
+            remarks = read_stored(
+                ExplanationAnswer, explained.body, submission_id=earlier.submission_id
+            ).remarks
     criteria = await read_judged_list(session, submission, rows)
     return FixedWords(
         remarks={remark.id: remark for remark in remarks},
@@ -503,7 +577,9 @@ class TextResultBuilder:
             raise ResultNotBuiltError(
                 REVIEW_PARTS_MISSING, "the submission has no explanation"
             )
-        answer = ExplanationAnswer.model_validate(explained.body)
+        answer = read_stored(
+            ExplanationAnswer, explained.body, submission_id=submission.id
+        )
         links = await settle_course_links(
             context.session, context.session_factory, submission, answer, rows
         )
@@ -515,6 +591,7 @@ class TextResultBuilder:
         structure, score = build_text_review(
             rows=rows,
             layer=judged_layer(rows),
+            author_musts=await judged_author_musts(context.session, submission, rows),
             explanation=answer,
             language=explained.language,
             reading={
@@ -524,6 +601,9 @@ class TextResultBuilder:
             states=states,
             fixed_words=await _fixed_words(
                 context.session, submission, rows, states=states
+            ),
+            replies=await replies_answered(
+                context.session, submission, language=explained.language
             ),
         )
         return BuiltResult(

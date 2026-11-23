@@ -30,10 +30,11 @@ worth correcting, and asking a student to shorten a text that would then be
 refused for its place is a step that leads nowhere.
 
 The review replies go to:
-    A reply is answered by the student's NEXT submission, which answers the
-    replies to its previous attempt
-    (:func:`~course_supporter.homework.remark_comments.pending_replies`). So
-    a reply is taken only where that submission will look:
+    A reply is answered by the student's NEXT submission, which answers
+    every reply no review answered yet to their attempts at the version in
+    force — those to its previous attempt among them
+    (:func:`~course_supporter.homework.remark_comments.pending_replies`). A
+    reply is taken only on the review that submission's previous attempt is:
 
     * the review is written (``completed`` or ``delivered``, with a text —
       :func:`~course_supporter.homework.feedback_core.review_is_readable`);
@@ -47,8 +48,11 @@ The review replies go to:
       review with no recorded version (one written before the attempt
       ledger) is no such review: K1's table keys every comment by a version.
 
-    Each of the three answers ``not_latest_review``: in each the reply would
-    be stored and never answered.
+    Each of the three answers ``not_latest_review``. In the first and the
+    third the reply would be stored and never answered; in the second it
+    would land on a review a later one has replaced — replies are taken on
+    the latest alone. This is the write's rule; which stored replies a
+    submission answers is ``pending_replies``' alone.
 
 The remarks of a review:
     Its verdict rows, by ``item_id`` (``c3`` — a criterion, ``c3.p2`` — a

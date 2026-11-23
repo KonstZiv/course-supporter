@@ -25,7 +25,7 @@ from course_supporter.api.deps import (
     get_session,
 )
 from course_supporter.auth.context import StudentContext
-from course_supporter.models.source import MaterialRole
+from course_supporter.models.source import AssignmentType, MaterialRole
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -39,6 +39,7 @@ from course_supporter.storage.project_base_repository import ProjectBaseReposito
 from course_supporter.storage.student_enrollment_repository import (
     StudentEnrollmentRepository,
 )
+from tests._helpers.path_config import shipped_with_todays_mentor_for
 
 CREATE_JOB_FUNC = "course_supporter.homework.submission_core.create_homework_job"
 DISPATCH_FUNC = "course_supporter.homework.submission_core.dispatch_homework"
@@ -269,15 +270,37 @@ class TestPortalSubmitSuccess:
         raw_hash_check.assert_not_awaited()
         mock_create.assert_awaited_once()
 
-    async def test_an_identical_file_for_a_project_returns_the_existing(
-        self, client: AsyncClient
+    @pytest.mark.parametrize(
+        ("handed_back", "turned_away"),
+        [
+            # Project chain K8: the new path serves and deduplicates a project.
+            ((), False),
+            # The way back: on today's Mentor the raw-hash check stays.
+            ((AssignmentType.PROJECT,), True),
+        ],
+    )
+    async def test_an_identical_project_archive_by_the_one_rule(
+        self,
+        client: AsyncClient,
+        handed_back: tuple[AssignmentType, ...],
+        turned_away: bool,
     ) -> None:
-        """A project, on today's Mentor, keeps the raw-hash check: duplicate=True."""
+        """One rule of the same work (task 13) for a project, as the file says.
+
+        On the new path (chain K8) an identical archive is a new submission,
+        met by the new path's dedup; handed back to today's Mentor, the
+        raw-hash check returns the existing one: duplicate=True.
+        """
         adoc = uuid.uuid4()
         root = uuid.uuid4()
         existing = _mock_submission(status="completed")
+        submission = _mock_submission()
 
         with (
+            patch(
+                "course_supporter.homework.attempt_dedup.get_path_config",
+                return_value=shipped_with_todays_mentor_for(*handed_back),
+            ),
             patch.object(
                 AuthoredDocumentRepository,
                 "get_by_id",
@@ -299,7 +322,12 @@ class TestPortalSubmitSuccess:
             patch.object(
                 HomeworkRepository, "find_duplicate", return_value=existing
             ) as raw_hash_check,
-            patch.object(HomeworkRepository, "create") as mock_create,
+            patch.object(
+                HomeworkRepository, "create", return_value=submission
+            ) as mock_create,
+            patch.object(HomeworkRepository, "set_job_id", return_value=None),
+            patch(CREATE_JOB_FUNC, new_callable=AsyncMock, return_value=_mock_job()),
+            patch(DISPATCH_FUNC, new_callable=AsyncMock, return_value=None),
         ):
             resp = await client.post(
                 _url(adoc),
@@ -308,11 +336,18 @@ class TestPortalSubmitSuccess:
 
         assert resp.status_code == 202
         data = resp.json()
-        assert data["submission_id"] == str(existing.id)
-        assert data["status"] == "completed"
-        assert data["duplicate"] is True
-        raw_hash_check.assert_awaited_once()
-        mock_create.assert_not_awaited()
+        if turned_away:
+            assert data["submission_id"] == str(existing.id)
+            assert data["status"] == "completed"
+            assert data["duplicate"] is True
+            raw_hash_check.assert_awaited_once()
+            mock_create.assert_not_awaited()
+        else:
+            assert data["submission_id"] == str(submission.id)
+            assert data["status"] == "received"
+            assert data["duplicate"] is False
+            raw_hash_check.assert_not_awaited()
+            mock_create.assert_awaited_once()
 
 
 class TestPortalSubmitGates:

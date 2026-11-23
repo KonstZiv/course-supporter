@@ -42,7 +42,7 @@ from course_supporter.homework.criteria_form import Criterion, criteria_to_docum
 from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.homework.criteria_verdicts import RepeatItem
 from course_supporter.homework.doors import DoorReading
-from course_supporter.homework.judged_list import judged_layer
+from course_supporter.homework.judged_list import judged_author_musts, judged_layer
 from course_supporter.homework.mentor_context import mark_authors_lines
 from course_supporter.homework.path_config import (
     PathKey,
@@ -616,6 +616,7 @@ class TestThePlaceOfAProblem:
         structure, _ = build_text_review(
             rows=listed,
             layer=judged_layer(listed),
+            author_musts=await judged_author_musts(db_session, submission, listed),
             explanation=ExplanationAnswer.model_validate(kept.body),
             language=kept.language,
         )

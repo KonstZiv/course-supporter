@@ -337,6 +337,7 @@ class HomeworkRepository:
         task_version: str,
         criteria_list: tuple[str, uuid.UUID] | None,
         evaluator_version: str,
+        review_language: str | None = None,
     ) -> HomeworkSubmission | None:
         """The latest earlier attempt of the same work, judged alike (task 13, K3).
 
@@ -351,6 +352,14 @@ class HomeworkRepository:
         ``None`` for ``criteria_list`` means the type is judged against no
         list; the key is then the rest alone. Read through the partial index
         ``ix_homework_submissions_attempt_fingerprint``.
+
+        ``review_language`` — the ISO 639-3 code the asking submission's review
+        is written in (operator's decision of 2026-11-23, V-6): only an attempt
+        whose stored review is written in it qualifies, and it is a condition
+        of the choice, not a check on the latest attempt — the latest in the
+        same language wins. ``None`` puts no condition on the language: for a
+        read that has no language to compare (the price of a work not yet sent,
+        ``billing/quotes.py``); the dedup itself never passes ``None``.
         """
         conditions = [
             HomeworkSubmission.tenant_id == tenant_id,
@@ -375,6 +384,10 @@ class HomeworkRepository:
                     SubmissionCriterionVerdict.criteria_layer == layer,
                     SubmissionCriterionVerdict.criteria_source_id == source_id,
                 )
+            )
+        if review_language is not None:
+            conditions.append(
+                HomeworkSubmission.review_result["language"].astext == review_language
             )
         stmt = (
             select(HomeworkSubmission)

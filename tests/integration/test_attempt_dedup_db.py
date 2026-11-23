@@ -36,6 +36,18 @@ and test mode in the receipt) is in ``test_attempt_ledger_db``:
 Lock д (a review stored without the new field) is a unit lock:
 ``tests/unit/test_review_unchanged_note.py``.
 
+The review's language in the key (operator's decision of 2026-11-23, V-6: a copy
+only in the same language), at the end of the file, one class each; the unit
+locks are ``tests/unit/test_homework/test_attempt_dedup_language.py``:
+
+* the repository: only a review written in the language asked for is a source,
+  and it is a condition of the choice — the latest attempt IN that language;
+* end to end: the same work in the same language is a copy; asked in another
+  language — a new review, paid; no language named on the form — the language
+  the other two sources give (the student's stored one, the task's) decides;
+  Ukrainian, English, Ukrainian — the third is given the first;
+* a submission whose language no source gives has nothing to compare: no copy.
+
 The doubles are the ones the walks of the new path already use
 (``test_text_review_e2e_db``, ``test_attempt_ledger_db``, ``test_one_door_db``):
 no model is called. Run with ``--run-db --run-redis``.
@@ -90,6 +102,7 @@ from course_supporter.storage.orm import (
     ExternalServiceCall,
     HomeworkSubmission,
     Job,
+    Student,
     SubmissionCriterionVerdict,
 )
 from course_supporter.storage.task_criteria_list_repository import (
@@ -238,9 +251,15 @@ async def _walk(
     port: _PortDouble | None = None,
     webhook: AsyncMock | None = None,
     config: PathConfig | None = None,
+    response_language: str | None = "uk",
 ) -> uuid.UUID:
-    """One submission of ``raw`` through the ARQ task and the new path's body."""
-    submission_id, job_id = await _submit(session_factory, world)
+    """One submission of ``raw`` through the ARQ task and the new path's body.
+
+    ``response_language`` — what the form named; ``None`` — nothing named.
+    """
+    submission_id, job_id = await _submit(
+        session_factory, world, response_language=response_language
+    )
     config = config or _shipped()
     ctx = {
         "session_factory": session_factory,
@@ -767,11 +786,13 @@ async def _reviewed_attempt(
     list_address: tuple[str, uuid.UUID] | None,
     status: str = "delivered",
     evaluator: str | None = None,
+    language: str = "ukr",
 ) -> uuid.UUID:
     """An attempt as the body leaves one: numbered, fingerprinted, reviewed.
 
     Its receipt names ``evaluator`` — none when ``None``, as every receipt
-    written before the evaluator's version.
+    written before the evaluator's version. Its review is written in
+    ``language``.
     """
     receipt: dict[str, Any] = {"attempt_no": minute + 1, "fingerprint": fingerprint}
     if evaluator is not None:
@@ -785,7 +806,7 @@ async def _reviewed_attempt(
     )
     review = ReviewStructureV1(
         schema_version=REVIEW_SCHEMA_VERSION,
-        language="ukr",
+        language=language,
         verdict=Verdict(passed=True, why="Усе на місці."),
     )
     async with session_factory() as session:
@@ -1512,3 +1533,303 @@ class TestDoorReadingCarriedToCopy:
         assert again.status == "delivered"
         assert curated_not_opened(again) == curated_not_opened(source)
         assert len(curated_not_opened(again)) == 1
+
+
+# ── The review's language in the key (operator's decision, 2026-11-23, V-6) ──
+
+_ORDINARY_REVIEW = [SAFETY, CRITERIA_EVALUATION, REVIEW_EXPLANATION]
+
+
+class TestLanguageLockAtTheRepository:
+    """Only a review written in the language asked for is a source — the latest
+    in that language, not the latest of all with the language looked at."""
+
+    _FP = "f" * 64
+    _LIST = uuid.UUID("11111111-1111-1111-1111-111111111111")
+    _EVALUATOR = "ev1:" + "e" * 16
+
+    async def _attempt(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+        *,
+        minute: int,
+        language: str,
+    ) -> uuid.UUID:
+        return await _reviewed_attempt(
+            session_factory,
+            world,
+            minute=minute,
+            fingerprint=self._FP,
+            task_version=_VERSION_A,
+            list_address=(CriteriaLayer.MODEL.value, self._LIST),
+            evaluator=self._EVALUATOR,
+            language=language,
+        )
+
+    async def _source(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+        language: str | None,
+    ) -> uuid.UUID | None:
+        asking = await _add(session_factory, world, status="received", minute=30)
+        async with session_factory() as session:
+            found = await HomeworkRepository(session).latest_unchanged_attempt(
+                tenant_id=world["tenant_id"],
+                student_id=world["student_id"],
+                authored_document_id=world["doc_id"],
+                excluding=asking,
+                fingerprint=self._FP,
+                task_version=_VERSION_A,
+                criteria_list=(CriteriaLayer.MODEL.value, self._LIST),
+                evaluator_version=self._EVALUATOR,
+                review_language=language,
+            )
+        return found.id if found is not None else None
+
+    async def test_a_review_in_the_same_language_is_a_source(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+    ) -> None:
+        source = await self._attempt(
+            session_factory, task_world, minute=0, language="ukr"
+        )
+
+        assert await self._source(session_factory, task_world, "ukr") == source
+
+    async def test_a_review_in_another_language_is_no_source(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+    ) -> None:
+        await self._attempt(session_factory, task_world, minute=0, language="ukr")
+
+        assert await self._source(session_factory, task_world, "eng") is None
+
+    async def test_the_latest_in_the_language_wins_not_the_latest_of_all(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+    ) -> None:
+        """Attempt 1 in Ukrainian, attempt 2 the same work in English: the
+        third, in Ukrainian, is given attempt 1; one in English, attempt 2."""
+        in_ukrainian = await self._attempt(
+            session_factory, task_world, minute=0, language="ukr"
+        )
+        in_english = await self._attempt(
+            session_factory, task_world, minute=1, language="eng"
+        )
+
+        assert await self._source(session_factory, task_world, "ukr") == in_ukrainian
+        assert await self._source(session_factory, task_world, "eng") == in_english
+
+    async def test_no_language_asked_is_no_condition_on_it(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+    ) -> None:
+        """A read with no language to compare — the price of a work not yet
+        sent (``billing/quotes.py``) — keeps the key it had: the latest of all."""
+        await self._attempt(session_factory, task_world, minute=0, language="ukr")
+        latest = await self._attempt(
+            session_factory, task_world, minute=1, language="eng"
+        )
+
+        assert await self._source(session_factory, task_world, None) == latest
+
+
+async def _attempt_in(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: dict[str, Any],
+    tmp_path: Path,
+    language: str | None,
+) -> tuple[HomeworkSubmission, list[str], _PortDouble]:
+    """The work sent with ``language`` on the form (``None``: none named).
+
+    The router answers, so a copy missed shows as stages walked, not as an
+    error; the port is the one the body reserves with.
+    """
+    router = _RouterDouble(session_factory)
+    port = _PortDouble()
+    submission_id = await _walk(
+        session_factory,
+        world,
+        _UTF8_LF,
+        tmp_path,
+        router=router,
+        source=_ListSource(world["in_force"]),
+        port=port,
+        response_language=language,
+    )
+    return await _row(session_factory, submission_id), router.calls, port
+
+
+def _written_in(submission: HomeworkSubmission) -> str:
+    return ReviewStructureV1.model_validate(submission.review_result).language
+
+
+async def _set_students_language(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: dict[str, Any],
+    language: str | None,
+) -> None:
+    async with session_factory() as session:
+        await session.execute(
+            update(Student)
+            .where(Student.id == world["student_id"])
+            .values(preferred_language=language)
+        )
+        await session.commit()
+
+
+class TestLanguageLockEndToEnd:
+    """The same work is a copy in the same language, and a new paid review in
+    another."""
+
+    async def test_the_same_work_in_the_same_language_is_a_copy(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        first, _, _ = await _attempt_in(session_factory, task_world, tmp_path, "uk")
+        register_before = await _register_rows(session_factory)
+
+        # The same language, named by its other code: one language, one key.
+        again, calls, port = await _attempt_in(
+            session_factory, task_world, tmp_path, "ukr"
+        )
+
+        assert calls == []
+        assert port.reserved == []
+        assert await _register_rows(session_factory) == register_before
+        assert again.attempt_receipt is not None
+        assert again.attempt_receipt[DEDUP_RECEIPT_KEY] == 1
+        assert _written_in(again) == _written_in(first) == "ukr"
+
+    async def test_the_same_work_asked_in_another_language_is_a_new_paid_review(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        first, _, _ = await _attempt_in(session_factory, task_world, tmp_path, "uk")
+
+        again, calls, port = await _attempt_in(
+            session_factory, task_world, tmp_path, "en"
+        )
+
+        assert calls == _ORDINARY_REVIEW  # the first stage onwards
+        assert port.reserved  # asked for funds, as any other review
+        _assert_reviewed_anew(again)
+        assert again.fingerprint == first.fingerprint is not None  # the same work
+        assert _written_in(again) == "eng"
+
+    @pytest.mark.parametrize(
+        ("first_form", "stored", "second_form_gives", "is_copy"),
+        [
+            # Nothing named, no stored language: the task's (Ukrainian) decides.
+            ("uk", None, "ukr", True),
+            # Nothing named: the student's stored language, not the task's.
+            ("en", "eng", "eng", True),
+            # The stored language is English, the task's Ukrainian: the first
+            # source wins, so the Ukrainian source is no source of a copy.
+            ("uk", "eng", "eng", False),
+        ],
+        ids=[
+            "the_tasks_language",
+            "the_students_language_gives_the_sources",
+            "the_students_language_beats_the_tasks",
+        ],
+    )
+    async def test_no_language_on_the_form_the_other_sources_decide(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+        first_form: str,
+        stored: str | None,
+        second_form_gives: str,
+        is_copy: bool,
+    ) -> None:
+        await _attempt_in(session_factory, task_world, tmp_path, first_form)
+        await _set_students_language(session_factory, task_world, stored)
+
+        again, calls, _ = await _attempt_in(session_factory, task_world, tmp_path, None)
+
+        assert again.response_language is None  # the form named nothing
+        assert _written_in(again) == second_form_gives
+        if is_copy:
+            assert calls == []
+            assert again.attempt_receipt is not None
+            assert again.attempt_receipt[DEDUP_RECEIPT_KEY] == 1
+        else:
+            assert calls == _ORDINARY_REVIEW
+            _assert_reviewed_anew(again)
+
+    async def test_ukrainian_english_ukrainian_the_third_is_given_the_first(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        first, _, _ = await _attempt_in(session_factory, task_world, tmp_path, "uk")
+        second, calls_2, _ = await _attempt_in(
+            session_factory, task_world, tmp_path, "en"
+        )
+        assert calls_2 == _ORDINARY_REVIEW  # attempt 2: a new review, in English
+        assert _written_in(second) == "eng"
+
+        third, calls_3, port_3 = await _attempt_in(
+            session_factory, task_world, tmp_path, "uk"
+        )
+
+        assert (first.attempt_no, second.attempt_no, third.attempt_no) == (1, 2, 3)
+        assert calls_3 == []
+        assert port_3.reserved == []
+        assert third.attempt_receipt is not None
+        assert third.attempt_receipt[DEDUP_RECEIPT_KEY] == 1  # not attempt 2
+        assert (
+            ReviewStructureV1.model_validate(third.review_result).unchanged_from_attempt
+            == 1
+        )
+        assert _written_in(third) == "ukr"
+
+        # And the fourth, in English, is given the second.
+        fourth, calls_4, _ = await _attempt_in(
+            session_factory, task_world, tmp_path, "en"
+        )
+        assert calls_4 == []
+        assert fourth.attempt_receipt is not None
+        assert fourth.attempt_receipt[DEDUP_RECEIPT_KEY] == 2
+        assert _written_in(fourth) == "eng"
+
+    async def test_a_language_no_source_gives_is_no_copy(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """Nothing named, nothing stored, a task with no language of its own:
+        there is no language to compare, and the work is reviewed as usual (a
+        missed copy costs a review; one in the wrong language costs the student
+        theirs)."""
+        await _attempt_in(session_factory, task_world, tmp_path, "uk")
+        async with session_factory() as session:
+            await session.execute(
+                update(AuthoredDocument)
+                .where(AuthoredDocument.id == task_world["doc_id"])
+                .values(language=None)
+            )
+            await session.commit()
+
+        with capture_logs() as logs:
+            again, calls, _ = await _attempt_in(
+                session_factory, task_world, tmp_path, None
+            )
+
+        assert "attempt_dedup_language_unknown" in {entry["event"] for entry in logs}
+        assert calls == _ORDINARY_REVIEW
+        _assert_reviewed_anew(again)

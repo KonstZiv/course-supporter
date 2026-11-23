@@ -33,14 +33,17 @@ The same work, judged alike:
       the product owner's decision of 2026-11-23 (V-6, variant 1): a copy is
       given in the same language only; the same work asked for in another
       language is a new, full, paid review like any other. The submission's
-      language is the doors' own answer
-      (:func:`~course_supporter.homework.path_runner.door_languages`: the
-      language named on the submission, else the student's stored one, else
-      the task's — never the raw ``response_language``, which may be empty). It
-      is a condition of the choice, not a check on the latest attempt: of
-      attempt 1 in Ukrainian, attempt 2 the same work in English (a new
-      review) and attempt 3 the same work in Ukrainian, attempt 3 is given
-      the review of attempt 1. A submission whose language no source gives has
+      language is the one its review will be written in
+      (:func:`~course_supporter.homework.review_language.review_language_of`:
+      the doors' answer — the language named on the submission, else the
+      student's stored one, else the task's — and without it the course root's,
+      as the review itself is; never the raw ``response_language``, which may
+      be empty). The price shown before the work is sent asks the same
+      function, so the price and the copy agree. It is a condition of the
+      choice, not a check on the latest attempt: of attempt 1 in Ukrainian,
+      attempt 2 the same work in English (a new review) and attempt 3 the same
+      work in Ukrainian, attempt 3 is given the review of attempt 1. A
+      submission to which not even the course root gives a language has
       nothing to compare, and is an ordinary review.
 
     Anything else — no fingerprint (the ledger did not write one), no version,
@@ -177,6 +180,7 @@ from course_supporter.homework.reply_source import (
     beside_the_work,
 )
 from course_supporter.homework.review_assembler import assemble_review
+from course_supporter.homework.review_language import review_language_of
 from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
     review_schema_version,
@@ -448,10 +452,16 @@ async def _find(
             return None
         criteria_list = (in_force.layer, in_force.source_id)
 
-    review_language = await _review_language_of(session, submission_id)
+    submission = await session.get(HomeworkSubmission, submission_id)
+    review_language = (
+        await review_language_of(session, submission)
+        if submission is not None
+        else None
+    )
     if review_language is None:
-        # No source gives a language: nothing to compare a stored review's
-        # language with, so no copy (the module; a missed repeat costs a review).
+        # Not even the course root gives a language (a defect, the database
+        # refuses such a root): nothing to compare a stored review's language
+        # with, so no copy (the module; a missed repeat costs a review).
         logger.info("attempt_dedup_language_unknown", submission_id=str(submission_id))
         return None
 
@@ -485,25 +495,6 @@ async def _find(
         door_reading=_door_reading_of(source.safety_result),
         replies=tuple(replies),
     )
-
-
-async def _review_language_of(
-    session: AsyncSession, submission_id: uuid.UUID
-) -> str | None:
-    """The language the submission's review is to be written in, ISO 639-3.
-
-    The doors' own answer, not another reading of the three sources:
-    :func:`~course_supporter.homework.path_runner.door_languages` is the code
-    the body resolves the language with, so the key and the review cannot
-    disagree. ``None`` when no source gives one (or the submission is gone).
-    Imported here because the runner imports this module.
-    """
-    from course_supporter.homework.path_runner import door_languages
-
-    submission = await session.get(HomeworkSubmission, submission_id)
-    if submission is None:
-        return None
-    return (await door_languages(session, submission)).review
 
 
 def _door_reading_of(safety_result: object) -> dict[str, Any]:

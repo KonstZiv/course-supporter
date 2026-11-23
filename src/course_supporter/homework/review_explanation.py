@@ -104,6 +104,7 @@ from course_supporter.homework.reply_source import (
     default_reply_source,
     reply_phrases,
 )
+from course_supporter.homework.review_language import language_for_review
 from course_supporter.homework.student_replies import RepliesPlan, plan_replies
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.homework.verdict_explanation import (
@@ -114,9 +115,8 @@ from course_supporter.homework.verdict_explanation import (
     explanation_facts,
     settle_reply_answers,
 )
-from course_supporter.language import display_name, resolve_review_language
+from course_supporter.language import display_name
 from course_supporter.service_logging import CourseLinkTrace, record_course_link_trace
-from course_supporter.storage.orm import CourseNode
 from course_supporter.storage.submission_verdict_repository import (
     SubmissionVerdictRepository,
 )
@@ -447,19 +447,17 @@ async def _explanation_language(
     """The language of the explanation as an ISO 639-3 code.
 
     The path's resolution first (``explicit``); without it, the course
-    root's language, read only then.
+    root's language, read only then — the one rule of
+    :func:`~course_supporter.homework.review_language.language_for_review`,
+    which the key of a copy and the price read too.
 
     Raises:
         ValueError: Neither gives a language — a root without one is refused
             by the database and by every write of it, so this is a defect.
     """
-    root_language: str | None = None
-    if explicit is None:
-        root = await session.get(CourseNode, submission.course_node_id)
-        root_language = root.default_language if root is not None else None
-    code = resolve_review_language(
-        explicit=explicit, preferred=None, course=root_language
-    ).code
+    code = await language_for_review(
+        session, course_node_id=submission.course_node_id, doors_language=explicit
+    )
     if code is None:
         msg = "neither the student nor the course root gives a language"
         raise ValueError(msg)

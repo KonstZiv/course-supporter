@@ -3,14 +3,15 @@
 Two pieces of the rule are not a query's business and are locked here; the
 choice of the source — "the latest attempt IN the language" — is a query, and is
 locked on a real database (``tests/integration/test_attempt_dedup_db.py``, the
-classes ``TestLanguageLock…``):
+classes ``TestLanguageLock…``; the price, ``test_billing_quotes_routes_db.py``):
 
-* the language of a submission is the doors' own answer
-  (``path_runner.door_languages``: the form, else the student's stored language,
-  else the task's), never the raw ``response_language`` — read here through the
-  real code over rows the session hands back;
+* the language of a submission is the one its review will be written in
+  (``review_language.review_language_of``: the doors' answer — the form, else
+  the student's stored language, else the task's — and without it the course
+  root's), never the raw ``response_language`` — read here through the real code
+  over rows the session hands back;
 * the repository's query carries the condition when a language is asked for, and
-  carries none when it is not (the price of a work not yet sent).
+  carries none when it is not.
 """
 
 from __future__ import annotations
@@ -22,9 +23,14 @@ from typing import Any
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from course_supporter.homework.attempt_dedup import _review_language_of
+from course_supporter.homework.review_language import review_language_of
 from course_supporter.storage.homework_repository import HomeworkRepository
-from course_supporter.storage.orm import AuthoredDocument, HomeworkSubmission, Student
+from course_supporter.storage.orm import (
+    AuthoredDocument,
+    CourseNode,
+    HomeworkSubmission,
+    Student,
+)
 
 
 class _Rows:
@@ -36,31 +42,34 @@ class _Rows:
         form: str | None,
         stored: str | None,
         task: str | None,
-        submission_exists: bool = True,
+        root: str | None = None,
     ) -> None:
         self._rows: dict[type, Any] = {
-            HomeworkSubmission: (
-                SimpleNamespace(
-                    student_id=uuid.uuid4(),
-                    authored_document_id=uuid.uuid4(),
-                    response_language=form,
-                )
-                if submission_exists
-                else None
+            HomeworkSubmission: SimpleNamespace(
+                student_id=uuid.uuid4(),
+                authored_document_id=uuid.uuid4(),
+                course_node_id=uuid.uuid4(),
+                response_language=form,
             ),
             Student: SimpleNamespace(preferred_language=stored),
             AuthoredDocument: SimpleNamespace(language=task),
+            CourseNode: SimpleNamespace(default_language=root),
         }
 
     async def get(self, model: type, _key: object) -> Any:
         return self._rows[model]
 
 
+async def _language(rows: _Rows) -> str | None:
+    submission = await rows.get(HomeworkSubmission, None)
+    return await review_language_of(rows, submission)  # type: ignore[arg-type]
+
+
 class TestTheLanguageOfASubmission:
     async def test_the_form_comes_first_in_any_of_its_codes(self) -> None:
         rows = _Rows(form="en", stored="uk", task="ukr")
 
-        assert await _review_language_of(rows, uuid.uuid4()) == "eng"  # type: ignore[arg-type]
+        assert await _language(rows) == "eng"
 
     async def test_a_form_that_names_nothing_leaves_the_student_s_language(
         self,
@@ -69,27 +78,37 @@ class TestTheLanguageOfASubmission:
         canonical code — not ``None`` and not the task's language."""
         rows = _Rows(form=None, stored="en", task="ukr")
 
-        assert await _review_language_of(rows, uuid.uuid4()) == "eng"  # type: ignore[arg-type]
+        assert await _language(rows) == "eng"
 
     async def test_neither_names_one_the_task_s_language_decides(self) -> None:
         rows = _Rows(form=None, stored=None, task="ukr")
 
-        assert await _review_language_of(rows, uuid.uuid4()) == "ukr"  # type: ignore[arg-type]
+        assert await _language(rows) == "ukr"
 
     async def test_a_value_that_resolves_to_nothing_is_skipped(self) -> None:
         rows = _Rows(form="not-a-language", stored=None, task="ukr")
 
-        assert await _review_language_of(rows, uuid.uuid4()) == "ukr"  # type: ignore[arg-type]
+        assert await _language(rows) == "ukr"
 
-    async def test_no_source_gives_none(self) -> None:
-        rows = _Rows(form=None, stored=None, task=None)
+    async def test_no_source_gives_the_course_root_s_language(self) -> None:
+        """The review is written in the root's language when nothing else gives
+        one — so the key of a copy and the price take that language too, and
+        not "none, so no copy" (the review would still have one)."""
+        rows = _Rows(form=None, stored=None, task=None, root="ukr")
 
-        assert await _review_language_of(rows, uuid.uuid4()) is None  # type: ignore[arg-type]
+        assert await _language(rows) == "ukr"
 
-    async def test_a_submission_that_is_gone_gives_none(self) -> None:
-        rows = _Rows(form="uk", stored="uk", task="ukr", submission_exists=False)
+    async def test_the_root_is_read_only_when_nothing_else_gives_a_language(
+        self,
+    ) -> None:
+        rows = _Rows(form=None, stored=None, task="eng", root="ukr")
 
-        assert await _review_language_of(rows, uuid.uuid4()) is None  # type: ignore[arg-type]
+        assert await _language(rows) == "eng"
+
+    async def test_not_even_the_root_gives_none(self) -> None:
+        rows = _Rows(form=None, stored=None, task=None, root=None)
+
+        assert await _language(rows) is None
 
 
 class _CapturedStatement:
@@ -105,7 +124,7 @@ class _CapturedStatement:
 
 async def _compiled_lookup(**extra: Any) -> tuple[str, dict[str, Any]]:
     session = _CapturedStatement()
-    await HomeworkRepository(session).latest_unchanged_attempt(  # type: ignore[arg-type]
+    await HomeworkRepository(session).latest_unchanged_attempt(
         tenant_id=uuid.uuid4(),
         student_id=uuid.uuid4(),
         authored_document_id=uuid.uuid4(),

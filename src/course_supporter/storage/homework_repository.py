@@ -357,9 +357,10 @@ class HomeworkRepository:
         is written in (operator's decision of 2026-11-23, V-6): only an attempt
         whose stored review is written in it qualifies, and it is a condition
         of the choice, not a check on the latest attempt — the latest in the
-        same language wins. ``None`` puts no condition on the language: for a
-        read that has no language to compare (the price of a work not yet sent,
-        ``billing/quotes.py``); the dedup itself never passes ``None``.
+        same language wins. ``None`` puts no condition on the language; the
+        two readers of this rule — the dedup and the price of a work not yet
+        sent (``billing/quotes.py``) — both ask in a language, the same one
+        (:func:`~course_supporter.homework.review_language.review_language_of`).
         """
         conditions = [
             HomeworkSubmission.tenant_id == tenant_id,

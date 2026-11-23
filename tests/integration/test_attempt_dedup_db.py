@@ -1806,17 +1806,16 @@ class TestLanguageLockEndToEnd:
         assert fourth.attempt_receipt[DEDUP_RECEIPT_KEY] == 2
         assert _written_in(fourth) == "eng"
 
-    async def test_a_language_no_source_gives_is_no_copy(
+    async def test_an_empty_language_is_the_course_root_s_and_the_same_work_is_a_copy(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         task_world: dict[str, Any],
         tmp_path: Path,
     ) -> None:
-        """Nothing named, nothing stored, a task with no language of its own:
-        there is no language to compare, and the work is reviewed as usual (a
-        missed copy costs a review; one in the wrong language costs the student
-        theirs)."""
-        await _attempt_in(session_factory, task_world, tmp_path, "uk")
+        """Nothing named on the form, nothing stored for the student, a task
+        with no language of its own: the review is written in the course root's
+        language all the same — so the key takes that language, and the same
+        work is a copy, not an ordinary review for want of a language."""
         async with session_factory() as session:
             await session.execute(
                 update(AuthoredDocument)
@@ -1824,10 +1823,40 @@ class TestLanguageLockEndToEnd:
                 .values(language=None)
             )
             await session.commit()
+        first, _, _ = await _attempt_in(session_factory, task_world, tmp_path, None)
+        assert _written_in(first) == "ukr"  # the root's (the world's course)
 
+        again, calls, port = await _attempt_in(
+            session_factory, task_world, tmp_path, None
+        )
+
+        assert calls == []
+        assert port.reserved == []
+        assert again.attempt_receipt is not None
+        assert again.attempt_receipt[DEDUP_RECEIPT_KEY] == 1
+        assert _written_in(again) == "ukr"
+
+    async def test_a_language_not_even_the_root_gives_is_no_copy(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The database refuses a root with no language, so this is a defect of
+        the data; the work is then reviewed as usual (a missed copy costs a
+        review; one in the wrong language costs the student theirs)."""
+        await _attempt_in(session_factory, task_world, tmp_path, "uk")
+
+        async def _none(*_: Any, **__: Any) -> None:
+            return None
+
+        monkeypatch.setattr(
+            "course_supporter.homework.attempt_dedup.review_language_of", _none
+        )
         with capture_logs() as logs:
             again, calls, _ = await _attempt_in(
-                session_factory, task_world, tmp_path, None
+                session_factory, task_world, tmp_path, "uk"
             )
 
         assert "attempt_dedup_language_unknown" in {entry["event"] for entry in logs}

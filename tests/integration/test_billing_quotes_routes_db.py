@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -42,12 +42,22 @@ from course_supporter.billing.accounts import (
 from course_supporter.billing.journal import add_months
 from course_supporter.billing.kinds import ActionKind, PayerSource, RuleScope
 from course_supporter.cost_estimate.settings import get_estimate_settings
+from course_supporter.criteria_kinds import CriteriaLayer
+from course_supporter.homework.attempts import AttemptWork, attempt_snapshotter_for
+from course_supporter.homework.criteria_form import criteria_to_document
+from course_supporter.homework.evaluator_version import (
+    EVALUATOR_VERSION_RECEIPT_KEY,
+    evaluator_version,
+)
 from course_supporter.homework.path_config import (
     PathKey,
     SubmissionState,
     get_path_config,
     path_ceiling_estimate,
 )
+from course_supporter.homework.review_assembler import assemble_review
+from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
+from course_supporter.models.review_structure import ReviewStructureV1, Verdict
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import (
@@ -58,9 +68,13 @@ from course_supporter.storage.orm import (
     StudentEnrollment,
     Tenant,
 )
+from course_supporter.storage.task_criteria_list_repository import (
+    TaskCriteriaListRepository,
+)
 from tests._helpers.billing_cleanup import drop_billing_of_tenant
 from tests._helpers.course_node_factory import make_root_course_node
 from tests._helpers.public_numbers import serve_numbers_of
+from tests.integration.test_text_review_e2e_db import _CRITERIA
 
 pytestmark = pytest.mark.requires_db
 
@@ -616,6 +630,7 @@ class TestRefusal:
                     display_name=None,
                 ),
                 file=None,
+                response_language=None,
             )  # the author has 0 units: no refusal
 
     async def test_at_the_ceiling_the_gate_needs_the_typical_price(
@@ -688,6 +703,7 @@ class TestRefusal:
                     display_name=None,
                 ),
                 file=None,
+                response_language=None,
             )
 
 
@@ -696,6 +712,7 @@ async def _gate(
     world: World,
     *,
     with_file: bool,
+    response_language: str | None = None,
 ) -> None:
     """The submission's gate (``_require_units``) on the world's task."""
     import io
@@ -719,6 +736,7 @@ async def _gate(
             file=UploadFile(io.BytesIO(WORK), filename="work.py")
             if with_file
             else None,
+            response_language=response_language,
         )
         await session.commit()
 
@@ -1118,3 +1136,201 @@ def test_the_new_billing_routes() -> None:
         ("/api/v1/portal/billing/outlook", "GET"),
         ("/api/v1/billing/outlook", "GET"),
     }
+
+
+# ── V-6: the same work asked for in another language is a new, paid review ──
+
+
+async def _earlier_review(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: World,
+    *,
+    language: str,
+) -> None:
+    """The student's attempt 1 at ``WORK``, reviewed in ``language``.
+
+    As the body leaves one: numbered, fingerprinted as the doors read ``WORK``,
+    its receipt naming today's evaluator, its verdicts judged against the list
+    in force — so the copy rule finds it unless the language differs.
+    """
+    from course_supporter.api.routes.billing_estimates import read_for_quote
+
+    async with session_factory() as session:
+        task = await session.get(AuthoredDocument, world.task_id)
+        assert task is not None
+        reading = await read_for_quote(
+            session, task, world.student_id, filename="work.py", data=WORK
+        )
+        fingerprint = (
+            attempt_snapshotter_for("task")
+            .snapshot(AttemptWork(reading=reading, snapshot_hash=None, manifest=None))
+            .fingerprint
+        )
+        assert task.content_hash is not None
+        lists = TaskCriteriaListRepository(session)
+        claimed = await lists.claim(
+            authored_document_id=task.id,
+            source_content_hash=task.content_hash,
+            source_task_type="task",
+            form_version=2,
+        )
+        assert claimed is not None
+        assert await lists.mark_ready(
+            claimed.id,
+            claimed_at=claimed.claimed_at,
+            criteria=criteria_to_document(_CRITERIA),
+            contradictions=[],
+            concepts_in_input=False,
+            dropped_concept_count=0,
+            input_fingerprint="f" * 64,
+        )
+        review = ReviewStructureV1(
+            schema_version=REVIEW_SCHEMA_VERSION,
+            language=language,
+            verdict=Verdict(passed=True, why="Усе на місці."),
+        )
+        earlier = HomeworkSubmission(
+            tenant_id=world.tenant_id,
+            student_id=world.student_id,
+            course_node_id=world.course_id,
+            node_id=world.course_id,
+            authored_document_id=task.id,
+            file_url="s3://bucket/homework/work.py",
+            file_type="text/plain",
+            original_filename="work.py",
+            status="delivered",
+            attempt_no=1,
+            fingerprint=fingerprint,
+            task_version=task.content_hash,
+            attempt_receipt={
+                "attempt_no": 1,
+                "fingerprint": fingerprint,
+                EVALUATOR_VERSION_RECEIPT_KEY: evaluator_version(
+                    AssignmentType.TASK, get_path_config()
+                ),
+            },
+            review_result=review.model_dump(mode="json"),
+            review_markdown=assemble_review(review),
+            score=100,
+        )
+        session.add(earlier)
+        await session.flush()
+        await session.execute(
+            text(
+                "INSERT INTO submission_criterion_verdicts (id, tenant_id,"
+                " submission_id, criteria_layer, criteria_source_id, item_id,"
+                " item_kind, weight, verdict, model_verdict, quote) VALUES"
+                " (:id, :tenant, :submission, :layer, :source, 'c1',"
+                " 'criterion', 'must', 'met', 'met', 'def solve(n):')"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "tenant": world.tenant_id,
+                "submission": earlier.id,
+                "layer": CriteriaLayer.MODEL.value,
+                "source": claimed.id,
+            },
+        )
+        await session.commit()
+
+
+async def _estimate_work(
+    world: World, *, data: bytes = WORK, **form: str
+) -> dict[str, Any]:
+    """The estimate route's answer for ``data``, ``form`` as the form fields."""
+    async with _client() as client:
+        response = await client.post(
+            f"/api/v1/portal/tasks/{world.task_id}/estimate",
+            files={"file": ("work.py", data, "text/x-python")},
+            data=form,
+        )
+    assert response.status_code == 200, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+@pytest.mark.usefixtures("signed_in")
+class TestTheSameWorkInAnotherLanguage:
+    """The price follows the copy rule: free only in the earlier review's
+    language, and the gate of a submission asks the same price."""
+
+    async def test_the_same_work_in_the_same_language_costs_nothing(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        await _earlier_review(session_factory, world, language="ukr")
+
+        nothing_named = await _estimate_work(world)  # the task's language: ukr
+        named_by_its_other_code = await _estimate_work(world, response_language="uk")
+
+        for body in (nothing_named, named_by_its_other_code):
+            assert (body["price_units"], body["enough"]) == (0, True)
+
+    async def test_the_same_work_asked_in_another_language_has_the_usual_price(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        await _earlier_review(session_factory, world, language="ukr")
+        # Another work of the same size, the earlier attempt behind it: the
+        # price of a new review on the path the student's next attempt takes.
+        usual = await _estimate_work(world, data=WORK.replace(b"add", b"sub"))
+
+        in_english = await _estimate_work(world, response_language="en")
+
+        assert usual["price_units"] > 0
+        assert in_english["price_units"] == usual["price_units"]
+        assert in_english["enough"] is False  # the student has no units
+
+    async def test_an_empty_language_is_the_course_root_s_as_the_review_is(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        """A task with no language of its own, no stored language, none named:
+        the review is written in the root's (ukr), and the price knows it."""
+        async with session_factory() as session:
+            await session.execute(
+                update(AuthoredDocument)
+                .where(AuthoredDocument.id == world.task_id)
+                .values(language=None)
+            )
+            await session.commit()
+        await _earlier_review(session_factory, world, language="ukr")
+
+        body = await _estimate_work(world)
+
+        assert (body["price_units"], body["enough"]) == (0, True)
+
+    async def test_the_gate_refuses_another_language_and_takes_the_same(
+        self, session_factory: async_sessionmaker[AsyncSession], world: World
+    ) -> None:
+        """A student with no units: the same work in the earlier review's
+        language is taken (it is a copy, nothing is paid); in another language
+        it is a new review — 402 ``insufficient_units`` — through the route."""
+        from fastapi import HTTPException
+
+        await _earlier_review(session_factory, world, language="ukr")
+
+        await _gate(session_factory, world, with_file=True, response_language="uk")
+        with pytest.raises(HTTPException) as refused:
+            await _gate(session_factory, world, with_file=True, response_language="en")
+        async with _client() as client:
+            over_the_route = await client.post(
+                f"/api/v1/portal/tasks/{world.task_id}/submissions",
+                files={"file": ("work.py", WORK, "text/x-python")},
+                data={"response_language": "en"},
+            )
+
+        assert refused.value.status_code == 402
+        assert over_the_route.status_code == 402, over_the_route.text
+        detail = over_the_route.json()["detail"]
+        assert detail["code"] == "insufficient_units"
+        assert detail["details"]["available_units"] == 0
+        assert (
+            detail["details"]["missing_units"] == detail["details"]["price_units"] > 0
+        )
+        async with session_factory() as session:
+            stored = (
+                await session.scalars(
+                    select(HomeworkSubmission.id).where(
+                        HomeworkSubmission.student_id == world.student_id
+                    )
+                )
+            ).all()
+        assert len(stored) == 1  # the earlier attempt alone; nothing new

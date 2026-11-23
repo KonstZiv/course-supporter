@@ -27,6 +27,8 @@ class StudentRosterRow(NamedTuple):
     display_name: str | None
     is_active: bool | None
     enrollment_count: int
+    source: str
+    """The source of the first enrollment ('author' with none, O-1)."""
 
 
 class StudentRepository:
@@ -207,11 +209,22 @@ class StudentRepository:
         ``enrollment_count`` is a correlated scalar subquery (not a GROUP BY)
         to avoid a grain conflict with the LEFT join. Soft-deleted students
         are excluded; newest-first, paginated (mirrors ``GET /nodes``).
+        ``source`` is the source of the student's first enrollment (O-1) —
+        'self' for a student who came by a course link — by the same kind
+        of correlated subquery; 'author' when there is none.
         """
         enrollment_count = (
             select(func.count())
             .select_from(StudentEnrollment)
             .where(StudentEnrollment.student_id == Student.id)
+            .correlate(Student)
+            .scalar_subquery()
+        )
+        first_source = (
+            select(StudentEnrollment.source)
+            .where(StudentEnrollment.student_id == Student.id)
+            .order_by(StudentEnrollment.created_at, StudentEnrollment.id)
+            .limit(1)
             .correlate(Student)
             .scalar_subquery()
         )
@@ -223,6 +236,7 @@ class StudentRepository:
                 Student.display_name,
                 StudentCredential.is_active,
                 enrollment_count.label("enrollment_count"),
+                func.coalesce(first_source, "author").label("source"),
             )
             .outerjoin(
                 StudentCredential,
@@ -245,6 +259,7 @@ class StudentRepository:
                 display_name=row.display_name,
                 is_active=row.is_active,
                 enrollment_count=row.enrollment_count,
+                source=row.source,
             )
             for row in result
         ]

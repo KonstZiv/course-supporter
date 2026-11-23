@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal, Self
 
 from pydantic import (
+    BaseModel,
     Field,
     PrivateAttr,
     SecretStr,
@@ -45,6 +46,17 @@ _ALL_PROVIDER_KEYS = _LLM_PROVIDER_KEYS + _STT_PROVIDER_KEYS
 # known value would let anyone forge a student's session token. Enforced by
 # ``_validate_portal_session_secret`` below.
 _DEFAULT_PORTAL_SESSION_SECRET = "dev-portal-session-secret-change-me"  # noqa: S105
+
+
+class RateLimit(BaseModel):
+    """One rate limit: at most ``limit`` requests per ``window_s`` seconds.
+
+    Set from the environment as JSON, e.g.
+    ``RATE_LIMIT_JOIN_SIGNUP_IP='{"limit": 5, "window_s": 3600}'``.
+    """
+
+    limit: int = Field(ge=1)
+    window_s: int = Field(ge=1)
 
 
 class Settings(BaseSettings):
@@ -95,6 +107,18 @@ class Settings(BaseSettings):
     # default targets the portal SPA dev server; the deployed portal origin is
     # supplied via PORTAL_BASE_URL in ``.env.prod`` (Phase 6 password-recovery).
     portal_base_url: str = "http://localhost:5173"
+
+    # --- Open courses (O-1): rate limits of the public enrollment routes ---
+    # Counted in Redis, so every API process shares them (auth.rate_limits);
+    # fixed windows. Over a limit: 429 rate_limited with Retry-After. Redis
+    # unavailable: the request passes and a WARNING is logged.
+    rate_limit_join_signup_ip: RateLimit = RateLimit(limit=5, window_s=3600)
+    rate_limit_join_signup_key: RateLimit = RateLimit(limit=50, window_s=86400)
+    rate_limit_join_resend_signup: RateLimit = RateLimit(limit=1, window_s=60)
+    rate_limit_join_resend_ip: RateLimit = RateLimit(limit=10, window_s=3600)
+    rate_limit_login_by_email_email: RateLimit = RateLimit(limit=10, window_s=900)
+    rate_limit_login_by_email_ip: RateLimit = RateLimit(limit=30, window_s=900)
+    rate_limit_join_course_student: RateLimit = RateLimit(limit=10, window_s=3600)
 
     # --- Billing (BIL-A) ---
     # The revision of the billing terms in force: the date it took effect,
@@ -194,6 +218,10 @@ class Settings(BaseSettings):
     # runs only while billing_charging_enabled or billing_charging_marked is on).
     periodic_billing_resume_funded_enabled: bool = True
     periodic_billing_resume_funded_cron: str = "*/5 * * * *"
+    # Self-enrollment requests (O-1): unconfirmed ones past their 7 days and
+    # confirmed ones older than 30 days are deleted. Daily.
+    periodic_portal_signups_cleanup_enabled: bool = True
+    periodic_portal_signups_cleanup_cron: str = "40 3 * * *"
 
     # --- PostgreSQL ---
     postgres_user: str = "course_supporter"
@@ -311,6 +339,7 @@ class Settings(BaseSettings):
         "periodic_billing_stale_reserves_cron",
         "periodic_billing_purge_cron",
         "periodic_billing_resume_funded_cron",
+        "periodic_portal_signups_cleanup_cron",
     )
     @classmethod
     def _validate_cron(cls, v: str) -> str:

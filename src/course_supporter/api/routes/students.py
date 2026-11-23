@@ -14,6 +14,9 @@ Routes
 - ``POST   /students/enrollments``          — bind student↔course.
 - ``DELETE /students/enrollments``          — unbind student↔course.
 - ``GET    /students/{student_id}/enrollments`` — list a student's grants (T5).
+
+The roster row and each enrollment carry ``source`` (O-1): 'author' for a grant
+the author made, 'self' for an enrollment by the course link.
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
 from course_supporter.auth.student_passwords import WeakPasswordError, hash_password
+from course_supporter.open_courses.service import SOURCE_AUTHOR
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.student_credential_repository import (
     StudentCredentialRepository,
@@ -172,6 +176,7 @@ async def list_students(
                 display_name=r.display_name,
                 is_active=r.is_active,
                 enrollment_count=r.enrollment_count,
+                source=r.source,
             )
             for r in rows
         ],
@@ -302,6 +307,7 @@ async def bind_enrollment(
     return {
         "student_id": str(body.student_id),
         "course_node_id": str(body.course_node_id),
+        "source": SOURCE_AUTHOR,
     }
 
 
@@ -358,6 +364,7 @@ async def list_student_enrollments(
             StudentEnrollmentItem(
                 course_node_id=e.course_node_id,
                 enrolled_at=e.created_at,
+                source=e.source,
             )
             for e in enrollments
         ],

@@ -22,7 +22,7 @@ Course Supporter provides two software services: homework review and course mate
 
 An author pays with units from their package for three things:
 
-- **Material processing.** The platform turns every uploaded material into text and analyses it, and that costs money. Repeated processing that you started yourself is paid again; repeated processing on the platform's initiative is not. More — in the section [Who pays for processing](materials.md#cost).
+- **Material processing.** The platform turns every uploaded material into text and analyses it, and that costs money. Repeated processing that you started yourself is paid again; repeated processing on the platform's initiative is not. If processing fails, no units are charged: the reserve returns to your package. More — in the section [Who pays for processing](materials.md#cost).
 - **The Methodist's work.** Writing section descriptions also uses units, so run the Methodist when the course has been uploaded ([Section descriptions: the Methodist](methodist.md#when)).
 - **Preparing an assignment for review.** The platform does this before the first review of an assignment and again after the assignment is changed. In the costs it is a separate column, "Task preparation (Підготовка завдань)"; it does not concern the student. A preparation started by a student's submission is not stopped when you are short of units.
 

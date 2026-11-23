@@ -156,7 +156,7 @@ A refusal comes in one of two places: during upload — the app does not accept 
 
 The buttons in a material's row are icons: they appear when you hover over the row, and the icon's name is shown in the tooltip. "Retry processing" is the icon with a circular arrow; a material in the "Error" state has it. A material in the "Done" state has "Restart processing (force) (Перезапустити обробку (force))" — the word force here means "anyway": process it again and replace the current result. The third icon is "Delete (Видалити)".
 
-Important: repeated processing goes through all the steps from the beginning, so units are charged for it again, just as for the first time (see [Who pays for processing](#cost)). Do not repeat it more than twice in a row: if the error has not gone away, look for the cause together with the platform administrator rather than by retrying.
+Important: repeated processing goes through all the steps from the beginning. Units are charged for processing that finished: if processing fails, none are charged, while "Restart processing (force) (Перезапустити обробку (force))" for a finished material is paid for like ordinary processing (see [Who pays for processing](#cost)). Do not repeat it more than twice in a row: if the error has not gone away, look for the cause together with the platform administrator rather than by retrying. The exception is a shortage of units: after buying a package, start the processing again.
 
 <!-- frame 12: a material in the "Error (Помилка)" state with the message text -->
 
@@ -185,7 +185,7 @@ Deleting a material, like adding a new one, changes the section: if the Methodis
 
 Material processing is a paid service of the Course Supporter platform: the materials are read and analysed by models, and that costs money. The author pays for processing the materials of their course — with units from their package, just as a student pays for the review of their work.
 
-If the platform repeated processing on its own initiative, no units are charged from your package for it. If processing was repeated because of your changes — you deleted a material and uploaded a new one, or pressed "Restart processing (force)" yourself — units are charged as for ordinary processing.
+If processing fails, no units are charged. If the platform repeated processing on its own initiative, no units are charged from your package for it. If processing was repeated because of your changes — you deleted a material and uploaded a new one, or pressed "Restart processing (force)" yourself — units are charged as for ordinary processing.
 
 If your package does not have enough units for processing, the material is kept, but processing does not start: the material shows "Error (Помилка)" and the message "Processing has not started: there were not enough units for it (Обробку не почато: на неї не вистачило юнітів…)". Buy a package in the "Units (Юніти)" section and press "Retry processing (Повторити обробку)". Where your costs are shown — on the page [Costs and history](costs-history.md).
 

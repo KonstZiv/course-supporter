@@ -10,7 +10,7 @@ keywords:
   - starter archive
   - list of criteria
   - methodological guide
-last_updated: 2026-11-22
+last_updated: 2026-11-23
 ---
 
 # Assignments
@@ -50,7 +50,7 @@ The Mentor does not read methodological materials directly. For it to know your 
 
 1. Put the review guide in the same section as the assignment, with the "Methodological" role.
 2. Run the Methodist ([Section descriptions: the Methodist](methodist.md)). It will read the guide and the assignment in full and carry the requirements over into the section description.
-3. Review the section description. For the "Short assignment" and "Assignment" types, the Mentor reads only the "Description (Опис)" field and the core concepts of the section and the course, so requirements and allowances that matter for the review must be in the assignment text and in the "Description" field. For the "Project" type, the Mentor reads five fields: "Title (Заголовок)", "Description", "Learning objectives (Навчальні цілі)", "Success criteria (Критерії успіху)" and "Common mistakes (Типові помилки)". As of November 2026, it does not read the "Assessment approach (Підхід до оцінювання)" field, so add the requirements and allowances of a project to "Success criteria" and "Common mistakes".
+3. Review the section description. The Mentor reads from it only the "Description (Опис)" field and the core concepts of the section and the course — for assignments of all types, including a project, — so requirements and allowances that matter for the review must be in the assignment text and in the "Description" field. As of November 2026, it does not read the "Assessment approach (Підхід до оцінювання)" field.
 
 A guide the Methodist has not read, because you did not run it, will not be taken into account by the Mentor. The overall picture — who reads what — is shown on the page [How the platform understands your course](how-it-works.md#who-reads).
 
@@ -80,9 +80,9 @@ The Mentor reviews work on an assignment against a list of criteria. The platfor
 
 It does so when the first piece of work arrives for the assignment. After that, all work on this assignment, from all students, is reviewed against the same list.
 
-Important: an edit of the section's "Description" field after the first piece of work is submitted no longer reaches the list. So get the "Description" of a section with an assignment right before students — or you yourself, on behalf of a test student — start submitting work. The Mentor does not read the other description fields for the "Short assignment" and "Assignment" types, and for the "Project" type it reads them anew in every review, so you can refine them later too (more — [How the platform understands your course](how-it-works.md#summary)).
+Important: an edit of the section's "Description" field after the first piece of work is submitted no longer reaches the list. So get the "Description" of a section with an assignment right before students — or you yourself, on behalf of a test student — start submitting work. The Mentor does not read the other description fields (more — [How the platform understands your course](how-it-works.md#summary)).
 
-**Coming soon!** It is planned that the "Learning objectives", "Success criteria" and "Common mistakes" fields will become the basis of the list of criteria for the "Short assignment" and "Assignment" types as well, so requirements written in these fields will make it into the review.
+**Coming soon!** It is planned that the "Learning objectives", "Success criteria" and "Common mistakes" fields will become the basis of the list of criteria, so requirements written in these fields will make it into the review.
 
 The platform will put together a new list if the assignment itself changes — its text or type.
 
@@ -90,15 +90,15 @@ You cannot see or correct the list in the author app yet: there is no screen for
 
 ## What the Mentor does with a piece of work {#review}
 
-As of November 2026, this is how work of the "Short assignment" and "Assignment" types is reviewed. A project is reviewed by the Mentor in its earlier form: it is described above and on the page [How the platform understands your course](how-it-works.md#summary).
+As of November 2026, this is how work of the "Short assignment", "Assignment" and "Project" types is reviewed. More on review — on the page [How the platform understands your course](how-it-works.md#summary).
 
 First, the platform runs a security check on the work, and on the first submission it also checks whether the work looks like an attempt at this particular assignment. Then the Mentor assesses the work against each criterion of the list separately.
 
 For each criterion that is not met, the review gives a comment in three parts: how it is done now, what the problem is, how it should be. In addition, up to three links to places in your course where this topic is explained can be added to a criterion: a time in a video or audio (minutes and seconds), a slide, a paragraph or a file. The platform picks the links by the criterion's core concepts, so a criterion whose concepts did not match the course's concepts will have no links. Only educational materials in the "Done" state go into the links; assignments, tests and service files do not.
 
-**Whether the work is passed.** Each criterion in the list has a weight: a required criterion weighs 3, a desirable one 2, an optional one 1. The work's score is the share of the weights of the criteria met, as a percentage, rounded down; only work in which everything is done gets 100. If the list of criteria was put together by the platform, the work is passed when the score is at least 80. The review tells the student the score, the pass mark and the rule by which the decision was made. A required criterion set by the platform is assessed, shown in the review and counts in the score, but it does not block passing by itself.
+**Whether the work is passed.** Each criterion in the list has a weight: a required criterion weighs 3, a desirable one 2, an optional one 1. The work's score is the share of the weights of the criteria met, as a percentage, rounded down; only work in which everything is done gets 100. Usually the work is passed when the score is at least 80. The review tells the student the score, the pass mark and the rule by which the decision was made.
 
-The rule is different for a list you saved yourself that has at least one required criterion (the list can be corrected only with API requests): then the work is passed when every required criterion is met and the score is at least 70. Details — on the page [Tests and criteria via the API](api.md#criteria-pass).
+A criterion is mandatory for passing only if you marked it as mandatory yourself. "Required" marks suggested by the automatic check affect only the score until you confirm them: such a criterion is assessed, shown in the review and counts in the score, but does not block passing by itself — even when you saved the list, having only corrected something else in it. If your list has at least one criterion that you marked as mandatory yourself, the work is passed when every such criterion is met and the score is at least 70. A criterion can be marked only with API requests — details on the page [Tests and criteria via the API](api.md#criteria-pass).
 
 If a student submits the same work again for the same assignment, and the assignment, the list of criteria and the Mentor itself have not changed in the meantime, they get the review of their previous attempt — the platform does not review it again; the review starts with a note that the work has not changed. When we update the Mentor (change its instructions, model or review rules), the same work is reviewed again, and the result may differ from the previous one. To see a new review on behalf of a test student, change the work.
 

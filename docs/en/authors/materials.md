@@ -10,7 +10,7 @@ keywords:
   - methodological material
   - processing states
   - upload errors
-last_updated: 2026-11-22
+last_updated: 2026-11-23
 ---
 
 # Materials
@@ -94,22 +94,22 @@ Important: if the Methodist has already written the section description, changin
 
 ### Methodological material: your review requirements {#methodical}
 
-The student reads the assignment text but not the methodological guide. So the methodological material is the place to write what you expect from the work, what to pay attention to, which mistakes are typical and what should not be counted as a mistake. These requirements reach the review in two steps: the Methodist reads the guide and carries the requirements over into the section description, and the Mentor reads that description: for the "Short assignment (Коротке завдання)" and "Assignment" types — the "Description (Опис)" field, once, when the list of criteria is put together; for the "Project (Проєкт)" type — five fields in every review ([Who reads what](how-it-works.md#who-reads)). So the guide affects the emphasis of assessment only when the Methodist has read it and you have reviewed the description.
+The student reads the assignment text but not the methodological guide. So the methodological material is the place to write what you expect from the work, what to pay attention to, which mistakes are typical and what should not be counted as a mistake. These requirements reach the review in two steps: the Methodist reads the guide and carries the requirements over into the section description, and the Mentor reads the "Description (Опис)" field from that description — once, when the list of criteria is put together ([Who reads what](how-it-works.md#who-reads)). So the guide affects the emphasis of assessment only when the Methodist has read it and you have reviewed the description.
 
 What to do:
 
 - Put the guide in the same section as the assignment, with the "Methodological" role.
 - State requirements in terms of what can be seen in the submitted work: *the archive contains a report file*, *the script takes a file path*.
-- Upload the guide before running the Methodist, and then review the section description: the most important requirements for "Short assignment" and "Assignment" types should be in the assignment text and in the "Description" field, and for a project — in the "Success criteria (Критерії успіху)" and "Common mistakes (Типові помилки)" fields.
+- Upload the guide before running the Methodist, and then review the section description: the most important requirements for assignments of all types, including a project, should be in the assignment text and in the "Description" field.
 
-**Coming soon!** It is planned that the "Learning objectives (Навчальні цілі)", "Success criteria" and "Common mistakes" fields will become the basis of the list of criteria for the "Short assignment" and "Assignment" types as well, so requirements written in these fields will make it into the review.
+**Coming soon!** It is planned that the "Learning objectives (Навчальні цілі)", "Success criteria" and "Common mistakes" fields will become the basis of the list of criteria, so requirements written in these fields will make it into the review.
 
 What not to do:
 
 - **Do not put the guide in a different section from the assignment.** The Methodist reads full text only from the materials of the section itself, and from subsections it takes only brief summaries.
 - **Do not write requirements that cannot be seen in the submitted work** — *the student had to work it out alone*, *worked without hints*. The Methodist will not carry such a requirement over into the description and will say so in the "Methodist's observations (Спостереження методиста)" field.
 - **Do not expect separate requirements for each assignment of a section.** A section has one description, and all its assignments — say, basic and advanced level — share it. So in the guide, say which assignment a requirement applies to.
-- **Do not leave allowances only in the "Assessment approach (Підхід до оцінювання)" field.** The Mentor does not read this field yet and may send back work that the guide says to accept. Add the most important things — *this is not a mistake*, *accept with a reminder* — to the assignment text or to the section's "Description", and for a project — to "Success criteria" or "Common mistakes".
+- **Do not leave allowances only in the "Assessment approach (Підхід до оцінювання)" field.** The Mentor does not read this field yet and may send back work that the guide says to accept. Add the most important things — *this is not a mistake*, *accept with a reminder* — to the assignment text or to the section's "Description".
 - **Do not assume that a model solution in the guide will stay secret.** The Mentor does not read the guide, but the description is written from it, so the content of the solution may get into the description and show through in a review. Review the description.
 - **Do not make the guide too large.** The Methodist reads the section's methodological materials and assignments in full up to 200,000 characters (an ordinary lesson is 10–40 thousand); whatever does not fit, it sees only in brief.
 

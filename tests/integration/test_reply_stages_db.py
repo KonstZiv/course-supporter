@@ -497,7 +497,11 @@ class TestTheEvaluationWithReplies:
 
         assert outcome == StageOutcome.ok()
         (request,) = router.requests
-        assert request["prompt_ref"] == "prompts/criteria_evaluation/v1_with_replies.md"
+        # v2_with_replies since task 13, K4 (2026-11-23): v1_with_replies and
+        # the block of the earlier attempt, which a submission with no earlier
+        # attempt is not shown.
+        assert request["prompt_ref"] == "prompts/criteria_evaluation/v2_with_replies.md"
+        assert "previous_attempt" not in request["render"]
         assert request["render"]["replies"] == [
             {
                 "item_id": "c2",

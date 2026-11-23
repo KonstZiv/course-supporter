@@ -348,8 +348,17 @@ def test_the_prompt_is_the_one_on_main(path: str, digest: str) -> None:
 
 
 # Added since, on purpose, for a stage of its own; pinned where it was added
-# (task 12a, K4: ``tests/unit/test_prompts/test_reply_prompts.py``).
-_ADDED_SINCE = frozenset({"prompts/criteria_evaluation/v1_with_replies.md"})
+# (task 12a, K4: ``tests/unit/test_prompts/test_reply_prompts.py``; task 13,
+# K4: the text types' two evaluation stages read v2 and v2_with_replies since
+# 2026-11-23, pinned in ``test_calibrated_prompts_unchanged.py`` and
+# ``tests/unit/test_prompts/test_evaluation_prompt_v2.py``).
+_ADDED_SINCE = frozenset(
+    {
+        "prompts/criteria_evaluation/v1_with_replies.md",
+        "prompts/criteria_evaluation/v2.md",
+        "prompts/criteria_evaluation/v2_with_replies.md",
+    }
+)
 
 
 @pytest.mark.parametrize(

@@ -5,8 +5,12 @@ Task 12a, K4. Two new prompts beside the calibrated ones, for two new stages:
 ``prompts/review_explanation/v3_with_replies.md`` — each a copy of its
 calibrated prompt with marked blocks for the replies. Since task 13
 (2026-11-23) the explanation's is ``v4_with_replies.md``, a copy of ``v4.md``
-with the same blocks and the limit of examples of an answer to a reply. The
-locks here:
+with the same blocks and the limit of examples of an answer to a reply. Since
+task 13, K4 (2026-11-23) the evaluation's stage reads ``v2_with_replies.md``,
+a copy of ``v1_with_replies.md`` with the block of the earlier attempt, and
+every other text path's evaluation ``v2.md`` (``test_evaluation_prompt_v2.py``
+locks both); ``v1_with_replies.md`` stays pinned here as the history it is,
+its locks below unchanged. The locks here:
 
 * the new prompts render with the slot lock, and a reply cannot open or close
   a slot;
@@ -55,6 +59,8 @@ from course_supporter.remark_kinds import CommentAuthor, CommentKind, CommentTop
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _EVALUATION = "prompts/criteria_evaluation/v1_with_replies.md"
 _EXPLANATION = "prompts/review_explanation/v4_with_replies.md"
+# The prompt the evaluation's stage with replies reads since task 13, K4.
+_EVALUATION_STAGE = "prompts/criteria_evaluation/v2_with_replies.md"
 
 # sha256 of the two new files as written for 12a K4: an edit is a decision
 # made on purpose, with a new digest here — and a new live measurement. The
@@ -68,7 +74,8 @@ _NEW = {
 }
 # sha256 of every prompt the other paths read, as on main before 12a K4; the
 # project's prompts as in project chain K8 (2026-11-22); the text types'
-# explanation moved on purpose from v3 to v4 by task 13 (2026-11-23).
+# explanation moved on purpose from v3 to v4 by task 13 (2026-11-23), and
+# their evaluation from v1 to v2 by task 13, K4 (2026-11-23).
 _CALIBRATED = {
     "prompts/safety_check/v2.md": (
         "04d5a1d0ddb18b58506a963e1744640c8aaca95340f37c7d68372702822ac9b7"
@@ -76,8 +83,8 @@ _CALIBRATED = {
     "prompts/sanity_check/v1.md": (
         "dfe1486fdc8bc6c7f9791d78d06c3334841a55648a867d9ea93bb7f939f4e6d6"
     ),
-    "prompts/criteria_evaluation/v1.md": (
-        "1067450153909de49254dfcd27d752b27d6753a142d04720149c845eb68d24a0"
+    "prompts/criteria_evaluation/v2.md": (
+        "0abf6466df31c8d2ac3c6ef356d74bfbb845af72c12010f3935103e9c45e8242"
     ),
     "prompts/review_explanation/v4.md": (
         "2fde8ef73e2817d12f8d9d171c9bb5a11900713214508e8bf6239e3ed3655113"
@@ -349,7 +356,11 @@ class TestEveryOtherPathIsAsItWas:
                 for name in stages
                 if isinstance(stage := config.stages[name], ModelStage)
             }
-            assert refs == {"prompts/safety_check/v2.md", _EVALUATION, _EXPLANATION}
+            assert refs == {
+                "prompts/safety_check/v2.md",
+                _EVALUATION_STAGE,
+                _EXPLANATION,
+            }
 
     @pytest.mark.parametrize(
         ("name", "twin"),

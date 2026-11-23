@@ -10,11 +10,16 @@ the answers mean belong to the evaluation stage
 request, holds the answer's form, and returns what the model said.
 
 Two requests, one prompt — the one the stage names, rendered from the same
-variables: ``prompts/criteria_evaluation/v1.md`` for a text type,
+variables: ``prompts/criteria_evaluation/v2.md`` for a text type,
 ``prompts/criteria_evaluation_project/v1.md`` for a project (chain K4),
-``prompts/criteria_evaluation/v1_with_replies.md`` for a text type's
+``prompts/criteria_evaluation/v2_with_replies.md`` for a text type's
 submission that carries the student's replies (task 12a, K4) — which alone
-is also shown the replies, in its own slot (:class:`EvaluationInput`):
+is also shown the replies, in its own slot (:class:`EvaluationInput`). A text
+type's FIRST request about a repeated attempt is also shown the earlier
+attempt (task 13, K4; :attr:`EvaluationInput.memory`): the earlier verdicts
+and the difference of the work, in slots of their own; the second request is
+what it was, and so is every request of a first attempt — byte for byte what
+v1 and v1_with_replies render, the history v2 is a copy of:
 
 * :meth:`CriteriaEvaluatorAgent.evaluate` asks about every item of the list —
   each criterion, or the mandatory points of one checked by points;
@@ -46,6 +51,7 @@ from typing import TYPE_CHECKING, Any, Final
 import structlog
 
 from course_supporter.agents.wire_schema import wire_schema
+from course_supporter.criteria_kinds import VerdictValue
 from course_supporter.homework.criteria_form import CheckMethod
 from course_supporter.homework.criteria_verdicts import (
     MAX_QUOTE_CHARS,
@@ -61,6 +67,10 @@ if TYPE_CHECKING:
     import uuid
 
     from course_supporter.homework.criteria_form import Criterion
+    from course_supporter.homework.earlier_review import (
+        AttemptMemory,
+        PreviousVerdict,
+    )
     from course_supporter.homework.student_replies import EvaluationReply
     from course_supporter.llm.stage_router import StageExecution, StageRouter
 
@@ -92,6 +102,11 @@ class EvaluationInput:
             (:func:`~course_supporter.homework.student_replies.replies_for_evaluation`;
             task 12a, K4) — possibly none; ``None`` on every other stage,
             whose request has no slot for them and stays what it was.
+        memory: What the first request about a repeated attempt of a text
+            type is shown of the earlier attempt
+            (:func:`~course_supporter.homework.earlier_review.read_attempt_memory`;
+            task 13, K4); ``None`` — a first attempt, nothing to show, or a
+            stage that shows none: the request is what it was.
     """
 
     task_title: str
@@ -101,6 +116,7 @@ class EvaluationInput:
     submission_text: str
     language: str | None
     replies: tuple[EvaluationReply, ...] | None = None
+    memory: AttemptMemory | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,7 +230,11 @@ def render_context(
     ``repeat`` is empty on the first request; on the repeat it names each item
     asked about again, what it said and what is wrong with it. ``replies`` is
     a variable only of the stage with replies (task 12a, K4): every other
-    request's variables are what they were.
+    request's variables are what they were. ``previous_attempt`` is a
+    variable only of the FIRST request with a memory (task 13, K4;
+    :func:`memory_for_prompt`): the repeat asks to mend quotes of THIS work,
+    and an earlier work's quotes beside it would only tempt a wrong one; a
+    request without the variable renders as before.
     """
     context: dict[str, Any] = {
         "task_title": shown.task_title,
@@ -230,7 +250,45 @@ def render_context(
     }
     if shown.replies is not None:
         context["replies"] = replies_for_prompt(shown.replies)
+    if shown.memory is not None and not repeat:
+        context["previous_attempt"] = memory_for_prompt(shown.memory)
     return context
+
+
+def memory_for_prompt(memory: AttemptMemory) -> dict[str, Any]:
+    """The earlier attempt as the model reads it (task 13, K4).
+
+    The notes as flags the prompt words; the verdicts — a "met" with its
+    quote, a "not met" with its sentence, ``unconfirmed`` only where it holds
+    — or ``None`` when not shown; the difference without its last line end
+    (the slot's closing tag is on a line of its own), ``None`` when not shown
+    or empty: the same work is a note, not an empty slot. Public so the
+    measurement renders a request exactly as the stage does.
+    """
+    return {
+        "criteria_changed": memory.criteria_changed,
+        "task_changed": memory.task_changed,
+        "rewritten": memory.rewritten,
+        "work_unavailable": memory.earlier_work_unavailable,
+        "work_unchanged": memory.diff == "",
+        "verdicts": (
+            None
+            if memory.verdicts is None
+            else [_previous_verdict(v) for v in memory.verdicts]
+        ),
+        "diff": memory.diff.removesuffix("\n") if memory.diff else None,
+    }
+
+
+def _previous_verdict(verdict: PreviousVerdict) -> dict[str, Any]:
+    shown: dict[str, Any] = {"id": verdict.id, "verdict": verdict.verdict.value}
+    if verdict.verdict is VerdictValue.MET:
+        shown["quote"] = verdict.quote
+    else:
+        shown["missing"] = verdict.missing
+    if verdict.unconfirmed:
+        shown["unconfirmed"] = True
+    return shown
 
 
 def replies_for_prompt(replies: Sequence[EvaluationReply]) -> list[dict[str, Any]]:

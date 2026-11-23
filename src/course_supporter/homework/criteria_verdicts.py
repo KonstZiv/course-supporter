@@ -191,7 +191,9 @@ quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 # (2026-11-17; злито після суворої гілки 2026-11-22)
 # пояснення бачить своє минуле зауваження до відкритого критерію,
 # межі прикладів рахує код (задача 13, сторона пояснення, 2026-11-23)
-VERDICT_RULES_VERSION: Final[int] = 10
+# оцінка повторної спроби бачить різницю з попередньою спробою
+# та попередні вердикти (задача 13, K4, 2026-11-23)
+VERDICT_RULES_VERSION: Final[int] = 11
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -222,7 +224,16 @@ is shown the explanation's own remark on it then, in the same language
 (``earlier_review.previous_remarks``), and a text type's request shows how
 many criteria the examples may cover — half of the list's criteria in the
 review, 30 % in one answer to a reply, rounded down
-(``verdict_explanation.example_limits``). It enters
+(``verdict_explanation.example_limits``); 11 — the evaluation of a repeat
+attempt sees the difference from the earlier attempt and its earlier verdicts
+(task 13, K4, 2026-11-23): the first request about a repeated attempt of
+``task`` or ``short_task`` is shown, as a hint where to look, the earlier
+attempt's verdicts on the items judged now and the line difference of the
+work (``earlier_review.read_attempt_memory``) — without the verdicts when
+the criteria list changed since, without the difference when the work was
+rewritten (``attempt_memory.rewritten_share`` of the submission-path file,
+whose change raises this number too) or the earlier work cannot be read; the
+safeguard and every rule above are unchanged. It enters
 the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,

@@ -1863,7 +1863,10 @@ Stage 1 або нормалізації проєкту, до Stage 2). Пода�
 - збирач — `text_result`, `review_assembler`;
 - стани зауважень між спробами — `is_credited`, `remark_states`, `with_remark_states` (задача 12а);
 - що бачить пояснення — минуле зауваження й межі прикладів (`earlier_review.previous_remarks`,
-  `verdict_explanation.example_limits`; задача 13, `10`).
+  `verdict_explanation.example_limits`; задача 13, `10`);
+- що бачить оцінка повторної спроби — попередні вердикти й різницю роботи
+  (`earlier_review.read_attempt_memory`, `attempt_memory.rewritten_share` у
+  `config/submission_paths.yaml`; задача 13, К4, `11`).
 
 Забута — і та сама робота отримає копію рецензії, яку написав старий код. `2` — після виправлення
 перевірки цитат 07.11.
@@ -2269,3 +2272,60 @@ Decision 1 / OpenAI, вибір виміром 17.11): реалізує `classif
 `test_reply_answers.py`, `test_replies_measure.py`, `tests/unit/test_prompts/test_reply_prompts.py`,
 `tests/integration/test_reply_stages_db.py`, `test_reply_answers_db.py`,
 `test_reply_answers_e2e_db.py`.
+
+## Пам'ять оцінки — двадцята частина (задача 13, К4)
+
+### 20. Що оцінка повторної спроби бачить про попередню — `earlier_review.py`, `attempt_memory_measure.py`
+
+**Призначення.** Повторну спробу `task` і `short_task` оцінюють не з нуля: перший запит стадії
+оцінки (`criteria_evaluation`, `criteria_evaluation_with_replies`) бачить, що знайшла рецензія
+попередньої спроби і що змінилось у роботі. Це **підказка, куди дивитися** (рішення оператора
+23.11, П2): кожен пункт модель вирішує сама, код вердиктів не переносить; запобіжник повторної
+здачі, правила заліку й балу — без змін. Тест — без пам'яті, проєкт — пізніше.
+
+**Вхід.** Одне місце — `earlier_review.read_attempt_memory` (поруч `read_earlier_review`, яке, як і
+досі, читає пояснення):
+
+- попередня спроба — найпізніша попередня спроба того самого студента над тим самим завданням, що
+  отримала рецензію з рядками вердиктів, **будь-якої версії завдання**
+  (`SubmissionVerdictRepository.earlier_attempt(..., same_version=False)`; пояснення й стани
+  зауважень і далі беруть лише ту саму версію);
+- її вердикти на пункти, про які модель питають тепер (`judged_items`): `met` — з цитатою,
+  `not_met` — з реченням `missing`, `unconfirmed` — як збережено (`quote_not_found`); тексту
+  зауважень попередньої рецензії оцінка не бачить;
+- її робота — файл спроби з S3, прочитаний кодом дверей (`DoorsEarlierWork`:
+  `path_runner.door_languages` + `path_runner.read_text_work`, тимчасовий файл видаляється);
+- різниця — `TextAttemptSnapshotter.diff` знімків обох спроб (рядкова різниця нормалізованого
+  тексту).
+
+**Коли пам'яті немає або вона неповна** (краще менше, ніж хибне):
+
+| ситуація | вердикти | різниця | позначка |
+|---|---|---|---|
+| попередньої спроби з рецензією немає | — | — | запит як на першу спробу |
+| інша адреса переліку (`criteria_layer` + `criteria_source_id`) | немає | є | «перелік критеріїв змінено» |
+| інша (або невідома) `task_version` | є | є | «завдання змінено» |
+| (додані + видалені рядки) / max(рядків до, після) > `attempt_memory.rewritten_share` (0,5) | є | немає | «роботу переписано» |
+| файл попередньої спроби не читається | є | немає | «попередня робота недоступна»; у журнал — рядок без тексту роботи |
+| не лишилось ні вердиктів, ні різниці | — | — | запит як на першу спробу |
+
+**Вихід — промпти `v2.md` і `v2_with_replies.md`** (копії `v1` і `v1_with_replies` з одним
+позначеним блоком). Блок пам'яті є лише в першому запиті повторної спроби: правила в системному
+повідомленні, позначки й два недовірені слоти в користувацькому — `<previous_attempt_verdicts>`
+(JSON) і `<previous_attempt_diff>` (unified diff); обидва названо в переліку недовіреного вводу.
+На першій спробі й у другому запиті про пункти (`repeat`, `<previous_problems>`) запит v2 байт у
+байт v1-вий (`tests/unit/test_prompts/test_text_stage_inputs_unchanged.py`).
+
+**Як змінити межу «переписано».** `attempt_memory.rewritten_share` у
+`config/submission_paths.yaml`; разом із нею — `VERDICT_RULES_VERSION` (замок
+`test_attempt_memory.py::TestTheSetting`).
+
+**Стенд виміру** (`attempt_memory_measure.py`, `scripts/measure_attempt_memory.py`): пари записаних
+входів (`scripts/record_evaluation_input.py` — перша й друга спроба) → три запити на перший щабель
+з тим самим зерном: перша спроба v1 (її вердикти), друга v1, друга v2 з пам'яттю. Звіряє вердикти
+пунктів, яких зміна не зачепила, і зачеплених; рахує застарілі цитати й приріст входу. Бази не
+торкається; `--dry-run` нічого не надсилає. Синтетична пара — `tests/fixtures/attempt_memory/`.
+
+Замки — `tests/unit/test_homework/test_attempt_memory.py`, `test_attempt_memory_measure.py`,
+`tests/unit/test_prompts/test_text_stage_inputs_unchanged.py`,
+`test_calibrated_prompts_unchanged.py`, `tests/integration/test_attempt_memory_db.py`.

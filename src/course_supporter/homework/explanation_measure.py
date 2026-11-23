@@ -393,6 +393,12 @@ class _Spy(LLMProvider):
         if self.inner is not None:
             self.inner.check_request(request)
 
+    def seed_supported(self, request: LLMRequest) -> bool:
+        # The real connector's answer, so a deterministic stage is measured
+        # with the seed the path sends (task 13, K4: the stand of the memory
+        # compares two prompts "with the same seed"); without one, no seed.
+        return self.inner is not None and self.inner.seed_supported(request)
+
     def classify_error(self, exc: Exception) -> ErrorCategory:
         if self.inner is None:
             return ErrorCategory.SEMANTIC

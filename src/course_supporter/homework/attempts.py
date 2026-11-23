@@ -114,6 +114,7 @@ __all__ = [
     "TestAttemptSnapshotter",
     "TextAttemptSnapshotter",
     "attempt_snapshotter_for",
+    "line_count",
     "normalize_work_text",
     "normalized_work_text",
 ]
@@ -431,6 +432,16 @@ def _text_diff(before: str, after: str) -> AttemptDiff:
         lines_added=added,
         lines_removed=removed,
     )
+
+
+def line_count(text: str) -> int:
+    """The lines of ``text`` as :meth:`TextAttemptSnapshotter.diff` counts them.
+
+    Cut at LF only, a last line without its LF counted too: the same lines
+    whose ``+`` and ``-`` the difference counts, so a share of changed lines
+    (``homework/earlier_review.py``, task 13, K4) divides like by like.
+    """
+    return len(_lines(text))
 
 
 def _lines(text: str) -> list[str]:

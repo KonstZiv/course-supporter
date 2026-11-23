@@ -15,6 +15,12 @@ The explanation prompts v4 and v4_with_replies (task 13, explanation side,
 2026-11-23) are pinned beside them as written: the text types' two stages
 read them since, v3 and v3_with_replies stay as the calibrated history, and
 their calibration is the live measurement of v3 against v4.
+
+The evaluation prompts v2 and v2_with_replies (task 13, K4, 2026-11-23) are
+pinned beside them as written: the text types' two evaluation stages read
+them since — copies of v1 and v1_with_replies with the block of the earlier
+attempt — v1 and v1_with_replies stay as the calibrated history, and their
+calibration is the live measurement of v1 against v2 on repeated attempts.
 """
 
 from __future__ import annotations
@@ -29,6 +35,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PINNED = {
     "prompts/criteria_evaluation/v1.md": (
         "1067450153909de49254dfcd27d752b27d6753a142d04720149c845eb68d24a0"
+    ),
+    "prompts/criteria_evaluation/v1_with_replies.md": (
+        "5b90a8c0161c3c5806f75923489a768f818db368c51977a32070d5e2d3fe4865"
+    ),
+    "prompts/criteria_evaluation/v2.md": (
+        "0abf6466df31c8d2ac3c6ef356d74bfbb845af72c12010f3935103e9c45e8242"
+    ),
+    "prompts/criteria_evaluation/v2_with_replies.md": (
+        "a60a656f2f21941101f7adeaab3b979d34c197902c00fb92c9d00fdc42dbbb2d"
     ),
     "prompts/review_explanation/v2.md": (
         "315afd0b1e35aa13e9bb133de1702cfa36f6cc05732d04c59a32c6f29a7bf0f3"

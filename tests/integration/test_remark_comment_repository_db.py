@@ -15,8 +15,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from course_supporter.homework.remark_comments import (
     NewReply,
@@ -261,7 +261,7 @@ class TestTheReads:
         assert await store.thread(stranger, ["c1"]) == []
         assert (
             await store.unanswered_student_replies(
-                tenant_id=uuid.uuid4(), submission_id=attempt.id
+                tenant_id=uuid.uuid4(), submission_ids=[attempt.id]
             )
             == []
         )
@@ -292,10 +292,50 @@ class TestTheReads:
         store = SqlRemarkCommentRepository(db_session)
 
         unanswered = await store.unanswered_student_replies(
-            tenant_id=seed_tenant.id, submission_id=attempt.id
+            tenant_id=seed_tenant.id, submission_ids=[attempt.id]
         )
 
         assert [c.id for c in unanswered] == [first.id, waiting.id]
+
+    async def test_a_set_of_submissions_is_read_whole_oldest_first(
+        self,
+        db_session: AsyncSession,
+        async_engine: AsyncEngine,
+        seed_tenant: Tenant,
+        seed_root_node: CourseNode,
+    ) -> None:
+        """Replies on several attempts: each once, by time across them, in one
+        query; an attempt outside the set is not read."""
+        doc = await _task(db_session, seed_root_node)
+        student = await _student(db_session, seed_tenant)
+        older = await _attempt(db_session, student=student, doc=doc, minute=0)
+        newer = await _attempt(db_session, student=student, doc=doc, minute=1)
+        outside = await _attempt(db_session, student=student, doc=doc, minute=2)
+        on_newer = await a_stored_comment(db_session, newer, minute=0)
+        on_older = await a_stored_comment(db_session, older, minute=1)
+        await a_stored_comment(db_session, outside, minute=2)
+        store = SqlRemarkCommentRepository(db_session)
+        statements: list[str] = []
+
+        def _count(*args: Any) -> None:
+            statements.append(args[2])
+
+        engine = async_engine.sync_engine
+        event.listen(engine, "before_cursor_execute", _count)
+        try:
+            unanswered = await store.unanswered_student_replies(
+                tenant_id=seed_tenant.id,
+                submission_ids=[older.id, newer.id, older.id],
+            )
+            nothing = await store.unanswered_student_replies(
+                tenant_id=seed_tenant.id, submission_ids=[]
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", _count)
+
+        assert [c.id for c in unanswered] == [on_newer.id, on_older.id]
+        assert nothing == []
+        assert len(statements) == 1, statements
 
 
 class TestOnlyTheLivingAreRead:
@@ -319,7 +359,7 @@ class TestOnlyTheLivingAreRead:
 
         thread = await store.thread(_scope(kept), ["c1"])
         unanswered = await store.unanswered_student_replies(
-            tenant_id=seed_tenant.id, submission_id=gone.id
+            tenant_id=seed_tenant.id, submission_ids=[gone.id]
         )
 
         assert [c.id for c in thread] == [stays.id]
@@ -342,7 +382,7 @@ class TestOnlyTheLivingAreRead:
         assert await store.thread(_scope(attempt), ["c1"]) == []
         assert (
             await store.unanswered_student_replies(
-                tenant_id=seed_tenant.id, submission_id=attempt.id
+                tenant_id=seed_tenant.id, submission_ids=[attempt.id]
             )
             == []
         )
@@ -378,7 +418,7 @@ class TestTheMarks:
         ).one()
         assert tuple(row) == ("hostile", 0.97, "prompt_injection")
         (read,) = await store.unanswered_student_replies(
-            tenant_id=seed_tenant.id, submission_id=attempt.id
+            tenant_id=seed_tenant.id, submission_ids=[attempt.id]
         )
         assert (read.topic, read.hostile_category) == (
             CommentTopic.HOSTILE,

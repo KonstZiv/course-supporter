@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant, get_s3_client
 from course_supporter.auth.context import TenantContext
+from course_supporter.models.source import AssignmentType
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -26,6 +27,7 @@ from course_supporter.storage.document_summary_repository import (
 )
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.student_repository import StudentRepository
+from tests._helpers.path_config import shipped_with_todays_mentor_for
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -802,11 +804,14 @@ class TestSubmitHomework:
         mock_s3.delete_object.assert_awaited_once()
 
     @pytest.mark.parametrize(
-        ("task_type", "filename", "turned_away"),
+        ("task_type", "filename", "handed_back", "turned_away"),
         [
-            ("task", "solution.py", False),
-            ("short_task", "solution.py", False),
-            ("project", "proj.zip", True),
+            ("task", "solution.py", (), False),
+            ("short_task", "solution.py", (), False),
+            # Project chain K8: on the new path, as a text task.
+            ("project", "proj.zip", (), False),
+            # The way back of K8: on today's Mentor the raw-hash check stays.
+            ("project", "proj.zip", (AssignmentType.PROJECT,), True),
         ],
     )
     async def test_an_identical_file_by_the_one_rule_of_the_same_work(
@@ -816,14 +821,15 @@ class TestSubmitHomework:
         node_id: uuid.UUID,
         task_type: str,
         filename: str,
+        handed_back: tuple[AssignmentType, ...],
         turned_away: bool,
     ) -> None:
         """One rule of the same work (task 13), at the channel's entry too.
 
-        A text task, served and deduplicated by the new path: the raw-hash
-        check is not asked, a new submission is created. A project, on
-        today's Mentor: the identical file already reviewed is the cached
-        result, as before.
+        A type served and deduplicated by the new path — a text task, and a
+        project since chain K8: the raw-hash check is not asked, a new
+        submission is created. A project handed back to today's Mentor: the
+        identical file already reviewed is the cached result, as before.
         """
         student = _mock_student()
         existing = _mock_submission(student_id=student.id)
@@ -842,6 +848,10 @@ class TestSubmitHomework:
             return None
 
         with (
+            patch(
+                "course_supporter.homework.attempt_dedup.get_path_config",
+                return_value=shipped_with_todays_mentor_for(*handed_back),
+            ),
             patch.object(
                 CourseNodeRepository,
                 "get_by_id",

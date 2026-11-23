@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Niet aan de verplichte criteria van de auteur i
 verdict.rule.author_musts_below_threshold: U hebt aan alle verplichte criteria van de auteur voldaan, maar {score} van de 100 behaald — onder de grens van {threshold} voor taken met verplichte criteria van de auteur, dus het werk is afgekeurd.
 verdict.rule.no_author_musts_passed: De auteur heeft voor deze taak geen verplichte criteria goedgekeurd. Voor zulke taken is de grens voor goedkeuring {threshold} van de 100; uw score is {score}, dus het werk is goedgekeurd.
 verdict.rule.no_author_musts_failed: De auteur heeft voor deze taak geen verplichte criteria goedgekeurd. Voor zulke taken is de grens voor goedkeuring {threshold} van de 100; uw score is {score}, dus het werk is afgekeurd.
+reply.work_only: We beoordelen alleen het werk zelf — de bestanden met de oplossing, niet wat erbij geschreven staat.
+reply.hostile.fallback: Interessante zet! We beoordelen alleen het werk zelf — de bestanden met de oplossing, niet wat erbij geschreven staat. Pas uw oplossing aan op basis van de opmerkingen in deze review om uw resultaat te verbeteren.
+reply.off_topic.wrap_up: 'Hierover kunnen we lang praten, maar er wacht werk op ons en de tijd kan beter besteed worden aan de cursus «{course}». Kletsen kost geld: ik wil best eindeloos blijven praten, maar een gewone chatbot doet dat goedkoper, en met mij kunt u beter «{course}» leren.'
+reply.said.withheld: (de tekst van deze reactie wordt niet vermeld in de review)

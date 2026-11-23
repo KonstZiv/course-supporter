@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Autora obligātie kritēriji nav izpildīti, t�
 verdict.rule.author_musts_below_threshold: Jūs izpildījāt visus autora obligātos kritērijus, bet saņēmāt vērtējumu {score} no 100 — zem sliekšņa {threshold} uzdevumiem ar autora obligātajiem kritērijiem, tāpēc darbs nav ieskaitīts.
 verdict.rule.no_author_musts_passed: Autors šim uzdevumam nav apstiprinājis obligātos kritērijus. Šādiem uzdevumiem ieskaites slieksnis ir {threshold} no 100; jūsu vērtējums ir {score}, tāpēc darbs ir ieskaitīts.
 verdict.rule.no_author_musts_failed: Autors šim uzdevumam nav apstiprinājis obligātos kritērijus. Šādiem uzdevumiem ieskaites slieksnis ir {threshold} no 100; jūsu vērtējums ir {score}, tāpēc darbs nav ieskaitīts.
+reply.work_only: Vērtējam tikai pašu darbu — failus ar risinājumu, nevis to, kas uzrakstīts blakus.
+reply.hostile.fallback: Interesants gājiens! Vērtējam tikai pašu darbu — failus ar risinājumu, nevis to, kas uzrakstīts blakus. Lai uzlabotu rezultātu, pilnveidojiet risinājumu atbilstoši šīs recenzijas piezīmēm.
+reply.off_topic.wrap_up: 'Par to var runāt ilgi, taču mūs gaida darbs, un laiku labāk veltīt kursam «{course}». Sarunas maksā naudu: esmu gatavs sarunāties bezgalīgi, taču parasts tērzēšanas robots to izdarīs lētāk, bet ar mani labāk apgūt «{course}».'
+reply.said.withheld: (šīs replikas tekstu recenzijā neuzrādām)

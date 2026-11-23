@@ -20,6 +20,14 @@ Which rows belong to which action (``rows_of``):
 * task preparation — the rows of its stage in the job the estimate was made in.
 
 Rows without a provider (funds-port and metrics rows) are not calls.
+
+Which reviews are in the sample (``select_reviews``, BIL-5, DD-BIL-CAL): the
+review of a service student (``students.is_test_student``) is left out unless
+asked (``--include-test-students``) — our control archives are much larger
+than a typical student's work. The estimates of the other actions are not
+touched. The report says how many reviews were left out and how many distinct
+non-test students the review sample has (the measure of the "20 reviews from
+different students" condition).
 """
 
 from __future__ import annotations
@@ -100,6 +108,60 @@ class ReportRow:
                 f"{k}={v}" for k, v in sorted(self.step_deviation.items())
             ),
         }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ReviewSample:
+    """The review estimates of test students, and the non-test students."""
+
+    test_reviews: int
+    excluded: bool
+    non_test_students: int
+
+    def line(self) -> str:
+        """The report's line about the sample."""
+        fate = "excluded" if self.excluded else "included (--include-test-students)"
+        return (
+            f"review: {self.test_reviews} estimate(s) of test students {fate}; "
+            f"{self.non_test_students} distinct non-test student(s) in the sample"
+        )
+
+
+def select_reviews(
+    estimates: Iterable[EstimateRow],
+    students: Mapping[str, tuple[uuid.UUID, bool]],
+    *,
+    include_test_students: bool,
+) -> tuple[list[EstimateRow], ReviewSample]:
+    """The estimates the report compares (the module's rule).
+
+    ``students`` maps a reviewed submission's id (a review's ``action_key``)
+    to its student's id and mark. A review of a submission missing from it is
+    kept and counts no student.
+    """
+    kept: list[EstimateRow] = []
+    test_reviews = 0
+    non_test: set[uuid.UUID] = set()
+    for estimate in estimates:
+        student = (
+            students.get(estimate.action_key)
+            if estimate.action_kind == ActionKind.REVIEW
+            else None
+        )
+        if student is not None:
+            student_id, is_test = student
+            if is_test:
+                test_reviews += 1
+                if not include_test_students:
+                    continue
+            else:
+                non_test.add(student_id)
+        kept.append(estimate)
+    return kept, ReviewSample(
+        test_reviews=test_reviews,
+        excluded=not include_test_students,
+        non_test_students=len(non_test),
+    )
 
 
 def rows_of(

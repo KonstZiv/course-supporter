@@ -65,17 +65,32 @@ review:
   # у спостережених даних такого випадку не було, калібрування його не покриває.
   review_explanation: {prompt_tokens: 10399, output_tokens: 8475, calls: 1, calibrated: true}
 
-  # Stages of the `project` path once it is switched to the new path
-  # (config/submission_paths.yaml: project_criteria_evaluation,
-  # project_review_explanation — "on no path yet"; today `project` is served by
-  # the Mentor with [safety, attempt_classifier], both priced above). No live
-  # measurement exists: each line is its twin's calibrated line plus the
-  # characters its own prompt adds over the twin's at 3.5 characters a token
-  # (2026-11-15). Replace with a measured median when the path is switched.
+  # Stages of the `project` path (config/submission_paths.yaml:
+  # project_criteria_evaluation, project_review_explanation — on every path of
+  # `project` since project chain K8, in test mode, after safety and
+  # attempt_classifier, both priced above). No live measurement exists yet:
+  # each line is its twin's calibrated line plus the characters its own prompt
+  # adds over the twin's at 3.5 characters a token (2026-11-15). Replace with a
+  # measured median after the live measurement of K8.
   # prompts/criteria_evaluation_project/v1.md 8366 chars - prompts/criteria_evaluation/v1.md 4446 = 3920 chars = 1120 tokens: 4870 + 1120
   project_criteria_evaluation: {prompt_tokens: 5990, output_tokens: 8548, calls: 2, calibrated: false}
   # prompts/review_explanation_project/v1.md 10633 chars - prompts/review_explanation/v3.md 9182 = 1451 chars = 414 tokens: 10399 + 414
   project_review_explanation: {prompt_tokens: 10813, output_tokens: 8475, calls: 1, calibrated: false}
+
+  # Stages of the path with the student's replies (task 12a, K4:
+  # criteria_evaluation_with_replies, review_explanation_with_replies on the
+  # `repeat_with_replies` path of `task` and `short_task`, which no submission
+  # state selects before K3). No live measurement yet — 12a measures on
+  # 2026-11-18: each line is its twin's calibrated line plus the characters its
+  # own prompt adds over the twin's at 3.5 characters a token (2026-11-16), as
+  # the project's lines above. The replies themselves (up to 12 000 characters
+  # shown to the evaluation, 24 000 of threads to the explanation,
+  # homework/student_replies.py) and the answers to them are not counted: the
+  # live measurement gives their size.
+  # prompts/criteria_evaluation/v1_with_replies.md 5975 chars - prompts/criteria_evaluation/v1.md 4446 = 1529 chars = 437 tokens: 4870 + 437
+  criteria_evaluation_with_replies: {prompt_tokens: 5307, output_tokens: 8548, calls: 2, calibrated: false}
+  # prompts/review_explanation/v3_with_replies.md 13315 chars - prompts/review_explanation/v3.md 9182 = 4133 chars = 1181 tokens: 10399 + 1181
+  review_explanation_with_replies: {prompt_tokens: 11580, output_tokens: 8475, calls: 1, calibrated: false}
 
 # ── Task preparation: input = the task document + prompt_tokens ──
 task_preparation:

@@ -671,7 +671,7 @@ class TestAnAgentsProjectGoesThrough:
         session_factory: async_sessionmaker[AsyncSession],
         s3_client: S3Client,
     ) -> None:
-        files = {**PROJECT, "app/util.py": "x = 1  # ‮\n".encode()}
+        files = {**PROJECT, "app/util.py": "x = 1  # \u202e\n".encode()}
         w = await world(_zip(files), None)
         run, submission = await _run(road, w, session_factory, s3_client)
 

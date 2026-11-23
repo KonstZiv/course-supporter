@@ -25,20 +25,30 @@ The same work, judged alike:
       — one version per type, whichever path a review walked). An edited
       prompt or another first model on any path of the type, other rules of
       the code — the review is written anew;
-    * for a text task (``short_task``, ``task``): the criteria list its
-      verdicts were judged against is the list in force for the task now.
+    * for a type judged against a criteria list — a text task (``short_task``,
+      ``task``) or a project: the criteria list its verdicts were judged
+      against is the list in force for the task now.
 
     Anything else — no fingerprint (the ledger did not write one), no version,
     no evaluator's version (every review written before it was recorded),
     a type with no version (not on the new path, or no model stage), no list
     in force, any key different — is an ordinary review.
 
-    And the same work is no copy while the student has replies to answer
-    (task 12a, K3; :func:`~course_supporter.homework.remark_comments.pending_replies`
-    — one definition with the submission's state and the reply screen): the
-    student wrote to the last review, and its copy would answer nothing they
-    wrote. A type that takes no replies has none to answer, and its rule is
-    the rule above.
+    And the same work is no copy while the student has a reply about the work
+    to answer (task 12a, K3;
+    :func:`~course_supporter.homework.remark_comments.pending_replies` — one
+    definition with the submission's state and the reply screen): the copy
+    would answer nothing they wrote. When EVERY reply to answer was judged by
+    the reply screen as off the topic or hostile, the work is the copy all
+    the same — there is nothing in the replies for a paid check to read —
+    and each reply gets the phrasebook's answer without a model: a hostile
+    one ``reply.hostile.fallback``, one off the topic ``reply.off_topic.wrap_up``
+    with the course's name (the product owner's decision of 2026-11-16, its
+    fourth item; task 12a, K4;
+    :func:`~course_supporter.homework.reply_source.answer_without_the_model`).
+    One reply about the work, or one the screen could not judge, and the work
+    is reviewed in full on ``repeat_with_replies``. A type that takes no
+    replies has none to answer, and its rule is the rule above.
 
 The version of a criteria list:
     Nothing new: the ADDRESS every verdict row carries — ``criteria_layer`` +
@@ -49,20 +59,27 @@ The version of a criteria list:
     (:func:`~course_supporter.homework.criteria_list_service.load_in_force`,
     no model call) is compared by its address. An attempt with no verdict rows
     was judged against no list — a review by today's Mentor, or a review that
-    was itself repeated — and is the source of no text task's copy; the copy is
-    taken from the attempt that was judged.
+    was itself repeated — and is the source of no copy for a type judged
+    against a list; the copy is taken from the attempt that was judged.
 
-    A project has no list on the new path: its key is the fingerprint and the
-    version alone. Projects are served by today's Mentor; the branch is there
-    for the day they move.
+    A project on the new path is judged against a list as a text task is: its
+    evaluation (``project_criteria_evaluation``) takes the list from the same
+    service (``criteria_list_service``) and its verdict rows carry the same
+    address. So its key carries that address too (project chain K8): an
+    author's edit of a project's list reviews the same archive anew, as it
+    does a text task's file.
 
 What the submission gets:
     The earlier attempt's review — its structure, with
-    ``unchanged_from_attempt`` set to that attempt's number, the markdown
+    ``unchanged_from_attempt`` set to that attempt's number and without the
+    earlier review's section of replies (those answered the replies of the
+    attempt before it; task 12a, K4), the markdown
     assembled from it by the one assembler (the earlier text, opened by the
     phrase ``review.unchanged``), and its score — and ``dedup_of``, the same
     number, in its attempt receipt, beside the ``evaluator_version`` of that
-    review: the copy was written by the source's evaluator. The body then
+    review: the copy was written by the source's evaluator. The phrasebook's
+    answers to the replies beside the work, if any, are kept with the copy,
+    in the same transaction, as the explanation stage keeps its own. The body then
     finishes it as it finishes any reviewed revision: ``reviewing``,
     ``completed``, the webhook, ``delivered``; the portal reads the stored
     review as it reads any. The copy also carries what the doors of the source
@@ -102,8 +119,8 @@ One rule of the same work (product owner's decision, 2026-11-12):
     (``submission_core``, ``homework_duplicate_detected``) — is not applied
     to it: a file identical byte for byte is a new submission, reaches the
     doors and meets this module — the copy, or an ordinary review once the
-    evaluator changed. A type on today's Mentor (``project``) and a type with
-    no dedup (``test``) keep the entry's check as it was.
+    evaluator changed. A type on today's Mentor and a type with no dedup
+    (``test``) keep the entry's check as it was.
     :func:`same_work_reaches_the_new_path` decides, from the submission-path
     file and the attempt adapter: one place, no list of types.
 
@@ -140,7 +157,11 @@ from course_supporter.homework.path_config import (
     ServedBy,
     get_path_config,
 )
-from course_supporter.homework.remark_comments import pending_replies
+from course_supporter.homework.remark_comments import CommentRecord, pending_replies
+from course_supporter.homework.reply_source import (
+    answer_without_the_model,
+    beside_the_work,
+)
 from course_supporter.homework.review_assembler import assemble_review
 from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
@@ -148,6 +169,7 @@ from course_supporter.models.review_schema import (
 )
 from course_supporter.models.review_structure import ReviewStructureV1
 from course_supporter.models.source import AssignmentType
+from course_supporter.models.stored_read import read_stored
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import AuthoredDocument, HomeworkSubmission
 
@@ -168,9 +190,15 @@ DEDUP_RECEIPT_KEY: Final = "dedup_of"
 """The receipt's key for the number of the attempt whose review was repeated."""
 
 _JUDGED_AGAINST_A_LIST: Final = frozenset(
-    {AssignmentType.SHORT_TASK.value, AssignmentType.TASK.value}
+    {
+        AssignmentType.SHORT_TASK.value,
+        AssignmentType.TASK.value,
+        AssignmentType.PROJECT.value,
+    }
 )
-"""The types whose review is judged against a criteria list (task 09b)."""
+"""The types whose review is judged against a criteria list: the text types
+(task 09b) and a project, whose evaluation reads its list from the same service
+(project chain K4)."""
 
 
 def same_work_reaches_the_new_path(
@@ -179,8 +207,9 @@ def same_work_reaches_the_new_path(
     """Does the same work of this type go on to this dedup? (the module's rule)
 
     True for a type the new path serves (``served_by``) whose attempt adapter
-    deduplicates (``dedup_enabled``) — ``task`` and ``short_task`` today: the
-    entry does not turn a byte-identical file away. False for every other
+    deduplicates (``dedup_enabled``) — ``task``, ``short_task``, and
+    ``project`` while it is on the new path: the entry does not turn a
+    byte-identical file away. False for every other
     type — on today's Mentor, or never deduplicated — whose entry keeps its
     check by the raw file's hash. ``config`` defaults to the cached
     submission-path file, the one the body serves by.
@@ -205,6 +234,9 @@ class UnchangedAttempt:
         score: Its score.
         evaluator_version: The version of the evaluator that wrote the review.
         door_reading: The source attempt's "not_opened" and "recovered_encoding".
+        replies: The student's replies to answer, every one judged off the
+            topic or hostile: the copy answers them with the phrasebook's
+            words (task 12a, K4). Empty for a student with none.
     """
 
     submission_id: uuid.UUID
@@ -213,6 +245,7 @@ class UnchangedAttempt:
     score: int | None
     evaluator_version: str
     door_reading: dict[str, Any]
+    replies: tuple[CommentRecord, ...] = ()
 
 
 async def repeat_unchanged_review(
@@ -246,7 +279,7 @@ async def repeat_unchanged_review(
         return None
 
     review = source.review.model_copy(
-        update={"unchanged_from_attempt": source.attempt_no}
+        update={"unchanged_from_attempt": source.attempt_no, "replies": []}
     )
     hw_repo = HomeworkRepository(session)
     await hw_repo.store_review_result(
@@ -263,6 +296,14 @@ async def repeat_unchanged_review(
     )
     if source.door_reading:
         await hw_repo.store_safety_result(submission_id, dict(source.door_reading))
+    if source.replies:
+        submission = await hw_repo.get_by_id(submission_id)
+        if submission is None:
+            msg = f"HomeworkSubmission {submission_id} not found"
+            raise ValueError(msg)
+        await answer_without_the_model(
+            session, submission, source.replies, language=review.language
+        )
     logger.info(
         "attempt_review_repeated",
         submission_id=str(submission_id),
@@ -367,7 +408,7 @@ async def _find(
         or not attempt_snapshotter_for(row.task_type).dedup_enabled
     ):
         return None
-    if await pending_replies(
+    replies = await pending_replies(
         session,
         tenant_id=row.tenant_id,
         submission_id=submission_id,
@@ -375,13 +416,12 @@ async def _find(
         authored_document_id=row.authored_document_id,
         task_type=AssignmentType(row.task_type),
         config=config,
-    ):
-        # The student wrote to the last review, and a copy of it answers
-        # nothing they wrote (task 12a, K3): the work is reviewed as usual.
-        # TODO(12a K4): a copy and a prepared answer when every reply is
-        # off-topic or hostile — the refinement of the owner's decision of
-        # 2026-11-16, made once the topic port has a real adapter (the
-        # measurement of 2026-11-17).
+    )
+    if replies and not beside_the_work(replies):
+        # A reply about the work, or one the screen could not judge: a copy
+        # would answer nothing the student wrote (task 12a, K3), and the work
+        # is reviewed as usual. Every reply off the topic or hostile: the copy
+        # all the same, with the phrasebook's answers (K4; the module).
         logger.info("attempt_dedup_replies_pending", submission_id=str(submission_id))
         return None
     version = evaluator_version(AssignmentType(row.task_type), config)
@@ -407,7 +447,7 @@ async def _find(
     )
     if source is None or source.attempt_no is None:
         return None
-    review = _version_1_review(source.review_result)
+    review = _version_1_review(source.review_result, submission_id=source.id)
     if review is None:
         logger.warning(
             "attempt_dedup_review_unreadable",
@@ -422,6 +462,7 @@ async def _find(
         score=source.score,
         evaluator_version=_evaluator_version_of(source.attempt_receipt),
         door_reading=_door_reading_of(source.safety_result),
+        replies=tuple(replies),
     )
 
 
@@ -446,13 +487,23 @@ def _evaluator_version_of(receipt: dict[str, Any] | None) -> str:
     return version
 
 
-def _version_1_review(review_result: dict[str, Any] | None) -> ReviewStructureV1 | None:
-    """The stored review as a version-1 structure, or ``None`` when it is not one."""
+def _version_1_review(
+    review_result: dict[str, Any] | None, *, submission_id: uuid.UUID | None = None
+) -> ReviewStructureV1 | None:
+    """The stored review as a version-1 structure, or ``None`` when it is not one.
+
+    Read, not written: a field the models do not know — written by a newer
+    release than this one — is left out, not a reason to review the same work
+    anew and charge for it (:func:`~course_supporter.models.stored_read.read_stored`).
+    ``submission_id`` is the source's, for that warning only.
+    """
     if not review_result or review_schema_version(review_result) != (
         REVIEW_SCHEMA_VERSION
     ):
         return None
     try:
-        return ReviewStructureV1.model_validate(review_result)
+        return read_stored(
+            ReviewStructureV1, review_result, submission_id=submission_id
+        )
     except ValidationError:
         return None

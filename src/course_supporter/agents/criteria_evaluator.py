@@ -11,7 +11,10 @@ request, holds the answer's form, and returns what the model said.
 
 Two requests, one prompt — the one the stage names, rendered from the same
 variables: ``prompts/criteria_evaluation/v1.md`` for a text type,
-``prompts/criteria_evaluation_project/v1.md`` for a project (chain K4):
+``prompts/criteria_evaluation_project/v1.md`` for a project (chain K4),
+``prompts/criteria_evaluation/v1_with_replies.md`` for a text type's
+submission that carries the student's replies (task 12a, K4) — which alone
+is also shown the replies, in its own slot (:class:`EvaluationInput`):
 
 * :meth:`CriteriaEvaluatorAgent.evaluate` asks about every item of the list —
   each criterion, or the mandatory points of one checked by points;
@@ -58,6 +61,7 @@ if TYPE_CHECKING:
     import uuid
 
     from course_supporter.homework.criteria_form import Criterion
+    from course_supporter.homework.student_replies import EvaluationReply
     from course_supporter.llm.stage_router import StageExecution, StageRouter
 
 logger = structlog.get_logger(__name__)
@@ -84,6 +88,10 @@ class EvaluationInput:
         language: The course's language by name (``"Ukrainian"``), for the
             sentences on what is missing (``PRE-FLIGHT.md`` 9.9); ``None``
             leaves the model to follow the task's own language.
+        replies: The student's replies the stage with replies shows
+            (:func:`~course_supporter.homework.student_replies.replies_for_evaluation`;
+            task 12a, K4) — possibly none; ``None`` on every other stage,
+            whose request has no slot for them and stays what it was.
     """
 
     task_title: str
@@ -92,6 +100,7 @@ class EvaluationInput:
     criteria: tuple[Criterion, ...]
     submission_text: str
     language: str | None
+    replies: tuple[EvaluationReply, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,9 +212,11 @@ def render_context(
 
     Public so the prompt's locks render exactly what a request renders.
     ``repeat`` is empty on the first request; on the repeat it names each item
-    asked about again, what it said and what is wrong with it.
+    asked about again, what it said and what is wrong with it. ``replies`` is
+    a variable only of the stage with replies (task 12a, K4): every other
+    request's variables are what they were.
     """
-    return {
+    context: dict[str, Any] = {
         "task_title": shown.task_title,
         "task_description": shown.task_description,
         "task_text": shown.task_text,
@@ -217,6 +228,21 @@ def render_context(
         "max_quote_chars": MAX_QUOTE_CHARS,
         "min_quote_chars": MIN_QUOTE_CHARS,
     }
+    if shown.replies is not None:
+        context["replies"] = replies_for_prompt(shown.replies)
+    return context
+
+
+def replies_for_prompt(replies: Sequence[EvaluationReply]) -> list[dict[str, Any]]:
+    """The student's replies as the model reads them: item, kind, text.
+
+    Public so the measurement of the path with replies adds them to a
+    recorded request exactly as a request renders them.
+    """
+    return [
+        {"item_id": reply.item_id, "kind": reply.kind.value, "text": reply.text}
+        for reply in replies
+    ]
 
 
 def _criterion_for_prompt(criterion: Criterion) -> dict[str, Any]:

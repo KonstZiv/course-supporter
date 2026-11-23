@@ -13,9 +13,32 @@ theme:
 
 nav:
   - Home: index.md
+  - For authors:
+      - Overview: authors/index.md
+      - How the platform understands your course: authors/how-it-works.md
+      - Signing in and your first course: authors/first-course.md
+      - Course structure: authors/structure.md
+      - Materials: authors/materials.md
+      - Assignments: authors/tasks.md
+      - Tests: authors/tests.md
+      - "Section descriptions: the Methodist": authors/methodist.md
+      - Costs and history: authors/costs-history.md
+      - If something goes wrong: authors/troubleshooting.md
+      - Tests and criteria via the API: authors/api.md
+  - For students: students/index.md
+  - Error codes: errors/index.md
+  - API: api/index.md
 
 extra_css:
   - ../stylesheets/extra.css
+
+# The mermaid script lives only in the main build (docs/javascripts/), like the
+# stylesheet above; the path is relative to docs/en/. The list repeats mkdocs.yml.
+plugins:
+  - search
+  - mermaid2:
+      javascript: ../javascripts/mermaid.min.js
+  - panzoom
 
 extra:
   language_build: en

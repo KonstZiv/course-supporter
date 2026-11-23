@@ -1103,7 +1103,8 @@ async def test_the_authors_outlook_shows_the_reviews_held_for_their_units(
 
 
 def test_the_new_billing_routes() -> None:
-    """Parts B and C add these routes and no other."""
+    """Parts B and C add these routes and no other (B-5: and the price of the
+    Methodist's regeneration of node summaries)."""
     paths = {
         (route.path, method)
         for route in app.routes
@@ -1114,6 +1115,7 @@ def test_the_new_billing_routes() -> None:
     assert paths == {
         ("/api/v1/portal/tasks/{authored_document_id}/estimate", "POST"),
         ("/api/v1/nodes/{node_id}/documents/estimate", "POST"),
+        ("/api/v1/nodes/{node_id}/summary/estimate", "POST"),
         ("/api/v1/documents/{document_id}/reference/estimate", "POST"),
         ("/api/v1/portal/billing/outlook", "GET"),
         ("/api/v1/billing/outlook", "GET"),

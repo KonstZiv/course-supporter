@@ -305,12 +305,25 @@ class TextAttemptSnapshotter:
         body = normalized_work_text(work.reading)
         return AttemptSnapshot(AttemptKind.TEXT, _sha256(body), body)
 
-    def diff(self, previous: AttemptSnapshot, current: AttemptSnapshot) -> AttemptDiff:
+    def diff(
+        self,
+        previous: AttemptSnapshot,
+        current: AttemptSnapshot,
+        *,
+        context_lines: int = 3,
+    ) -> AttemptDiff:
+        """The port's difference; ``context_lines`` — the unchanged lines shown
+        around a change (``difflib.unified_diff``'s ``n``).
+
+        3 by default, the diff of K1. The memory of the evaluation shows its
+        own number (task 13, K4; ``attempt_memory.diff_context_lines`` of the
+        path file). The counts of added and removed lines do not depend on it.
+        """
         before = _text_body(previous, AttemptKind.TEXT)
         after = _text_body(current, AttemptKind.TEXT)
         if before == after:
             return AttemptDiff(AttemptKind.TEXT)
-        return _text_diff(before, after)
+        return _text_diff(before, after, context_lines=context_lines)
 
 
 class ProjectAttemptSnapshotter:
@@ -407,13 +420,15 @@ def _require_kind(snapshot: AttemptSnapshot, kind: AttemptKind) -> None:
         raise ValueError(msg)
 
 
-def _text_diff(before: str, after: str) -> AttemptDiff:
+def _text_diff(before: str, after: str, *, context_lines: int = 3) -> AttemptDiff:
     """The unified diff of two normalized texts, and its line counts.
 
     Both come from the same matcher with the same arguments ``unified_diff``
-    uses, so the counts are the ``+`` and ``-`` lines of the diff shown. A last
-    line without its LF is marked the way ``diff`` marks it, so a change of the
-    final line end alone is still a visible change.
+    uses, so the counts are the ``+`` and ``-`` lines of the diff shown —
+    whatever ``context_lines``, which changes only the unchanged lines shown
+    around a change. A last line without its LF is marked the way ``diff``
+    marks it, so a change of the final line end alone is still a visible
+    change.
     """
     old, new = _lines(before), _lines(after)
     added = removed = 0
@@ -424,7 +439,9 @@ def _text_diff(before: str, after: str) -> AttemptDiff:
             added += j2 - j1
     unified = "".join(
         line if line.endswith("\n") else f"{line}\n\\ No newline at end of file\n"
-        for line in difflib.unified_diff(old, new, "previous", "current")
+        for line in difflib.unified_diff(
+            old, new, "previous", "current", n=context_lines
+        )
     )
     return AttemptDiff(
         AttemptKind.TEXT,

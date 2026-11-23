@@ -4,7 +4,8 @@ Task 13, K4. For each pair of recorded inputs — a student's first attempt and
 their second at the same task — three requests to the first rung of
 ``criteria_evaluation`` in ``config/submission_paths.yaml``, with the stage's
 seed: the first attempt with v1 (its verdicts), the second with v1, and the
-second with v2 and the memory built from the first. No retry, no fallback, no
+second with v2 and the memory built from the first — under the ceiling of the
+request's growth, as the stage puts it. No retry, no fallback, no
 register row, nothing written to a database. The logic is
 ``course_supporter.homework.attempt_memory_measure``.
 
@@ -132,6 +133,8 @@ async def _main(args: argparse.Namespace) -> int:
             registry=registry,
             provider=provider,
             rewritten_share=config.attempt_memory.rewritten_share,
+            context_lines=config.attempt_memory.diff_context_lines,
+            max_growth=config.attempt_memory.max_growth,
             list_now=uuid.uuid4(),
             list_then=uuid.uuid4(),
         )
@@ -152,7 +155,7 @@ async def _main(args: argparse.Namespace) -> int:
 
 
 def _print(result: PairResult, *, dry_run: bool) -> None:
-    memory = result.memory
+    memory, fitted = result.memory, result.fitted
     shown = (
         "no memory"
         if memory is None
@@ -162,7 +165,15 @@ def _print(result: PairResult, *, dry_run: bool) -> None:
             f"share {memory.changed_share}, rewritten {memory.rewritten}"
         )
     )
-    print(f"{result.pair.label}: {shown}")
+    ceiling = (
+        ""
+        if fitted is None
+        else (
+            f"; ceiling: reason {fitted.reason}, base {fitted.base_chars} chars, "
+            f"growth {fitted.growth:.3f}, sent {fitted.sent_growth:.3f}"
+        )
+    )
+    print(f"{result.pair.label}: {shown}{ceiling}")
     for call in result.calls:
         entry = call.as_json()
         print(

@@ -42,7 +42,8 @@ Interface:
     * ``attempt_memory`` — what the evaluation of a repeated attempt of a
       text type is shown of the attempt before it (task 13, K4;
       :class:`AttemptMemory`): the share of changed lines above which the
-      work counts as rewritten.
+      work counts as rewritten, the lines of context of the difference, and
+      the most the memory may grow the request by.
 
     No field has a default but ``test_mode``, ``replies_enabled`` and
     ``attempt_memory``: a description that is missing fails loudly instead of
@@ -293,19 +294,32 @@ class TaskTypePaths(BaseModel):
 class AttemptMemory(BaseModel):
     """What the evaluation of a repeated attempt is shown of the one before it.
 
-    Task 13, K4 (``homework/earlier_review.py``, ``read_attempt_memory``).
-    ``rewritten_share`` — the share of changed lines above which the work
-    counts as rewritten and its difference from the earlier attempt is not
-    shown: (lines added + lines removed) / the larger of the two attempts'
-    line counts. 0.5 by the operator's decision of 2026-11-23, to be refined
-    by the live measurement. What the evaluation is shown is what a review
-    says: a change of it raises ``VERDICT_RULES_VERSION``
-    (``homework/criteria_verdicts.py``), which pins this value beside it.
+    Task 13, K4 (``homework/earlier_review.py``, ``read_attempt_memory`` and
+    ``fit_memory``); the operator's decisions of 2026-11-23, to be refined by
+    the live measurement:
+
+    * ``rewritten_share`` — the share of changed lines above which the work
+      counts as rewritten and its difference from the earlier attempt is not
+      shown: (lines added + lines removed) / the larger of the two attempts'
+      line counts. 0.5.
+    * ``diff_context_lines`` — the unchanged lines the difference shows
+      around a change. 1: the work itself is in the request whole, so more
+      context only repeats it. The counts above do not depend on it.
+    * ``max_growth`` — the most the memory may grow the request by, as a
+      share of the request without it, in characters of the rendered system
+      and user messages. 0.33. Above it the memory goes without its
+      difference, marked rewritten; above it still, it does not go at all.
+
+    What the evaluation is shown is what a review says: a change of any of
+    them raises ``VERDICT_RULES_VERSION`` (``homework/criteria_verdicts.py``),
+    which pins these values beside it.
     """
 
     model_config = _STRICT
 
     rewritten_share: float = Field(default=0.5, gt=0.0, le=1.0)
+    diff_context_lines: int = Field(default=1, ge=0)
+    max_growth: float = Field(default=0.33, gt=0.0)
 
 
 class PathConfig(BaseModel):

@@ -138,6 +138,8 @@ async def _measure(
         registry=registry,
         provider=provider,
         rewritten_share=0.5,
+        context_lines=1,
+        max_growth=0.33,
         list_now=_NOW,
         list_then=_THEN,
     )
@@ -210,6 +212,11 @@ class TestTheCalls:
         assert memory.diff is not None
         assert f"+    {_DOCSTRING}" in memory.diff
         assert not memory.rewritten
+        # Under the ceiling, as the stage puts it: one line of context.
+        assert result.fitted is not None
+        assert result.fitted.reason is None
+        assert result.fitted.sent_growth <= 0.33
+        assert memory.diff.count("\n ") == 2  # one line before, one after
 
     async def test_the_comparison_tells_the_touched_items_from_the_rest(
         self,
@@ -275,7 +282,37 @@ class TestTheCalls:
         written = json.loads(summary.read_text(encoding="utf-8"))
         assert written["tally"]["changed"]["stale_quotes"] == 1
         assert written["pairs"][0]["input_growth"]["chars"] > 0
+        assert written["pairs"][0]["ceiling"]["reason"] is None
         assert (tmp_path / "p2.second.v2.answer.json").exists()
+
+
+class TestTheCeiling:
+    async def test_a_memory_over_it_is_not_sent(
+        self,
+        pair: stand.Pair,
+        stage: ModelStage,
+        registry: ModelRegistryConfig,
+    ) -> None:
+        provider = _Provider(_FIRST_ANSWER, _WITHOUT_ANSWER, _WITH_ANSWER)
+
+        result = await stand.measure_pair(
+            pair,
+            stage=stage,
+            registry=registry,
+            provider=provider,
+            rewritten_share=0.5,
+            context_lines=1,
+            max_growth=0.05,
+            list_now=_NOW,
+            list_then=_THEN,
+        )
+
+        assert result.memory is None
+        assert result.fitted is not None
+        assert result.fitted.reason == "memory_over_growth"
+        # The request is then v2's without the memory: v1's byte for byte.
+        _, without, with_ = provider.requests
+        assert with_.prompt == without.prompt
 
 
 class TestTheScriptsDryRun:

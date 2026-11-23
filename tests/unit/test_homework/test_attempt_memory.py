@@ -15,7 +15,13 @@ memory is missing or partial), proved without a database:
 * no memory block on a first attempt, on a test, on a project;
 * the difference and the earlier verdicts only inside their untrusted slots,
   named in the prompt's list of untrusted input;
-* the setting is the operator's number, raised together with the rules.
+* the difference shows the path file's one line of context around a change;
+* the ceiling of the request's growth (0.33): a little under it the
+  difference goes, a little over it the memory goes without it, marked
+  rewritten (``diff_over_growth``); verdicts alone over it — no memory
+  (``memory_over_growth``); both evaluation stages apply it, and its log line
+  holds no text of the work;
+* the settings are the operator's numbers, raised together with the rules.
 
 The database side — two attempts on the new path — is
 ``tests/integration/test_attempt_memory_db.py``.
@@ -23,6 +29,7 @@ The database side — two attempts on the new path — is
 
 from __future__ import annotations
 
+import math
 import re
 import uuid
 from dataclasses import dataclass, replace
@@ -32,6 +39,7 @@ from typing import Any, ClassVar
 from unittest.mock import MagicMock
 
 import pytest
+import structlog
 from structlog.testing import capture_logs
 
 from course_supporter.agents import criteria_evaluator
@@ -42,9 +50,13 @@ from course_supporter.homework.criteria_list_service import CriteriaInForce
 from course_supporter.homework.criteria_verdicts import VERDICT_RULES_VERSION
 from course_supporter.homework.doors import DoorReading
 from course_supporter.homework.earlier_review import (
+    DIFF_OVER_GROWTH,
+    MEMORY_OVER_GROWTH,
+    REWRITTEN_SHARE,
     AttemptMemory,
     PreviousVerdict,
     attempt_memory,
+    fit_memory,
     read_attempt_memory,
 )
 from course_supporter.homework.path_config import (
@@ -126,6 +138,7 @@ def _memory(
     before: str | None = _BEFORE,
     after: str = _AFTER,
     share: float = 1.0,
+    context_lines: int = 3,
 ) -> AttemptMemory | None:
     return attempt_memory(
         _EARLIER,
@@ -137,6 +150,7 @@ def _memory(
         earlier_work=None if before is None else _reading(before),
         current_work=_reading(after),
         rewritten_share=share,
+        context_lines=context_lines,
     )
 
 
@@ -355,6 +369,7 @@ async def _read(
         judged=_JUDGED,
         source=source,
         rewritten_share=1.0,
+        context_lines=1,
     )
 
 
@@ -465,6 +480,25 @@ def _context(stage_name: str, state: SubmissionState, task_type: str) -> StageCo
 
 _A_MEMORY = AttemptMemory(_EARLIER, (), "", False, False, False, False)
 
+# A request large enough that the empty memory above fits under the ceiling:
+# v2's rules alone are some 2 500 characters.
+_LARGE = criteria_evaluator.EvaluationInput(
+    task_title="Подвоєння",
+    task_description="Функція",
+    task_text="Напишіть solve(n). " * 1000,
+    criteria=(_criterion("c1"),),
+    submission_text=_AFTER,
+    language="Ukrainian",
+)
+
+
+def _shown_for(stage_name: str) -> criteria_evaluator.EvaluationInput:
+    """The request without the memory, as the stage builds it: the stage with
+    replies shows them (none here), the other has no slot for them."""
+    if stage_name == CRITERIA_EVALUATION_WITH_REPLIES:
+        return replace(_LARGE, replies=())
+    return _LARGE
+
 
 class TestTheStageShowsAMemoryOnARepeatedTextAttemptAlone:
     @pytest.fixture(autouse=True)
@@ -481,7 +515,9 @@ class TestTheStageShowsAMemoryOnARepeatedTextAttemptAlone:
         context = _context(CRITERIA_EVALUATION, SubmissionState.FIRST, task_type)
 
         assert (
-            await criteria_evaluation._memory_shown(context, _LISTED, log=MagicMock())
+            await criteria_evaluation._memory_shown(
+                context, _LISTED, _LARGE, log=MagicMock()
+            )
             is None
         )
 
@@ -493,7 +529,9 @@ class TestTheStageShowsAMemoryOnARepeatedTextAttemptAlone:
         context = _context(PROJECT_CRITERIA_EVALUATION, state, "project")
 
         assert (
-            await criteria_evaluation._memory_shown(context, _LISTED, log=MagicMock())
+            await criteria_evaluation._memory_shown(
+                context, _LISTED, _LARGE, log=MagicMock()
+            )
             is None
         )
 
@@ -505,12 +543,18 @@ class TestTheStageShowsAMemoryOnARepeatedTextAttemptAlone:
         ],
     )
     async def test_on_a_repeated_attempt_of_a_text_type(
-        self, stage_name: str, state: SubmissionState
+        self,
+        stage_name: str,
+        state: SubmissionState,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        monkeypatch.chdir(_REPO_ROOT)  # the prompt resolves as the router's
         context = _context(stage_name, state, "task")
 
         assert (
-            await criteria_evaluation._memory_shown(context, _LISTED, log=MagicMock())
+            await criteria_evaluation._memory_shown(
+                context, _LISTED, _shown_for(stage_name), log=MagicMock()
+            )
             is _A_MEMORY
         )
 
@@ -695,17 +739,269 @@ class TestTheRequest:
 
 
 class TestTheSetting:
-    def test_the_file_states_the_operators_share(self) -> None:
+    def test_the_file_states_the_operators_numbers(self) -> None:
         config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
         assert config.attempt_memory.rewritten_share == 0.5
+        assert config.attempt_memory.diff_context_lines == 1
+        assert config.attempt_memory.max_growth == 0.33
 
     def test_it_moves_with_the_verdict_rules(self) -> None:
-        """A change of the share changes what a review says: the rules' number
-        moves with it (``homework/criteria_verdicts.py``)."""
+        """A change of any of the three changes what a review says: the rules'
+        number moves with it (``homework/criteria_verdicts.py``). 11 holds
+        all three: it was never released before them (the operator,
+        2026-11-23, 21:42)."""
         config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
+        settings = config.attempt_memory
 
-        assert (VERDICT_RULES_VERSION, config.attempt_memory.rewritten_share) == (
-            11,
-            0.5,
+        assert (
+            VERDICT_RULES_VERSION,
+            settings.rewritten_share,
+            settings.diff_context_lines,
+            settings.max_growth,
+        ) == (11, 0.5, 1, 0.33)
+
+
+# ── One line of context ──
+
+
+class TestTheDifferenceShowsOneLineOfContext:
+    def test_exactly_one_line_around_a_change_as_rendered(self) -> None:
+        config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
+        memory = _memory(
+            before=_lines(10),
+            after=_lines(10, changed=frozenset({4})),
+            context_lines=config.attempt_memory.diff_context_lines,
         )
+        assert memory is not None
+
+        _, user = _render(_PROMPTS[0], _shown(memory))
+
+        assert _slot(user, "previous_attempt_diff") == (
+            "--- previous\n"
+            "+++ current\n"
+            "@@ -4,3 +4,3 @@\n"
+            " line 3\n"
+            "-line 4\n"
+            "+line 4 changed\n"
+            " line 5"
+        )
+
+    def test_the_counts_do_not_depend_on_the_context(self) -> None:
+        after = _lines(40, changed=frozenset({3, 17, 30}))
+        three = _memory(before=_lines(40), after=after, context_lines=3)
+        one = _memory(before=_lines(40), after=after, context_lines=1)
+        assert three is not None
+        assert one is not None
+
+        assert (one.lines_added, one.lines_removed, one.changed_share) == (
+            three.lines_added,
+            three.lines_removed,
+            three.changed_share,
+        )
+        assert one.diff is not None
+        assert three.diff is not None
+        assert len(one.diff) < len(three.diff)
+
+
+# ── The ceiling of the request's growth ──
+
+_WITH_DIFF = AttemptMemory(
+    _EARLIER,
+    (PreviousVerdict("c1", VerdictValue.MET, "def solve(n):", None, False),),
+    "--- previous\n+++ current\n@@ -1 +1 @@\n-a\n+b\n",
+    False,
+    False,
+    False,
+    False,
+)
+
+
+def _chars(*, base: int, full: int, lighter: int) -> Any:
+    """A request whose size is given: without a memory, with it, without its
+    difference."""
+
+    def size(memory: AttemptMemory | None) -> int:
+        if memory is None:
+            return base
+        return full if memory.diff else lighter
+
+    return size
+
+
+class TestTheCeiling:
+    """``with - without <= 0.33 * without``; over — without the difference."""
+
+    def test_a_little_under_the_ceiling_the_difference_goes(self) -> None:
+        fitted = fit_memory(
+            _WITH_DIFF,
+            request_chars=_chars(base=1000, full=1329, lighter=1100),
+            max_growth=0.33,
+        )
+
+        assert fitted.memory is _WITH_DIFF
+        assert fitted.reason is None
+        assert (fitted.base_chars, fitted.growth) == (1000, 0.329)
+
+    def test_at_the_ceiling_exactly_the_difference_goes(self) -> None:
+        fitted = fit_memory(
+            _WITH_DIFF,
+            request_chars=_chars(base=1000, full=1330, lighter=1100),
+            max_growth=0.33,
+        )
+
+        assert fitted.memory is _WITH_DIFF
+
+    def test_a_little_over_the_ceiling_the_memory_goes_without_it(self) -> None:
+        fitted = fit_memory(
+            _WITH_DIFF,
+            request_chars=_chars(base=1000, full=1340, lighter=1100),
+            max_growth=0.33,
+        )
+
+        assert fitted.memory is not None
+        assert fitted.memory.diff is None
+        assert fitted.memory.rewritten
+        assert fitted.memory.verdicts == _WITH_DIFF.verdicts
+        assert fitted.reason == DIFF_OVER_GROWTH
+        assert (fitted.growth, fitted.sent_growth) == (0.34, 0.1)
+
+    def test_the_verdicts_alone_over_the_ceiling_no_memory(self) -> None:
+        fitted = fit_memory(
+            _WITH_DIFF,
+            request_chars=_chars(base=1000, full=1500, lighter=1331),
+            max_growth=0.33,
+        )
+
+        assert fitted.memory is None
+        assert fitted.reason == MEMORY_OVER_GROWTH
+        assert fitted.sent_growth == 0.0
+
+    def test_a_memory_rewritten_by_the_share_says_so(self) -> None:
+        rewritten = replace(_WITH_DIFF, diff=None, rewritten=True)
+
+        fitted = fit_memory(
+            rewritten,
+            request_chars=_chars(base=1000, full=1100, lighter=1100),
+            max_growth=0.33,
+        )
+
+        assert fitted.memory is rewritten
+        assert fitted.reason == REWRITTEN_SHARE
+
+
+def _a_diff(chars: int) -> AttemptMemory:
+    """A memory whose difference adds a line of ``chars`` characters."""
+    return replace(
+        _WITH_DIFF,
+        diff=(
+            f"--- previous\n+++ current\n@@ -1 +1 @@\n-{_DIFF_MARKER}\n+{'x' * chars}\n"
+        ),
+    )
+
+
+class TestBothStagesApplyTheCeiling:
+    """On the stage's own request, rendered by its prompt with the memory and
+    without it: a difference of one character more than fits is dropped."""
+
+    @pytest.fixture(autouse=True)
+    def _at_the_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(_REPO_ROOT)  # the prompt resolves as the router's
+
+    async def _shown(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stage_name: str,
+        memory: AttemptMemory,
+    ) -> tuple[AttemptMemory | None, list[dict[str, Any]]]:
+        async def _found(*args: Any, **kwargs: Any) -> AttemptMemory:
+            return memory
+
+        monkeypatch.setattr(criteria_evaluation, "read_attempt_memory", _found)
+        state = (
+            SubmissionState.REPEAT_WITH_REPLIES
+            if stage_name == CRITERIA_EVALUATION_WITH_REPLIES
+            else SubmissionState.REPEAT_WITHOUT_REPLIES
+        )
+        context = _context(stage_name, state, "task")
+        with capture_logs() as logs:
+            shown = await criteria_evaluation._memory_shown(
+                context,
+                _LISTED,
+                _shown_for(stage_name),
+                log=structlog.get_logger("test"),
+            )
+        return shown, logs
+
+    def _fitting(self, stage_name: str) -> int:
+        """The longest added line that keeps the growth at 0.33 or under."""
+        stage = load_path_config(
+            _REPO_ROOT / "config" / "submission_paths.yaml"
+        ).stages[stage_name]
+        assert isinstance(stage, ModelStage)
+        judged = ["c1"]
+
+        def size(memory: AttemptMemory | None) -> int:
+            return criteria_evaluator.request_chars(
+                replace(_shown_for(stage_name), memory=memory),
+                prompt_ref=stage.prompt_ref,
+                expected=judged,
+            )
+
+        base = size(None)
+        at_ten = size(_a_diff(10)) - base
+        return 10 + math.floor(0.33 * base) - at_ten
+
+    @pytest.mark.parametrize("stage_name", sorted(criteria_evaluation.MEMORY_STAGES))
+    async def test_a_little_under_the_ceiling_the_difference_goes(
+        self, monkeypatch: pytest.MonkeyPatch, stage_name: str
+    ) -> None:
+        memory = _a_diff(self._fitting(stage_name))
+
+        shown, logs = await self._shown(monkeypatch, stage_name, memory)
+
+        assert shown is memory
+        [line] = [e for e in logs if e["event"] == "criteria_evaluation_memory_shown"]
+        assert line["reason"] is None
+        assert line["growth"] <= 0.33
+
+    @pytest.mark.parametrize("stage_name", sorted(criteria_evaluation.MEMORY_STAGES))
+    async def test_a_little_over_it_the_difference_goes_not_the_verdicts(
+        self, monkeypatch: pytest.MonkeyPatch, stage_name: str
+    ) -> None:
+        memory = _a_diff(self._fitting(stage_name) + 1)
+
+        shown, logs = await self._shown(monkeypatch, stage_name, memory)
+
+        assert shown is not None
+        assert shown.diff is None
+        assert shown.rewritten
+        assert shown.verdicts == memory.verdicts
+        [line] = [e for e in logs if e["event"] == "criteria_evaluation_memory_shown"]
+        assert line["reason"] == DIFF_OVER_GROWTH
+        # One character over: the log rounds the share to four places.
+        assert line["growth"] >= 0.33
+        assert line["sent_growth"] < 0.33
+        assert line["base_chars"] > 0
+        # The reason's line holds the numbers, never the work.
+        assert _DIFF_MARKER not in repr(logs)
+
+    @pytest.mark.parametrize("stage_name", sorted(criteria_evaluation.MEMORY_STAGES))
+    async def test_verdicts_alone_over_the_ceiling_no_memory(
+        self, monkeypatch: pytest.MonkeyPatch, stage_name: str
+    ) -> None:
+        many = tuple(
+            PreviousVerdict(
+                f"c{n}", VerdictValue.MET, f"{_QUOTE_MARKER} {'q' * 180}", None, False
+            )
+            for n in range(200)
+        )
+        memory = replace(_WITH_DIFF, verdicts=many)
+
+        shown, logs = await self._shown(monkeypatch, stage_name, memory)
+
+        assert shown is None
+        [line] = [e for e in logs if e["event"] == "criteria_evaluation_memory_none"]
+        assert line["reason"] == MEMORY_OVER_GROWTH
+        assert line["growth"] > 0.33
+        assert _QUOTE_MARKER not in repr(logs)

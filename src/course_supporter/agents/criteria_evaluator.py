@@ -62,9 +62,11 @@ from course_supporter.homework.criteria_verdicts import (
     read_answer,
 )
 from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.llm.prompt_loader_md import load_prompt
 
 if TYPE_CHECKING:
     import uuid
+    from pathlib import Path
 
     from course_supporter.homework.criteria_form import Criterion
     from course_supporter.homework.earlier_review import (
@@ -253,6 +255,28 @@ def render_context(
     if shown.memory is not None and not repeat:
         context["previous_attempt"] = memory_for_prompt(shown.memory)
     return context
+
+
+def request_chars(
+    shown: EvaluationInput,
+    *,
+    prompt_ref: str,
+    expected: Sequence[str],
+    base_path: Path | None = None,
+) -> int:
+    """Characters of the first request as the router renders it: system + user.
+
+    The prompt is read by the loader the router reads it with, from
+    ``prompt_ref`` resolved as the router resolves it (``base_path`` ``None``
+    — the working directory, as in production), and rendered from
+    :func:`render_context`. The measure of the ceiling of the memory's growth
+    (task 13, K4; ``homework/earlier_review.py``, ``fit_memory``): the stage
+    renders the request with the memory and without it by this one function.
+    """
+    rendered = load_prompt(prompt_ref, base_path=base_path).render(
+        **render_context(shown, expected=expected, repeat=())
+    )
+    return len(rendered.system or "") + len(rendered.user or "")
 
 
 def memory_for_prompt(memory: AttemptMemory) -> dict[str, Any]:

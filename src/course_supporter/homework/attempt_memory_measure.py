@@ -31,9 +31,13 @@ the path does, the real connector willing):
     * ``second.v2`` — the second attempt with prompt v2 and the memory, built
       by production's own function
       (:func:`~course_supporter.homework.earlier_review.attempt_memory`) from
-      the first's settled verdicts and the two works, the share of the path
-      file (``attempt_memory.rewritten_share``), and rendered by the agent's
-      own (:func:`~course_supporter.agents.criteria_evaluator.memory_for_prompt`).
+      the first's settled verdicts and the two works, with the path file's
+      ``attempt_memory`` (the share, the lines of context), put under the
+      ceiling of the request's growth by production's own
+      (:func:`~course_supporter.homework.earlier_review.fit_memory`, the
+      request rendered with the memory and without it), and rendered by the
+      agent's own (``criteria_evaluator.memory_for_prompt``).
+      A memory the ceiling drops leaves this request v2's without it.
 
 The comparison, item by item of the second attempt (:func:`compare`): the
 first's verdict, the verdict without the memory and with it — each settled
@@ -78,7 +82,12 @@ from course_supporter.homework.criteria_verdicts import (
     read_answer,
 )
 from course_supporter.homework.doors import DoorReading
-from course_supporter.homework.earlier_review import AttemptMemory, attempt_memory
+from course_supporter.homework.earlier_review import (
+    AttemptMemory,
+    FittedMemory,
+    attempt_memory,
+    fit_memory,
+)
 from course_supporter.homework.explanation_measure import (
     Sent,
     price_of,
@@ -87,6 +96,7 @@ from course_supporter.homework.explanation_measure import (
 from course_supporter.homework.path_stages import CRITERIA_EVALUATION
 from course_supporter.homework.replies_measure import work_files
 from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.llm.reproducibility import REPRODUCIBILITY_SEED
 
 if TYPE_CHECKING:
@@ -222,10 +232,11 @@ def memory_of(
     rows: Sequence[SettledRow],
     *,
     rewritten_share: float,
+    context_lines: int,
     list_now: uuid.UUID,
     list_then: uuid.UUID,
 ) -> AttemptMemory | None:
-    """The memory the stage would show the second attempt.
+    """The memory the stage would read for the second attempt, before the ceiling.
 
     ``list_then`` is the first's list; the stand gives it another address
     than ``list_now`` exactly when the records' criteria differ.
@@ -240,6 +251,32 @@ def memory_of(
         earlier_work=reading_of(pair.first),
         current_work=reading_of(pair.second),
         rewritten_share=rewritten_share,
+        context_lines=context_lines,
+    )
+
+
+def rendered_chars(prompt_ref: str, variables: Mapping[str, Any]) -> int:
+    """Characters of a request rendered from recorded variables: system + user.
+
+    The measure of :func:`~course_supporter.agents.criteria_evaluator.request_chars`
+    on a record: the recorded variables are what ``render_context`` gave.
+    """
+    rendered = load_prompt(prompt_ref).render(**variables)
+    return len(rendered.system or "") + len(rendered.user or "")
+
+
+def fitted_memory(
+    pair: Pair, memory: AttemptMemory | None, *, max_growth: float
+) -> FittedMemory | None:
+    """The memory under the ceiling, the second request rendered by v2."""
+    if memory is None:
+        return None
+    return fit_memory(
+        memory,
+        request_chars=lambda shown: rendered_chars(
+            WITH, with_memory(pair.second, shown)
+        ),
+        max_growth=max_growth,
     )
 
 
@@ -461,6 +498,7 @@ class PairResult:
     pair: Pair
     calls: list[Call] = field(default_factory=list)
     memory: AttemptMemory | None = None
+    fitted: FittedMemory | None = None
     compared: list[ItemComparison] = field(default_factory=list)
 
     @property
@@ -482,6 +520,8 @@ async def measure_pair(
     registry: ModelRegistryConfig,
     provider: LLMProvider | None,
     rewritten_share: float,
+    context_lines: int,
+    max_growth: float,
     list_now: uuid.UUID,
     list_then: uuid.UUID,
 ) -> PairResult:
@@ -504,13 +544,19 @@ async def measure_pair(
         submitted_work(pair.first),
         source_id=list_then if pair.criteria_changed else list_now,
     )
-    result.memory = memory_of(
+    result.fitted = fitted_memory(
         pair,
-        rows,
-        rewritten_share=rewritten_share,
-        list_now=list_now,
-        list_then=list_then,
+        memory_of(
+            pair,
+            rows,
+            rewritten_share=rewritten_share,
+            context_lines=context_lines,
+            list_now=list_now,
+            list_then=list_then,
+        ),
+        max_growth=max_growth,
     )
+    result.memory = result.fitted.memory if result.fitted is not None else None
     without = await _send(
         "second.v1",
         pair.second,
@@ -556,13 +602,23 @@ def summary_of(results: Sequence[PairResult], *, dry_run: bool) -> dict[str, Any
 
 
 def _pair_json(result: PairResult) -> dict[str, Any]:
-    memory = result.memory
+    memory, fitted = result.memory, result.fitted
     calls = {call.label: call for call in result.calls}
     without, with_ = calls.get("second.v1"), calls.get("second.v2")
     return {
         "label": result.pair.label,
         "task_changed": result.pair.task_changed,
         "criteria_changed": result.pair.criteria_changed,
+        "ceiling": (
+            None
+            if fitted is None
+            else {
+                "reason": fitted.reason,
+                "base_chars": fitted.base_chars,
+                "growth": round(fitted.growth, 4),
+                "sent_growth": round(fitted.sent_growth, 4),
+            }
+        ),
         "memory": (
             None
             if memory is None

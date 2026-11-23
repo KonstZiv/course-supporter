@@ -12,6 +12,10 @@ Task 13, K4. Against a live database, with the models as doubles:
   attempt: the replies and the memory both, the memory read by production's
   source (:class:`~course_supporter.homework.earlier_review.DoorsEarlierWork`)
   over an S3 double — and with another version of the task, its note;
+* the shipped ceiling of the memory's growth (0.33) on both: a short task's
+  ten-line work is a request too small to carry the memory, which then goes
+  not at all, the log saying why (the plumbing above runs with the ceiling
+  raised);
 * the explanation reads the earlier attempt as it did: the same version only.
 
 Requires ``docker compose up -d``; run with ``--run-db``.
@@ -22,7 +26,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, MutableMapping
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -30,6 +34,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from course_supporter.api.tasks import arq_process_homework
 from course_supporter.criteria_kinds import CriteriaLayer
@@ -341,60 +346,69 @@ async def _run(
         )
 
 
-class TestTheSecondAttemptIsEvaluatedWithTheFirstsMemory:
-    async def test_the_difference_and_the_earlier_verdicts_are_in_its_request(
-        self,
-        session_factory: async_sessionmaker[AsyncSession],
-        world: dict[str, Any],
-        tmp_path: Path,
-    ) -> None:
-        config = _shipped()
-        router = _Requests(session_factory)
-        source = _ListSource(world["in_force"])
-        s3 = _S3(tmp_path, {})
-        # c2 (by its points) and c3 not met on both attempts: one explanation.
-        router.content[REVIEW_EXPLANATION] = _EXPLANATION
+def _raised() -> PathConfig:
+    """The shipped file, its ceiling of the memory's growth raised.
 
-        # ── Attempt 1: c1 and c2.p1 met, c2.p2 and c3 not ──
-        router.content[CRITERIA_EVALUATION] = _evaluation(
-            _verdict("c1", "met", quote="def solve(n):"),
-            _verdict("c2.p1", "met", quote="return n * 2"),
-            _verdict("c2.p2", "not_met", missing="Немає тестів."),
-            _verdict("c3", "not_met", missing="Немає докстрінга."),
-        )
-        first_id, first_job = await _attempt(
-            session_factory, world, s3, n=1, work=_FIRST_WORK
-        )
-        await _run(
-            session_factory,
-            router,
-            source,
-            s3,
-            submission_id=first_id,
-            job_id=first_job,
-            config=config,
-        )
-        first = await _submission(session_factory, first_id)
-        assert (first.status, first.attempt_no) == ("delivered", 1)
+    A ten-line work in a task of one sentence is a request of a few thousand
+    characters, and v2's rules alone are some 2 500: under the shipped 0.33
+    such a request carries no memory (the tests below say so). The plumbing
+    is proved on it with the ceiling out of the way; the ceiling itself is
+    proved in ``tests/unit/test_homework/test_attempt_memory.py``.
+    """
+    shipped = _shipped()
+    return shipped.model_copy(
+        update={
+            "attempt_memory": shipped.attempt_memory.model_copy(
+                update={"max_growth": 10.0}
+            )
+        }
+    )
 
-        # A first attempt: v2's request is v1's, byte for byte, no memory.
-        [(ref, variables)] = router.evaluations()
-        assert ref == "prompts/criteria_evaluation/v2.md"
-        assert "previous_attempt" not in variables
-        assert _rendered(ref, variables) == _rendered(
-            "prompts/criteria_evaluation/v1.md", variables
-        )
 
-        # ── Attempt 2: the work changed ──
-        router.content[CRITERIA_EVALUATION] = _evaluation(
-            _verdict("c1", "met", quote="def solve(n):"),
-            _verdict("c2.p1", "met", quote="return n + n"),
-            _verdict("c2.p2", "not_met", missing="Немає тестів."),
-            _verdict("c3", "not_met", missing="Докстрінг не пояснює винятку."),
-        )
-        second_id, second_job = await _attempt(
-            session_factory, world, s3, n=2, work=_SECOND_WORK
-        )
+async def _two_attempts(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: dict[str, Any],
+    tmp_path: Path,
+    config: PathConfig,
+) -> tuple[_Requests, uuid.UUID, uuid.UUID, _S3, list[MutableMapping[str, Any]]]:
+    """The first attempt and the second through the body; the second's log."""
+    router = _Requests(session_factory)
+    source = _ListSource(world["in_force"])
+    s3 = _S3(tmp_path, {})
+    # c2 (by its points) and c3 not met on both attempts: one explanation.
+    router.content[REVIEW_EXPLANATION] = _EXPLANATION
+
+    # ── Attempt 1: c1 and c2.p1 met, c2.p2 and c3 not ──
+    router.content[CRITERIA_EVALUATION] = _evaluation(
+        _verdict("c1", "met", quote="def solve(n):"),
+        _verdict("c2.p1", "met", quote="return n * 2"),
+        _verdict("c2.p2", "not_met", missing="Немає тестів."),
+        _verdict("c3", "not_met", missing="Немає докстрінга."),
+    )
+    first_id, first_job = await _attempt(
+        session_factory, world, s3, n=1, work=_FIRST_WORK
+    )
+    await _run(
+        session_factory,
+        router,
+        source,
+        s3,
+        submission_id=first_id,
+        job_id=first_job,
+        config=config,
+    )
+
+    # ── Attempt 2: the work changed ──
+    router.content[CRITERIA_EVALUATION] = _evaluation(
+        _verdict("c1", "met", quote="def solve(n):"),
+        _verdict("c2.p1", "met", quote="return n + n"),
+        _verdict("c2.p2", "not_met", missing="Немає тестів."),
+        _verdict("c3", "not_met", missing="Докстрінг не пояснює винятку."),
+    )
+    second_id, second_job = await _attempt(
+        session_factory, world, s3, n=2, work=_SECOND_WORK
+    )
+    with capture_logs() as logs:
         await _run(
             session_factory,
             router,
@@ -404,6 +418,30 @@ class TestTheSecondAttemptIsEvaluatedWithTheFirstsMemory:
             job_id=second_job,
             config=config,
         )
+    return router, first_id, second_id, s3, logs
+
+
+class TestTheSecondAttemptIsEvaluatedWithTheFirstsMemory:
+    async def test_the_difference_and_the_earlier_verdicts_are_in_its_request(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        router, first_id, second_id, s3, _ = await _two_attempts(
+            session_factory, world, tmp_path, _raised()
+        )
+
+        first = await _submission(session_factory, first_id)
+        assert (first.status, first.attempt_no) == ("delivered", 1)
+        # A first attempt: v2's request is v1's, byte for byte, no memory.
+        (ref, variables), _ = router.evaluations()
+        assert ref == "prompts/criteria_evaluation/v2.md"
+        assert "previous_attempt" not in variables
+        assert _rendered(ref, variables) == _rendered(
+            "prompts/criteria_evaluation/v1.md", variables
+        )
+
         second = await _submission(session_factory, second_id)
         assert (second.status, second.attempt_no) == ("delivered", 2)
         assert second.task_version == first.task_version
@@ -442,6 +480,27 @@ class TestTheSecondAttemptIsEvaluatedWithTheFirstsMemory:
             "c2.p2": "not_met",
             "c3": "not_met",
         }
+
+    async def test_under_the_shipped_ceiling_a_small_request_carries_none(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        router, _, _, _, logs = await _two_attempts(
+            session_factory, world, tmp_path, _shipped()
+        )
+
+        ref, variables = router.evaluations()[-1]
+        assert ref == "prompts/criteria_evaluation/v2.md"
+        assert "previous_attempt" not in variables
+        assert _rendered(ref, variables) == _rendered(
+            "prompts/criteria_evaluation/v1.md", variables
+        )
+        [line] = [e for e in logs if e["event"] == "criteria_evaluation_memory_none"]
+        assert line["reason"] == "memory_over_growth"
+        assert line["growth"] > 0.33
+        assert "return n + n" not in repr(logs)
 
 
 async def _verdict_rows(
@@ -545,7 +604,10 @@ async def two_attempts(
 
 
 async def _evaluate_with_replies(
-    session: AsyncSession, attempts: dict[str, Any], router: _Router
+    session: AsyncSession,
+    attempts: dict[str, Any],
+    router: _Router,
+    config: PathConfig | None = None,
 ) -> StageOutcome:
     second: HomeworkSubmission = attempts["second"]
     reading = read_text_work(
@@ -554,7 +616,7 @@ async def _evaluate_with_replies(
         languages=["ukr"],
         note_flags=(),
     )
-    config = _shipped()
+    config = config if config is not None else _raised()
     context = StageContext(
         session=session,
         router=router,  # type: ignore[arg-type]
@@ -642,3 +704,20 @@ class TestTheStageWithRepliesShowsTheMemoryToo:
         )
         assert found is not None
         assert found.submission_id == two_attempts["first"].id
+
+    async def test_under_the_shipped_ceiling_a_small_request_carries_none(
+        self, db_session: AsyncSession, two_attempts: dict[str, Any]
+    ) -> None:
+        router = _Router(_verdicts(_met("c1", "def fibonacci(n):"), _not_met("c2")))
+
+        with capture_logs() as logs:
+            await _evaluate_with_replies(
+                db_session, two_attempts, router, config=_shipped()
+            )
+
+        (request,) = router.requests
+        assert "previous_attempt" not in request["render"]
+        assert "<student_replies>" in _request(router)[1]
+        [line] = [e for e in logs if e["event"] == "criteria_evaluation_memory_none"]
+        assert line["reason"] == "memory_over_growth"
+        assert "return fibonacci(n - 1)" not in repr(logs)

@@ -231,9 +231,14 @@ attempt sees the difference from the earlier attempt and its earlier verdicts
 attempt's verdicts on the items judged now and the line difference of the
 work (``earlier_review.read_attempt_memory``) — without the verdicts when
 the criteria list changed since, without the difference when the work was
-rewritten (``attempt_memory.rewritten_share`` of the submission-path file,
-whose change raises this number too) or the earlier work cannot be read; the
-safeguard and every rule above are unchanged. It enters
+rewritten (``attempt_memory.rewritten_share`` of the submission-path file)
+or the earlier work cannot be read; the difference with
+``attempt_memory.diff_context_lines`` lines of context, and the whole memory
+under the ceiling ``attempt_memory.max_growth`` of the request's growth
+(``earlier_review.fit_memory``; the operator's decision of 2026-11-23,
+21:42, inside 11, never released before it). A change of any of the three
+settings raises this number too. The safeguard and every rule above are
+unchanged. It enters
 the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,

@@ -22,6 +22,8 @@ Interface:
     and the notes on what is not shown and why.
     :func:`read_attempt_memory` — reads it; ``None`` when there is nothing to
     show. :func:`attempt_memory` — the same from what was read: pure.
+    :func:`fit_memory`, :class:`FittedMemory` — the memory under the ceiling
+    of the request's growth, and why it is cut.
     :class:`EarlierWorkSource` — where the earlier attempt's work is read
     from; :class:`DoorsEarlierWork` — production's: the attempt's file in S3,
     read by the doors' own code.
@@ -66,6 +68,21 @@ The memory of the evaluation (task 13, K4):
     * nothing left to show — neither verdicts nor difference (the list
       changed, and the work was rewritten or cannot be read): no memory.
 
+    The difference shows ``attempt_memory.diff_context_lines`` (1) unchanged
+    lines around a change: the work itself is in the request whole.
+
+    The ceiling (:func:`fit_memory`, the operator's decision of 2026-11-23,
+    21:42): the memory may grow the stage's request by
+    ``attempt_memory.max_growth`` (0.33) of the request without it at most —
+    in characters of the rendered system and user messages, both rendered
+    the same way by the stage. Above it the same memory goes without its
+    difference, marked ``rewritten`` (for the model the same sense: judge
+    every item anew from the work, the verdicts a hint); above it still, no
+    memory at all. Why the difference or the memory is not shown is logged
+    apart from the share of changed lines — ``rewritten_share``,
+    ``diff_over_growth``, ``memory_over_growth`` — with the numbers and no
+    text of the work.
+
     The verdicts are those of the items the model is asked about now
     (:func:`~course_supporter.homework.criteria_verdicts.judged_items`), as
     stored: a "met" with its quote, a "not met" with its sentence, and
@@ -86,10 +103,10 @@ Replacing:
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 import structlog
 
@@ -365,6 +382,7 @@ async def read_attempt_memory(
     judged: Sequence[str],
     source: EarlierWorkSource | None,
     rewritten_share: float,
+    context_lines: int,
 ) -> AttemptMemory | None:
     """What the evaluation of ``submission`` is shown of the earlier attempt.
 
@@ -377,6 +395,7 @@ async def read_attempt_memory(
         criteria_source_id: …and its row: the list's address.
         judged: The items the model is asked about now, in their order.
         rewritten_share: ``attempt_memory.rewritten_share`` of the path file.
+        context_lines: ``attempt_memory.diff_context_lines`` of the path file.
 
     Returns:
         ``None`` when there is nothing to show.
@@ -424,6 +443,7 @@ async def read_attempt_memory(
         earlier_work=earlier_work,
         current_work=current,
         rewritten_share=rewritten_share,
+        context_lines=context_lines,
     )
 
 
@@ -438,6 +458,7 @@ def attempt_memory(
     earlier_work: DoorReading | None,
     current_work: DoorReading,
     rewritten_share: float,
+    context_lines: int,
 ) -> AttemptMemory | None:
     """The memory from what was read: pure, no session.
 
@@ -464,7 +485,7 @@ def attempt_memory(
         snapshotter = TextAttemptSnapshotter()
         before = snapshotter.snapshot(AttemptWork(reading=earlier_work))
         after = snapshotter.snapshot(AttemptWork(reading=current_work))
-        change = snapshotter.diff(before, after)
+        change = snapshotter.diff(before, after, context_lines=context_lines)
         added, removed = change.lines_added, change.lines_removed
         share = changed_share(
             added,
@@ -503,6 +524,78 @@ def changed_share(
     """
     larger = max(lines_before, lines_after)
     return (lines_added + lines_removed) / larger if larger else 0.0
+
+
+REWRITTEN_SHARE: Final = "rewritten_share"
+"""Why no difference: more lines changed than ``attempt_memory.rewritten_share``."""
+
+DIFF_OVER_GROWTH: Final = "diff_over_growth"
+"""Why no difference: with it the request would grow past the ceiling."""
+
+MEMORY_OVER_GROWTH: Final = "memory_over_growth"
+"""Why no memory: even without the difference it grows the request too much."""
+
+
+@dataclass(frozen=True, slots=True)
+class FittedMemory:
+    """The memory the request goes with, under the ceiling, and why.
+
+    Attributes:
+        memory: What goes; ``None`` — no memory (the request is a first
+            attempt's).
+        reason: Why the difference or the memory is not shown —
+            :data:`REWRITTEN_SHARE`, :data:`DIFF_OVER_GROWTH`,
+            :data:`MEMORY_OVER_GROWTH` — or ``None``: everything is shown, or
+            the difference is missing for a reason of its own (the earlier
+            work could not be read, the work is the same).
+        base_chars: Characters of the request without the memory.
+        growth: The growth the memory as read would bring, as a share of
+            ``base_chars``.
+        sent_growth: The growth of what goes; 0 without a memory.
+    """
+
+    memory: AttemptMemory | None
+    reason: str | None
+    base_chars: int
+    growth: float
+    sent_growth: float
+
+
+def fit_memory(
+    memory: AttemptMemory,
+    *,
+    request_chars: Callable[[AttemptMemory | None], int],
+    max_growth: float,
+) -> FittedMemory:
+    """The memory under the ceiling of the request's growth: pure.
+
+    ``request_chars`` renders the stage's request — system and user message
+    — with the memory given (``None`` — without one) and counts its
+    characters; the stage renders both by the same means
+    (:func:`~course_supporter.agents.criteria_evaluator.request_chars`).
+    The memory fits when ``with - without <= max_growth * without``; one
+    that does not goes without its difference, marked ``rewritten``, if that
+    fits; otherwise none goes.
+    """
+    base = request_chars(None)
+    added = request_chars(memory) - base
+    growth = added / base
+    if _fits(added, base, max_growth):
+        reason = REWRITTEN_SHARE if memory.rewritten else None
+        return FittedMemory(memory, reason, base, growth, growth)
+    if memory.diff:
+        lighter = replace(memory, diff=None, rewritten=True)
+        lighter_added = request_chars(lighter) - base
+        if _fits(lighter_added, base, max_growth):
+            return FittedMemory(
+                lighter, DIFF_OVER_GROWTH, base, growth, lighter_added / base
+            )
+    return FittedMemory(None, MEMORY_OVER_GROWTH, base, growth, 0.0)
+
+
+def _fits(added: int, base: int, max_growth: float) -> bool:
+    """The growth is the ceiling's share of the request or less."""
+    return added <= max_growth * base
 
 
 def _previous_verdicts(

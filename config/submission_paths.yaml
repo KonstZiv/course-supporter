@@ -156,12 +156,12 @@ stages:
       # DeepSeek is priced off-peak; peak hours bill twice that (DD-SP-BG).
       # Prompt v2 (task 13, K4) is not counted in the number: on a repeated
       # attempt the first request grows by the earlier verdicts, the
-      # difference and v2's rules. At the largest input, the worst difference
-      # at `rewritten_share` 0.5 (every other line changed, its context the
-      # whole work) — about 52 900 tokens more, 108 917 in all:
-      #   qwen3.7-max, 16 384 out:     108 917 x 0.00165/1k + 16 384 x 0.004951/1k = 0.260830
-      #   deepseek-v4-pro, 32 768 out: 108 917 x 0.00066/1k + 32 768 x 0.00198/1k  = 0.136766
-      #   0.397596 — both rungs stay reachable under 0.55; the repeat shows no
+      # difference and v2's rules — by `attempt_memory.max_growth` (0.33) of
+      # the request without them at most (below). At the largest input,
+      # 56 021 + 18 486 = 74 507 tokens:
+      #   qwen3.7-max, 16 384 out:     74 507 x 0.00165/1k + 16 384 x 0.004951/1k = 0.204054
+      #   deepseek-v4-pro, 32 768 out: 74 507 x 0.00066/1k + 32 768 x 0.00198/1k  = 0.114055
+      #   0.318109 — both rungs stay reachable under 0.55; the repeat shows no
       # memory. The live measurement of v2 reads the real size.
       money_usd: 0.55
     ladder:
@@ -484,12 +484,20 @@ stages:
 # attempt before it (task 13, K4; homework/earlier_review.py): its verdicts,
 # and the line difference of the work unless the work counts as rewritten —
 # (lines added + lines removed) / the larger line count of the two attempts
-# above `rewritten_share`. 0.5 by the operator's decision of 2026-11-23; the
-# live measurement refines it. A change of it changes what a review says, so
-# it raises VERDICT_RULES_VERSION (homework/criteria_verdicts.py) together
-# with it.
+# above `rewritten_share`. The difference shows `diff_context_lines`
+# unchanged lines around a change (the work itself is in the request whole).
+# The memory may grow the stage's request — the characters of its rendered
+# system and user messages — by `max_growth` of the request without it at
+# most: above that it goes without its difference, marked rewritten, and
+# above that still not at all (the request is a first attempt's). The
+# operator's decisions of 2026-11-23 (0.5; 1 and 0.33 at 21:42); the live
+# measurement refines them. A change of any of them changes what a review
+# says, so it raises VERDICT_RULES_VERSION (homework/criteria_verdicts.py)
+# together with it.
 attempt_memory:
   rewritten_share: 0.5
+  diff_context_lines: 1
+  max_growth: 0.33
 
 task_types:
   # A test makes no model call on any path. On the new path since task 07:

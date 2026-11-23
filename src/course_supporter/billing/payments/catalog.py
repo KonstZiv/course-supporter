@@ -11,7 +11,7 @@ paid, so a package's id stands for its units and prices for good: changing a
 package means a new id.
 
 Each provider has a section of its own — package id → the provider's id of
-the product or price its checkout needs (a Paddle price id, say). An empty
+the product or price its checkout needs (a Creem product id, say). An empty
 section, or none, is allowed; whether a provider can sell a package without
 one is its adapter's business.
 

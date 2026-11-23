@@ -25,6 +25,9 @@ from course_supporter.homework.criteria_form import (
     CheckMethod,
     Criterion,
     CriterionDraft,
+    CriterionEdit,
+    author_criteria_from_document,
+    author_musts,
     check_methods_for,
     compose_criteria,
     criteria_from_document,
@@ -350,6 +353,79 @@ class TestDocument:
             [_draft()], ["the node says loops are not covered"], input_concepts=[]
         )
         assert composition.contradictions == ("the node says loops are not covered",)
+
+
+class TestMustByAuthor:
+    """The author's own "must" (2026-11-17): the author's layer's mark alone."""
+
+    def test_the_models_list_is_stored_as_before(self) -> None:
+        composition = compose_criteria(
+            [_draft(), _draft(weight="should")], [], input_concepts=[]
+        )
+
+        document = criteria_to_document(composition.criteria)
+
+        assert [criterion.must_by_author for criterion in composition.criteria] == [
+            None,
+            None,
+        ]
+        assert all("must_by_author" not in criterion for criterion in document)
+        assert set(document[0]) == set(_stored())
+
+    def test_the_authors_mark_is_stored_true_or_false(self) -> None:
+        own = Criterion.model_validate(_stored(must_by_author=True))
+        kept = Criterion.model_validate(_stored(id="c2", must_by_author=False))
+
+        document = criteria_to_document([own, kept])
+
+        assert [criterion["must_by_author"] for criterion in document] == [True, False]
+        assert author_musts(criteria_from_document(document)) == {"c1"}
+
+    def test_an_edit_stored_before_the_mark_reads_false(self) -> None:
+        stored = [_stored(), _stored(id="c2", weight="should")]
+
+        criteria = author_criteria_from_document(stored)
+
+        assert [criterion.must_by_author for criterion in criteria] == [False, False]
+        assert author_musts(criteria) == frozenset()
+
+    def test_a_stored_mark_is_read_as_it_is(self) -> None:
+        criteria = author_criteria_from_document([_stored(must_by_author=True)])
+
+        assert author_musts(criteria) == {"c1"}
+
+    @pytest.mark.parametrize("weight", ["should", "may"])
+    def test_only_a_must_is_marked(self, weight: str) -> None:
+        with pytest.raises(ValidationError, match="must_by_author marks a 'must'"):
+            Criterion.model_validate(_stored(weight=weight, must_by_author=True))
+        assert (
+            Criterion.model_validate(
+                _stored(weight=weight, must_by_author=False)
+            ).must_by_author
+            is False
+        )
+
+    def test_an_edit_may_send_it_or_leave_it_out(self) -> None:
+        sent = {
+            "text": "Has a base case",
+            "evidence": "an if-return",
+            "weight": "must",
+            "check_method": "model_verdict",
+        }
+
+        assert CriterionEdit.model_validate(sent).must_by_author is None
+        assert (
+            CriterionEdit.model_validate(
+                {**sent, "must_by_author": True}
+            ).must_by_author
+            is True
+        )
+        assert (
+            CriterionEdit.model_validate(
+                {**sent, "must_by_author": False}
+            ).must_by_author
+            is False
+        )
 
 
 def test_the_module_examples_are_executed() -> None:

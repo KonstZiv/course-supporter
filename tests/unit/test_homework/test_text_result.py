@@ -14,6 +14,7 @@ body in ``tests/integration/test_text_review_e2e_db.py``.
 from __future__ import annotations
 
 import doctest
+from collections.abc import Sequence
 
 import pytest
 
@@ -40,6 +41,7 @@ from course_supporter.models.review_structure import (
     PassRule,
     Reference,
     Remark,
+    Reply,
     Verdict,
 )
 from course_supporter.remark_kinds import RemarkState
@@ -81,6 +83,19 @@ AUTHOR = CriteriaLayer.AUTHOR
 MUST, SHOULD, MAY = WeightCategory.MUST, WeightCategory.SHOULD, WeightCategory.MAY
 
 
+def _own_musts(rows: Sequence[VerdictRecord]) -> frozenset[str]:
+    """Every "must" criterion of ``rows``, as one the author marked themselves.
+
+    The builder's pass is ``pass_decision``'s; these tests read its strict
+    branch, where the "must" criteria are the author's own (2026-11-17).
+    """
+    return frozenset(
+        row.item_id
+        for row in rows
+        if row.item_kind == VerdictItemKind.CRITERION and row.weight == MUST
+    )
+
+
 class TestTheScore:
     """Lock 1: the score is the hand count — weights 3 / 2 / 1, points inside."""
 
@@ -99,7 +114,11 @@ class TestTheScore:
         ]
 
         _, score = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=_explanation("c2"), language="ukr"
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c2"),
+            language="ukr",
         )
 
         assert score == 66
@@ -108,7 +127,11 @@ class TestTheScore:
         rows = [_criterion("c1", MUST, MET), _criterion("c2", MAY, MET)]
 
         _, score = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=_explanation(), language="ukr"
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation(),
+            language="ukr",
         )
 
         assert score == 100
@@ -126,6 +149,7 @@ class TestThePassIsTheCodes:
 
         structure, score = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", passed=True),
             language="ukr",
@@ -148,6 +172,7 @@ class TestThePassIsTheCodes:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c2", passed=False),
             language="ukr",
@@ -161,6 +186,7 @@ class TestThePassIsTheCodes:
 
         structure, score = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", "c2"),
             language="ukr",
@@ -187,6 +213,7 @@ class TestTheRemarks:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", "c10", "c2", "c11", "c3"),
             language="ukr",
@@ -205,7 +232,11 @@ class TestTheRemarks:
         rows = [_criterion("c1", MUST, NOT_MET)]
 
         structure, _ = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=_explanation("c1"), language="ukr"
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c1"),
+            language="ukr",
         )
 
         assert structure.new_remarks == [
@@ -223,8 +254,27 @@ class TestTheRemarks:
         with pytest.raises(ValueError, match=r"\['c7'\]"):
             build_text_review(
                 layer=AUTHOR,
+                author_musts=_own_musts(rows),
                 rows=rows,
                 explanation=_explanation("c1", "c7"),
+                language="ukr",
+            )
+
+    def test_an_own_must_the_rows_do_not_hold_as_a_must_is_a_defect(self) -> None:
+        """The builder never counts a pass by marks read from another list.
+
+        A mark on a row that is no "must" means the marks and the rows come
+        from different lists (``pass_decision``); the review is refused, not
+        given with a pass counted in either branch.
+        """
+        rows = [_criterion("c1", MUST, MET), _criterion("c2", SHOULD, MET)]
+
+        with pytest.raises(ValueError, match="not 'must' criteria of the rows"):
+            build_text_review(
+                layer=AUTHOR,
+                author_musts={"c1", "c2"},
+                rows=rows,
+                explanation=_explanation(),
                 language="ukr",
             )
 
@@ -235,6 +285,7 @@ class TestTheRemarks:
         with pytest.raises(ValueError, match=r"\['c1\.p1'\]"):
             build_text_review(
                 layer=AUTHOR,
+                author_musts=_own_musts(rows),
                 rows=rows,
                 explanation=_explanation("c1.p1"),
                 language="ukr",
@@ -246,7 +297,11 @@ class TestTheRestOfTheReview:
         rows = [_criterion("c1", MUST, MET)]
 
         structure, _ = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=_explanation(), language="eng"
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation(),
+            language="eng",
         )
 
         assert structure.language == "eng"
@@ -259,6 +314,7 @@ class TestTheRestOfTheReview:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation(voice=voice),
             language="ukr",
@@ -270,7 +326,11 @@ class TestTheRestOfTheReview:
         """Nothing in the builder writes text: the one assembler does."""
         rows = [_criterion("c1", MUST, NOT_MET)]
         structure, _ = build_text_review(
-            layer=AUTHOR, rows=rows, explanation=_explanation("c1"), language="ukr"
+            layer=AUTHOR,
+            author_musts=_own_musts(rows),
+            rows=rows,
+            explanation=_explanation("c1"),
+            language="ukr",
         )
 
         markdown = assemble_review(structure)
@@ -283,6 +343,7 @@ class TestTheRestOfTheReview:
         with pytest.raises(ValueError, match="without a criterion"):
             build_text_review(
                 layer=AUTHOR,
+                author_musts=(),
                 rows=[_point("c1.p1", MET)],
                 explanation=_explanation(),
                 language="ukr",
@@ -290,6 +351,55 @@ class TestTheRestOfTheReview:
 
     def test_the_refusal_code_is_a_short_key(self) -> None:
         assert REVIEW_PARTS_MISSING == "review_parts_missing"
+
+
+class TestTheSectionOfReplies:
+    """Task 12a, K4: the section is added, and nothing else moves."""
+
+    _REPLIES = (
+        Reply(kind="question", said="Чому c1?", answer="Бо так написано."),
+        Reply(kind="comment", said="(не наводимо)", answer="Жарт і правило."),
+    )
+
+    def test_the_replies_are_laid_out_in_their_order(self) -> None:
+        rows = [_criterion("c1", MUST, NOT_MET)]
+
+        structure, _ = build_text_review(
+            layer=AUTHOR,
+            rows=rows,
+            author_musts=_own_musts(rows),
+            explanation=_explanation("c1"),
+            language="ukr",
+            replies=self._REPLIES,
+        )
+
+        assert structure.replies == list(self._REPLIES)
+        markdown = assemble_review(structure)
+        assert markdown.index("Чому c1?") < markdown.index("(не наводимо)")
+
+    def test_with_no_reply_the_review_is_what_it_was(self) -> None:
+        rows = [_criterion("c1", MUST, NOT_MET)]
+        explanation = _explanation("c1")
+
+        without, score = build_text_review(
+            layer=AUTHOR,
+            rows=rows,
+            author_musts=_own_musts(rows),
+            explanation=explanation,
+            language="ukr",
+        )
+        with_replies, same_score = build_text_review(
+            layer=AUTHOR,
+            rows=rows,
+            author_musts=_own_musts(rows),
+            explanation=explanation,
+            language="ukr",
+            replies=self._REPLIES,
+        )
+
+        assert without.replies == []
+        assert with_replies.model_copy(update={"replies": []}) == without
+        assert score == same_score
 
 
 class TestTheCourseLinks:
@@ -304,6 +414,7 @@ class TestTheCourseLinks:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", "c2", passed=False),
             language="ukr",
@@ -315,6 +426,7 @@ class TestTheCourseLinks:
     def test_without_reading_no_remark_has_any(self) -> None:
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts={"c1"},
             rows=[_criterion("c1", MUST, NOT_MET)],
             explanation=_explanation("c1", passed=False),
             language="ukr",
@@ -397,6 +509,7 @@ class TestTheSectionsByState:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c3", "c2", "c1", passed=False),
             language="ukr",
@@ -433,6 +546,7 @@ class TestTheSectionsByState:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c2", "c1", passed=False),
             language="ukr",
@@ -465,6 +579,7 @@ class TestTheSectionsByState:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", "c2", "c3", passed=False),
             language="ukr",
@@ -505,6 +620,7 @@ class TestTheSectionsByState:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1"),
             language="ukr",
@@ -527,6 +643,7 @@ class TestTheSectionsByState:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation(),
             language="ukr",
@@ -544,6 +661,7 @@ class TestTheSectionsByState:
         with pytest.raises(ValueError, match="c1 is fixed"):
             build_text_review(
                 layer=AUTHOR,
+                author_musts={"c1"},
                 rows=[_criterion("c1", MUST, MET)],
                 explanation=_explanation(),
                 language="ukr",
@@ -560,6 +678,7 @@ class TestTheSectionsByState:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", passed=False),
             language="ukr",
@@ -586,6 +705,7 @@ class TestTheSectionsByState:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", "c2", "c3", passed=False),
             language="ukr",
@@ -630,6 +750,7 @@ class TestTheSectionsByState:
 
         structure, _ = build_text_review(
             layer=AUTHOR,
+            author_musts=_own_musts(rows),
             rows=rows,
             explanation=_explanation("c1", "c2", "c3", passed=False),
             language="ukr",

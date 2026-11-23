@@ -82,6 +82,20 @@ prints the same and writes nothing (a READ ONLY transaction). show-account
 prints an account's test units:
     void-test-batches --actor kostiantyn [--account <account-id>] [--dry-run]
 
+Test students (BIL-5, DD-BIL-CAL). Our own service students — control,
+rehearsal, a payment provider reviewer's students — are marked on the student
+(students.is_test_student): the calibration of the review cost estimate
+(scripts/cost_estimate_report.py) leaves their reviews out. Nothing on the
+review path reads the mark. --mark / --unmark print the mark before and after;
+the same mark again changes nothing; an unknown or deleted student is refused.
+Not in the audit log (its five-year destruction follows billing accounts, and
+the mark is not on one): the change is a structured log line with the
+--actor. --list only reads: the marked students' ids and tenants, and their
+number:
+    test-student --student <student-id> --mark --actor kostiantyn
+    test-student --student <student-id> --unmark --actor kostiantyn
+    test-student --list
+
 Disputes (BIL-PAY, operator 2026-11-12). A chargeback held the free units of
 the disputed purchase; a provider that does not report the outcome (Creem
 sends nothing when a dispute is won) leaves it here. Lost: the held units
@@ -161,11 +175,12 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import structlog
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from course_supporter.billing import accounts, admin, ledger, testmark
+from course_supporter.billing import accounts, admin, audit, ledger, testmark
 from course_supporter.billing import costs as billing_costs
 from course_supporter.billing.errors import (
     BillingError,
@@ -181,8 +196,11 @@ from course_supporter.storage.orm import (
     BillingAccount,
     BillingMovement,
     BillingPaymentRule,
+    Student,
     Tenant,
 )
+
+logger = structlog.get_logger(__name__)
 
 Handler = Callable[[AsyncSession, argparse.Namespace], Awaitable[str]]
 
@@ -530,6 +548,50 @@ async def void_test_batches(session: AsyncSession, args: argparse.Namespace) -> 
             "\ndry run: nothing written" if done.dry_run else ""
         )
     return _void_lines(done)
+
+
+async def test_student(session: AsyncSession, args: argparse.Namespace) -> str:
+    """Mark or unmark a service student, or list the marked ones (BIL-5).
+
+    The mark (``students.is_test_student``) leaves the student's reviews out
+    of the calibration of the review cost estimate; the review path does not
+    read it. ``--list`` only reads: the marked students' ids and tenants (no
+    name), in a READ ONLY transaction. A change is logged with ``--actor``
+    (``student_test_mark_set``), not audited: the audit log's destruction
+    follows billing accounts, and the mark is not on one.
+    """
+    if args.list:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+        marked = (
+            await session.execute(
+                select(Student.id, Student.tenant_id, Student.deleted_at)
+                .where(Student.is_test_student)
+                .order_by(Student.tenant_id, Student.id)
+            )
+        ).all()
+        lines = [
+            f"student {sid}  tenant {tid}" + ("  deleted" if deleted else "")
+            for sid, tid, deleted in marked
+        ]
+        lines.append(f"total: {len(marked)} marked student(s)")
+        return "\n".join(lines)
+    actor = audit.require_actor(args.actor)
+    student = await session.get(Student, args.student, with_for_update=True)
+    if student is None or student.deleted_at is not None:
+        raise BillingNotFoundError(f"student {args.student} not found")
+    before = student.is_test_student
+    if before is args.mark:
+        return f"unchanged (already so): student {student.id}  is_test_student={before}"
+    student.is_test_student = args.mark
+    await session.flush()
+    logger.info(
+        "student_test_mark_set",
+        actor=actor,
+        student_id=str(student.id),
+        before=before,
+        after=args.mark,
+    )
+    return f"changed: student {student.id}  is_test_student {before} → {args.mark}"
 
 
 async def _end_dispute(
@@ -928,9 +990,7 @@ def _render_task_table(report: billing_costs.CostReport) -> list[str]:
     total_row = _cells("разом", "", "", totals.spend, totals.units, "", "")
     lines = ["По завданнях (автор → курс → завдання):"]
     lines.extend(
-        _format_ascii_table(
-            headers, rows, total_row, right_align={3, 4, 5, 6, 7, 8, 9}
-        )
+        _format_ascii_table(headers, rows, total_row, right_align={3, 4, 5, 6, 7, 8, 9})
     )
     lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
     return lines
@@ -1230,6 +1290,7 @@ COMMANDS: dict[str, Handler] = {
     "refund-release": refund_release,
     "test-purchase": mark_test_purchase,
     "void-test-batches": void_test_batches,
+    "test-student": test_student,
     "dispute-lost": dispute_lost,
     "dispute-won": dispute_won,
     "balance": balance,
@@ -1320,6 +1381,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--dry-run", action="store_true", help="print what would go; write nothing"
     )
+
+    p = command("test-student", "mark a service student, or list them", changes=False)
+    p.add_argument("--student", type=uuid.UUID, help="student id (--mark, --unmark)")
+    p.add_argument("--actor", help="who makes the change (--mark, --unmark)")
+    mark = p.add_mutually_exclusive_group(required=True)
+    mark.add_argument(
+        "--mark", dest="mark", action="store_const", const=True, help="set the mark"
+    )
+    mark.add_argument(
+        "--unmark", dest="mark", action="store_const", const=False, help="clear it"
+    )
+    mark.add_argument("--list", action="store_true", help="list the marked students")
 
     p = command("credit-invoice", "credit a paid contract invoice", changes=True)
     p.add_argument("--tenant", required=True, help="tenant id or name")
@@ -1424,7 +1497,12 @@ async def run(args: argparse.Namespace) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point: run the command, print its result."""
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "test-student" and (
+        not args.list and (args.student is None or args.actor is None)
+    ):
+        parser.error("test-student --mark/--unmark needs --student and --actor")
     try:
         out = asyncio.run(run(args))
     except BillingError as exc:

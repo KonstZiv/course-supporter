@@ -7,11 +7,21 @@ the rows of ``billing.charging.PAID_BY_PAYER``, the definition the journal
 charges by. The arithmetic and the rule of which rows belong to which action
 are in ``course_supporter.cost_estimate.report``.
 
+Test students (BIL-5, DD-BIL-CAL): the review of a submission whose student is
+marked as a service student (``students.is_test_student``; the mark is set by
+``scripts/billing_admin.py test-student``) is left out by default;
+``--include-test-students`` brings it back. The estimates of the other actions
+are not filtered. After the report a line says how many review estimates of
+test students were excluded (or included) and how many distinct non-test
+students the review sample has. ``--limit`` counts the estimates before the
+filter.
+
 Usage::
 
     uv run python scripts/cost_estimate_report.py              # table
     uv run python scripts/cost_estimate_report.py --csv out.csv
     uv run python scripts/cost_estimate_report.py --kind review --limit 50
+    uv run python scripts/cost_estimate_report.py --include-test-students
 
 Reads ``DATABASE_URL`` (the app settings) and the catalog
 (``config/external_services.yaml``). Opens a READ ONLY transaction.
@@ -36,11 +46,19 @@ from course_supporter.cost_estimate.report import (
     CallRow,
     EstimateRow,
     ReportRow,
+    ReviewSample,
     compare,
     rows_of,
+    select_reviews,
 )
 from course_supporter.llm.registry import load_registry
-from course_supporter.storage.orm import ActionCostEstimate, ExternalServiceCall, Job
+from course_supporter.storage.orm import (
+    ActionCostEstimate,
+    ExternalServiceCall,
+    HomeworkSubmission,
+    Job,
+    Student,
+)
 
 _COLUMNS = (
     "action_kind",
@@ -56,9 +74,28 @@ _COLUMNS = (
 )
 
 
+async def _review_students(
+    session: AsyncSession, estimates: list[EstimateRow]
+) -> dict[str, tuple[uuid.UUID, bool]]:
+    """Each reviewed submission's student and the student's test mark."""
+    reviewed = [uuid.UUID(e.action_key) for e in estimates if e.action_kind == "review"]
+    if not reviewed:
+        return {}
+    rows = await session.execute(
+        select(HomeworkSubmission.id, Student.id, Student.is_test_student)
+        .join(Student, Student.id == HomeworkSubmission.student_id)
+        .where(HomeworkSubmission.id.in_(reviewed))
+    )
+    return {str(sub): (student, is_test) for sub, student, is_test in rows}
+
+
 async def _load(
-    session: AsyncSession, kind: str | None, limit: int | None
-) -> list[ReportRow]:
+    session: AsyncSession,
+    kind: str | None,
+    limit: int | None,
+    *,
+    include_test_students: bool = False,
+) -> tuple[list[ReportRow], ReviewSample]:
     query = select(ActionCostEstimate).order_by(ActionCostEstimate.created_at)
     if kind is not None:
         query = query.where(ActionCostEstimate.action_kind == kind)
@@ -86,6 +123,11 @@ async def _load(
         )
         for e in stored
     ]
+    estimates, sample = select_reviews(
+        estimates,
+        await _review_students(session, estimates),
+        include_test_students=include_test_students,
+    )
 
     # The jobs of each reviewed submission (their subject is the submission).
     submission_jobs: dict[str, list[uuid.UUID]] = defaultdict(list)
@@ -130,7 +172,7 @@ async def _load(
             )
 
     models = load_registry(get_settings().external_services_path).models
-    return [
+    report = [
         compare(
             e,
             rows_of(e, by_job=by_job, submission_jobs=submission_jobs),
@@ -138,14 +180,20 @@ async def _load(
         )
         for e in estimates
     ]
+    return report, sample
 
 
-async def _main(args: argparse.Namespace) -> list[ReportRow]:
+async def _main(args: argparse.Namespace) -> tuple[list[ReportRow], ReviewSample]:
     engine = create_async_engine(get_settings().database_url)
     try:
         async with AsyncSession(engine) as session:
             await session.execute(text("SET TRANSACTION READ ONLY"))
-            return await _load(session, args.kind, args.limit)
+            return await _load(
+                session,
+                args.kind,
+                args.limit,
+                include_test_students=args.include_test_students,
+            )
     finally:
         await engine.dispose()
 
@@ -170,8 +218,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--csv", type=Path, help="write the report here")
     parser.add_argument("--kind", choices=("review", "processing", "task_preparation"))
     parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--include-test-students",
+        action="store_true",
+        help="keep the reviews of test students (students.is_test_student)",
+    )
     args = parser.parse_args(argv)
-    rows = asyncio.run(_main(args))
+    rows, sample = asyncio.run(_main(args))
     if args.csv is not None:
         with args.csv.open("w", newline="", encoding="utf-8") as fh:
             writer = csv.DictWriter(fh, fieldnames=_COLUMNS)
@@ -179,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
             writer.writerows(r.as_csv() for r in rows)
     else:
         _print(rows)
+    sys.stdout.write(sample.line() + "\n")
     return 0
 
 

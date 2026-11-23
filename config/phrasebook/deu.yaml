@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Die Pflichtkriterien des Autors sind nicht erf�
 verdict.rule.author_musts_below_threshold: Sie haben alle Pflichtkriterien des Autors erfüllt, aber {score} von 100 erreicht — unter der Grenze von {threshold} für Aufgaben mit Pflichtkriterien des Autors, daher ist die Arbeit nicht bestanden.
 verdict.rule.no_author_musts_passed: Der Autor hat für diese Aufgabe keine Pflichtkriterien bestätigt. Für solche Aufgaben liegt die Bestehensgrenze bei {threshold} von 100; Ihr Ergebnis ist {score}, daher ist die Arbeit bestanden.
 verdict.rule.no_author_musts_failed: Der Autor hat für diese Aufgabe keine Pflichtkriterien bestätigt. Für solche Aufgaben liegt die Bestehensgrenze bei {threshold} von 100; Ihr Ergebnis ist {score}, daher ist die Arbeit nicht bestanden.
+reply.work_only: Wir bewerten nur die Arbeit selbst – die Lösungsdateien, nicht das, was daneben steht.
+reply.hostile.fallback: Interessanter Zug! Wir bewerten nur die Arbeit selbst – die Lösungsdateien, nicht das, was daneben steht. Um das Ergebnis zu verbessern, überarbeiten Sie Ihre Lösung anhand der Anmerkungen dieser Bewertung.
+reply.off_topic.wrap_up: 'Darüber lässt sich lange reden, aber es wartet Arbeit auf uns, und die Zeit ist im Kurs „{course}“ besser investiert. Plaudern kostet Geld: Ich unterhalte mich gerne ewig, aber ein gewöhnlicher Chatbot macht das günstiger – mit mir lernen Sie besser „{course}“.'
+reply.said.withheld: (der Text dieser Äußerung wird in der Bewertung nicht aufgeführt)

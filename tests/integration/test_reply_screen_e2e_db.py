@@ -34,8 +34,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from course_supporter.homework.attempt_dedup import DEDUP_RECEIPT_KEY
 from course_supporter.homework.path_config import REPLY_SAFETY_ACTION, SubmissionState
 from course_supporter.homework.path_stages import (
-    CRITERIA_EVALUATION,
-    REVIEW_EXPLANATION,
+    CRITERIA_EVALUATION_WITH_REPLIES,
+    REVIEW_EXPLANATION_WITH_REPLIES,
     SAFETY,
 )
 from course_supporter.homework.remark_comments import (
@@ -248,14 +248,15 @@ class TestTheSameWorkWithRepliesIsReviewedAndTheRepliesScreened:
         assert job.stage_progress["submission_state"] == (
             SubmissionState.REPEAT_WITH_REPLIES.value
         )
-        # Each reply its own call, under its own name, before anything paid.
+        # Each reply its own call, under its own name, before anything paid;
+        # then the path with replies, on its own two stages (task 12a, K4).
         assert router.calls == [
             REPLY_SAFETY_ACTION,
             REPLY_SAFETY_ACTION,
             REPLY_SAFETY_ACTION,
             SAFETY,
-            CRITERIA_EVALUATION,
-            REVIEW_EXPLANATION,
+            CRITERIA_EVALUATION_WITH_REPLIES,
+            REVIEW_EXPLANATION_WITH_REPLIES,
         ]
         actions = await _actions_of(session_factory, job.id)
         assert actions.count(REPLY_SAFETY_ACTION) == 3

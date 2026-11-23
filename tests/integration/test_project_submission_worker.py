@@ -45,6 +45,7 @@ from course_supporter.models.mentor_review import (
     Verdict,
 )
 from course_supporter.models.sanity import SanityClassification
+from course_supporter.models.source import AssignmentType
 from course_supporter.normalizer import manifest_to_jsonb, normalize_archive
 from course_supporter.security.schemas import SafetyResult
 from course_supporter.storage.homework_repository import HomeworkRepository
@@ -59,6 +60,7 @@ from course_supporter.storage.orm import (
 )
 from course_supporter.storage.s3 import S3Client
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.path_config import shipped_with_todays_mentor_for
 
 pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
 
@@ -443,6 +445,18 @@ async def _run_full_worker(
         "s3_client": s3_client,
     }
     with ExitStack() as stack:
+        # These walks drive TODAY's Mentor on a project. Since project chain K8
+        # the shipped file serves ``project`` on the new path, so the walks take
+        # the way back — ``served_by: todays_mentor`` — here alone: the body's
+        # switch and the attempt ledger's test mode both read it.
+        handed_back = shipped_with_todays_mentor_for(AssignmentType.PROJECT)
+        for reader in ("path_runner", "path_config"):
+            stack.enter_context(
+                patch(
+                    f"course_supporter.homework.{reader}.get_path_config",
+                    return_value=handed_back,
+                )
+            )
         stack.enter_context(
             patch(
                 "course_supporter.security.stage2.run_stage2_safety_check", new=safety

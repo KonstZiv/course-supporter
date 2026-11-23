@@ -293,6 +293,39 @@ class HomeworkRepository:
             return int(count or 0), None, None
         return int(count or 0), latest.id, latest.task_version
 
+    async def attempts_at_version(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        student_id: uuid.UUID,
+        authored_document_id: uuid.UUID,
+        task_version: str,
+        excluding: uuid.UUID,
+    ) -> list[uuid.UUID]:
+        """The student's attempts at the task read against ``task_version``.
+
+        The attempts :meth:`attempts_before` counts — live revisions that got
+        a review, ``excluding`` the one asking — whose recorded
+        ``task_version`` is this one, within ``tenant_id``; an attempt with no
+        recorded version is none of them. Oldest first, by the order
+        :meth:`attempts_before` reads the latest by (task 12a, K3: the
+        attempts whose replies a submission answers).
+        """
+        rows = await self._session.scalars(
+            select(HomeworkSubmission.id)
+            .where(
+                HomeworkSubmission.tenant_id == tenant_id,
+                HomeworkSubmission.student_id == student_id,
+                HomeworkSubmission.authored_document_id == authored_document_id,
+                HomeworkSubmission.status.in_(ATTEMPT_STATUSES),
+                HomeworkSubmission.deleted_at.is_(None),
+                HomeworkSubmission.id != excluding,
+                HomeworkSubmission.task_version == task_version,
+            )
+            .order_by(HomeworkSubmission.created_at, HomeworkSubmission.id)
+        )
+        return list(rows)
+
     async def latest_unchanged_attempt(
         self,
         *,

@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Criteriile obligatorii ale autorului nu sunt î
 verdict.rule.author_musts_below_threshold: Ați îndeplinit toate criteriile obligatorii ale autorului, dar ați obținut scorul {score} din 100 — sub pragul {threshold} pentru sarcinile cu criterii obligatorii ale autorului, așa că lucrarea nu este admisă.
 verdict.rule.no_author_musts_passed: Autorul nu a aprobat criterii obligatorii pentru această sarcină. Pentru astfel de sarcini, pragul de admitere este {threshold} din 100; scorul dumneavoastră este {score}, așa că lucrarea este admisă.
 verdict.rule.no_author_musts_failed: Autorul nu a aprobat criterii obligatorii pentru această sarcină. Pentru astfel de sarcini, pragul de admitere este {threshold} din 100; scorul dumneavoastră este {score}, așa că lucrarea nu este admisă.
+reply.work_only: Evaluăm doar lucrarea propriu-zisă — fișierele cu rezolvarea, nu ceea ce este scris pe lângă.
+reply.hostile.fallback: Interesantă mișcare! Evaluăm doar lucrarea propriu-zisă — fișierele cu rezolvarea, nu ceea ce este scris pe lângă. Pentru a vă îmbunătăți rezultatul, revizuiți rezolvarea conform observațiilor din această recenzie.
+reply.off_topic.wrap_up: 'Putem vorbi mult despre asta, dar ne așteaptă treaba, iar timpul ar fi mai bine folosit pentru cursul „{course}”. Conversațiile costă bani: sunt gata să comunic la nesfârșit, dar un chatbot obișnuit va face asta mai ieftin, iar cu mine este mai bine să învățați „{course}”.'
+reply.said.withheld: (nu redăm textul acestei replici în recenzie)

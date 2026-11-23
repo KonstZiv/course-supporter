@@ -19,6 +19,14 @@ names the ones it points to. The identifiers the answer was not shown for a
 criterion are cut by the stage, not by the check here
 (:func:`~course_supporter.homework.verdict_explanation.drop_unshown_links`).
 
+The stage with the student's replies (task 12a, K4) renders
+``prompts/review_explanation/v3_with_replies.md``: the same variables and one
+more, ``replies`` — the threads under the remarks and the replies to answer
+now (:class:`~course_supporter.homework.student_replies.RepliesView`) — and
+asks through :meth:`ReviewExplainerAgent.explain_with_replies`, whose answer
+has its own form with the answers to the replies. Every other stage renders
+and asks exactly what it did.
+
 The answer is held twice, as the evaluation's is. On the wire, by the strict
 schema of :class:`~course_supporter.homework.verdict_explanation.ExplanationAnswer`
 without its descriptions (:func:`~course_supporter.agents.wire_schema.wire_schema`).
@@ -43,18 +51,27 @@ import structlog
 
 from course_supporter.agents.wire_schema import wire_schema
 from course_supporter.criteria_kinds import VerdictValue
+from course_supporter.homework.student_replies import AnswerWay
 from course_supporter.homework.verdict_explanation import (
     CriterionFacts,
     ExplanationAnswer,
     ExplanationFacts,
+    ExplanationWithReplies,
     JudgedItem,
     read_explanation,
+    read_explanation_with_replies,
 )
 from course_supporter.llm.error_categories import StructuralRetryError
+from course_supporter.remark_kinds import CommentTopic
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from course_supporter.homework.student_replies import (
+        RepliesView,
+        ShownAsk,
+        ShownEntry,
+    )
     from course_supporter.llm.stage_router import StageExecution, StageRouter
     from course_supporter.models.review_structure import Position
 
@@ -63,6 +80,9 @@ logger = structlog.get_logger(__name__)
 
 RESPONSE_SCHEMA: Final = wire_schema(ExplanationAnswer)
 """The schema of the answer, as the router puts it on the wire (task 09a)."""
+
+RESPONSE_SCHEMA_WITH_REPLIES: Final = wire_schema(ExplanationWithReplies)
+"""The schema of the answer of the stage with replies (task 12a, K4)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +123,9 @@ class ExplanationInput:
         course_links: The places of the course shown for each criterion that
             is not met, by criterion id; a criterion missing here, or mapped
             to an empty tuple, is shown none.
+        replies: The threads and the replies to answer, on the stage with
+            replies (task 12a, K4); ``None`` on every other stage, whose
+            request has no slot for them and stays what it was.
     """
 
     task_title: str
@@ -112,6 +135,7 @@ class ExplanationInput:
     submission_text: str
     language: str
     course_links: Mapping[str, tuple[ShownLink, ...]]
+    replies: RepliesView | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +143,15 @@ class Explained:
     """What the model said, and which rung of the ladder said it."""
 
     answer: ExplanationAnswer
+    provider: str
+    model: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExplainedWithReplies:
+    """What the model said on the stage with replies, and which rung said it."""
+
+    answer: ExplanationWithReplies
     provider: str
     model: str
 
@@ -162,13 +195,58 @@ class ReviewExplainerAgent:
             model=result.model_used,
         )
 
+    async def explain_with_replies(
+        self, shown: ExplanationInput, *, execution: StageExecution
+    ) -> ExplainedWithReplies:
+        """The explanation, agreeing with the facts, and an answer per reply.
+
+        ``shown.replies`` names the replies to answer; each is answered
+        exactly once, or the router asks again (task 12a, K4).
+
+        Raises:
+            ValueError: ``shown`` carries no replies — the stage without them
+                asks :meth:`explain`.
+            LadderExhaustedError: As :meth:`explain`.
+        """
+        if shown.replies is None:
+            msg = "the stage with replies needs the replies it answers"
+            raise ValueError(msg)
+        to_answer = tuple(ask.id for ask in shown.replies.to_answer)
+        parsed: dict[str, ExplanationWithReplies] = {}
+
+        def _validator(content: str) -> None:
+            try:
+                parsed["answer"] = read_explanation_with_replies(
+                    content, shown.facts, to_answer
+                )
+            except StructuralRetryError as refusal:
+                logger.warning(
+                    "review_explanation_answer_refused", feedback=refusal.feedback
+                )
+                raise
+
+        result = await execution.run(
+            self._stage_router,
+            response_validator=_validator,
+            expects_json=True,
+            response_schema=RESPONSE_SCHEMA_WITH_REPLIES,
+            **render_context(shown),
+        )
+        return ExplainedWithReplies(
+            answer=parsed["answer"],
+            provider=result.provider_used,
+            model=result.model_used,
+        )
+
 
 def render_context(shown: ExplanationInput) -> dict[str, Any]:
     """The prompt's variables for one request.
 
     Public so the prompt's locks render exactly what a request renders.
+    ``replies`` is a variable only of the stage with replies (task 12a, K4):
+    every other request's variables are what they were.
     """
-    return {
+    context: dict[str, Any] = {
         "task_title": shown.task_title,
         "task_description": shown.task_description,
         "task_text": shown.task_text,
@@ -187,6 +265,69 @@ def render_context(shown: ExplanationInput) -> dict[str, Any]:
             for criterion_id in shown.facts.unmet
         ],
     }
+    if shown.replies is not None:
+        context["replies"] = _replies_for_prompt(shown.replies)
+    return context
+
+
+def _replies_for_prompt(view: RepliesView) -> dict[str, Any]:
+    """The threads and the replies to answer, as the model reads them.
+
+    A field without a value is left out, so an entry carries only what
+    applies to it. A hostile reply has no text here: the view never holds
+    one (:func:`~course_supporter.homework.student_replies.plan_replies`).
+    """
+    return {
+        "threads": [
+            {
+                "item": thread.item,
+                "entries": [_entry_for_prompt(entry) for entry in thread.entries],
+            }
+            for thread in view.threads
+        ],
+        "to_answer": [_ask_for_prompt(ask) for ask in view.to_answer],
+    }
+
+
+def _entry_for_prompt(entry: ShownEntry) -> dict[str, Any]:
+    """One entry of a thread: a hostile reply by ``hostile`` alone, never text.
+
+    ``hostile`` is the category the safety check named, ``null`` when it
+    named none — present on every hostile entry, so the prompt can tell
+    "no category" from "not hostile".
+    """
+    shown: dict[str, Any] = {
+        "id": entry.id,
+        "author": entry.author.value,
+        "kind": entry.kind.value,
+        "in_reply_to": entry.in_reply_to,
+    }
+    if entry.topic is not None:
+        shown["topic"] = entry.topic.value
+    if entry.text is not None:
+        shown["text"] = entry.text
+    if entry.topic is CommentTopic.HOSTILE:
+        shown["hostile"] = entry.hostile
+    return shown
+
+
+def _ask_for_prompt(ask: ShownAsk) -> dict[str, Any]:
+    shown: dict[str, Any] = {"id": ask.id, "how": ask.how.value, "item": ask.item}
+    if ask.off_topic_round is not None:
+        shown["off_topic_round"] = ask.off_topic_round
+    if ask.course is not None:
+        shown["course"] = ask.course
+    if ask.how is AnswerWay.JOKE:
+        shown["hostile"] = ask.hostile
+    if ask.style is not None:
+        shown["style"] = {
+            "id": ask.style.id,
+            "description": ask.style.description,
+            "example": ask.style.example,
+        }
+    if ask.work_only is not None:
+        shown["work_only"] = ask.work_only
+    return shown
 
 
 def _link_for_prompt(link: ShownLink) -> dict[str, Any]:

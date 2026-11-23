@@ -3,16 +3,22 @@
 The product owner's rule, locks a to g of the order, and the pure half of
 lock e (the order's Ukrainian letters, transliterated: a, b, v, h, g, d, e):
 
-* a — the author's list with a "must", every "must" met: 70 passes, 69 does
-  not ("below the threshold");
-* b — the author's list, one "must" not met: 95 does not pass ("the author's
-  mandatory criteria are not met");
-* v — the author's list, a "must" unconfirmed: it does not fail the work;
+* a — the author's list with a "must" of their own, every one met: 70 passes,
+  69 does not ("below the threshold");
+* b — the author's list, one "must" of their own not met: 95 does not pass
+  ("the author's mandatory criteria are not met");
+* v — the author's list, a "must" of their own unconfirmed: it does not fail
+  the work;
 * h — the model's list, a "must" not met: 82 passes, 79 does not ("the author
   has not approved mandatory criteria … 80");
-* g — the author's list without a "must": the model's rule, 80;
+* g — the author's list without a "must" of their own: the model's rule, 80;
 * e — one function: the review's builder, the explanation's facts and a recount
   from the stored rows all give the pass of :func:`pass_decision`.
+
+The decision of 2026-11-17 (:class:`TestOnlyTheAuthorsOwnMusts`): the strict
+branch is the author's own "must" criteria (``must_by_author``) alone — a
+"must" the author kept from the model's list weighs in the score, and blocks
+nothing, on the author's list as on the model's.
 
 Each lock is checked on the pass AND on what the student reads: the phrase the
 assembler prints under the verdict, in the source language, numbers put in.
@@ -23,7 +29,7 @@ webhook — is ``tests/integration/test_pass_rule_e2e_db.py``.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import get_args
 
 import pytest
@@ -36,7 +42,12 @@ from course_supporter.criteria_kinds import (
     VerdictValue,
     WeightCategory,
 )
-from course_supporter.homework.criteria_form import Criterion
+from course_supporter.homework.criteria_form import (
+    Criterion,
+    author_criteria_from_document,
+    author_musts,
+    criteria_to_document,
+)
 from course_supporter.homework.criteria_verdicts import (
     PASS_THRESHOLD_AUTHOR_MUSTS,
     PASS_THRESHOLD_NO_AUTHOR_MUSTS,
@@ -116,8 +127,16 @@ def _many(
     return [(weight, verdict)] * count
 
 
-def _criteria(rows: Sequence[SubmissionCriterionVerdict]) -> tuple[Criterion, ...]:
-    """The list the rows were judged against: a criterion per row."""
+def _criteria(
+    rows: Sequence[SubmissionCriterionVerdict],
+    layer: CriteriaLayer = MODEL,
+    own: Collection[str] = frozenset(),
+) -> tuple[Criterion, ...]:
+    """The list the rows were judged against: a criterion per row.
+
+    The author's carries ``must_by_author`` on each criterion — ``True`` on
+    those of ``own``; the model's carries none.
+    """
     return tuple(
         Criterion.model_validate(
             {
@@ -129,6 +148,7 @@ def _criteria(rows: Sequence[SubmissionCriterionVerdict]) -> tuple[Criterion, ..
                 "soft_descent": False,
                 "concepts": [],
                 "mandatory_points": [],
+                "must_by_author": row.item_id in own if layer is AUTHOR else None,
             }
         )
         for row in rows
@@ -151,13 +171,19 @@ def _explanation(
 
 
 def _reviewed(
-    rows: Sequence[SubmissionCriterionVerdict], layer: CriteriaLayer
+    rows: Sequence[SubmissionCriterionVerdict],
+    layer: CriteriaLayer,
+    own: Collection[str] = frozenset(),
 ) -> tuple[bool, PassRule, str]:
-    """The pass, the rule and the markdown the builder and the assembler give."""
-    decided = pass_decision(rows, layer=layer)
+    """The pass, the rule and the markdown the builder and the assembler give.
+
+    ``own`` — the "must" criteria the author made mandatory themselves.
+    """
+    decided = pass_decision(rows, layer=layer, author_musts=own)
     structure, score = build_text_review(
         rows=rows,
         layer=layer,
+        author_musts=own,
         explanation=_explanation(rows, passed=decided.passed),
         language="ukr",
     )
@@ -209,12 +235,12 @@ class TestTheThresholds:
 
 
 class TestLockA:
-    """a: the author's "must" all met — the score decides at 70."""
+    """a: the author's own "must" all met — the score decides at 70."""
 
     def test_seventy_passes(self) -> None:
         assert score_percent(_AUTHOR_70) == 70
 
-        passed, rule, markdown = _reviewed(_AUTHOR_70, AUTHOR)
+        passed, rule, markdown = _reviewed(_AUTHOR_70, AUTHOR, own={"c1"})
 
         assert passed is True
         assert rule == PassRule(basis="author_musts_met", score=70, threshold=70)
@@ -226,7 +252,7 @@ class TestLockA:
     def test_sixty_nine_does_not(self) -> None:
         assert score_percent(_AUTHOR_69) == 69
 
-        passed, rule, markdown = _reviewed(_AUTHOR_69, AUTHOR)
+        passed, rule, markdown = _reviewed(_AUTHOR_69, AUTHOR, own={"c1", "c2"})
 
         assert passed is False
         assert rule == PassRule(
@@ -239,12 +265,12 @@ class TestLockA:
 
 
 class TestLockB:
-    """b: one "must" of the author's not met — no score passes."""
+    """b: one "must" of the author's own not met — no score passes."""
 
     def test_ninety_five_does_not_pass(self) -> None:
         assert score_percent(_ONE_MUST_UNMET_95) == 95
 
-        passed, rule, markdown = _reviewed(_ONE_MUST_UNMET_95, AUTHOR)
+        passed, rule, markdown = _reviewed(_ONE_MUST_UNMET_95, AUTHOR, own={"c1"})
 
         assert passed is False
         assert rule == PassRule(basis="author_musts_unmet", score=95, threshold=70)
@@ -255,14 +281,14 @@ class TestLockB:
 
 
 class TestLockV:
-    """v: an unconfirmed "must" of the author's does not fail the work."""
+    """v: an unconfirmed "must" of the author's own does not fail the work."""
 
     def test_unconfirmed_and_seventy_or_more_passes(self) -> None:
         # The "must" unconfirmed counts as met: 3 + 2 of 6 -> 83.
         rows = _rows((MUST, "unconfirmed"), (SHOULD, MET), (MAY, NOT_MET))
         assert score_percent(rows) == 83
 
-        passed, rule, markdown = _reviewed(rows, AUTHOR)
+        passed, rule, markdown = _reviewed(rows, AUTHOR, own={"c1"})
 
         assert passed is True
         assert rule == PassRule(basis="author_musts_met", score=83, threshold=70)
@@ -271,7 +297,10 @@ class TestLockV:
     def test_a_must_really_not_met_beside_it_still_fails(self) -> None:
         rows = _rows((MUST, "unconfirmed"), (MUST, NOT_MET), *_many(10, SHOULD, MET))
 
-        assert pass_decision(rows, layer=AUTHOR).basis == "author_musts_unmet"
+        assert (
+            pass_decision(rows, layer=AUTHOR, author_musts={"c1", "c2"}).basis
+            == "author_musts_unmet"
+        )
 
 
 class TestLockH:
@@ -309,7 +338,7 @@ class TestLockH:
 
 
 class TestLockG:
-    """g: the author's list without a "must" is passed by the model's rule."""
+    """g: the author's list without a "must" of their own: the model's rule."""
 
     @pytest.mark.parametrize(
         ("rows", "score", "passed"),
@@ -334,17 +363,22 @@ class TestLockG:
     def test_the_same_rows_on_the_models_list_read_alike(self) -> None:
         rows = _rows((SHOULD, MET), (MAY, MET), (MAY, NOT_MET))
 
-        assert pass_decision(rows, layer=AUTHOR) == pass_decision(rows, layer=MODEL)
+        assert pass_decision(rows, layer=AUTHOR, author_musts=()) == pass_decision(
+            rows, layer=MODEL, author_musts=()
+        )
 
 
+# The rows, and the "must" criteria the author made mandatory on their list.
 _EVERY_CASE = [
-    _AUTHOR_70,
-    _AUTHOR_69,
-    _ONE_MUST_UNMET_95,
-    _MUST_UNMET_82,
-    _MUST_UNMET_79,
-    _rows((MUST, "unconfirmed"), (SHOULD, MET), (MAY, NOT_MET)),
-    _rows((SHOULD, MET), (MAY, MET), (MAY, NOT_MET)),
+    (_AUTHOR_70, {"c1"}),
+    (_AUTHOR_69, {"c1", "c2"}),
+    (_AUTHOR_69, {"c2"}),
+    (_ONE_MUST_UNMET_95, {"c1"}),
+    (_ONE_MUST_UNMET_95, set()),
+    (_MUST_UNMET_82, set()),
+    (_MUST_UNMET_79, {"c1"}),
+    (_rows((MUST, "unconfirmed"), (SHOULD, MET), (MAY, NOT_MET)), {"c1"}),
+    (_rows((SHOULD, MET), (MAY, MET), (MAY, NOT_MET)), set()),
 ]
 
 
@@ -358,17 +392,154 @@ class TestLockE:
     """
 
     @pytest.mark.parametrize("layer", list(CriteriaLayer))
-    @pytest.mark.parametrize("rows", _EVERY_CASE)
+    @pytest.mark.parametrize(("rows", "own"), _EVERY_CASE)
     def test_one_function(
-        self, rows: list[SubmissionCriterionVerdict], layer: CriteriaLayer
+        self,
+        rows: list[SubmissionCriterionVerdict],
+        own: set[str],
+        layer: CriteriaLayer,
     ) -> None:
-        decided = pass_decision(rows, layer=layer)
-        built, rule, _ = _reviewed(rows, layer)
-        facts = explanation_facts(_criteria(rows), rows, layer=layer)
+        # What every place reads: the marks of the list the rows were judged by.
+        criteria = _criteria(rows, layer, own)
+        marked = author_musts(criteria)
+        decided = pass_decision(rows, layer=layer, author_musts=marked)
+        built, rule, _ = _reviewed(rows, layer, marked)
+        facts = explanation_facts(criteria, rows, layer=layer)
 
         assert decided == PassDecision(built, rule.basis, rule.score, rule.threshold)
-        assert facts.passed is built is is_passed(rows, layer=layer)
+        assert (
+            facts.passed is built is is_passed(rows, layer=layer, author_musts=marked)
+        )
         assert facts.score == rule.score == score_percent(rows)
+
+
+# The list of the control submission of 2026-11-16, as its author kept it
+# after correcting a word: c1 and c2 "must" — the model's marks, kept — and
+# twenty-one "should". Weights 3 + 3 + 42 = 48.
+# 41 of 48 -> 85: c1 and two "should" not met.
+_KEPT_MUST_UNMET_85 = _rows(
+    (MUST, NOT_MET), (MUST, MET), *_many(19, SHOULD, MET), *_many(2, SHOULD, NOT_MET)
+)
+# 35 of 48 -> 72: the same list, c1 and five "should" not met.
+_KEPT_MUST_UNMET_72 = _rows(
+    (MUST, NOT_MET), (MUST, MET), *_many(16, SHOULD, MET), *_many(5, SHOULD, NOT_MET)
+)
+
+
+class TestOnlyTheAuthorsOwnMusts:
+    """The decision of 2026-11-17: the strict branch is the author's own "must".
+
+    A "must" the author made mandatory themselves (``must_by_author``) makes
+    the pass strict; one they kept from the model's list weighs in the score
+    and blocks nothing — as on the model's list.
+    """
+
+    def test_the_control_submission_of_16_11_passes_at_85(self) -> None:
+        """Only kept "must" criteria, c1 not met, 85: the 80 branch passes it.
+
+        The control submission of 2026-11-16: by the rule of 2026-11-12 the
+        author's list alone made the kept c1 block the pass.
+        """
+        assert score_percent(_KEPT_MUST_UNMET_85) == 85
+
+        passed, rule, markdown = _reviewed(_KEPT_MUST_UNMET_85, AUTHOR)
+
+        assert passed is True
+        assert rule == PassRule(basis="no_author_musts_passed", score=85, threshold=80)
+        assert _verdict_section(markdown)[:2] == [
+            "## Зараховано",
+            _NO_AUTHOR_MUSTS_PASSED.format(score=85, threshold=80),
+        ]
+        # The kept "must" is judged and shown: its remark is in the review.
+        assert "## Нові зауваження" in markdown
+
+    def test_one_own_must_met_passes_the_same_list_at_72(self) -> None:
+        assert score_percent(_KEPT_MUST_UNMET_72) == 72
+
+        passed, rule, markdown = _reviewed(_KEPT_MUST_UNMET_72, AUTHOR, own={"c2"})
+
+        assert passed is True
+        assert rule == PassRule(basis="author_musts_met", score=72, threshold=70)
+        assert _AUTHOR_MUSTS_MET.format(score=72, threshold=70) in markdown
+
+    def test_without_it_the_same_72_does_not_pass(self) -> None:
+        decided = pass_decision(_KEPT_MUST_UNMET_72, layer=AUTHOR, author_musts=())
+
+        assert decided == PassDecision(False, "no_author_musts_failed", 72, 80)
+
+    def test_an_own_must_not_met_fails_at_95(self) -> None:
+        passed, rule, _ = _reviewed(_ONE_MUST_UNMET_95, AUTHOR, own={"c1"})
+
+        assert passed is False
+        assert rule == PassRule(basis="author_musts_unmet", score=95, threshold=70)
+
+    def test_an_own_must_unconfirmed_does_not_block(self) -> None:
+        # 3 + 10 of 16 -> 81: c1 own and unconfirmed (counted met), c2 kept
+        # and not met, five "should" met.
+        rows = _rows((MUST, "unconfirmed"), (MUST, NOT_MET), *_many(5, SHOULD, MET))
+
+        decided = pass_decision(rows, layer=AUTHOR, author_musts={"c1"})
+
+        assert decided == PassDecision(True, "author_musts_met", 81, 70)
+
+    def test_a_kept_must_not_met_beside_an_own_met_does_not_block(self) -> None:
+        decided = pass_decision(_KEPT_MUST_UNMET_85, layer=AUTHOR, author_musts={"c2"})
+
+        assert decided == PassDecision(True, "author_musts_met", 85, 70)
+
+    def test_the_models_list_is_as_before(self) -> None:
+        decided = pass_decision(_KEPT_MUST_UNMET_85, layer=MODEL, author_musts=())
+
+        assert decided == PassDecision(True, "no_author_musts_passed", 85, 80)
+        assert pass_decision(
+            _MUST_UNMET_79, layer=MODEL, author_musts=()
+        ) == PassDecision(False, "no_author_musts_failed", 79, 80)
+
+    def test_a_mark_counts_on_the_authors_list_alone(self) -> None:
+        decided = pass_decision(_ONE_MUST_UNMET_95, layer=MODEL, author_musts={"c1"})
+
+        assert decided.basis == "no_author_musts_passed"
+
+    @pytest.mark.parametrize("stranger", ["c99", "c2"], ids=["no-row", "not-a-must"])
+    def test_a_mark_the_rows_have_no_must_for_is_a_defect(self, stranger: str) -> None:
+        with pytest.raises(ValueError, match="not 'must' criteria of the rows"):
+            pass_decision(_ONE_MUST_UNMET_95, layer=AUTHOR, author_musts={stranger})
+
+
+class TestAnEditStoredBeforeTheMark:
+    """An edit stored before 2026-11-17 has no mark: each criterion reads "no".
+
+    The row is a snapshot the verdicts point at, and is not rewritten; its
+    "must" criteria were kept, not made mandatory — the 80 branch.
+    """
+
+    def test_it_reads_no_mark_and_the_80_branch(self) -> None:
+        stored = criteria_to_document(_criteria(_KEPT_MUST_UNMET_85))
+        assert all("must_by_author" not in criterion for criterion in stored)
+
+        criteria = author_criteria_from_document(stored)
+        facts = explanation_facts(criteria, _KEPT_MUST_UNMET_85, layer=AUTHOR)
+
+        assert [criterion.must_by_author for criterion in criteria] == [False] * 23
+        assert author_musts(criteria) == frozenset()
+        assert facts.passed is True
+        assert pass_decision(
+            _KEPT_MUST_UNMET_85, layer=AUTHOR, author_musts=author_musts(criteria)
+        ) == PassDecision(True, "no_author_musts_passed", 85, 80)
+
+    def test_a_marked_edit_reads_its_marks(self) -> None:
+        stored = criteria_to_document(
+            _criteria(_KEPT_MUST_UNMET_85, AUTHOR, own={"c1"})
+        )
+
+        criteria = author_criteria_from_document(stored)
+
+        assert stored[0]["must_by_author"] is True
+        assert stored[1]["must_by_author"] is False
+        assert author_musts(criteria) == {"c1"}
+        assert explanation_facts(
+            criteria, _KEPT_MUST_UNMET_85, layer=AUTHOR
+        ).passed is (False)
 
 
 class TestTheStructure:

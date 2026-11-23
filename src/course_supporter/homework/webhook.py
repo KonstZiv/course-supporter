@@ -88,7 +88,7 @@ def build_reviewed_payload(
     review_result = submission.review_result or {}
     # The same projection the portal reads through: one place decides what a
     # stored review is, so the two surfaces cannot drift (task 04).
-    structure = curated_structure(submission.review_result)
+    structure = curated_structure(submission.review_result, submission_id=submission.id)
 
     if review_schema_version(review_result) == REVIEW_SCHEMA_VERSION:
         passed, correctness = (

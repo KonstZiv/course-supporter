@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from course_supporter.billing import (
     admin,
@@ -412,6 +413,48 @@ class TestStudentReview:
         assert moved[MovementKind.RESERVE.value] == TWO_E
         assert moved[MovementKind.DEBIT.value] == 36
         assert (await balance(session_factory, w.student)).available == 464
+
+    async def test_repeat_with_another_fact_charges_nothing_and_warns(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A platform-initiated rerun of an already settled action with a
+        different fact returns None, adds no movements, and logs a WARNING."""
+        w = await make_world(session_factory)
+        await buy(session_factory, w.student, 500)
+        port = funds.LedgerFundsPort(session_factory)
+
+        await port.check_and_reserve(review(w), 1.0)
+        await call(session_factory, w.homework_job_id, "0.04")
+        await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
+
+        moved_before = await sums(session_factory, ActionKind.REVIEW, key_of(w))
+        bal_before = await balance(session_factory, w.student)
+
+        with capture_logs() as logs:
+            async with session_factory() as session:
+                settlement = await charging.finish(
+                    session,
+                    action_kind=ActionKind.REVIEW,
+                    action_key=key_of(w),
+                    fact_usd=Decimal("0.08"),
+                    tenant_id=w.tenant_id,
+                    course_node_id=w.course_id,
+                    student_id=w.student_id,
+                )
+
+        assert settlement is None
+        moved_after = await sums(session_factory, ActionKind.REVIEW, key_of(w))
+        assert moved_after == moved_before
+        assert await balance(session_factory, w.student) == bal_before
+
+        warnings = [
+            e for e in logs if e.get("event") == "billing_finish_repeat_not_charged"
+        ]
+        assert len(warnings) == 1
+        assert warnings[0]["log_level"] == "warning"
+        assert warnings[0]["fact_usd"] == "0.08"
+        assert "was settled with 36 units, not 72" in warnings[0]["error"]
+        assert not any(e.get("event") == "billing_finish_conflict" for e in logs)
 
     async def test_the_fact_leaves_out_the_task_preparation(
         self, session_factory: async_sessionmaker[AsyncSession]

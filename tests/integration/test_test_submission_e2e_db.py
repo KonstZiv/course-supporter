@@ -762,7 +762,7 @@ class TestAcceptance:
             text = payload.review.review_text
             assert "**Question 5:** Incorrect" in text, "step 5: in English"
             assert f"- {_MODEL_UKR['5']}" in text, "step 5: the course language's words"
-            assert "The explanation is provided in the course language." in text, (
+            assert "Explanations are given in the language of the course." in text, (
                 "step 5: the line that says so"
             )
             asked = [
@@ -789,9 +789,9 @@ class TestAcceptance:
             assert delivered.await_args is not None
             text = delivered.await_args.kwargs["payload"].review.review_text
             assert f"- {_MODEL_ENG['5']}" in text, "step 6: the English explanation"
-            assert "The explanation is provided in the course language." not in text, (
-                "step 6: no line about the course language"
-            )
+            assert (
+                "Explanations are given in the language of the course." not in text
+            ), "step 6: no line about the course language"
             assert len(await _generations(session_factory, test_id)) == 2, (
                 "step 6: no new generation"
             )

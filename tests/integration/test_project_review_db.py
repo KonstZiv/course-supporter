@@ -70,7 +70,12 @@ def _criterion(cid: str, weight: str) -> Criterion:
     )
 
 
-_CRITERIA = (_criterion("c1", "must"), _criterion("c2", "should"))
+# The author's edit: c1 a "must" the author made mandatory themselves
+# (``must_by_author``, 2026-11-17), so the strict branch of the pass decides.
+_CRITERIA = (
+    _criterion("c1", "must").model_copy(update={"must_by_author": True}),
+    _criterion("c2", "should").model_copy(update={"must_by_author": False}),
+)
 
 _QUOTE = "return sum(len(line) for line in lines) / len(lines)"
 

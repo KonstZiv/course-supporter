@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Autori kohustuslikud kriteeriumid ei ole täide
 verdict.rule.author_musts_below_threshold: Täitsite kõik autori kohustuslikud kriteeriumid, kuid saite tulemuseks {score} 100-st — see jääb alla autori kohustuslike kriteeriumidega ülesannete läve {threshold}, seega ei ole töö arvestatud.
 verdict.rule.no_author_musts_passed: Autor ei ole selle ülesande jaoks kohustuslikke kriteeriume kinnitanud. Selliste ülesannete puhul on arvestuse lävi {threshold} 100-st; teie tulemus on {score}, seega on töö arvestatud.
 verdict.rule.no_author_musts_failed: Autor ei ole selle ülesande jaoks kohustuslikke kriteeriume kinnitanud. Selliste ülesannete puhul on arvestuse lävi {threshold} 100-st; teie tulemus on {score}, seega ei ole töö arvestatud.
+reply.work_only: Hindame ainult tööd ennast – lahendusfaile, mitte selle kõrvale kirjutatut.
+reply.hostile.fallback: Huvitav käik! Hindame ainult tööd ennast – lahendusfaile, mitte selle kõrvale kirjutatut. Tulemuse parandamiseks viimistlege lahendust vastavalt selle retsensiooni märkustele.
+reply.off_topic.wrap_up: 'Sellest võiks rääkida pikalt, kuid töö ootab ning aega on parem kulutada kursusele „{course}”. Vestlused maksavad raha: olen valmis suhtlema lõputult, kuid tavaline vestlusrobot teeb seda odavamalt, minuga tasub aga pigem õppida kursust „{course}”.'
+reply.said.withheld: (selle repliigi teksti retsensioonis ei esitata)

@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: 未符合作者訂嘅必要準則，所以份�
 verdict.rule.author_musts_below_threshold: 你已經符合作者訂嘅所有必要準則，但分數係 {score}（滿分 100），低過有作者必要準則嘅作業嘅合格線 {threshold}，所以份作業唔合格。
 verdict.rule.no_author_musts_passed: 作者冇為呢份作業確認必要準則。呢類作業嘅合格線係 {threshold}（滿分 100）；你嘅分數係 {score}，所以份作業合格。
 verdict.rule.no_author_musts_failed: 作者冇為呢份作業確認必要準則。呢類作業嘅合格線係 {threshold}（滿分 100）；你嘅分數係 {score}，所以份作業唔合格。
+reply.work_only: 我哋只會評估作業本身——即係提交嘅解答檔案，而唔係旁邊寫嘅嘢。
+reply.hostile.fallback: 幾有趣嘅做法！我哋只會評估作業本身——即係提交嘅解答檔案，而唔係旁邊寫嘅嘢。想改善成績，請根據呢份評語修改你嘅解答。
+reply.off_topic.wrap_up: 呢個話題可以傾好耐，但係我哋仲有正事要做，時間最好放返喺「{course}」課程。傾偈係有成本嘅：我隨時可以同你傾落去，但普通聊天機器人會平啲，同我一齊最好都係專注學「{course}」。
+reply.said.withheld: （呢則回覆嘅內容唔會喺評語度顯示）

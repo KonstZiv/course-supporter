@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Vigezo vya lazima vya mwandishi havijatimizwa, 
 verdict.rule.author_musts_below_threshold: Umetimiza vigezo vyote vya lazima vya mwandishi, lakini umepata {score} kati ya 100 — chini ya kiwango cha {threshold} kwa kazi zenye vigezo vya lazima vya mwandishi, kwa hivyo kazi haikupitishwa.
 verdict.rule.no_author_musts_passed: Mwandishi hajaidhinisha vigezo vya lazima kwa kazi hii. Kwa kazi kama hizi, kiwango cha kupita ni {threshold} kati ya 100; alama zako ni {score}, kwa hivyo kazi imepitishwa.
 verdict.rule.no_author_musts_failed: Mwandishi hajaidhinisha vigezo vya lazima kwa kazi hii. Kwa kazi kama hizi, kiwango cha kupita ni {threshold} kati ya 100; alama zako ni {score}, kwa hivyo kazi haikupitishwa.
+reply.work_only: Tunatathmini kazi yenyewe tu — faili za suluhisho, siyo yaliyoandikwa kando.
+reply.hostile.fallback: Mbinu ya kuvutia! Tunatathmini kazi yenyewe tu — faili za suluhisho, siyo yaliyoandikwa kando. Ili kuboresha matokeo, tafadhali rekebisha suluhisho kulingana na maoni ya tathmini hii.
+reply.off_topic.wrap_up: 'Tunaweza kuzungumzia hili kwa muda mrefu, lakini kazi inatusubiri, na ni bora kutumia muda kwenye kozi ya «{course}». Mazungumzo yanagharimu pesa: niko tayari kuongea daima, lakini roboti ya kawaida ya gumzo itafanya hivyo kwa gharama nafuu zaidi, na ukiwa nami ni bora kujifunza «{course}».'
+reply.said.withheld: (maandishi ya ujumbe huu hayajawekwa kwenye tathmini)

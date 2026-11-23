@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Non se cumpriron os criterios obrigatorios do a
 verdict.rule.author_musts_below_threshold: Cumpriu todos os criterios obrigatorios do autor, pero obtivo {score} sobre 100, por debaixo do limiar de {threshold} para as tarefas con criterios obrigatorios do autor, polo que o traballo non está aprobado.
 verdict.rule.no_author_musts_passed: O autor non aprobou criterios obrigatorios para esta tarefa. Para estas tarefas, o limiar de aprobado é {threshold} sobre 100; a súa puntuación é {score}, polo que o traballo está aprobado.
 verdict.rule.no_author_musts_failed: O autor non aprobou criterios obrigatorios para esta tarefa. Para estas tarefas, o limiar de aprobado é {threshold} sobre 100; a súa puntuación é {score}, polo que o traballo non está aprobado.
+reply.work_only: 'Avaliamos unicamente o traballo en si: os ficheiros coa solución, non o que estea escrito ao lado.'
+reply.hostile.fallback: 'Interesante xogada! Avaliamos unicamente o traballo en si: os ficheiros coa solución, non o que estea escrito ao lado. Para mellorar o resultado, revise a solución segundo as observacións desta revisión.'
+reply.off_topic.wrap_up: 'Poderiamos falar disto durante moito tempo, pero agarda por nós o traballo e é mellor aproveitar o tempo co curso «{course}». Conversar custa cartos: estou disposto a falar arreo, pero un chatbot común farao máis barato, e comigo é mellor estudar «{course}».'
+reply.said.withheld: (non incluímos o texto desta resposta na revisión)

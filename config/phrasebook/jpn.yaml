@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: 作成者の必須基準を満たしていな�
 verdict.rule.author_musts_below_threshold: 作成者の必須基準はすべて満たしていますが、スコアは 100 点満点中 {score} 点で、作成者の必須基準がある課題の合格ライン {threshold} 点を下回っているため、不合格です。
 verdict.rule.no_author_musts_passed: 作成者はこの課題の必須基準を承認していません。このような課題の合格ラインは 100 点満点中 {threshold} 点です。スコアは {score} 点のため、合格です。
 verdict.rule.no_author_musts_failed: 作成者はこの課題の必須基準を承認していません。このような課題の合格ラインは 100 点満点中 {threshold} 点です。スコアは {score} 点のため、不合格です。
+reply.work_only: 評価の対象は課題そのもの（解答ファイル）のみであり、添えられた文章は含まれません。
+reply.hostile.fallback: 興味深いアプローチですが、評価の対象は課題そのもの（解答ファイル）のみであり、添えられた文章は含まれません。評価を改善するには、このレビューの指摘事項に沿って解答を修正してください。
+reply.off_topic.wrap_up: この件について長く話すこともできますが、課題に取り組み、時間をコース「{course}」に充てることをお勧めします。会話にはコストがかかります。いつまでも対話することは可能ですが、通常のチャットボットのほうが安価ですし、私とはコース「{course}」の学習を進めるのが賢明です。
+reply.said.withheld: （この返信のテキストはレビューに記載していません）

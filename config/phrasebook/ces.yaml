@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Povinná kritéria autora nejsou splněna, prot
 verdict.rule.author_musts_below_threshold: Splnili jste všechna povinná kritéria autora, ale získali {score} ze 100 — pod hranicí {threshold} pro úlohy s povinnými kritérii autora, proto práce není uznána.
 verdict.rule.no_author_musts_passed: Autor pro tuto úlohu neschválil povinná kritéria. U takových úloh je hranice pro splnění {threshold} ze 100; vaše skóre je {score}, proto je práce uznána.
 verdict.rule.no_author_musts_failed: Autor pro tuto úlohu neschválil povinná kritéria. U takových úloh je hranice pro splnění {threshold} ze 100; vaše skóre je {score}, proto práce není uznána.
+reply.work_only: Hodnotíme pouze samotnou práci – soubory s řešením, nikoli to, co je napsáno vedle.
+reply.hostile.fallback: Zajímavý tah! Hodnotíme pouze samotnou práci – soubory s řešením, nikoli to, co je napsáno vedle. Chcete-li výsledek zlepšit, upravte řešení podle připomínek v této recenzi.
+reply.off_topic.wrap_up: 'O tom se dá mluvit dlouho, ale čeká nás práce a čas je lepší věnovat kurzu „{course}“. Povídání stojí peníze: jsem připraven si povídat věčně, ale běžný chatbot to zvládne levněji a se mnou je lepší se učit „{course}“.'
+reply.said.withheld: (text této repliky v recenzi neuvádíme)

@@ -43,6 +43,22 @@ Steps:
        and a retry would be paid for to win nothing the cut does not.
     6. The answer is kept as cut, in the language it was written in.
 
+The student's replies (task 12a, K4):
+    On ``review_explanation_with_replies`` alone — the switch by the stage's
+    name — the request also shows the threads under the remarks and asks an
+    answer to every reply that awaits one
+    (:func:`~course_supporter.homework.student_replies.plan_replies`): a reply
+    on the topic is answered, the third round off the topic folds the
+    conversation, a hostile reply is shown by its category and answered with
+    a joke in a style the code chose. The answer is checked as above and for
+    one answer per reply; a joke that fails its check is replaced by the
+    phrasebook's, and a reply from the fourth round off the topic is answered
+    by the phrasebook alone
+    (:func:`~course_supporter.homework.verdict_explanation.settle_reply_answers`).
+    The explanation is kept as on every stage; the answers go to
+    :class:`~course_supporter.homework.reply_source.ReplySource`, in the same
+    session.
+
 Language (``PRE-FLIGHT.md`` 9.9):
     The student's — the path's own resolution: the language asked for on the
     submission, the student's preference, the task's language — and else the
@@ -64,7 +80,9 @@ Replacing:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections import Counter
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -76,11 +94,25 @@ from course_supporter.agents.review_explainer import (
 from course_supporter.homework.course_link_position import link_position
 from course_supporter.homework.course_links import FoundCourseLinks
 from course_supporter.homework.judged_list import judged_layer, read_judged_list
-from course_supporter.homework.path_stages import StageOutcome
+from course_supporter.homework.path_stages import (
+    REVIEW_EXPLANATION_WITH_REPLIES,
+    StageOutcome,
+)
+from course_supporter.homework.reply_humor import get_humor_styles
+from course_supporter.homework.reply_source import (
+    course_name,
+    default_reply_source,
+    reply_phrases,
+)
+from course_supporter.homework.student_replies import RepliesPlan, plan_replies
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.homework.verdict_explanation import (
+    AnswerSource,
+    ExplanationAnswer,
+    ReplyPhrases,
     drop_unshown_links,
     explanation_facts,
+    settle_reply_answers,
 )
 from course_supporter.language import display_name, resolve_review_language
 from course_supporter.service_logging import CourseLinkTrace, record_course_link_trace
@@ -90,11 +122,15 @@ from course_supporter.storage.submission_verdict_repository import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from course_supporter.homework.path_stages import StageContext
+    from course_supporter.homework.reply_humor import HumorStyle
+    from course_supporter.homework.reply_source import ReplySource
+    from course_supporter.homework.student_replies import ThreadEntry
+    from course_supporter.homework.verdict_explanation import SettledReplyAnswer
     from course_supporter.llm.stage_router import StageExecution
     from course_supporter.storage.orm import HomeworkSubmission
 
@@ -102,7 +138,10 @@ logger = structlog.get_logger(__name__)
 
 
 async def explain_verdicts(
-    context: StageContext, *, execution: StageExecution
+    context: StageContext,
+    *,
+    execution: StageExecution,
+    reply_source: ReplySource | None = None,
 ) -> StageOutcome:
     """Explain the submission's verdicts to its student, and keep the answer.
 
@@ -110,6 +149,10 @@ async def explain_verdicts(
         context: The stage's context; ``submission_text`` is the work as the
             doors read it.
         execution: The stage's description as the router runs it.
+        reply_source: Where the student's replies come from and their answers
+            go, on the stage with replies alone; ``None`` — the production
+            source
+            (:func:`~course_supporter.homework.reply_source.default_reply_source`).
 
     Returns:
         ``ok`` with the explanation written.
@@ -119,6 +162,12 @@ async def explain_verdicts(
         ValueError: The submission has no verdict rows, or rows the list they
             name does not match.
     """
+    if context.stage_name == REVIEW_EXPLANATION_WITH_REPLIES:
+        return await _explain_with_replies(
+            context,
+            execution=execution,
+            source=reply_source if reply_source is not None else default_reply_source(),
+        )
     submission = context.submission
     log = logger.bind(submission_id=str(submission.id), stage=context.stage_name)
 
@@ -133,8 +182,36 @@ async def explain_verdicts(
         shown, execution=execution
     )
 
+    answer, fabricated = await _keep_explanation(
+        context, shown, explained.answer, language
+    )
+    log.info(
+        "review_explanation_written",
+        language=language,
+        passed=facts.passed,
+        remarks=len(answer.remarks),
+        linked=sum(1 for remark in answer.remarks if remark.links),
+        fabricated_links=sum(len(ids) for ids in fabricated.values()),
+        mentor_voice=answer.mentor_voice is not None,
+        provider=explained.provider,
+        model=explained.model,
+    )
+    return StageOutcome.ok()
+
+
+async def _keep_explanation(
+    context: StageContext,
+    shown: ExplanationInput,
+    explained: ExplanationAnswer,
+    language: str,
+) -> tuple[ExplanationAnswer, dict[str, tuple[str, ...]]]:
+    """Steps 5-6: cut the links not shown, trace each cut, keep the answer.
+
+    Returns the answer as kept and the identifiers cut, by criterion id.
+    """
+    submission = context.submission
     answer, fabricated = drop_unshown_links(
-        explained.answer,
+        explained,
         {cid: {link.id for link in links} for cid, links in shown.course_links.items()},
     )
     for criterion_id, ids in fabricated.items():
@@ -150,10 +227,54 @@ async def explain_verdicts(
         language=language,
         body=answer.model_dump(mode="json"),
     )
+    return answer, fabricated
+
+
+async def _explain_with_replies(
+    context: StageContext, *, execution: StageExecution, source: ReplySource
+) -> StageOutcome:
+    """The stage with replies: the explanation, and an answer to every reply.
+
+    The steps of the module, with the threads shown and the answers kept
+    beside the explanation (see "The student's replies" in the module).
+    """
+    submission = context.submission
+    log = logger.bind(submission_id=str(submission.id), stage=context.stage_name)
+
+    shown, language = await explanation_input(
+        context.session,
+        submission,
+        submission_text=context.submission_text,
+        language=context.language,
+    )
+    read = await source.replies(
+        context.session,
+        submission,
+        task_type=context.path_key.task_type,
+        config=context.config,
+    )
+    for comment_id in read.unjudged:
+        # The id alone: a reply the screen could not judge is shown to no
+        # model, answered by no review now, and its text is in no log.
+        log.info("review_explanation_reply_unjudged", comment_id=comment_id)
+    plan, phrases = replies_plan(
+        read.entries,
+        language=language,
+        course=await course_name(context.session, submission),
+    )
+    explained = await ReviewExplainerAgent(context.router).explain_with_replies(
+        replace(shown, replies=plan.view), execution=execution
+    )
+    settled = settle_reply_answers(explained.answer, plan, phrases=phrases)
+
+    answer, fabricated = await _keep_explanation(
+        context, shown, explained.answer.without_replies(), language
+    )
+    await source.keep_answers(context.session, submission, settled)
     log.info(
         "review_explanation_written",
         language=language,
-        passed=facts.passed,
+        passed=shown.facts.passed,
         remarks=len(answer.remarks),
         linked=sum(1 for remark in answer.remarks if remark.links),
         fabricated_links=sum(len(ids) for ids in fabricated.values()),
@@ -161,7 +282,60 @@ async def explain_verdicts(
         provider=explained.provider,
         model=explained.model,
     )
+    _log_answers(log, settled)
     return StageOutcome.ok()
+
+
+def replies_plan(
+    entries: Iterable[ThreadEntry],
+    *,
+    language: str,
+    course: str,
+    styles: Sequence[HumorStyle] | None = None,
+    style_for: Callable[[str], HumorStyle] | None = None,
+) -> tuple[RepliesPlan, ReplyPhrases]:
+    """The plan of the replies, and the phrasebook's words for them.
+
+    Public so the measurement builds exactly what the stage builds, from
+    threads of its own (``scripts/measure_replies.py``).
+
+    Args:
+        entries: The threads under the remarks of the task.
+        language: The explanation's language, ISO 639-3: the phrases' too.
+        course: The course's name, which a folded conversation points to.
+        styles: The joke's styles; ``None`` — the shipped file
+            (:func:`~course_supporter.homework.reply_humor.get_humor_styles`).
+        style_for: Another choice of a joke's style than by the reply's id —
+            the measurement's sweep; ``None`` in production.
+    """
+    phrases = reply_phrases(language, course)
+    plan = plan_replies(
+        entries,
+        styles=styles if styles is not None else get_humor_styles(),
+        course=course,
+        work_only=phrases.work_only,
+        style_for=style_for,
+    )
+    return plan, phrases
+
+
+def _log_answers(log: Any, settled: Sequence[SettledReplyAnswer]) -> None:
+    """One event per joke replaced by the phrasebook's, then the summary."""
+    for answer in settled:
+        if answer.source is AnswerSource.FALLBACK:
+            log.info(
+                "review_explanation_joke_replaced",
+                comment_id=answer.comment_id,
+                faults=[fault.value for fault in answer.faults],
+            )
+    ways = Counter(answer.way.value for answer in settled)
+    sources = Counter(answer.source.value for answer in settled)
+    log.info(
+        "review_explanation_replies_answered",
+        replies=len(settled),
+        ways=dict(ways),
+        sources=dict(sources),
+    )
 
 
 async def explanation_input(

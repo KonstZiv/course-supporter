@@ -142,7 +142,7 @@ async def _screen(
 ) -> reply_screen.ScreenSummary:
     """The screen over the store's unanswered replies on the previous attempt."""
     pending = await store.unanswered_student_replies(
-        tenant_id=uuid.uuid4(), submission_id=_PREVIOUS
+        tenant_id=uuid.uuid4(), submission_ids=[_PREVIOUS]
     )
     with (
         patch.object(
@@ -228,7 +228,7 @@ class TestEachReplyIsJudgedByTheSafetyCheckUnderItsOwnName:
         reply = a_reply(_PREVIOUS)
         store = FakeRemarkComments([reply])
         pending = await store.unanswered_student_replies(
-            tenant_id=uuid.uuid4(), submission_id=_PREVIOUS
+            tenant_id=uuid.uuid4(), submission_ids=[_PREVIOUS]
         )
 
         with (

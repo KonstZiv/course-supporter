@@ -190,6 +190,13 @@ def _review(records: dict[str, VerdictRecord]) -> tuple[list[Any], str]:
     structure, _ = build_text_review(
         rows=rows,
         layer=CriteriaLayer.AUTHOR,
+        # Every "must" as the author's own: the strict branch, as before.
+        author_musts={
+            row.item_id
+            for row in rows
+            if row.item_kind == VerdictItemKind.CRITERION
+            and row.weight == WeightCategory.MUST
+        },
         explanation=explanation,
         language="ukr",
     )

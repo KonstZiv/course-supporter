@@ -45,3 +45,7 @@ verdict.rule.author_musts_unmet: Các tiêu chí bắt buộc của tác giả c
 verdict.rule.author_musts_below_threshold: Bạn đã đáp ứng tất cả tiêu chí bắt buộc của tác giả, nhưng chỉ đạt {score} trên 100 — thấp hơn ngưỡng {threshold} của các bài có tiêu chí bắt buộc của tác giả, vì vậy bài làm chưa đạt.
 verdict.rule.no_author_musts_passed: Tác giả chưa phê duyệt tiêu chí bắt buộc cho bài này. Với những bài như vậy, ngưỡng đạt là {threshold} trên 100; điểm của bạn là {score}, vì vậy bài làm đã đạt.
 verdict.rule.no_author_musts_failed: Tác giả chưa phê duyệt tiêu chí bắt buộc cho bài này. Với những bài như vậy, ngưỡng đạt là {threshold} trên 100; điểm của bạn là {score}, vì vậy bài làm chưa đạt.
+reply.work_only: Chúng tôi chỉ đánh giá bài làm — các tệp chứa bài giải, chứ không phải nội dung viết kèm.
+reply.hostile.fallback: Nước đi thú vị! Chúng tôi chỉ đánh giá bài làm — các tệp chứa bài giải, chứ không phải nội dung viết kèm. Để cải thiện kết quả, bạn vui lòng hoàn thiện lại bài giải theo các nhận xét trong bài đánh giá này.
+reply.off_topic.wrap_up: 'Chúng ta có thể nói về chuyện này rất lâu, nhưng công việc đang đợi và tốt nhất là nên dành thời gian cho khóa học «{course}». Trò chuyện cũng tốn chi phí: tôi sẵn sàng trao đổi mãi, nhưng một chatbot thông thường sẽ làm việc đó rẻ hơn, còn với tôi thì tốt hơn là học «{course}».'
+reply.said.withheld: (nội dung của câu trả lời này không được đưa vào bài đánh giá)

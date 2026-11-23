@@ -208,6 +208,10 @@ class TestShippedSource:
         "attempt",
         "score",
         "threshold",
+        # Filled by the explanation stage with the student's replies, not by
+        # the assembler: the canned answer to a long talk off the topic names
+        # the course (task 12a, K4).
+        "course",
     }
 
     def test_it_reads_as_plain_phrases(self) -> None:

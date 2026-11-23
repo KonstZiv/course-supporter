@@ -1163,7 +1163,12 @@ class CriteriaOverrideRequest(BaseModel):
             f"``mandatory_points`` (up to {MAX_POINTS}, each an ``id`` — omitted "
             f"for a new point — and a ``text`` of up to {MAX_POINT_CHARS} "
             "characters; there exactly when ``check_method`` is "
-            "``mandatory_points``). ``soft_descent`` is the code's and is not sent."
+            "``mandatory_points``) and, for a ``must``, ``must_by_author`` — "
+            "``true`` makes it mandatory for the pass, ``false`` leaves it to "
+            "weigh in the score; omitted, a ``must`` of the edit this one "
+            "replaces keeps its value there, one raised to ``must`` and a new one "
+            "are mandatory, and a ``must`` of the model's list is not. "
+            "``soft_descent`` is the code's and is not sent."
         ),
     )
 
@@ -1238,7 +1243,8 @@ class CriteriaViewResponse(BaseModel):
         description=(
             "The author's edit for the current version; null when there is none. "
             "An edit of an earlier version is not shown: it is not carried to a "
-            "new one."
+            "new one. Each criterion carries ``must_by_author``: which ``must`` "
+            "criteria the author made mandatory for the pass."
         ),
     )
     in_force: CriteriaInForceResponse | None = Field(

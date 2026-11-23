@@ -51,6 +51,7 @@ error_codes:
   - UNKNOWN_CRITERION_ID
   - CHECK_METHOD_NOT_ADMITTED
   - UNKNOWN_CONCEPT
+  - MUST_BY_AUTHOR_WITHOUT_MUST
 keywords:
   - errors
   - error codes
@@ -59,7 +60,7 @@ keywords:
   - comment
   - criteria
   - replies
-last_updated: 2026-11-22
+last_updated: 2026-11-23
 ---
 
 # Error codes
@@ -190,3 +191,4 @@ refused request is saved.
 | [`UNKNOWN_CRITERION_ID`](../authors/api.md#UNKNOWN_CRITERION_ID) | 422 | a criterion or point `id` that is not in the current list | read the list again; a new criterion — without `id` |
 | [`CHECK_METHOD_NOT_ADMITTED`](../authors/api.md#CHECK_METHOD_NOT_ADMITTED) | 422 | `code_test` not in a project | choose `model_verdict` or `mandatory_points` |
 | [`UNKNOWN_CONCEPT`](../authors/api.md#UNKNOWN_CONCEPT) | 422 | a concept not from the `concepts` of reading | choose a concept from `concepts` or remove it |
+| [`MUST_BY_AUTHOR_WITHOUT_MUST`](../authors/api.md#MUST_BY_AUTHOR_WITHOUT_MUST) | 422 | `must_by_author: true` in a criterion whose weight is not `must` | set the weight to `must` or remove `must_by_author` |

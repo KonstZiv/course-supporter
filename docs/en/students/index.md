@@ -9,7 +9,7 @@ keywords:
   - test
   - review
   - replies
-last_updated: 2026-11-22
+last_updated: 2026-11-23
 ---
 
 # For students
@@ -71,8 +71,8 @@ write a reply — a **question**, an **objection** or a **comment**. The next re
 answer every reply.
 
 - **The answer comes with your next submission.** Send your work again — corrected or the same: the
-  review of it will answer your replies. The same work with replies is reviewed anew, rather than
-  repeating the previous review.
+  review of it will answer your replies. If the replies concern the work, the same work is reviewed
+  anew; for replies not about the work, the answer is short, without a new review.
 - **You can write only to the latest review.** While a new submission is being reviewed, replies to
   the previous review are not accepted — wait for the new one and write to it. If the author changed
   the assignment after the review, replies to it are not accepted either.

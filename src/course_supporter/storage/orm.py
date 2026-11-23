@@ -1630,6 +1630,15 @@ class Student(SoftDeleteMixin, Base):
         "Nullable: integration-mode students (created via get_or_create on "
         "submit) carry none.",
     )
+    is_test_student: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("false"),
+        comment="A service student of the platform (a control, rehearsal or "
+        "payment provider reviewer's student): their work is left out of the "
+        "calibration of the review cost estimate. The review path does not "
+        "read it.",
+    )
 
     # Relationships
     tenant: Mapped["Tenant"] = relationship()

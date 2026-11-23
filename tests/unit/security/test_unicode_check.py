@@ -52,7 +52,7 @@ class TestCleanInputsAccepted:
         # LRM U+200E and RLM U+200F are Cf bidi directionality
         # markers but NOT in the spec's bidi-override list (they do
         # not override; they hint).
-        check_text_unicode_safety("text‎and‏more")
+        check_text_unicode_safety("text\u200eand\u200fmore")
 
 
 # ── Zero-width characters rejected ─────────────────────────────────
@@ -98,15 +98,15 @@ class TestBidiOverrideRejected:
     @pytest.mark.parametrize(
         "char",
         [
-            "‪",
-            "‫",
-            "‬",
-            "‭",
-            "‮",
-            "⁦",
-            "⁧",
-            "⁨",
-            "⁩",
+            "\u202a",
+            "\u202b",
+            "\u202c",
+            "\u202d",
+            "\u202e",
+            "\u2066",
+            "\u2067",
+            "\u2068",
+            "\u2069",
         ],
     )
     def test_each_bidi_char(self, char: str) -> None:
@@ -117,7 +117,7 @@ class TestBidiOverrideRejected:
 
     def test_trojan_source_inline_attack(self) -> None:
         # CVE-2021-42574-style payload (U+202E + U+202C).
-        attack = "if (auth) { /* ‮ } { ‬ */"
+        attack = "if (auth) { /* \u202e } { \u202c */"
         with pytest.raises(SecurityRejectedError):
             check_text_unicode_safety(attack)
 
@@ -176,7 +176,7 @@ class TestFirstMatchEarlyExit:
     def test_first_suspicious_char_reported(self) -> None:
         # Two suspicious chars: zero-width at index 2, bidi at 5.
         # Detail must report the first match, not the second.
-        text = "ab​cd‮tail"
+        text = "ab\u200bcd\u202etail"
         with pytest.raises(SecurityRejectedError) as exc_info:
             check_text_unicode_safety(text)
         assert "index 2" in exc_info.value.detail

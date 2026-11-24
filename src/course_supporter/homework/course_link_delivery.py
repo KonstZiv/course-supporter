@@ -86,6 +86,7 @@ from course_supporter.homework.course_links import (
 )
 from course_supporter.homework.judged_list import read_judged_list
 from course_supporter.models.review_structure import Reference
+from course_supporter.models.stored_read import read_stored
 from course_supporter.service_logging import CourseLinkTrace, record_course_link_trace
 from course_supporter.storage.document_segment_repository import (
     DocumentSegmentRepository,
@@ -150,7 +151,7 @@ async def settle_course_links(
     )
     if kept is None:
         return {}
-    found = FoundCourseLinks.model_validate(kept.body)
+    found = read_stored(FoundCourseLinks, kept.body, submission_id=submission.id)
     if found.settled is not None:
         return {given.item_id: given.candidates for given in found.settled}
 

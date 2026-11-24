@@ -334,7 +334,9 @@ def _checkpoint_of(job: Job) -> PathCheckpoint | None:
     if not isinstance(job.stage_progress, dict):
         return None
     try:
-        return PathCheckpoint.from_jsonb(job.stage_progress)
+        return PathCheckpoint.from_jsonb(
+            job.stage_progress, submission_id=job.subject_id
+        )
     except ValueError:
         return None
 

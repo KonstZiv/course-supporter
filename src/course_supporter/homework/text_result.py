@@ -119,7 +119,10 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
+
+import structlog
+from pydantic import ValidationError
 
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
@@ -144,6 +147,7 @@ from course_supporter.homework.judged_list import (
     read_judged_list,
 )
 from course_supporter.homework.result_builders import (
+    PATH_FAILED,
     BuildContext,
     BuiltResult,
     ResultNotBuiltError,
@@ -164,7 +168,7 @@ from course_supporter.models.review_structure import (
     ReviewStructureV1,
     Verdict,
 )
-from course_supporter.models.stored_read import read_stored
+from course_supporter.models.stored_read import problems_without_values, read_stored
 from course_supporter.phrasebook import phrases_for
 from course_supporter.remark_kinds import CommentKind, CommentTopic, RemarkState
 from course_supporter.review_metrics import (
@@ -179,12 +183,16 @@ from course_supporter.storage.submission_verdict_repository import (
 )
 
 if TYPE_CHECKING:
+    import uuid
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from course_supporter.storage.orm import (
         HomeworkSubmission,
         SubmissionCriterionVerdict,
     )
+
+logger = structlog.get_logger(__name__)
 
 __all__ = [
     "REVIEW_PARTS_MISSING",
@@ -194,6 +202,7 @@ __all__ = [
     "build_text_review",
     "link_authenticity",
     "problem_positions",
+    "read_stored_explanation",
     "replies_answered",
 ]
 
@@ -511,14 +520,52 @@ async def _fixed_words(
             tenant_id=submission.tenant_id, submission_id=earlier.submission_id
         )
         if explained is not None:
-            remarks = read_stored(
-                ExplanationAnswer, explained.body, submission_id=earlier.submission_id
+            remarks = read_stored_explanation(
+                explained.body,
+                submission_id=earlier.submission_id,
+                whose="earlier explanation",
             ).remarks
     criteria = await read_judged_list(session, submission, rows)
     return FixedWords(
         remarks={remark.id: remark for remark in remarks},
         criteria={criterion.id: criterion for criterion in criteria},
     )
+
+
+def read_stored_explanation(
+    body: Mapping[str, Any], *, submission_id: uuid.UUID, whose: str
+) -> ExplanationAnswer:
+    """The stored explanation of a submission, read at the builder's boundary.
+
+    :func:`~course_supporter.models.stored_read.read_stored`, with one thing
+    more: a row that does not read is our own bad data, and the error pydantic
+    raises for it holds the value of every field that failed — the Mentor's
+    words about the student's work, quoted. That error does not leave here. It
+    becomes a :class:`ResultNotBuiltError` with the code the submission failed
+    with before (:data:`PATH_FAILED`: a failure on our side), a message without
+    values, and ``from None`` so that no traceback carries the original; the
+    place and the kind of each error go to the log in one line.
+
+    Args:
+        body: The stored explanation's body.
+        submission_id: The submission whose explanation it is, for the log.
+        whose: ``"explanation"`` or ``"earlier explanation"``: which of the
+            two reads this is, for the log and the message.
+
+    Raises:
+        ResultNotBuiltError: ``path_failed`` — the row does not read.
+    """
+    try:
+        return read_stored(ExplanationAnswer, body, submission_id=submission_id)
+    except ValidationError as error:
+        logger.error(
+            "stored_explanation_unreadable",
+            submission_id=str(submission_id),
+            whose=whose,
+            problems=problems_without_values(error),
+        )
+        msg = f"the stored {whose} does not read ({error.error_count()} errors)"
+        raise ResultNotBuiltError(PATH_FAILED, msg) from None
 
 
 def link_authenticity(
@@ -577,8 +624,8 @@ class TextResultBuilder:
             raise ResultNotBuiltError(
                 REVIEW_PARTS_MISSING, "the submission has no explanation"
             )
-        answer = read_stored(
-            ExplanationAnswer, explained.body, submission_id=submission.id
+        answer = read_stored_explanation(
+            explained.body, submission_id=submission.id, whose="explanation"
         )
         links = await settle_course_links(
             context.session, context.session_factory, submission, answer, rows
@@ -639,7 +686,7 @@ class TextResultBuilder:
             tenant_id=submission.tenant_id, submission_id=submission.id
         )
         found = (
-            FoundCourseLinks.model_validate(kept.body)
+            read_stored(FoundCourseLinks, kept.body, submission_id=submission.id)
             if kept is not None
             else FoundCourseLinks(criteria=())
         )

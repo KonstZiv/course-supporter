@@ -53,6 +53,7 @@ from course_supporter.homework.path_config import PathKey, SubmissionState
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.llm.error_categories import LadderStop
 from course_supporter.models.source import AssignmentType
+from course_supporter.models.stored_read import read_stored
 from course_supporter.storage.job_repository import JobRepository
 
 if TYPE_CHECKING:
@@ -236,9 +237,19 @@ class PathCheckpoint(BaseModel):
         return self.model_dump(mode="json")
 
     @classmethod
-    def from_jsonb(cls, payload: dict[str, Any]) -> PathCheckpoint:
-        """Deserialize from ``Job.stage_progress`` content."""
-        return cls.model_validate(payload)
+    def from_jsonb(
+        cls, payload: dict[str, Any], *, submission_id: uuid.UUID | None = None
+    ) -> PathCheckpoint:
+        """Deserialize from ``Job.stage_progress`` content.
+
+        The model stays strict for writing; reading leaves out a field it does
+        not know (a newer release wrote it, and this one is older) instead of
+        refusing a checkpoint whose data is whole, which would start the
+        revision over and pay for its stages again
+        (:func:`~course_supporter.models.stored_read.read_stored`).
+        ``submission_id`` is only for that warning.
+        """
+        return read_stored(cls, payload, submission_id=submission_id)
 
 
 async def save_checkpoint(
@@ -297,7 +308,9 @@ async def load_checkpoint(
     if job is None or not isinstance(job.stage_progress, dict):
         return None
     try:
-        return PathCheckpoint.from_jsonb(job.stage_progress)
+        return PathCheckpoint.from_jsonb(
+            job.stage_progress, submission_id=submission_id
+        )
     except ValueError:
         logger.warning(
             "submission_path_checkpoint_unreadable",

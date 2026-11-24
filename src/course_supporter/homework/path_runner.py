@@ -47,6 +47,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from pydantic import ValidationError
 
 from course_supporter.billing.estimates import review_e_usd
 from course_supporter.cost_estimate.hooks import shadow_review
@@ -80,6 +81,7 @@ from course_supporter.homework.path_stages import (
 )
 from course_supporter.homework.reply_screen import screen_replies
 from course_supporter.homework.result_builders import (
+    PATH_FAILED,
     BuildContext,
     ResultBuilder,
     ResultNotBuiltError,
@@ -87,6 +89,7 @@ from course_supporter.homework.result_builders import (
 )
 from course_supporter.llm.error_categories import LadderExhaustedError, LadderStop
 from course_supporter.models.source import AssignmentType
+from course_supporter.models.stored_read import problems_without_values
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import HomeworkStatus
 
@@ -110,13 +113,6 @@ if TYPE_CHECKING:
     from course_supporter.storage.s3 import S3Client
 
 logger = structlog.get_logger(__name__)
-
-PATH_FAILED = "path_failed"
-"""The code a submission fails with when the body broke for no reason of its own.
-
-A builder that refuses names its own code (:class:`ResultNotBuiltError`); this
-one covers everything else — a defect, a storage error, a delivery that raised.
-"""
 
 _HOLD_STATUS: dict[FreezeReason, HomeworkStatus] = {
     FreezeReason.CRITERIA_UNAVAILABLE: HomeworkStatus.AWAITING_CRITERIA,
@@ -1174,7 +1170,17 @@ async def _fail_the_submission(
     """
     code = exc.code if isinstance(exc, ResultNotBuiltError) else PATH_FAILED
     log = logger.bind(submission_id=str(submission_id), code=code)
-    log.error("path_failed", error=f"{type(exc).__name__}: {exc}")
+    if isinstance(exc, ValidationError):
+        # Never ``str(exc)``: pydantic puts the value of every field that
+        # failed into it, and for a stored review that is the Mentor's words
+        # about the student's work.
+        log.error(
+            "path_failed",
+            error=type(exc).__name__,
+            problems=problems_without_values(exc),
+        )
+    else:
+        log.error("path_failed", error=f"{type(exc).__name__}: {exc}")
     async with session_factory() as session:
         try:
             await HomeworkRepository(session).update_status(

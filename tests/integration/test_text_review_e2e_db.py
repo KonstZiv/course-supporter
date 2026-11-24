@@ -44,6 +44,7 @@ Requires ``docker compose up -d``; run with ``--run-db``.
 from __future__ import annotations
 
 import json
+import traceback
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
@@ -51,9 +52,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import structlog
 from scripts import record_evaluation_input
 from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from course_supporter.api.routes._portal_shared import (
     curated_presentation,
@@ -94,6 +97,7 @@ from course_supporter.homework.path_stages import (
     SAFETY,
 )
 from course_supporter.homework.result_builders import (
+    PATH_FAILED,
     BuildContext,
     ResultNotBuiltError,
 )
@@ -114,7 +118,7 @@ from course_supporter.models.review_structure import (
     ReviewStructureV1,
 )
 from course_supporter.models.source import AssignmentType
-from course_supporter.models.webhook import WebhookReviewedPayload
+from course_supporter.models.webhook import WebhookFailedPayload, WebhookReviewedPayload
 from course_supporter.review_metrics import REVIEW_METRICS_ACTION
 from course_supporter.service_logging import _persist
 from course_supporter.storage.orm import (
@@ -135,6 +139,7 @@ from course_supporter.storage.task_criteria_list_repository import (
     TaskCriteriaListRepository,
 )
 from tests._helpers.priced import priced_exact
+from tests._helpers.stored_review import MARKER
 from tests.integration.test_document_segment_repository import (
     _seed_child,
     _seed_material,
@@ -1370,6 +1375,136 @@ class TestAReviewWithoutItsPartsFails:
                 )
 
         assert refused.value.code == REVIEW_PARTS_MISSING
+
+
+class TestAnExplanationThatDoesNotReadLeavesNoWordsBehind:
+    """DD-SP-DM: the stored explanation's values stay out of every record.
+
+    The explanation holds a wrong type in a field whose value is a marker: the
+    text pydantic makes of that error would quote it. The submission fails as
+    it did — ``failed`` with ``path_failed``, the webhook told the same reason
+    — and the marker is in no log line, in no row, and in no trace of the
+    exception the body raises.
+    """
+
+    async def test_failed_with_path_failed_and_the_marker_nowhere(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from course_supporter.homework import path_runner, text_result
+        from course_supporter.models import stored_read
+
+        # Loggers bound by an earlier test keep its processors (cached).
+        for module in (path_runner, text_result, stored_read):
+            monkeypatch.setattr(module, "logger", structlog.get_logger())
+        webhook = _webhook()
+        submission_id, job_id = await _submit(session_factory, world)
+        unreadable = json.loads(_EXPLANATION)
+        unreadable["passed"] = MARKER
+        async with session_factory() as session:
+            await SubmissionVerdictRepository(session).store_explanation(
+                tenant_id=world["tenant_id"],
+                submission_id=submission_id,
+                language="ukr",
+                body=unreadable,
+            )
+            await session.commit()
+
+        with capture_logs() as logs:
+            await _run(
+                session_factory,
+                _RouterDouble(session_factory),
+                _ListSource(world["in_force"]),
+                webhook,
+                tmp_path,
+                submission_id=submission_id,
+                job_id=job_id,
+                config=_path_of(SAFETY, ATTEMPT_CLASSIFIER, CRITERIA_EVALUATION),
+            )
+
+        failed = await _submission(session_factory, submission_id)
+        assert failed.status == "failed"
+        assert failed.error_message == PATH_FAILED
+        assert failed.review_result is None
+        assert _reviewed(webhook) == []
+        (told,) = [
+            call.kwargs["payload"]
+            for call in webhook.await_args_list
+            if isinstance(call.kwargs["payload"], WebhookFailedPayload)
+        ]
+        assert told.reason == PATH_FAILED
+        (line,) = [entry for entry in logs if entry["event"] == "path_failed"]
+        assert line["code"] == PATH_FAILED
+        assert [
+            entry for entry in logs if entry["event"] == "stored_explanation_unreadable"
+        ]
+        assert MARKER not in repr(logs)
+        assert MARKER not in caplog.text
+        async with session_factory() as session:
+            job = await session.get(Job, job_id)
+            assert job is not None
+            assert job.status == "failed"
+            assert MARKER not in repr(job.error_message)
+            assert MARKER not in repr(job.stage_progress)
+
+    async def test_the_exception_the_body_raises_has_no_marker_in_its_trace(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """The seam swallows it, so the body is asked for it directly."""
+        from course_supporter.homework.path_runner import run_new_path_if_switched
+        from course_supporter.service_logging import (
+            set_job_from_arq,
+            set_tenant_from_job,
+        )
+
+        submission_id, job_id = await _submit(session_factory, world)
+        # What the seam sets before it calls the body: the register's rows.
+        await set_tenant_from_job(session_factory, job_id)
+        set_job_from_arq(job_id)
+        unreadable = json.loads(_EXPLANATION)
+        unreadable["passed"] = MARKER
+        async with session_factory() as session:
+            await SubmissionVerdictRepository(session).store_explanation(
+                tenant_id=world["tenant_id"],
+                submission_id=submission_id,
+                language="ukr",
+                body=unreadable,
+            )
+            await session.commit()
+        config = _path_of(SAFETY, ATTEMPT_CLASSIFIER, CRITERIA_EVALUATION)
+
+        with (
+            patch(
+                "course_supporter.homework.path_runner.get_path_config",
+                return_value=config,
+            ),
+            patch(
+                "course_supporter.homework.path_runner.build_funds_port",
+                return_value=_PortDouble(),
+            ),
+            patch(
+                "course_supporter.homework.criteria_evaluation.build_criteria_list_service",
+                return_value=_ListSource(world["in_force"]),
+            ),
+            patch("course_supporter.homework.webhook.deliver_webhook", new=_webhook()),
+            pytest.raises(ResultNotBuiltError) as raised,
+        ):
+            await run_new_path_if_switched(
+                _ctx(session_factory, _RouterDouble(session_factory), tmp_path),
+                job_id,
+                submission_id,
+            )
+
+        assert raised.value.code == PATH_FAILED
+        assert MARKER not in "".join(traceback.format_exception(raised.value))
+        assert MARKER not in str(raised.value)
 
 
 class TestTheShippedFileServesTextTasksOnTheNewPathOutOfTestMode:

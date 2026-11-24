@@ -139,8 +139,8 @@ class TestTheHardClassesRefuseInBothModes:
     @pytest.mark.parametrize(
         "ch",
         [
-            pytest.param("‮", id="right-to-left-override"),
-            pytest.param("⁦", id="left-to-right-isolate"),
+            pytest.param("\u202e", id="right-to-left-override"),
+            pytest.param("\u2066", id="left-to-right-isolate"),
             pytest.param("\U000e0041", id="tag-character"),
             pytest.param("\x07", id="bell"),
             pytest.param("\x1b", id="escape"),
@@ -157,11 +157,11 @@ class TestTheHardClassesRefuseInBothModes:
 
     def test_a_hard_class_behind_a_zero_width_still_refuses_in_signal(self) -> None:
         with pytest.raises(SecurityRejectedError):
-            screen_text("a​b‮c", name="n", mode="signal")
+            screen_text("a\u200bb\u202ec", name="n", mode="signal")
 
     def test_a_name_with_a_direction_override_is_refused(self) -> None:
         with pytest.raises(SecurityRejectedError):
-            screen_text("evil‮txt.py", name="n", mode="signal", where="name")
+            screen_text("evil\u202etxt.py", name="n", mode="signal", where="name")
 
 
 class TestAName:

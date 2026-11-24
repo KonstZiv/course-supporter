@@ -2,7 +2,7 @@
 
 Purpose:
     The platform sells prepaid packages of units through merchants of record —
-    several side by side (Paddle, Creem, others), each behind an adapter of
+    several side by side (Creem, others), each behind an adapter of
     its own — and, for B2B, by a contract invoice. Everything here is the
     same for every provider; an adapter knows one provider's API and nothing
     of the journal. The journal itself (``billing.ledger``,

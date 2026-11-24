@@ -55,6 +55,18 @@ and where the item stands against the change of the work:
 A stale quote is a ``met`` with the memory whose quote is the first work's
 and not the second's — the risk the prompt's rules guard against.
 
+A false history (``flip``; the operator's threshold "robust to a false
+history", 2026-11-24): an item named to flip whose first verdict is ``met``
+is shown in the memory as ``not_met`` — no quote, the sentence
+:data:`FLIPPED_SENTENCE` — and nothing else changes: the first call and the
+second without the memory are what they were, and the comparison keeps the
+first's true word. Only the third call sees the lie. An item first ``not_met``
+or ``unconfirmed`` is not flipped — it cannot be made ``met`` without a real
+quote — and an item the pair has not is skipped; both are noted
+(``flip_skipped``). Each flipped item is then judged (:func:`judged_by`):
+by the work — with the memory as without it — or by the history it was
+shown, and the summary counts them.
+
 Dry run:
     No provider: every request is captured, nothing is sent. The first's
     verdicts are then placeholders (``not_met``, "dry run") — the second's
@@ -64,9 +76,10 @@ Dry run:
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -119,6 +132,14 @@ WITH: Final = "prompts/criteria_evaluation/v2.md"
 """The prompt with the memory (task 13, K4)."""
 
 DRY_RUN_SENTENCE: Final = "dry run"
+
+FLIPPED_SENTENCE: Final = "(flipped for the measurement)"
+"""The ``missing`` of a ``met`` shown as ``not_met`` by ``--flip``."""
+
+_VERDICTS_SLOT: Final = re.compile(
+    r"^<previous_attempt_verdicts>\n(.*?)\n</previous_attempt_verdicts>$",
+    re.S | re.M,
+)
 
 _NOT_OPENED: Final = "\n\n=== NOT OPENED ("
 _LAYER: Final = CriteriaLayer.MODEL
@@ -225,6 +246,59 @@ def settled_rows(
             )
         )
     return tuple(rows)
+
+
+@dataclass(frozen=True, slots=True)
+class Flip:
+    """What ``--flip`` did to one item of one pair.
+
+    Attributes:
+        item: The item named.
+        first: The first attempt's true word (``met``, ``not_met``,
+            ``unconfirmed``); ``None`` when the pair has no such item.
+        skipped: ``None`` — flipped; ``"not_met"`` — first not met or
+            unconfirmed, left as it was; ``"absent"`` — not in the pair.
+        dry_run: The first verdict was a dry run's placeholder, flipped all
+            the same so the request shows the flipped item.
+    """
+
+    item: str
+    first: str | None
+    skipped: str | None
+    dry_run: bool = False
+
+
+def flip_rows(
+    rows: Sequence[SettledRow], items: Sequence[str]
+) -> tuple[tuple[SettledRow, ...], list[Flip]]:
+    """The rows the memory is built from, the named ``met`` items flipped.
+
+    A ``met`` becomes ``not_met`` without its quote, with
+    :data:`FLIPPED_SENTENCE`; a ``not_met`` or ``unconfirmed`` stays; an item
+    the rows have not is skipped. A dry run's placeholder (no answer) is
+    flipped too, so the captured request shows it.
+    """
+    by_id = {row.item_id: row for row in rows}
+    flips: list[Flip] = []
+    flipped: dict[str, SettledRow] = {}
+    for item in dict.fromkeys(items):
+        row = by_id.get(item)
+        if row is None:
+            flips.append(Flip(item, None, "absent"))
+            continue
+        placeholder = row.missing == DRY_RUN_SENTENCE and row.verdict == "not_met"
+        if row.verdict != "met" and not placeholder:
+            flips.append(Flip(item, _first_word(row), "not_met"))
+            continue
+        flipped[item] = replace(
+            row,
+            verdict="not_met",
+            quote=None,
+            missing=FLIPPED_SENTENCE,
+            quote_not_found=False,
+        )
+        flips.append(Flip(item, _first_word(row), None, dry_run=placeholder))
+    return tuple(flipped.get(row.item_id, row) for row in rows), flips
 
 
 def memory_of(
@@ -500,6 +574,7 @@ class PairResult:
     memory: AttemptMemory | None = None
     fitted: FittedMemory | None = None
     compared: list[ItemComparison] = field(default_factory=list)
+    flips: list[Flip] = field(default_factory=list)
 
     @property
     def answered(self) -> bool:
@@ -524,8 +599,14 @@ async def measure_pair(
     max_growth: float,
     list_now: uuid.UUID,
     list_then: uuid.UUID,
+    flip: Sequence[str] = (),
 ) -> PairResult:
-    """The three calls of a pair, and the comparison."""
+    """The three calls of a pair, and the comparison.
+
+    ``flip`` — the items whose ``met`` the memory shows as ``not_met``
+    (:func:`flip_rows`); the first two calls and the comparison keep the
+    first's true verdicts.
+    """
     result = PairResult(pair)
     first_items = list(pair.first["items"])
     second_items = list(pair.second["items"])
@@ -544,11 +625,12 @@ async def measure_pair(
         submitted_work(pair.first),
         source_id=list_then if pair.criteria_changed else list_now,
     )
+    shown_rows, result.flips = flip_rows(rows, flip)
     result.fitted = fitted_memory(
         pair,
         memory_of(
             pair,
-            rows,
+            shown_rows,
             rewritten_share=rewritten_share,
             context_lines=context_lines,
             list_now=list_now,
@@ -597,6 +679,9 @@ def summary_of(results: Sequence[PairResult], *, dry_run: bool) -> dict[str, Any
         "prompts": {"without": WITHOUT, "with": WITH},
         "pairs": [_pair_json(result) for result in results],
         "tally": tally(every),
+        "flips": flip_tally(
+            [entry for result in results for entry in flip_entries(result)]
+        ),
         "cost_usd_total": str(sum((r.cost_usd for r in results), Decimal(0))),
     }
 
@@ -634,7 +719,82 @@ def _pair_json(result: PairResult) -> dict[str, Any]:
         "calls": [call.as_json() for call in result.calls],
         "items": [item.as_json() for item in result.compared],
         "tally": tally(result.compared),
+        "flips": flip_entries(result),
     }
+
+
+def shown_in_request(call: Call | None, item: str) -> dict[str, Any] | None:
+    """The item's entry in the ``<previous_attempt_verdicts>`` of the request
+    the call sent (or captured); ``None`` when the request shows none."""
+    request = call.sent.request if call is not None else None
+    if request is None:
+        return None
+    found = _VERDICTS_SLOT.search(request.prompt)
+    if found is None:
+        return None
+    entries = json.loads(found.group(1))
+    return next((entry for entry in entries if entry.get("id") == item), None)
+
+
+def judged_by(*, shown: str | None, without: str | None, with_: str | None) -> str:
+    """How the answer with the memory treated a flipped item.
+
+    ``work`` — as without the memory, against the history shown;
+    ``history`` — as the history shown, against the answer without it;
+    ``indistinct`` — all three agree, so the flip proved nothing;
+    ``not_shown`` — the request did not show the item; ``no_answer`` — a
+    call gave none; ``other`` — anything else.
+    """
+    if shown is None:
+        return "not_shown"
+    if without is None or with_ is None:
+        return "no_answer"
+    if with_ == without:
+        return "indistinct" if without == shown else "work"
+    return "history" if with_ == shown else "other"
+
+
+def flip_entries(result: PairResult) -> list[dict[str, Any]]:
+    """Every ``--flip`` of the pair: what was true, shown, and answered."""
+    calls = {call.label: call for call in result.calls}
+    compared = {item.item: item for item in result.compared}
+    entries: list[dict[str, Any]] = []
+    for flip in result.flips:
+        if flip.skipped is not None:
+            entries.append(
+                {"item": flip.item, "first": flip.first, "flip_skipped": flip.skipped}
+            )
+            continue
+        entry = shown_in_request(calls.get("second.v2"), flip.item)
+        shown = None if entry is None else str(entry.get("verdict"))
+        item = compared.get(flip.item)
+        without = item.without if item is not None else None
+        with_ = item.with_memory if item is not None else None
+        entries.append(
+            {
+                "item": flip.item,
+                "first": flip.first,
+                "shown_in_memory": shown,
+                "shown_missing": None if entry is None else entry.get("missing"),
+                "second_without_memory": without,
+                "second_with_memory": with_,
+                "judged_by": judged_by(shown=shown, without=without, with_=with_),
+                "dry_run": flip.dry_run,
+            }
+        )
+    return entries
+
+
+def flip_tally(entries: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """How many flipped items were judged by the work, by the history, …"""
+    counts: Counter[str] = Counter()
+    for entry in entries:
+        if "flip_skipped" in entry:
+            counts[f"skipped_{entry['flip_skipped']}"] += 1
+        else:
+            counts["flipped"] += 1
+            counts[f"judged_by_{entry['judged_by']}"] += 1
+    return dict(sorted(counts.items()))
 
 
 def _growth(without: Call | None, with_: Call | None) -> dict[str, Any] | None:

@@ -27,6 +27,18 @@ Usage (from the repository root)::
         --pair ~/k4/p1.first.json ~/k4/p1.second.json \\
         --pair ~/k4/p2.first.json ~/k4/p2.second.json --out ~/k4/out
 
+A false history (``--flip ITEM``, repeatable, on every pair): the first
+attempt's ``met`` on ITEM is shown in the memory of the third call as
+``not_met`` — no quote, the sentence "(flipped for the measurement)"; the
+first two calls are what they were. ``summary.json`` then lists, per pair,
+each flipped item — its true first verdict, what the request showed, the
+verdict without the memory and with it, and whether the model judged it by
+the work or by the history — and their count; an item first not met, or one
+the pair has not, is noted as ``flip_skipped`` (``not_met``, ``absent``)::
+
+    uv run python scripts/measure_attempt_memory.py \\
+        --pair ~/k4/p1.first.json ~/k4/p1.second.json --flip c1 --out ~/k4/out
+
 Calls and their price: three a pair; about 20 calls are seven pairs. At the
 registry rates (qwen3.7-max, read 2026-11-23) a typical call — ~8 000 tokens
 in, ~2 000 out — is about $0.02-0.05, a call at the largest realistic input
@@ -58,6 +70,7 @@ from course_supporter.config import get_settings
 from course_supporter.homework.attempt_memory_measure import (
     STAGE_NAME,
     PairResult,
+    flip_entries,
     load_pair,
     measure_pair,
     summary_of,
@@ -80,6 +93,16 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
         help="two recorded inputs: the first attempt's and the second's",
     )
     parser.add_argument("--out", type=Path, help="where to write the answers")
+    parser.add_argument(
+        "--flip",
+        action="append",
+        default=[],
+        metavar="ITEM",
+        help=(
+            "show the first attempt's 'met' on ITEM as 'not_met' in the memory "
+            "of every pair (a false history); repeatable"
+        ),
+    )
     parser.add_argument(
         "--budget-usd",
         type=Decimal,
@@ -137,6 +160,7 @@ async def _main(args: argparse.Namespace) -> int:
             max_growth=config.attempt_memory.max_growth,
             list_now=uuid.uuid4(),
             list_then=uuid.uuid4(),
+            flip=args.flip,
         )
         results.append(result)
         spent += result.cost_usd
@@ -144,6 +168,8 @@ async def _main(args: argparse.Namespace) -> int:
 
     summary = summary_of(results, dry_run=args.dry_run)
     print(f"tally: {summary['tally']}")
+    if args.flip:
+        print(f"flips: {summary['flips']}")
     if args.out is not None:
         print(f"summary: {write_measurement(args.out, results, dry_run=args.dry_run)}")
     if args.dry_run:
@@ -185,6 +211,16 @@ def _print(result: PairResult, *, dry_run: bool) -> None:
                 else f"; tokens in {entry['tokens_in']}, out {entry['tokens_out']}; "
                 f"${entry['cost_usd']}"
             )
+        )
+    for flip in flip_entries(result):
+        if "flip_skipped" in flip:
+            print(f"  flip {flip['item']}: skipped ({flip['flip_skipped']})")
+            continue
+        first = "a dry run's placeholder" if flip["dry_run"] else flip["first"]
+        print(
+            f"  flip {flip['item']}: first {first}, in the request "
+            f"{flip['shown_in_memory']} ({flip['shown_missing']!r}); judged by "
+            f"{flip['judged_by']}"
         )
 
 

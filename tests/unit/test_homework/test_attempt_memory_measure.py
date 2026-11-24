@@ -10,6 +10,10 @@ second attempt adds a docstring and a type check to the first. Here:
 * three calls a pair over a provider double, read as the stage reads them,
   and the comparison: the items the change touched and those it did not;
 * a stale quote — the first work's line, not the second's — is counted;
+* a false history (``--flip``): a first ``met`` is shown in the third call's
+  memory as ``not_met`` and nothing else moves; a first ``not_met`` and an
+  item the pair has not are noted, not flipped; each flipped item is judged
+  by the work or by the history, and the summary counts both;
 * the script's dry run calls nothing, builds no provider and exits 0.
 """
 
@@ -131,6 +135,7 @@ async def _measure(
     stage: ModelStage,
     registry: ModelRegistryConfig,
     provider: LLMProvider | None,
+    flip: tuple[str, ...] = (),
 ) -> stand.PairResult:
     return await stand.measure_pair(
         pair,
@@ -142,6 +147,7 @@ async def _measure(
         max_growth=0.33,
         list_now=_NOW,
         list_then=_THEN,
+        flip=flip,
     )
 
 
@@ -315,6 +321,152 @@ class TestTheCeiling:
         assert with_.prompt == without.prompt
 
 
+# Without the memory the model keeps both items met; with it, it keeps c1 met
+# (by the work) and follows the false history on c2.p1.
+_FLIP_WITHOUT = _answer(
+    ("c1", "met", "def fibonacci(n):"),
+    ("c2.p1", "met", _RAISE_NEGATIVE),
+    ("c2.p2", "met", _RAISE_TYPE),
+    ("c3", "met", _DOCSTRING),
+)
+_FLIP_WITH = _answer(
+    ("c1", "met", "def fibonacci(n):"),
+    ("c2.p1", "not_met", "Від'ємне n не перевіряється."),
+    ("c2.p2", "met", _RAISE_TYPE),
+    ("c3", "met", _DOCSTRING),
+)
+
+
+def _entries(request: LLMRequest) -> dict[str, dict[str, Any]]:
+    """The ``<previous_attempt_verdicts>`` of a request, by item."""
+    body = request.prompt.split("<previous_attempt_verdicts>\n", 1)[1]
+    body = body.split("\n</previous_attempt_verdicts>", 1)[0]
+    return {entry["id"]: entry for entry in json.loads(body)}
+
+
+class TestAFalseHistory:
+    async def test_a_met_is_shown_not_met_and_nothing_else_moves(
+        self,
+        pair: stand.Pair,
+        stage: ModelStage,
+        registry: ModelRegistryConfig,
+    ) -> None:
+        honest = _Provider(_FIRST_ANSWER, _FLIP_WITHOUT, _FLIP_WITH)
+        lying = _Provider(_FIRST_ANSWER, _FLIP_WITHOUT, _FLIP_WITH)
+
+        await _measure(pair, stage, registry, honest)
+        result = await _measure(pair, stage, registry, lying, flip=("c1",))
+
+        # The first call and the second without the memory: byte for byte.
+        assert [r.prompt for r in lying.requests[:2]] == [
+            r.prompt for r in honest.requests[:2]
+        ]
+        assert [r.system_prompt for r in lying.requests[:2]] == [
+            r.system_prompt for r in honest.requests[:2]
+        ]
+        # The third: c1 shown not met, no quote, the measurement's sentence;
+        # every other item as it was.
+        shown, true = _entries(lying.requests[2]), _entries(honest.requests[2])
+        assert true["c1"] == {
+            "id": "c1",
+            "quote": "def fibonacci(n):",
+            "verdict": "met",
+        }
+        assert shown["c1"] == {
+            "id": "c1",
+            "missing": stand.FLIPPED_SENTENCE,
+            "verdict": "not_met",
+        }
+        assert {k: v for k, v in shown.items() if k != "c1"} == {
+            k: v for k, v in true.items() if k != "c1"
+        }
+        # The comparison keeps the first's true word.
+        [c1] = [item for item in result.compared if item.item == "c1"]
+        assert c1.first == "met"
+
+    async def test_a_not_met_or_absent_item_is_noted_not_flipped(
+        self,
+        pair: stand.Pair,
+        stage: ModelStage,
+        registry: ModelRegistryConfig,
+    ) -> None:
+        honest = _Provider(_FIRST_ANSWER, _FLIP_WITHOUT, _FLIP_WITH)
+        lying = _Provider(_FIRST_ANSWER, _FLIP_WITHOUT, _FLIP_WITH)
+
+        await _measure(pair, stage, registry, honest)
+        result = await _measure(pair, stage, registry, lying, flip=("c3", "c9"))
+
+        assert lying.requests[2].prompt == honest.requests[2].prompt
+        assert stand.flip_entries(result) == [
+            {"item": "c3", "first": "not_met", "flip_skipped": "not_met"},
+            {"item": "c9", "first": None, "flip_skipped": "absent"},
+        ]
+
+    async def test_each_flipped_item_is_judged_and_the_summary_counts_both(
+        self,
+        pair: stand.Pair,
+        stage: ModelStage,
+        registry: ModelRegistryConfig,
+        tmp_path: Path,
+    ) -> None:
+        provider = _Provider(_FIRST_ANSWER, _FLIP_WITHOUT, _FLIP_WITH)
+
+        result = await _measure(
+            pair, stage, registry, provider, flip=("c1", "c2.p1", "c3")
+        )
+
+        summary = stand.write_measurement(tmp_path, [result], dry_run=False)
+        written = json.loads(summary.read_text(encoding="utf-8"))
+        assert written["pairs"][0]["flips"] == [
+            {
+                "item": "c1",
+                "first": "met",
+                "shown_in_memory": "not_met",
+                "shown_missing": stand.FLIPPED_SENTENCE,
+                "second_without_memory": "met",
+                "second_with_memory": "met",
+                "judged_by": "work",
+                "dry_run": False,
+            },
+            {
+                "item": "c2.p1",
+                "first": "met",
+                "shown_in_memory": "not_met",
+                "shown_missing": stand.FLIPPED_SENTENCE,
+                "second_without_memory": "met",
+                "second_with_memory": "not_met",
+                "judged_by": "history",
+                "dry_run": False,
+            },
+            {"item": "c3", "first": "not_met", "flip_skipped": "not_met"},
+        ]
+        assert written["flips"] == {
+            "flipped": 2,
+            "judged_by_history": 1,
+            "judged_by_work": 1,
+            "skipped_not_met": 1,
+        }
+        # The work's text is not in the flips' lines.
+        assert _RAISE_NEGATIVE not in json.dumps(written["flips"])
+        assert _RAISE_NEGATIVE not in json.dumps(written["pairs"][0]["flips"])
+
+    @pytest.mark.parametrize(
+        ("without", "with_", "judged"),
+        [
+            ("met", "met", "work"),
+            ("met", "not_met", "history"),
+            ("not_met", "not_met", "indistinct"),
+            ("met", "unconfirmed", "other"),
+            (None, "met", "no_answer"),
+        ],
+    )
+    def test_how_an_item_is_judged(
+        self, without: str | None, with_: str | None, judged: str
+    ) -> None:
+        assert stand.judged_by(shown="not_met", without=without, with_=with_) == judged
+        assert stand.judged_by(shown=None, without=without, with_=with_) == "not_shown"
+
+
 class TestTheScriptsDryRun:
     async def test_it_calls_nothing_and_exits_0(
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
@@ -335,6 +487,24 @@ class TestTheScriptsDryRun:
         assert "p1: verdicts 4, diff " in out
         for label in ("first.v1", "second.v1", "second.v2"):
             assert f"  {label} prompts/criteria_evaluation/" in out
+
+    async def test_a_flip_shows_the_flipped_item_in_the_request(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(_REPO_ROOT)
+        args = measure_attempt_memory._arguments(
+            ["--pair", str(_FIRST), str(_SECOND), "--flip", "c1", "--dry-run"]
+        )
+
+        code = await measure_attempt_memory._main(args)
+
+        out = capsys.readouterr().out
+        assert code == 0
+        assert (
+            "  flip c1: first a dry run's placeholder, in the request not_met "
+            f"({stand.FLIPPED_SENTENCE!r})" in out
+        )
+        assert "flips: {'flipped': 1, 'judged_by_no_answer': 1}" in out
 
     async def test_a_missing_record_is_refused_with_2(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

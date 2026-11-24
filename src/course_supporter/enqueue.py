@@ -606,6 +606,7 @@ async def enqueue_email(
     to: str,
     context: dict[str, str],
     language: str | None = None,
+    recipient_masked: str | None = None,
 ) -> None:
     """Enqueue a transactional email on the default queue (Phase 6 R1/R2).
 
@@ -615,13 +616,20 @@ async def enqueue_email(
     this typed helper rather than ``arq.enqueue_job`` directly; ``message_id``
     and ``context`` are the ``email_text`` template id + its ``{placeholder}``
     values (e.g. ``password_reset`` + ``{reset_url, ttl}``). Log-only and
-    PII-lean — the recipient domain, never the mailbox.
+    PII-lean — the recipient domain, never the mailbox; a caller that logs
+    nothing of the address but its mask (O-1) passes ``recipient_masked``,
+    which is logged instead of the domain.
     """
-    _, _, domain = to.rpartition("@")
-    log = structlog.get_logger().bind(
-        message_id=message_id,
-        recipient_domain=domain or "?",
-    )
+    if recipient_masked is not None:
+        log = structlog.get_logger().bind(
+            message_id=message_id, recipient_masked=recipient_masked
+        )
+    else:
+        _, _, domain = to.rpartition("@")
+        log = structlog.get_logger().bind(
+            message_id=message_id,
+            recipient_domain=domain or "?",
+        )
     await arq.enqueue_job(
         "arq_send_email",
         message_id=message_id,

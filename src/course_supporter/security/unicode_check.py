@@ -63,7 +63,7 @@ _ZERO_WIDTH_CHARS: frozenset[str] = frozenset(
 
 # Bidirectional override characters per vision §KD14.
 _BIDI_OVERRIDE_CHARS: frozenset[str] = frozenset(
-    "‪‫‬‭‮⁦⁧⁨⁩",
+    "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069",
 )
 
 # Unicode Tags block. Steganography channel; hard reject.

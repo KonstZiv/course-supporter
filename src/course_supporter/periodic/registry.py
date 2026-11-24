@@ -27,13 +27,14 @@ from typing import TYPE_CHECKING, Any
 from arq.cron import CronJob, cron
 
 from course_supporter.billing.periodic import BILLING_TASKS
+from course_supporter.open_courses.cleanup import OPEN_COURSE_TASKS
 from course_supporter.periodic.runner import PeriodicTask, run_task
 from course_supporter.periodic.schedule import parse_cron
 
 if TYPE_CHECKING:
     from course_supporter.config import Settings
 
-TASKS: tuple[PeriodicTask, ...] = (*BILLING_TASKS,)
+TASKS: tuple[PeriodicTask, ...] = (*BILLING_TASKS, *OPEN_COURSE_TASKS)
 
 CRON_TIMEOUT_S = 1800
 """A periodic run longer than this is cancelled (and logged as such)."""

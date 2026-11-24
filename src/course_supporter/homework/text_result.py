@@ -164,6 +164,7 @@ from course_supporter.models.review_structure import (
     ReviewStructureV1,
     Verdict,
 )
+from course_supporter.models.stored_read import read_stored
 from course_supporter.phrasebook import phrases_for
 from course_supporter.remark_kinds import CommentKind, CommentTopic, RemarkState
 from course_supporter.review_metrics import (
@@ -510,7 +511,9 @@ async def _fixed_words(
             tenant_id=submission.tenant_id, submission_id=earlier.submission_id
         )
         if explained is not None:
-            remarks = ExplanationAnswer.model_validate(explained.body).remarks
+            remarks = read_stored(
+                ExplanationAnswer, explained.body, submission_id=earlier.submission_id
+            ).remarks
     criteria = await read_judged_list(session, submission, rows)
     return FixedWords(
         remarks={remark.id: remark for remark in remarks},
@@ -574,7 +577,9 @@ class TextResultBuilder:
             raise ResultNotBuiltError(
                 REVIEW_PARTS_MISSING, "the submission has no explanation"
             )
-        answer = ExplanationAnswer.model_validate(explained.body)
+        answer = read_stored(
+            ExplanationAnswer, explained.body, submission_id=submission.id
+        )
         links = await settle_course_links(
             context.session, context.session_factory, submission, answer, rows
         )

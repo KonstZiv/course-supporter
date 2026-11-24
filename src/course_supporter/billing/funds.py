@@ -11,6 +11,10 @@ Purpose:
       the threshold and the reserve at its shadow estimate, before its first
       paid step (operator 2026-11-15, S1); its fact or its release when the job
       ends.
+    * :func:`node_summary_regeneration_started` /
+      :func:`node_summary_regeneration_ended` — a regeneration of node
+      summaries (the Methodist): the same action of the author, by the same
+      rule and key (operator 2026-11-23, the author's guide).
     * :func:`preparation_started` / :func:`preparation_ended` — the criteria
       decomposition a submission runs; never waits for the author's units.
     * :func:`billing_note` — what a student is told about a review that cost
@@ -42,7 +46,11 @@ import structlog
 from sqlalchemy import select
 
 from course_supporter.billing import charging
-from course_supporter.billing.estimates import preparation_e_usd, processing_e_usd
+from course_supporter.billing.estimates import (
+    node_summary_e_usd,
+    preparation_e_usd,
+    processing_e_usd,
+)
 from course_supporter.billing.kinds import AccountKind, ActionKind, MovementKind
 from course_supporter.billing.quotes import NOTHING_PRICED_THRESHOLD, ceiling_threshold
 from course_supporter.cost_estimate.shadow import (
@@ -60,6 +68,7 @@ from course_supporter.funds_port import (
 from course_supporter.homework.path_config import in_test_mode
 from course_supporter.models.source import AssignmentType
 from course_supporter.security.exceptions import ErrorCategory
+from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.orm import (
     AuthoredDocument,
     BillingMovement,
@@ -68,9 +77,14 @@ from course_supporter.storage.orm import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from course_supporter.cost_estimate.actions import MaterialFactors
+    from course_supporter.cost_estimate.actions import (
+        MaterialFactors,
+        NodeSummaryFactors,
+    )
 
 logger = structlog.get_logger(__name__)
 
@@ -365,6 +379,93 @@ class InsufficientUnitsError(Exception):
         self.available_units = available_units
 
 
+@dataclass(frozen=True, slots=True)
+class _Course:
+    """Where an author's processing is paid: the tenant and the course root."""
+
+    tenant_id: uuid.UUID
+    root_id: uuid.UUID | None
+
+
+async def _course_of_document(
+    session: AsyncSession, authored_document_id: uuid.UUID
+) -> _Course | None:
+    """The material's tenant (through its node) and course root."""
+    task = await session.get(AuthoredDocument, authored_document_id)
+    if task is None:
+        return None
+    tenant_id = await _tenant_of_document(session, task)
+    if tenant_id is None:
+        return None
+    return _Course(tenant_id, task.course_root_id)
+
+
+async def _course_of_node(session: AsyncSession, node_id: uuid.UUID) -> _Course | None:
+    """The node's tenant and the root of its course (the node itself at the top)."""
+    node = await session.get(CourseNode, node_id)
+    if node is None:
+        return None
+    root = await CourseNodeRepository(session).get_root_for(
+        node_id, tenant_id=node.tenant_id
+    )
+    return _Course(node.tenant_id, root.id if root is not None else node_id)
+
+
+async def _start_processing(
+    session: AsyncSession,
+    *,
+    job_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    course_root_id: uuid.UUID | None,
+    e_usd: Decimal,
+) -> None:
+    """The threshold and the reserve of an author's processing job (one rule).
+
+    A material's processing and a regeneration of node summaries are the same
+    action of the author (``ActionKind.PROCESSING``, key: the job). Commits.
+
+    Raises:
+        InsufficientUnitsError: an author without credit cannot cover P.
+    """
+    payer = await charging.charged_payer_of(
+        session,
+        action_kind=ActionKind.PROCESSING,
+        tenant_id=tenant_id,
+        course_node_id=course_root_id,
+        student_id=None,
+    )
+    if payer is None:
+        return
+    found = await charging.quote(
+        session,
+        action_kind=ActionKind.PROCESSING,
+        payer=payer,
+        price_units=charging.price_of(e_usd),
+        own_action=True,
+        lock=True,
+    )
+    if not found.enough:
+        await session.commit()
+        logger.info(
+            "billing_processing_refused",
+            job_id=str(job_id),
+            price_units=found.price_units,
+            available_units=found.available_units,
+        )
+        raise InsufficientUnitsError(
+            price_units=found.price_units, available_units=found.available_units
+        )
+    await charging.reserve_for(
+        session,
+        action_kind=ActionKind.PROCESSING,
+        action_key=processing_key(job_id),
+        payer=payer,
+        e_usd=e_usd,
+        ceiling_usd=None,
+    )
+    await session.commit()
+
+
 async def processing_started(
     *,
     kind: str,
@@ -399,43 +500,95 @@ async def processing_started(
             if authored_document_id is not None
             else None
         )
-        payer = await charging.charged_payer_of(
+        await _start_processing(
             session,
-            action_kind=ActionKind.PROCESSING,
+            job_id=job_id,
             tenant_id=tenant_id,
-            course_node_id=task.course_root_id if task is not None else None,
-            student_id=None,
-        )
-        if payer is None:
-            return
-        found = await charging.quote(
-            session,
-            action_kind=ActionKind.PROCESSING,
-            payer=payer,
-            price_units=charging.price_of(e_usd),
-            own_action=True,
-            lock=True,
-        )
-        if not found.enough:
-            await session.commit()
-            logger.info(
-                "billing_processing_refused",
-                job_id=str(job_id),
-                price_units=found.price_units,
-                available_units=found.available_units,
-            )
-            raise InsufficientUnitsError(
-                price_units=found.price_units, available_units=found.available_units
-            )
-        await charging.reserve_for(
-            session,
-            action_kind=ActionKind.PROCESSING,
-            action_key=processing_key(job_id),
-            payer=payer,
+            course_root_id=task.course_root_id if task is not None else None,
             e_usd=e_usd,
-            ceiling_usd=None,
         )
-        await session.commit()
+
+
+async def node_summary_regeneration_started(
+    *,
+    factors: NodeSummaryFactors,
+    job_id: uuid.UUID,
+    vertex_node_id: uuid.UUID,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> None:
+    """The threshold and the reserve of a regeneration of node summaries.
+
+    The author's processing (:func:`processing_started`, the same rule and the
+    same key — the job): called at the job's shadow estimate, before its first
+    model call. E is :func:`~.estimates.node_summary_e_usd` on the factors the
+    estimate read; the payer is found by the course of the vertex. No estimate,
+    or E = 0 (every summary is fresh — no model is called): nothing is
+    reserved.
+
+    Raises:
+        InsufficientUnitsError: an author without credit cannot cover P.
+    """
+    factory = session_factory or _session_factory
+    if not charging.charging_possible() or factory is None:
+        return
+    e_usd = node_summary_e_usd(factors)
+    if not e_usd:
+        return
+    async with factory() as session:
+        course = await _course_of_node(session, vertex_node_id)
+        if course is None:
+            logger.warning(
+                "billing_processing_without_course",
+                job_id=str(job_id),
+                vertex_node_id=str(vertex_node_id),
+            )
+            return
+        await _start_processing(
+            session,
+            job_id=job_id,
+            tenant_id=course.tenant_id,
+            course_root_id=course.root_id,
+            e_usd=e_usd,
+        )
+
+
+async def _processing_ended(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    job_id: uuid.UUID,
+    completed: bool,
+    course_of: Callable[[AsyncSession], Awaitable[_Course | None]],
+) -> None:
+    """An author's processing job ended: settle its fact, or release its reserve.
+
+    The fact is :func:`.charging.job_fact_usd` — the job's calls the payer pays
+    (``PAID_BY_PAYER``). ``course_of`` finds where it is paid, read only on
+    completion. Never raises.
+    """
+    if not charging.charging_possible():
+        return
+    key = processing_key(job_id)
+    try:
+        async with session_factory() as session:
+            if not completed:
+                await charging.fail(
+                    session, action_kind=ActionKind.PROCESSING, action_key=key
+                )
+            else:
+                course = await course_of(session)
+                if course is not None:
+                    await charging.finish(
+                        session,
+                        action_kind=ActionKind.PROCESSING,
+                        action_key=key,
+                        fact_usd=await charging.job_fact_usd(session, job_id),
+                        tenant_id=course.tenant_id,
+                        course_node_id=course.root_id,
+                        student_id=None,
+                    )
+            await session.commit()
+    except Exception:
+        logger.exception("billing_processing_end_failed", job_id=str(job_id))
 
 
 async def job_ended(
@@ -450,35 +603,33 @@ async def job_ended(
     A job that reserved nothing (charging off at its start, no estimate) is
     left alone. Never raises: the job's end is already written.
     """
-    if not charging.charging_possible():
-        return
-    key = processing_key(job_id)
-    try:
-        async with session_factory() as session:
-            if not completed:
-                await charging.fail(
-                    session, action_kind=ActionKind.PROCESSING, action_key=key
-                )
-            else:
-                task = await session.get(AuthoredDocument, authored_document_id)
-                tenant_id = (
-                    await _tenant_of_document(session, task)
-                    if task is not None
-                    else None
-                )
-                if task is not None and tenant_id is not None:
-                    await charging.finish(
-                        session,
-                        action_kind=ActionKind.PROCESSING,
-                        action_key=key,
-                        fact_usd=await charging.job_fact_usd(session, job_id),
-                        tenant_id=tenant_id,
-                        course_node_id=task.course_root_id,
-                        student_id=None,
-                    )
-            await session.commit()
-    except Exception:
-        logger.exception("billing_processing_end_failed", job_id=str(job_id))
+    await _processing_ended(
+        session_factory,
+        job_id=job_id,
+        completed=completed,
+        course_of=lambda session: _course_of_document(session, authored_document_id),
+    )
+
+
+async def node_summary_regeneration_ended(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    job_id: uuid.UUID,
+    vertex_node_id: uuid.UUID,
+    completed: bool,
+) -> None:
+    """A regeneration of node summaries ended — as :func:`job_ended`.
+
+    ``complete`` settles the cost of the job's calls the author pays; failed or
+    obsolete releases the reserve. A job that reserved nothing is left alone.
+    Never raises.
+    """
+    await _processing_ended(
+        session_factory,
+        job_id=job_id,
+        completed=completed,
+        course_of=lambda session: _course_of_node(session, vertex_node_id),
+    )
 
 
 # ── A task preparation a submission runs (criteria decomposition) ─────
@@ -636,6 +787,8 @@ __all__ = [
     "billing_note",
     "configure",
     "job_ended",
+    "node_summary_regeneration_ended",
+    "node_summary_regeneration_started",
     "preparation_ended",
     "preparation_started",
     "processing_started",

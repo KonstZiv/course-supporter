@@ -9,6 +9,12 @@ Routes
 - ``POST /nodes/{node_id}/documents/estimate`` — an author (the tenant's key,
   scope ``prep``): the price of processing a material of the node, from its
   features as the client knows them (kind, duration, slides, text size).
+- ``POST /nodes/{node_id}/summary/estimate`` — an author (scope ``prep``,
+  their own node): the price of regenerating the section descriptions of the
+  node's subtree (the Methodist, ``POST /nodes/{node_id}/summary/generate``) —
+  the author's processing, priced on the job's own factors by the function
+  the job reserves on; the same body as the generate route. Every summary
+  fresh: ``price_units`` 0, ``unpriced_reason`` ``nothing_to_do``.
 - ``POST /documents/{document_id}/reference/estimate`` — an author (scope
   ``prep``): the price of the explanations of a test's key.
 
@@ -22,9 +28,12 @@ priced (BIL-E3) answers ``price_units`` and ``missing_units`` null, ``enough``
 true, and why: ``unpriced_reason`` ``missing_features`` — the body lacks a
 feature the kind of material needs (``missing_features`` names the fields) —
 or ``estimate_failed``. The action is not refused in advance: its start checks
-the threshold on its real features. The refusal of a submission for want
-of units is 402 ``{"detail": {"code": "insufficient_units", "details":
-{price_units, available_units, missing_units}}}``
+the threshold on its real features. One action has a price of 0 for a reason:
+a regeneration of node summaries that would call no model answers
+``price_units`` 0 and ``unpriced_reason`` ``nothing_to_do``. The refusal of a
+submission for want of units is 402 ``{"detail": {"code":
+"insufficient_units", "details": {price_units, available_units,
+missing_units}}}``
 (:func:`course_supporter.billing.quotes.require_enough`).
 
 A student's review the author pays for under a rule carries no numbers
@@ -46,16 +55,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_current_student, get_session
 from course_supporter.api.routes.portal_submissions import _answerable_task
+from course_supporter.api.schemas import NodeSummaryGenerateRequest
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.billing.estimates import (
     key_explanation_task_chars,
+    node_summary_e_usd,
     preparation_e_usd,
     processing_e_usd,
 )
 from course_supporter.billing.kinds import ActionKind
 from course_supporter.billing.quotes import Quote, author_quote, review_quote
 from course_supporter.cost_estimate.actions import REQUIRED_FACTORS, MaterialFactors
+from course_supporter.cost_estimate.node_summary import read_node_summary_factors
 from course_supporter.homework.reference_key import AnswerKey
 from course_supporter.homework.reference_service import ReadOnlyQueue
 from course_supporter.homework.task_context import load_task_source_text
@@ -83,7 +95,7 @@ PrepDep = Annotated[TenantContext, Depends(require_scope("prep"))]
 
 _NOT_FOUND = "Not found."
 
-UnpricedReason = Literal["missing_features", "estimate_failed"]
+UnpricedReason = Literal["missing_features", "estimate_failed", "nothing_to_do"]
 
 
 class AuthorEstimateResponse(BaseModel):
@@ -112,7 +124,10 @@ class AuthorEstimateResponse(BaseModel):
         default=None,
         description="Why there is no price: missing_features — the body lacks a "
         "feature this kind of material needs (listed in missing_features); "
-        "estimate_failed — the estimate itself failed. Null when priced.",
+        "estimate_failed — the estimate itself failed. Or why the price is 0: "
+        "nothing_to_do — the action would call no model (every node summary "
+        "of the scope is fresh), nothing is reserved or charged. Null when "
+        "priced.",
     )
     missing_features: list[str] | None = Field(
         default=None,
@@ -185,11 +200,14 @@ def _review_response(quote: Quote) -> ReviewEstimateResponse:
 
 
 def _author_response(
-    quote: Quote, missing: list[str] | None = None
+    quote: Quote, missing: list[str] | None = None, *, nothing_to_do: bool = False
 ) -> AuthorEstimateResponse:
-    """The answer; without a price, why — the missing features, else a failure."""
+    """The answer; without a price, why — the missing features, else a failure;
+    at a price of 0 for want of work, ``nothing_to_do``."""
     reason: UnpricedReason | None = None
-    if quote.price_units is None:
+    if nothing_to_do:
+        reason = "nothing_to_do"
+    elif quote.price_units is None:
         reason = "missing_features" if missing else "estimate_failed"
     return AuthorEstimateResponse(
         price_units=quote.price_units,
@@ -374,6 +392,42 @@ async def estimate_processing(
         e_usd=None if missing else processing_e_usd(kind=body.kind, factors=factors),
     )
     return _author_response(quote, missing)
+
+
+@router.post(
+    "/nodes/{node_id}/summary/estimate",
+    response_model=AuthorEstimateResponse,
+)
+async def estimate_node_summary_regeneration(
+    tenant: PrepDep,
+    session: SessionDep,
+    node_id: uuid.UUID,
+    body: NodeSummaryGenerateRequest,
+) -> AuthorEstimateResponse:
+    """The price of regenerating the section descriptions under this node.
+
+    The author's processing (the Methodist's job,
+    ``POST /nodes/{node_id}/summary/generate``): priced on the job's own
+    factors — the scope and the freshness read by
+    :func:`~course_supporter.cost_estimate.node_summary.read_node_summary_factors`
+    — by the function the job reserves on
+    (:func:`~course_supporter.billing.estimates.node_summary_e_usd`), so the
+    price shown is the E reserved. The body is the generate route's; ``force``
+    does not change the price (the run's scope is the node's subtree either
+    way) and this route never answers its 422. Every summary fresh: price 0,
+    ``unpriced_reason`` ``nothing_to_do``. Writes nothing.
+    """
+    del body  # the generate route's body; ``force`` is no factor of the price
+    root_id = await _course_root_of_node(session, tenant.tenant_id, node_id)
+    factors = await read_node_summary_factors(session, node_id)
+    quote = await author_quote(
+        session,
+        action_kind=ActionKind.PROCESSING,
+        tenant_id=tenant.tenant_id,
+        course_node_id=root_id,
+        e_usd=node_summary_e_usd(factors),
+    )
+    return _author_response(quote, nothing_to_do=not factors.calls_model)
 
 
 @router.post(

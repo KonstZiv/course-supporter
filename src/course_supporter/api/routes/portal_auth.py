@@ -56,7 +56,7 @@ _LOGIN_RATE_LIMIT = 10
 
 # Single generic message for every auth failure — never leak whether the login
 # exists, the password was wrong, or the tenant is inactive.
-_INVALID_CREDENTIALS = "Invalid login or password"
+INVALID_CREDENTIALS = "Invalid login or password"
 
 
 @router.post("/portal/login", response_model=PortalLoginResponse)
@@ -79,12 +79,12 @@ async def portal_login(
     if credential is None or not verify_password(
         body.password, credential.password_hash
     ):
-        raise HTTPException(status_code=401, detail=_INVALID_CREDENTIALS)
+        raise HTTPException(status_code=401, detail=INVALID_CREDENTIALS)
 
     # Mirror get_current_tenant: an inactive tenant cannot authenticate.
     tenant = await session.get(Tenant, body.tenant_id)
     if tenant is None or not tenant.is_active:
-        raise HTTPException(status_code=401, detail=_INVALID_CREDENTIALS)
+        raise HTTPException(status_code=401, detail=INVALID_CREDENTIALS)
 
     student = await session.get(Student, credential.student_id)
     token = issue_session_token(

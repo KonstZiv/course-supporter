@@ -86,6 +86,7 @@ from course_supporter.storage.submission_verdict_repository import (
 from course_supporter.storage.task_criteria_override_repository import (
     TaskCriteriaOverrideRepository,
 )
+from tests._helpers.stored_review import UNKNOWN, with_unknown
 from tests.integration.test_document_segment_repository import (
     _seed_child,
     _seed_material,
@@ -398,6 +399,38 @@ class TestTheWorld:
             world.a1.id,
         ]
         assert found.shown("c2") == ()
+
+
+class TestAnExplanationWrittenByANewerRelease:
+    """Debt DD-SP-DL: the stored explanation is read, not written, so a field
+    its models do not know is left out and the review is built as ever."""
+
+    async def test_a_remark_with_an_unknown_field_builds_the_same_review(
+        self,
+        db_session: AsyncSession,
+        session_factory: async_sessionmaker[AsyncSession],
+        register_job: uuid.UUID,
+        world: _World,
+    ) -> None:
+        links = {"c1": ["c1.l2"], "c2": []}
+        await _searched_and_explained(db_session, world, links)
+        await SubmissionVerdictRepository(db_session).store_explanation(
+            tenant_id=world.submission.tenant_id,
+            submission_id=world.submission.id,
+            language="ukr",
+            body=with_unknown(_explanation(links), (), ("remarks", 0), ("remarks", 1)),
+        )
+
+        with capture_logs() as logs:
+            built = await _build(db_session, session_factory, world, register_job)
+
+        assert _linked(built) == [[str(world.a2.id)], []]
+        assert UNKNOWN not in repr(built.structure)
+        [skipped] = [
+            entry for entry in logs if entry["event"] == "stored_unknown_fields_ignored"
+        ]
+        assert skipped["model"] == "ExplanationAnswer"
+        assert skipped["submission_id"] == str(world.submission.id)
 
 
 class TestAChosenPlaceGone:

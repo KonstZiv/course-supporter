@@ -94,9 +94,9 @@ class TestNormalizeFilename:
         # Detection of the suspicious char is unicode_check's job;
         # normalization only gives the whitelist a deterministic
         # comparison string.
-        rtl = "homework‮.txt"
+        rtl = "homework\u202e.txt"
         result = normalize_filename(rtl)
-        assert "‮" in result
+        assert "\u202e" in result
 
     def test_idempotent(self) -> None:
         name = "report.docx"

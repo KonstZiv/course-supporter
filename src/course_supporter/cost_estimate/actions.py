@@ -518,6 +518,12 @@ class NodeSummaryFactors:
     topdown_nodes: int
     nodes: int
 
+    @property
+    def calls_model(self) -> bool:
+        """Will the job call a model at all? ``False`` — every summary of the
+        scope is fresh on both axes: nothing to regenerate, nothing to pay."""
+        return bool(self.bottomup_chars) or self.topdown_nodes > 0
+
     def as_json(self) -> dict[str, Any]:
         """The known factors, for the ``inputs`` column."""
         return {

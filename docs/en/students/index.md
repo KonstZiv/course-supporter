@@ -9,7 +9,7 @@ keywords:
   - test
   - review
   - replies
-last_updated: 2026-11-22
+last_updated: 2026-11-24
 ---
 
 # For students
@@ -62,6 +62,18 @@ review — even if you sent the same answers again.
 
 If an attempt could not be checked, the portal tells you — send your answers again.
 
+## Units and paying for a review {#units}
+
+A package of units pays for the review of homework. You can buy it in the student portal, in the "Units" section: choose a package, confirm the terms before your first purchase and pay on the checkout page. A unit is not money and not a means of payment, but an amount of the platform's service. The "Units" page shows how many units are available, when some of them will expire soon and what has happened to them.
+
+Before you submit work, the portal shows the estimated cost of the review and how many units you have available. Tests do not use up units as long as something remains in your package; when there are no units at all, a test cannot be submitted — buy a package first. Submitting the same work again does not use up units. Reviewing projects does not use up units for now either.
+
+If you do not have enough units, instead of the submit button the portal shows "Not enough units (Не вистачає юнітів)" and the link "Buy units (Купити юніти)". The chosen file stays on the page: after buying, go back to this tab — the portal notices by itself that you have enough units. If the work has already been accepted but its review has not started because of a shortage of units, it is marked "Paused (Призупинено)": after you buy a package the review continues by itself, and you do not have to submit the work again.
+
+If the author of the course pays for the review of your work, the portal says "The course author pays for the review of this work (Перевірку цієї роботи оплачує автор курсу)", and there is no "Units" item in the menu. If the author does not have enough units, the work is still accepted but it waits: "Waiting for review (Чекає перевірки)" — the review starts when the author buys units. You do not have to submit the work again.
+
+When you are running low on units, the portal reminds you on the "My courses" and "Units" pages and tells you roughly how many reviews they will cover; it also reminds you when some units are about to expire: a package is valid for six months from the day of purchase.
+
 ## Replies to a review {#replies}
 
 **Turned off for now.** This feature will be turned on together with answers to replies in the review.
@@ -71,8 +83,8 @@ write a reply — a **question**, an **objection** or a **comment**. The next re
 answer every reply.
 
 - **The answer comes with your next submission.** Send your work again — corrected or the same: the
-  review of it will answer your replies. The same work with replies is reviewed anew, rather than
-  repeating the previous review.
+  review of it will answer your replies. If the replies concern the work, the same work is reviewed
+  anew; for replies not about the work, the answer is short, without a new review.
 - **You can write only to the latest review.** While a new submission is being reviewed, replies to
   the previous review are not accepted — wait for the new one and write to it. If the author changed
   the assignment after the review, replies to it are not accepted either.

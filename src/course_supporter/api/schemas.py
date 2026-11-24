@@ -1820,6 +1820,10 @@ class SetStudentPasswordRequest(BaseModel):
     password: str = Field(min_length=1, description="New portal password (plaintext).")
 
 
+#: Who made an enrollment (O-1): ``student_enrollments.source``.
+EnrollmentSource = Literal["author", "self"]
+
+
 class EnrollmentRequest(BaseModel):
     """Request body for POST /students/enrollments (bind student↔course)."""
 
@@ -1857,6 +1861,12 @@ class StudentRosterItem(BaseModel):
     enrollment_count: int = Field(
         description="Number of course enrollments (correlated count)."
     )
+    source: EnrollmentSource = Field(
+        default="author",
+        description="How the student came (O-1): the source of their first "
+        "enrollment — 'self' when they enrolled by a course link, 'author' "
+        "when the author enrolled them; 'author' with no enrollment.",
+    )
 
 
 class StudentRosterResponse(BaseModel):
@@ -1886,6 +1896,10 @@ class StudentEnrollmentItem(BaseModel):
 
     course_node_id: uuid.UUID = Field(description="Enrolled root CourseNode id.")
     enrolled_at: datetime = Field(description="When the grant was created.")
+    source: EnrollmentSource = Field(
+        description="Who made the grant (O-1): 'author' — the author; 'self' — "
+        "the student by the course link."
+    )
 
 
 class StudentEnrollmentsResponse(BaseModel):
@@ -1894,6 +1908,210 @@ class StudentEnrollmentsResponse(BaseModel):
     student_id: uuid.UUID = Field(description="The student these grants belong to.")
     items: list[StudentEnrollmentItem] = Field(
         description="Enrollments, oldest-first (mirrors bind order)."
+    )
+
+
+# --- Open courses (O-1): enrollment by a course link ---
+
+
+def _email_shape(raw: str) -> str:
+    """A single ``@`` with a local part and a domain (as the recovery email;
+    the confirm mail proves the rest); lower-cased, as stored."""
+    local, sep, domain = raw.strip().partition("@")
+    if not sep or not local or not domain:
+        msg = "email must contain a local part and a domain (e.g. name@example.com)"
+        raise ValueError(msg)
+    return raw.strip().lower()
+
+
+def _must_be_adult(value: bool) -> bool:
+    if value is not True:
+        raise ValueError("adult must be true: enrollment is for people aged 18+")
+    return value
+
+
+#: An email of the open-course routes: shape-checked and lower-cased.
+JoinEmail = Annotated[
+    str,
+    Field(min_length=3, max_length=320, description="Email address."),
+    AfterValidator(_email_shape),
+]
+#: The "I am 18 or older" mark: required, and only ``true`` is accepted.
+AdultMark = Annotated[
+    bool,
+    Field(description='The "I am 18 or older" mark; must be true (422 otherwise).'),
+    AfterValidator(_must_be_adult),
+]
+#: The terms revision and fingerprint, as in ``BillingConsentRequest``.
+TermsVersion = Annotated[
+    str,
+    Field(
+        max_length=32,
+        description="The billing terms revision shown; must be the one in "
+        "force (409 terms_changed otherwise).",
+    ),
+]
+TermsTextSha256 = Annotated[
+    str,
+    Field(
+        pattern=r"^[0-9a-f]{64}$",
+        description="SHA-256 (lowercase hex) of the terms text shown.",
+    ),
+]
+
+
+class EnrollmentLinkResponse(BaseModel):
+    """GET/POST /nodes/{course_id}/enrollment-link[/open|/rotate|/close]."""
+
+    open: bool = Field(description="True while the course's link works.")
+    key: str | None = Field(
+        description="The course key; null while the link is closed."
+    )
+    url: str | None = Field(
+        description="The link to give out: {portal_base_url}/{tenant_id}/join/"
+        "{key}; null while closed."
+    )
+
+
+class JoinCourseCardResponse(BaseModel):
+    """GET /portal/join/{tenant_id}/{key}: the course the link leads to."""
+
+    course_id: uuid.UUID = Field(description="The course (root node) id.")
+    course_title: str = Field(description="The course title.")
+    author_name: str = Field(description="The author's (tenant's) name.")
+    languages: list[str] = Field(
+        description="ISO 639-3 languages of the course: its own language "
+        "first, then the other languages of its materials."
+    )
+    terms_version: str = Field(
+        description="Revision of the billing terms in force: the date it took "
+        "effect, YYYY-MM-DD. Signup sends it back as ``terms_version``."
+    )
+
+
+class JoinSignupRequest(BaseModel):
+    """POST /portal/join/{tenant_id}/{key}/signup."""
+
+    login: str = Field(min_length=1, max_length=200, description="Portal login.")
+    password: str = Field(
+        min_length=1,
+        max_length=1024,
+        description="Portal password (plaintext; only the argon2id hash is "
+        "kept). Must meet the minimum-length policy (422 otherwise).",
+    )
+    email: JoinEmail
+    display_name: str | None = Field(
+        default=None, max_length=200, description="Portal display name."
+    )
+    interface_language: str | None = Field(
+        default=None,
+        description="Language of the portal pages and of the confirm email; "
+        "ISO 639-1 or 639-3 accepted, stored as 639-3. Null: Ukrainian.",
+        examples=["en", "ukr"],
+    )
+    adult: AdultMark
+    terms_version: TermsVersion
+    text_sha256: TermsTextSha256
+
+    @field_validator("interface_language")
+    @classmethod
+    def _check_language(cls, raw: str | None) -> str | None:
+        return None if raw is None else _validate_language(raw)
+
+
+class JoinSignupResponse(BaseModel):
+    """202 of signup and resend: the request waits for the email."""
+
+    signup_id: uuid.UUID = Field(description="The request; resend names it.")
+    email_masked: str = Field(description="The email, masked: a***@d***.com.")
+    expires_at: datetime = Field(
+        description="Confirm before this, or the request is void (7 days)."
+    )
+
+
+class JoinResendRequest(BaseModel):
+    """POST /portal/join/resend."""
+
+    signup_id: uuid.UUID = Field(description="The pending request.")
+
+
+class JoinConfirmRequest(BaseModel):
+    """POST /portal/join/confirm."""
+
+    token: str = Field(min_length=1, description="The token of the mailed link.")
+
+
+class JoinChangeLoginRequest(BaseModel):
+    """POST /portal/join/{signup_id}/login: another login for a request whose
+    login was taken before it was confirmed."""
+
+    login: str = Field(min_length=1, max_length=200, description="The new login.")
+    token: str = Field(min_length=1, description="The token of the mailed link.")
+
+
+class JoinConfirmResponse(PortalLoginResponse):
+    """200 of confirm: a session, as POST /portal/login gives, and the course."""
+
+    tenant_id: uuid.UUID = Field(description="The student's tenant.")
+    course_id: uuid.UUID = Field(description="The course enrolled in.")
+
+
+class PortalCourseJoinRequest(BaseModel):
+    """POST /portal/courses/join: a student with a login joins by a link."""
+
+    tenant_id: uuid.UUID = Field(description="The tenant of the link.")
+    key: str = Field(min_length=1, max_length=200, description="The course key.")
+    adult: AdultMark
+    terms_version: TermsVersion
+    text_sha256: TermsTextSha256
+
+
+class PortalCourseJoinResponse(BaseModel):
+    """201 enrolled / 200 already_enrolled."""
+
+    status: Literal["enrolled", "already_enrolled"] = Field(
+        description="enrolled (201) or already_enrolled (200)."
+    )
+    course_id: uuid.UUID = Field(description="The course.")
+
+
+class PortalEmailLoginRequest(BaseModel):
+    """POST /portal/login-by-email (variant A)."""
+
+    email: JoinEmail
+    password: str = Field(
+        min_length=1, max_length=1024, description="Password (plaintext)."
+    )
+    tenant_id: uuid.UUID | None = Field(
+        default=None, description="The tenant chosen from ``choose``."
+    )
+    login: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="The login chosen from ``choose``.",
+    )
+
+
+class PortalEmailLoginResponse(PortalLoginResponse):
+    """200, one match: a session, as POST /portal/login gives."""
+
+    tenant_id: uuid.UUID = Field(description="The tenant signed in to.")
+
+
+class PortalEmailLoginChoice(BaseModel):
+    """A login the password matched; the portal asks which one."""
+
+    tenant_id: uuid.UUID
+    tenant_name: str = Field(description="The author's (tenant's) name.")
+    login: str
+
+
+class PortalEmailLoginChoiceResponse(BaseModel):
+    """200, several matches: no session; send again with tenant_id + login."""
+
+    choose: list[PortalEmailLoginChoice] = Field(
+        description="Only the logins whose password matched."
     )
 
 

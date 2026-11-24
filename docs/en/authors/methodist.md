@@ -9,7 +9,7 @@ keywords:
   - Generate description
   - Approve
   - running again
-last_updated: 2026-11-22
+last_updated: 2026-11-23
 ---
 
 # Section descriptions: the Methodist
@@ -52,23 +52,23 @@ Click the section card and, in the panel, press "View/edit description (Пере
 
 | Field on the screen | What is in it | Does the Mentor read it | Can you edit it |
 |---|---|---|---|
-| "Title (Заголовок)" | a short name for what the section teaches | only for the "Project (Проєкт)" type | yes |
-| "Description (Опис)" | one paragraph: what the section covers and what the student does in it | goes into the list of criteria of all assignments; the "Project" type also reads it with every review | yes |
-| "Learning objectives (Навчальні цілі)" | what the student will be able to do after the section | only for the "Project" type | yes |
+| "Title (Заголовок)" | a short name for what the section teaches | no | yes |
+| "Description (Опис)" | one paragraph: what the section covers and what the student does in it | goes into the list of criteria of all assignments | yes |
+| "Learning objectives (Навчальні цілі)" | what the student will be able to do after the section | no | yes |
 | "Knowledge (will know) (Знання (буде знати))" | facts, concepts, principles | no | yes |
 | "Skills (will be able to) (Навички (буде вміти))" | what the student can do in practice | no | yes |
-| "Success criteria (Критерії успіху)" | what the student has to show in the submitted work | only for the "Project" type | yes |
+| "Success criteria (Критерії успіху)" | what the student has to show in the submitted work | no | yes |
 | "Assessment approach (Підхід до оцінювання)" | how to assess: what to send back for rework, what to accept with a reminder, what not to count as a mistake | not yet | yes |
 | "Teaching approach (Підхід до викладання)" | how the section's materials teach | no | yes |
 | "Key activities (Ключові активності)" | what the student does in the section | no | yes |
-| "Common mistakes (Типові помилки)" | mistakes in the work — by signs visible in the work itself | only for the "Project" type | yes |
+| "Common mistakes (Типові помилки)" | mistakes in the work — by signs visible in the work itself | no | yes |
 | "Core concepts (Основні концепти)", "Secondary concepts (Другорядні концепти)" | concepts gathered from the section's materials | no; but the core ones go into the list of criteria | no |
 | "Enclosing context (Охоплюючий контекст)" | the section's place in the course | no | no |
 | "Methodist's observations (Спостереження методиста)" | the Methodist's notes for you | no | no |
 
-The words "Core concepts" and "Secondary concepts" on the screen mean the same as "concepts" on this page. If the Mentor column says a field is read only for the "Project" type, the Mentor does not assess "Short assignment (Коротке завдання)" and "Assignment (Завдання)" types against that field.
+The words "Core concepts" and "Secondary concepts" on the screen mean the same as "concepts" on this page.
 
-**Coming soon!** It is planned that the "Learning objectives", "Success criteria" and "Common mistakes" fields will become the basis of the list of criteria for the "Short assignment" and "Assignment" types as well, so requirements written in these fields will make it into the review.
+**Coming soon!** It is planned that the "Learning objectives", "Success criteria" and "Common mistakes" fields will become the basis of the list of criteria, so requirements written in these fields will make it into the review.
 
 At the bottom of the window is the line "Documents: … (with subtree …) · characters: … (with subtree …)" («Документів: … (з піддеревом …) · символів: … (з піддеревом …)»): how many materials and characters of text the section has by itself and together with everything below it. The numbers are counted at the time of generation: only processed materials, without tests.
 
@@ -83,8 +83,8 @@ The platform considers a section to have assignments if it contains a processed 
 
 There are many descriptions; check them in this order.
 
-1. **Sections with assignments.** It is their descriptions the Mentor reads. Check "Description" — it goes into the list of criteria of every assignment. If the section has a "Project" assignment, also check "Success criteria" and "Common mistakes". See whether these really are your requirements, whether there are requirements from other lessons, whether each point can be checked from the submitted work.
-2. **The course description** (the course card). Its "Success criteria" are read by the Mentor in the review of every project of the course; for "Short assignment" and "Assignment" types, only the "Core concepts" field is taken from the course description. Here you should have the outcomes of the whole course, not the requirements of a single lesson.
+1. **Sections with assignments.** The Mentor reads their "Description" field — it goes into the list of criteria of every assignment. See whether these really are your requirements, whether there are requirements from other lessons, whether each point can be checked from the submitted work.
+2. **The course description** (the course card). Only the "Core concepts" field is taken from the course description. Here you should have the outcomes of the whole course, not the requirements of a single lesson.
 3. **"Methodist's observations"** in each section with an assignment: where the Methodist formulated requirements itself and what it did not carry over from your guide.
 4. **Intermediate sections** (blocks). The Mentor does not read their descriptions; edit them if you like.
 
@@ -109,20 +109,17 @@ At the top of the description window is the state — "Draft — not approved (�
 
 Important: "Accept generated" does not ask again and cannot be undone. All your edits of this description will be lost. Press this button only when you want to give up your own edits.
 
-Approval is a label for you, so that you do not get lost among the descriptions. The Mentor reads a description the same way whether it is approved or not. For a project, a saved edit takes effect from the next review; for "Short assignment" and "Assignment" types — only while the list of criteria has not been put together yet (see [below](#timing)).
+Approval is a label for you, so that you do not get lost among the descriptions. The Mentor reads a description the same way whether it is approved or not. A saved edit of the "Description" field reaches the review only while the assignment's list of criteria has not been put together yet (see [below](#timing)).
 
 After pressing "Approve" or "Accept generated", check that the top of the window says "Approved". If the app said nothing and the state did not change, press the button again or refresh the page.
 
 The "Compare with previous version (Порівняти з попередньою версією)" button appears if the Methodist rewrote the description during a repeated generation. It marks with the word "changed" («змінено») the fields that differ from the previous version. The app does not show the previous text itself, and it cannot be restored. After "Approve", the previous version disappears for good: the compare button will no longer be there once you open the description window again.
 
-## Which edits take effect straight away, and which only before the first submitted work {#timing}
+## When an edit of the description reaches the review {#timing}
 
-The Mentor reviews work against two sources.
+The Mentor reviews work against the assignment's list of criteria — for assignments of all types, including a project. The list is put together separately for each assignment — from the text of the assignment itself, the section's "Description" field and the core concepts of the section and the course — with the first submitted piece of work, and it is shared by all students. An edit of the "Description" field after that no longer reaches the list. More — [Assignments](tasks.md#criteria). The other description fields do not affect the review.
 
-- **The assignment's list of criteria.** It is put together separately for each assignment — from the text of the assignment itself, the section's "Description" field and the core concepts of the section and the course — with the first submitted piece of work, and it is shared by all students. An edit of the "Description" field after that no longer reaches the list. More — [Assignments](tasks.md#criteria).
-- **Section description fields — only for the "Project" type.** The Mentor reads "Title", "Description", "Learning objectives", "Success criteria" and "Common mistakes" anew in every project review, so edits to them take effect from the next review — whether the description is approved or not. For the "Short assignment" and "Assignment" types, these fields, apart from "Description", do not affect the review.
-
-The practical conclusion: get the "Description" field of a section with an assignment right before students — or you yourself, on behalf of a test student — start submitting work. The other fields can be refined later for a project, and for the "Short assignment" and "Assignment" types they do not affect the review.
+The practical conclusion: get the "Description" field of a section with an assignment right before students — or you yourself, on behalf of a test student — start submitting work.
 
 ## Running the Methodist again {#rerun}
 

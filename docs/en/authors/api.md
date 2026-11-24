@@ -13,7 +13,7 @@ keywords:
   - criteria
   - text assignment
   - refusal codes
-last_updated: 2026-11-22
+last_updated: 2026-11-24
 ---
 
 # Tests and criteria via the API
@@ -211,7 +211,7 @@ The response carries `status`: `awaiting_key` — the test is not published yet,
 explanations are being written, `ready` — everything is ready, `failed` — the explanations could not
 be written (the cause is named in `failure_reason`; to try again, publish the test once more). If the
 explanations were not written because your package ran out of units, `failure_code` is
-`insufficient_units`; for other causes, `failure_code` is `null`. Next to it — `answers` (the letters
+`insufficient_units`: buy a package in the author app and publish the test again; for other causes, `failure_code` is `null`. Next to it — `answers` (the letters
 of the correct options of the current version), `pass_threshold`, `explanations` (your own and those
 the system wrote) and `doubts` (see [Doubt](tests.md#doubt)). What the check found for a draft that is
 not yet published, this request does not show — reading the draft shows that (`check`, see
@@ -387,25 +387,30 @@ Each criterion carries:
 | `id` | the criterion's tag — `c1`, `c2`, …; set by the system |
 | `text` | what to check |
 | `evidence` | the sign by which you can see it is done |
-| `weight` | weight: `must` — required, `should` — desirable, `may` — optional |
+| `weight` | weight: `must` — major, `should` — moderate, `may` — minor |
 | `check_method` | how to check: `model_verdict` — the system assesses the work by the criterion's text and sign; `mandatory_points` — the criterion is met when the work contains every mandatory point; `code_test` — a check by running code, only in a project |
 | `soft_descent` | `true` — the check by running code is done by the system's assessment for now: the system cannot run code yet |
 | `concepts` | the core concepts the criterion concerns |
 | `mandatory_points` | mandatory points — for `mandatory_points`; each has its own tag: `c1.p1`, `c1.p2`, … |
+| `must_by_author` | only in your edit: `true` — you made this `must` mandatory for passing yourself; `false` — no (a `must` mark suggested by the automatic check affects only the score). This field is not present in the system's list |
 
 ### How passing is decided {#criteria-pass}
 
 The work's score is the share of the weights of the criteria met (`must` — 3, `should` — 2, `may` —
-1), as a percentage, rounded down. Whether the work is passed depends on whose list is in force:
+1), as a percentage, rounded down. Only a criterion you marked as mandatory yourself
+(`must_by_author: true`) is mandatory for passing. Whether the work is passed:
 
 - **your list** (you saved an edit, see [Correct the list](#criteria-edit)) and it has at least one
-  `must` — the work is passed if every `must` is met and the score is at least 70;
-- **the system's list**, or your list without a single `must` — the work is passed if the score is at
-  least 80. `must` criteria set by the system are also assessed, shown in the review and count in the
-  score, but they do not block passing by themselves.
+  `must` that you marked as mandatory yourself — the work is passed if every such `must` is met and
+  the score is at least 70;
+- **the system's list**, or your list without a single such `must` — the work is passed if the score
+  is at least 80.
 
-By saving the list, you confirm its `must` criteria: from then on, an unmet `must` prevents the work
-from being passed, whatever the score. The review explains to the student by which rule it was
+`must` marks suggested by the automatic check affect only the score until you confirm them: such a
+criterion is assessed, shown in the review and counts in the score, but does not block passing by
+itself — neither in the system's list nor in your list if you saved it without changing anything in the
+mark. For a criterion to become mandatory for passing, send `"must_by_author": true` in the edit
+(see [Correct the list](#criteria-edit)). The review explains to the student by which rule it was
 decided: it names the score and the pass mark.
 
 ### Read the list {#criteria-read}
@@ -428,7 +433,7 @@ students' work are waiting for the list in order to be reviewed against it (see
 [When there is no list](#criteria-none)). Next to them:
 
 - `model` — the list the system put together;
-- `author` — your edit, if you made one;
+- `author` — your edit, if you made one; each of its criteria carries `must_by_author`;
 - `in_force` — the list work is reviewed against: `layer` says whose it is (`author` — your edit,
   `model` — the system's list), `criteria` — the criteria themselves;
 - `contradictions` — where the assignment contradicts the section description. This is only for you:
@@ -462,10 +467,7 @@ what to do:
 | `composition_error` | Перелік критеріїв не вдалося скласти через внутрішню помилку системи. Зверніться до адміністратора системи: після виправлення він запустить повторну спробу, і тоді ж буде перевірено роботи, що чекають. | The list of criteria could not be put together because of an internal system error. Contact the system administrator: after the fix, they will start another attempt, and the waiting work will be reviewed at the same time. |
 | `not_attempted` | Перелік критеріїв для поточної версії завдання ще не складався, а роботи студентів уже чекають на нього. Він складеться автоматично, щойно хтось зі студентів подасть роботу на це завдання, і тоді ж буде перевірено роботи, що чекають. Якщо нових робіт найближчим часом не буде — зверніться до адміністратора системи, і він запустить повторну спробу. | The list of criteria for the current version of the assignment has not been put together yet, and students' work is already waiting for it. It will be put together automatically as soon as one of the students submits work for this assignment, and the waiting work will be reviewed at the same time. If no new work is expected soon, contact the system administrator, and they will start another attempt. |
 
-Today, a student's work for which there is no list still gets a review — without the list — and the
-next submission tries to put the list together again, so `waiting_submissions` is 0. When the review
-of text assignments relies only on the list, work without one will wait until the list appears and get
-its review at that point; `waiting_submissions` will show how many such pieces of work there are.
+Student work for which there is no list waits until the list appears and gets its review at that point; `waiting_submissions` shows how many such pieces of work there are.
 
 ### Correct the list {#criteria-edit}
 
@@ -474,8 +476,22 @@ An edit is sent as the whole list:
 ```bash
 curl -X PUT https://api.pythoncourse.me/api/v1/documents/$TASK_ID/criteria/override \
      -H "X-API-Key: $PREP_KEY" -H 'Content-Type: application/json' \
-     -d '{"criteria": [{"id": "c1", "text": "Обробляє n = 0", "evidence": "factorial(0) повертає 1", "weight": "must", "check_method": "model_verdict", "concepts": ["Рекурсія"]}, {"text": "Є базовий випадок", "evidence": "рекурсія зупиняється", "weight": "should", "check_method": "mandatory_points", "mandatory_points": [{"text": "умова зупинки"}]}]}'
+     -d '{"criteria": [{"id": "c1", "text": "Обробляє n = 0", "evidence": "factorial(0) повертає 1", "weight": "must", "check_method": "model_verdict", "concepts": ["Рекурсія"], "must_by_author": true}, {"text": "Є базовий випадок", "evidence": "рекурсія зупиняється", "weight": "should", "check_method": "mandatory_points", "mandatory_points": [{"text": "умова зупинки"}]}]}'
 ```
+
+- `must_by_author` — whether a `must` criterion is mandatory for passing (see
+  [How passing is decided](#criteria-pass)):
+    - `true` — mandatory; `false` — no, the criterion only counts in the score;
+    - not sent — a criterion that was `must` in your previous edit keeps its value from there: your
+      choice of `true` or `false` does not change until you send something else; a criterion whose
+      weight you raised to `must` in this edit and a new `must` criterion become mandatory; a `must`
+      that you kept from the system's list and have not marked yet does not become mandatory until
+      you send `true`;
+    - only for `must`: `true` in a criterion with another weight is a
+      [`MUST_BY_AUTHOR_WITHOUT_MUST`](#MUST_BY_AUTHOR_WITHOUT_MUST) refusal.
+- The response shows `must_by_author` in every criterion of your edit. An edit saved before this
+  field appeared does not have it: none of its `must` criteria is mandatory for passing until you
+  save an edit with `true`.
 
 - Send a criterion or point you are keeping with its `id` — the tag will be kept. A new one — without
   `id`: the system gives it a tag after the largest one in the current list and in the system's list,
@@ -516,3 +532,4 @@ A refusal carries the reason code and an explanation in the `detail` field:
 | `UNKNOWN_CRITERION_ID` {#UNKNOWN_CRITERION_ID} | 422 | the edit has a criterion or point `id` that is not in the current list | read the list again and send the edit with its `id`s; send a new criterion without `id` |
 | `CHECK_METHOD_NOT_ADMITTED` {#CHECK_METHOD_NOT_ADMITTED} | 422 | the check method is not for this assignment type: `code_test` — only in a project | choose `model_verdict` or `mandatory_points` |
 | `UNKNOWN_CONCEPT` {#UNKNOWN_CONCEPT} | 422 | a concept that is not in the `concepts` of reading | choose a concept from `concepts` or remove it |
+| `MUST_BY_AUTHOR_WITHOUT_MUST` {#MUST_BY_AUTHOR_WITHOUT_MUST} | 422 | `must_by_author: true` in a criterion whose weight is not `must` | set the criterion's weight to `must` or remove `must_by_author` |

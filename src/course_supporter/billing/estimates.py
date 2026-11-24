@@ -8,9 +8,9 @@ costs only the calibration, never the price (operator 2026-11-15, S6).
 
 When the computation itself fails, a review says so — ``None``: its path's
 money ceiling stands for E (BIL-E2, 4a), with one WARNING
-``billing_quote_ceiling`` naming the reason; a processing or a preparation
-returns ``None`` and is not charged (no estimate, no charge — operator
-2026-11-15, S2).
+``billing_quote_ceiling`` naming the reason; a processing (a regeneration of
+node summaries too) or a preparation returns ``None`` and is not charged (no
+estimate, no charge — operator 2026-11-15, S2).
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ import structlog
 from course_supporter.cost_estimate.actions import (
     LadderStage,
     MaterialFactors,
+    NodeSummaryFactors,
+    estimate_node_summary_regeneration,
     estimate_processing,
     estimate_review,
     estimate_task_preparation,
@@ -126,5 +128,37 @@ def processing_e_usd(
     except Exception:
         logger.warning(
             "billing_estimate_failed", action_kind="processing", exc_info=True
+        )
+        return None
+
+
+def node_summary_e_usd(
+    factors: NodeSummaryFactors, *, at: datetime | None = None
+) -> Decimal | None:
+    """E of one regeneration of node summaries; ``None`` if it cannot be made.
+
+    THE function of its price: the job reserves on it
+    (``billing.funds.node_summary_regeneration_started``) and the route that
+    shows the author the price before asking
+    (``POST /nodes/{node_id}/summary/estimate``) prices it — both on the
+    factors of ``cost_estimate.node_summary.read_node_summary_factors``, so the
+    price shown is the E reserved. 0 when the job calls no model (every summary
+    of the scope is fresh): nothing to price, nothing to reserve.
+    """
+    if not factors.calls_model:
+        return Decimal(0)
+    try:
+        return estimate_node_summary_regeneration(
+            factors=factors,
+            ladders=load_ladder_stages(),
+            settings=get_estimate_settings(),
+            catalog=load_catalog(),
+            at=_now(at),
+        ).e_usd
+    except Exception:
+        logger.warning(
+            "billing_estimate_failed",
+            action_kind="node_summary_regeneration",
+            exc_info=True,
         )
         return None

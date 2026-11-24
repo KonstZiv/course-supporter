@@ -74,7 +74,10 @@ import structlog
 from sqlalchemy import ColumnElement, and_, func, not_, or_, select
 
 from course_supporter.billing import ledger
-from course_supporter.billing.errors import BillingConflictError
+from course_supporter.billing.errors import (
+    ActionAlreadySettledError,
+    BillingConflictError,
+)
 from course_supporter.billing.journal import lock_account
 from course_supporter.billing.kinds import (
     AccountKind,
@@ -550,8 +553,9 @@ async def finish(
     was off then, or it is free) and for one whose reserve was released
     before its end — a hold outlived ``billing_stale_reserve_hours`` (operator
     2026-11-15, S3: nothing is charged, a WARNING names the action). A
-    repeated end returns the first outcome; an end with another fact is
-    logged and changes nothing.
+    repeated end returns the first outcome; repeating an already settled
+    action with a different fact (a platform-initiated repeat) charges
+    nothing and is logged as a WARNING.
     """
     reservation = await reservation_of(session, action_kind, action_key)
     log = logger.bind(action_kind=action_kind.value, action_key=action_key)
@@ -585,6 +589,13 @@ async def finish(
             excess_to_platform=not await credit_allowed(session, account),
             now=now or datetime.now(UTC),
         )
+    except ActionAlreadySettledError as exc:
+        log.warning(
+            "billing_finish_repeat_not_charged",
+            error=str(exc),
+            fact_usd=str(fact_usd),
+        )
+        return None
     except BillingConflictError as exc:
         log.error("billing_finish_conflict", error=str(exc))
         return None

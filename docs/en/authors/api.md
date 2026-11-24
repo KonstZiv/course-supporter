@@ -13,7 +13,7 @@ keywords:
   - criteria
   - text assignment
   - refusal codes
-last_updated: 2026-11-23
+last_updated: 2026-11-24
 ---
 
 # Tests and criteria via the API
@@ -211,7 +211,7 @@ The response carries `status`: `awaiting_key` — the test is not published yet,
 explanations are being written, `ready` — everything is ready, `failed` — the explanations could not
 be written (the cause is named in `failure_reason`; to try again, publish the test once more). If the
 explanations were not written because your package ran out of units, `failure_code` is
-`insufficient_units`; for other causes, `failure_code` is `null`. Next to it — `answers` (the letters
+`insufficient_units`: buy a package in the author app and publish the test again; for other causes, `failure_code` is `null`. Next to it — `answers` (the letters
 of the correct options of the current version), `pass_threshold`, `explanations` (your own and those
 the system wrote) and `doubts` (see [Doubt](tests.md#doubt)). What the check found for a draft that is
 not yet published, this request does not show — reading the draft shows that (`check`, see
@@ -467,10 +467,7 @@ what to do:
 | `composition_error` | Перелік критеріїв не вдалося скласти через внутрішню помилку системи. Зверніться до адміністратора системи: після виправлення він запустить повторну спробу, і тоді ж буде перевірено роботи, що чекають. | The list of criteria could not be put together because of an internal system error. Contact the system administrator: after the fix, they will start another attempt, and the waiting work will be reviewed at the same time. |
 | `not_attempted` | Перелік критеріїв для поточної версії завдання ще не складався, а роботи студентів уже чекають на нього. Він складеться автоматично, щойно хтось зі студентів подасть роботу на це завдання, і тоді ж буде перевірено роботи, що чекають. Якщо нових робіт найближчим часом не буде — зверніться до адміністратора системи, і він запустить повторну спробу. | The list of criteria for the current version of the assignment has not been put together yet, and students' work is already waiting for it. It will be put together automatically as soon as one of the students submits work for this assignment, and the waiting work will be reviewed at the same time. If no new work is expected soon, contact the system administrator, and they will start another attempt. |
 
-Today, a student's work for which there is no list still gets a review — without the list — and the
-next submission tries to put the list together again, so `waiting_submissions` is 0. When the review
-of text assignments relies only on the list, work without one will wait until the list appears and get
-its review at that point; `waiting_submissions` will show how many such pieces of work there are.
+Student work for which there is no list waits until the list appears and gets its review at that point; `waiting_submissions` shows how many such pieces of work there are.
 
 ### Correct the list {#criteria-edit}
 

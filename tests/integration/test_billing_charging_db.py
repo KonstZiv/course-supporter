@@ -1367,6 +1367,64 @@ async def test_the_portal_says_whose_units_a_held_review_waits_for(
     assert listed.json()[0]["presentation"]["reason_code"] == "awaiting_author_funds"
 
 
+async def test_the_authors_screen_says_whose_units_a_held_review_waits_for(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """M-3: the author's list and detail read the portal's ``presentation``,
+    with ``awaiting_author_funds`` once the author pays and has no units."""
+    from httpx import ASGITransport, AsyncClient
+
+    from course_supporter.api.app import app
+    from course_supporter.api.deps import get_current_tenant
+    from course_supporter.auth.context import TenantContext
+    from course_supporter.storage.database import get_session
+
+    w = await make_world(session_factory)
+    async with session_factory() as session:
+        await session.execute(
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == w.submission_id)
+            .values(status="awaiting_funds")
+        )
+        await session.commit()
+
+    async def _session() -> Any:
+        async with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[get_current_tenant] = lambda: TenantContext(
+        tenant_id=w.tenant_id,
+        tenant_name="m3",
+        scopes=["prep"],
+        plan_id="basic",
+        key_prefix="cs_m3",
+    )
+    base = f"/api/v1/students/{w.student_id}/submissions"
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            own = await client.get(base)
+            await course_rule(session_factory, w)
+            listed = await client.get(base)
+            detail = await client.get(f"{base}/{w.submission_id}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert own.status_code == 200, own.text
+    assert own.json()["items"][0]["presentation"] == {
+        "state": "awaiting_funds",
+        "reason_code": "awaiting_funds",
+    }
+    waits_for_author = {
+        "state": "awaiting_funds",
+        "reason_code": "awaiting_author_funds",
+    }
+    assert listed.json()["items"][0]["presentation"] == waits_for_author
+    assert detail.json()["presentation"] == waits_for_author
+
+
 async def test_the_portal_detail_carries_the_billing_note(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

@@ -2624,6 +2624,235 @@ class PortalSubmissionDetail(BaseModel):
     )
 
 
+class AuthorSubmissionStudent(BaseModel):
+    """The student a submission belongs to, as the author's screen names them."""
+
+    student_id: uuid.UUID = Field(description="Student primary key.")
+    display_name: str | None = Field(
+        default=None, description="Display name of the student, if one was set."
+    )
+
+
+class AuthorStudentHeader(AuthorSubmissionStudent):
+    """The student at the head of the author's submissions list."""
+
+    login: str | None = Field(
+        default=None,
+        description="Portal login of the student; null when no portal "
+        "credential was provisioned. Same source as GET /students.",
+    )
+
+
+class AuthorStudentEnrollment(BaseModel):
+    """A course the student is enrolled in, for the head of the list."""
+
+    course_id: uuid.UUID = Field(description="Root CourseNode id of the course.")
+    course_title: str = Field(description="Title of the course.")
+    enrolled_at: datetime = Field(description="When the student was enrolled.")
+
+
+class AuthorSubmissionBase(BaseModel):
+    """The fields a submission row and a submission detail have in common.
+
+    Never serialised on its own: the two author responses extend it. The
+    investigation trace (``safety_result``, ``sanity_result``, the raw
+    ``review_result``), the job, the storage key and every cost figure are
+    deliberately absent from both responses.
+    """
+
+    id: uuid.UUID = Field(description="Submission id.")
+    attempt_no: int | None = Field(
+        default=None,
+        description="Which attempt at the task this submission is (1 for the "
+        "first reviewed one); null for a submission made before attempts were "
+        "counted or one that took no number (refused, off-task, failed).",
+    )
+    previous_submission_id: uuid.UUID | None = Field(
+        default=None,
+        description="The student's latest earlier reviewed attempt at the same "
+        "task; null for the first.",
+    )
+    created_at: datetime = Field(description="When the work was submitted.")
+    reviewed_at: datetime | None = Field(
+        default=None,
+        description="When the review was written: the completion time of the "
+        "processing job that wrote it. Null while there is no review, and "
+        "when the job is not known to have finished.",
+    )
+    course_id: uuid.UUID = Field(description="Root CourseNode id of the course.")
+    course_title: str = Field(description="Title of the course.")
+    task_document_id: uuid.UUID = Field(
+        description="AuthoredDocument id of the task the work answers."
+    )
+    task_title: str = Field(
+        description="Label of the task: its title, else its file name, else "
+        "a derived '<source type> #<order>'."
+    )
+    task_type: str | None = Field(
+        default=None,
+        description="Kind of the task (short_task, task, project, test).",
+    )
+    status: str = Field(description="Lifecycle milestone of the submission.")
+    presentation: PortalPresentation = Field(
+        description="What to say about this attempt: the very answer the "
+        "student's portal shows, with 'awaiting_author_funds' when the review "
+        "waits for the author's units."
+    )
+    score: int | None = Field(default=None, description="Final 0-100 grade, if any.")
+    rejection: PortalRejection | None = Field(
+        default=None, description="Why the attempt was refused; null if it was not."
+    )
+    not_opened: list[PortalNotOpened] = Field(
+        default_factory=list,
+        description="Files skipped during checking, also on a passing attempt.",
+    )
+    recovered_encoding: str | None = Field(
+        default=None,
+        description="Encoding the submitted file was read as: 'utf-8' when read "
+        "directly, another name when recovered, null when it does not apply.",
+    )
+    is_repeat_copy: bool = Field(
+        description="True when this review is a copy of the earlier review of "
+        "the very same work (the work did not change), not a new evaluation."
+    )
+    review_language: str | None = Field(
+        default=None,
+        description="Language of the review, three-letter code as stored: the "
+        "review's own, else the language requested for the submission.",
+    )
+    original_filename: str | None = Field(
+        default=None, description="Name of the submitted file."
+    )
+
+
+class AuthorSubmissionListItem(AuthorSubmissionBase):
+    """One submission in the author's list of a student's work."""
+
+    passed: bool | None = Field(
+        default=None,
+        description="Whether the work was accepted, as the student's portal "
+        "reads it; null while there is no verdict.",
+    )
+
+
+class AuthorStudentSubmissions(BaseModel):
+    """GET /students/{student_id}/submissions: a student's work, newest first."""
+
+    student: AuthorStudentHeader = Field(description="The student.")
+    enrollments: list[AuthorStudentEnrollment] = Field(
+        description="Courses the student is enrolled in, oldest enrollment first."
+    )
+    items: list[AuthorSubmissionListItem] = Field(
+        description="The page of submissions, newest first."
+    )
+    total: int = Field(description="Submissions matching the filter, all pages.")
+    limit: int = Field(description="Page size that was applied.")
+    offset: int = Field(description="Submissions skipped before this page.")
+
+
+class AuthorPassRule(BaseModel):
+    """The pass rule that decided a criteria-judged review, as it was recorded."""
+
+    basis: str = Field(
+        description="Branch of the rule that decided: author_musts_met, "
+        "author_musts_unmet, author_musts_below_threshold, "
+        "no_author_musts_passed or no_author_musts_failed."
+    )
+    threshold: int = Field(
+        description="Pass threshold of that branch, whole percent (70 or 80)."
+    )
+    required_musts: int | None = Field(
+        default=None,
+        description="How many criteria the author made mandatory for the pass "
+        "(must_by_author) in the list the work was judged against; 0 for a "
+        "branch without them; null when the list cannot be read.",
+    )
+
+
+class AuthorCriterionVerdict(BaseModel):
+    """The verdict on one criterion or mandatory point of the judged list."""
+
+    item_id: str = Field(description="Identifier within the list: 'c3' or 'c3.p2'.")
+    item_kind: Literal["criterion", "point"] = Field(
+        description="Whether the item is a criterion or a mandatory point of one."
+    )
+    text: str = Field(description="The criterion's or point's text, as judged.")
+    weight: Literal["must", "should", "may"] | None = Field(
+        default=None, description="Weight category; null for a point."
+    )
+    must_by_author: bool = Field(
+        description="True when the author made this 'must' mandatory for the "
+        "pass themselves; false for everything else, a point included."
+    )
+    verdict: Literal["met", "not_met", "unconfirmed"] = Field(
+        description="'met'; 'not_met'; or 'unconfirmed': the model said met "
+        "and no line of the work bore it out, which counts as met for the "
+        "score and the pass."
+    )
+    quote: str | None = Field(
+        default=None, description="The evidence quoted from the work, if any."
+    )
+    quote_line_start: int | None = Field(
+        default=None,
+        description="First line of the quote in the file, from 1; null for a "
+        "document, or without a quote.",
+    )
+    missing: str | None = Field(
+        default=None, description="What is missing, for a 'not_met'."
+    )
+    remark_state: Literal["new", "open", "fixed", "broken"] | None = Field(
+        default=None,
+        description="State of the remark against the student's previous "
+        "attempt: new, open (still not credited), fixed, broken (credited "
+        "before, not now); null when credited now and before or without "
+        "comparison.",
+    )
+
+
+class AuthorSubmissionDetail(AuthorSubmissionBase):
+    """GET /students/{student_id}/submissions/{submission_id}: one work, whole."""
+
+    student: AuthorSubmissionStudent = Field(description="The student.")
+    verdict: PortalVerdict | None = Field(
+        default=None, description="Verdict as the student's portal reads it."
+    )
+    structure: ReviewStructureV1 | None = Field(
+        default=None,
+        description="The review as data, in the student's language (schema "
+        "version 1); null for a review written before the rebuild.",
+    )
+    review_markdown: str | None = Field(
+        default=None, description="Rendered Markdown review, once reviewed."
+    )
+    delta: PortalDeltaReceipt | None = Field(
+        default=None,
+        description="Comparison with the project's base, for a project "
+        "submission built on one; null otherwise.",
+    )
+    own_feedback: FeedbackTouch | None = Field(
+        default=None,
+        description="The student's own answer about this review; null when "
+        "they have not answered.",
+    )
+    pass_rule: AuthorPassRule | None = Field(
+        default=None,
+        description="The pass rule that decided the verdict; null for a test "
+        "and for a review written before the rule was recorded.",
+    )
+    criteria: list[AuthorCriterionVerdict] = Field(
+        description="Verdict on each criterion and mandatory point, in the "
+        "order of the list the work was judged against; empty when the review "
+        "has none (old review, test, refused work)."
+    )
+
+
+class AuthorSubmissionFileLink(BaseModel):
+    """A short-lived link to download the submitted file."""
+
+    url: str = Field(description="Temporary download link; do not store it.")
+    expires_at: datetime = Field(description="When the link stops working.")
+
+
 class PortalBaseDownload(BaseModel):
     """Presigned download of a project task's active base ORIGINAL (KD18 P5).
 

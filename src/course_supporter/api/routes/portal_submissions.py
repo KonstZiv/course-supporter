@@ -49,6 +49,7 @@ from course_supporter.api.routes._portal_shared import (
     curated_rejection,
     curated_structure,
     curated_verdict,
+    delta_receipt,
 )
 from course_supporter.api.routes._test_shared import (
     require_published,
@@ -90,7 +91,6 @@ from course_supporter.homework.test_doors import (
 )
 from course_supporter.material_visibility import role_visible_to_student
 from course_supporter.models.source import AssignmentType
-from course_supporter.normalizer import compute_delta, manifest_from_jsonb
 from course_supporter.storage.authored_document_repository import (
     AuthoredDocumentRepository,
 )
@@ -550,67 +550,6 @@ def _to_list_item(
     )
 
 
-async def _delta_receipt(
-    session: AsyncSession, submission: HomeworkSubmission
-) -> PortalDeltaReceipt | None:
-    """The I2 delta receipt — counters + staleness, derived on read (KD18 P5).
-
-    Null in the two cases where there is nothing to compare against: a
-    non-project submission (no snapshot manifest, so no delta concept) and a
-    project task with no base attached. The second used to return all-new
-    counters, and the portal drew "Порівняння з базовим проєктом · Змінено 0,
-    нових 12, видалено 0" over a comparison that never happened — the heading
-    is the interface's, but the object that switched it on was ours.
-
-    For a project submission built on a base the delta is derived (KD-P3-B)
-    from the persisted manifests — the DB stores manifests, not counts, and
-    ``compute_delta`` is BE-only. Counters are the sizes of the delta path
-    tuples; the hygiene level is intentionally not surfaced.
-    """
-    raw_sub = submission.snapshot_manifest
-    if raw_sub is None:
-        # Non-project submission: no delta concept.
-        return None
-    sub_manifest = manifest_from_jsonb(raw_sub)
-
-    if submission.base_id is None:
-        # No base was ever attached: there is no comparison to report, and a
-        # receipt of all-new counters is not a smaller version of one — it is a
-        # different claim. Null says the honest thing, and the portal already
-        # hides the block on null (PortalReviewDetail.tsx).
-        return None
-
-    # The base row or its manifest is gone, but this submission WAS built on a
-    # base: the comparison existed, its other side does not any more. All-new
-    # counters are the closest true statement left.
-    all_new = PortalDeltaReceipt(
-        changed=0,
-        new=len(sub_manifest.included),
-        deleted=0,
-        base_version=None,
-        latest_version=None,
-        is_stale=False,
-    )
-
-    pb_repo = ProjectBaseRepository(session)
-    base = await pb_repo.get_by_id(submission.base_id)
-    if base is None or base.manifest is None:
-        return all_new
-
-    delta = compute_delta(manifest_from_jsonb(base.manifest), sub_manifest)
-    latest_ready = await pb_repo.get_latest_ready(submission.authored_document_id)
-    latest_version = latest_ready.version if latest_ready is not None else None
-    is_stale = latest_version is not None and base.version < latest_version
-    return PortalDeltaReceipt(
-        changed=len(delta.changed),
-        new=len(delta.new),
-        deleted=len(delta.deleted),
-        base_version=base.version,
-        latest_version=latest_version,
-        is_stale=is_stale,
-    )
-
-
 def _to_detail(
     submission: HomeworkSubmission,
     *,
@@ -735,7 +674,7 @@ async def get_portal_submission(
     )
     if submission is None:
         raise HTTPException(status_code=404, detail="Submission not found.")
-    delta = await _delta_receipt(session, submission)
+    delta = await delta_receipt(session, submission)
     # The student's own answer, read with the session's tenant AND student —
     # never with the submission's. The row is served back to the person the
     # session names, so the session is what the lookup is keyed on.

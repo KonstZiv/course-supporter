@@ -85,7 +85,7 @@ class TestSecrets:
 class TestMemberNames:
     def test_a_direction_override_in_a_name_refuses_the_submission(self) -> None:
         with pytest.raises(SecurityRejectedError) as refused:
-            _student({"main.py": b"x = 1\n", "evil‮txt.py": b"x = 2\n"})
+            _student({"main.py": b"x = 1\n", "evil\u202etxt.py": b"x = 2\n"})
         assert refused.value.category is ErrorCategory.SUSPICIOUS_UNICODE
 
     def test_a_phrase_in_a_name_is_a_name_flag(self) -> None:
@@ -97,7 +97,7 @@ class TestMemberNames:
 
     def test_the_name_of_an_unread_file_is_screened_too(self) -> None:
         with pytest.raises(SecurityRejectedError):
-            _student({"main.py": b"x = 1\n", "a‮b.exe": b"MZ"})
+            _student({"main.py": b"x = 1\n", "a\u202eb.exe": b"MZ"})
 
 
 class TestTheAuthorIsStrictAsBefore:

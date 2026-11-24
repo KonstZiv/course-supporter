@@ -121,6 +121,7 @@ from course_supporter.homework.verdict_explanation import (
     ExplanationAnswer,
     PreviousRemark,
 )
+from course_supporter.models.stored_read import read_stored
 from course_supporter.remark_kinds import RemarkState
 from course_supporter.storage.orm import HomeworkSubmission
 from course_supporter.storage.submission_verdict_repository import (
@@ -177,7 +178,10 @@ async def read_earlier_review(
     The attempt is ``SubmissionVerdictRepository.earlier_attempt``'s — the
     latest earlier live attempt of the same student at the same version of
     the task that has verdict rows; its explanation, the row the explanation
-    stage kept for it. Reads only.
+    stage kept for it, read as every stored row is
+    (:func:`~course_supporter.models.stored_read.read_stored`): a field the
+    model does not know is left out and logged by its path, never a refusal
+    of the row. Reads only.
 
     Returns:
         ``None`` when there is nothing to compare with.
@@ -198,7 +202,11 @@ async def read_earlier_review(
             language=None,
             remarks=MappingProxyType({}),
         )
-    remarks = ExplanationAnswer.model_validate(explained.body).remarks
+    # Read leniently, as every reader of a stored explanation (``read_stored``):
+    # a field a newer release added is left out, never a refusal of the row.
+    remarks = read_stored(
+        ExplanationAnswer, explained.body, submission_id=attempt.submission_id
+    ).remarks
     return EarlierReview(
         submission_id=attempt.submission_id,
         rows=attempt.rows,

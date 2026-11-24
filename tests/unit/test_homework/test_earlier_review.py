@@ -11,7 +11,11 @@ Task 13, explanation side (the product owner's decisions A and B of
 * the limits are ``N // 2`` for the review and ``N * 3 // 10`` for one answer
   to a reply, from the number of criteria of the list;
 * ``reply_example_limit`` goes only with the replies, and an input without
-  limits — the project's — shows none.
+  limits — the project's — shows none;
+* the earlier explanation is read as every stored row is (``read_stored``,
+  merged from main with KonstZiv/course-supporter#712): a field the model
+  does not know — a newer release's — leaves its remarks as they are, and
+  the log names the field's path, never its value.
 """
 
 from __future__ import annotations
@@ -19,23 +23,32 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, replace
-from types import MappingProxyType
-from typing import Any
+from types import MappingProxyType, SimpleNamespace
+from typing import Any, ClassVar
 
 import pytest
+import structlog
+from structlog.testing import capture_logs
 
 from course_supporter.agents import review_explainer
 from course_supporter.criteria_kinds import CriteriaLayer
+from course_supporter.homework import earlier_review
 from course_supporter.homework.criteria_form import Criterion
-from course_supporter.homework.earlier_review import EarlierReview, previous_remarks
+from course_supporter.homework.earlier_review import (
+    EarlierReview,
+    previous_remarks,
+    read_earlier_review,
+)
 from course_supporter.homework.student_replies import RepliesView
 from course_supporter.homework.verdict_explanation import (
     CriterionRemark,
     ExampleLimits,
+    ExplanationAnswer,
     PreviousRemark,
     example_limits,
     explanation_facts,
 )
+from course_supporter.models import stored_read
 
 _LANGUAGE = "ukr"
 
@@ -257,3 +270,79 @@ class TestTheRequest:
 
         assert context["result"] == {"passed": False, "score": 33}
         assert "previous_remark" not in json.dumps(context, ensure_ascii=False)
+
+
+# ── The earlier explanation, read leniently ──
+
+_NEWER = "VALUE-OF-A-NEWER-RELEASE-5e1d"
+_EARLIER_ID = uuid.UUID("00000000-0000-7000-8000-0000000000e2")
+
+
+def _stored_body(*, newer: bool) -> dict[str, Any]:
+    body = ExplanationAnswer(
+        passed=False,
+        why="Функція є, але перевірок бракує.",
+        remarks=(_remark("c1"), _remark("c2")),
+        mentor_voice=None,
+    ).model_dump(mode="json")
+    if newer:
+        body["tone"] = _NEWER
+        body["remarks"][1]["severity"] = _NEWER
+    return body
+
+
+class _Repository:
+    """The verdict repository double: one earlier attempt, its explanation."""
+
+    body: ClassVar[dict[str, Any]] = {}
+
+    def __init__(self, session: Any) -> None:
+        pass
+
+    async def earlier_attempt(self, **_: Any) -> Any:
+        return SimpleNamespace(submission_id=_EARLIER_ID, rows=())
+
+    async def get_explanation(self, **_: Any) -> Any:
+        return SimpleNamespace(language=_LANGUAGE, body=type(self).body)
+
+
+async def _read(monkeypatch: pytest.MonkeyPatch, *, newer: bool) -> EarlierReview:
+    """The earlier review read through the repository double.
+
+    The reader's module logger is swapped for a fresh one: bound here
+    (``cache_logger_on_first_use``), it would keep the processors of this
+    test and slip past the ``capture_logs`` of ``read_stored``'s own tests.
+    """
+    monkeypatch.setattr(stored_read, "logger", structlog.get_logger())
+    monkeypatch.setattr(earlier_review, "SubmissionVerdictRepository", _Repository)
+    _Repository.body = _stored_body(newer=newer)
+    submission = SimpleNamespace(id=uuid.uuid4(), tenant_id=uuid.uuid4())
+    read = await read_earlier_review(None, submission)  # type: ignore[arg-type]
+    assert read is not None
+    return read
+
+
+class TestTheEarlierExplanationIsReadLeniently:
+    async def test_an_unknown_field_leaves_the_remarks_as_they_are(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        plain = await _read(monkeypatch, newer=False)
+        with capture_logs() as logs:
+            newer = await _read(monkeypatch, newer=True)
+
+        assert dict(newer.remarks) == dict(plain.remarks)
+        assert sorted(newer.remarks) == ["c1", "c2"]
+        assert newer.language == plain.language == _LANGUAGE
+        [line] = [e for e in logs if e["event"] == "stored_unknown_fields_ignored"]
+        assert line["model"] == "ExplanationAnswer"
+        assert sorted(line["fields"]) == ["remarks.1.severity", "tone"]
+        assert line["submission_id"] == str(_EARLIER_ID)
+        assert _NEWER not in repr(logs)
+
+    async def test_without_an_unknown_field_nothing_is_logged(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with capture_logs() as logs:
+            await _read(monkeypatch, newer=False)
+
+        assert [e for e in logs if e["event"] == "stored_unknown_fields_ignored"] == []

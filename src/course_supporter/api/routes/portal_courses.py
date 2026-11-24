@@ -148,7 +148,9 @@ def _build_overlay(
     latest = attempts[0]
     last = PortalAttemptResult(
         score=latest.score,
-        verdict=curated_verdict(latest.review_result, score=latest.score),
+        verdict=curated_verdict(
+            latest.review_result, score=latest.score, submission_id=latest.id
+        ),
     )
     scored = [
         s
@@ -160,7 +162,9 @@ def _build_overlay(
         top = max(scored, key=lambda s: s.score or 0)
         best = PortalAttemptResult(
             score=top.score,
-            verdict=curated_verdict(top.review_result, score=top.score),
+            verdict=curated_verdict(
+                top.review_result, score=top.score, submission_id=top.id
+            ),
         )
     return PortalSubmissionOverlay(
         submission_status=_overlay_status(latest.status),

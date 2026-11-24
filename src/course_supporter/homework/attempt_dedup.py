@@ -169,6 +169,7 @@ from course_supporter.models.review_schema import (
 )
 from course_supporter.models.review_structure import ReviewStructureV1
 from course_supporter.models.source import AssignmentType
+from course_supporter.models.stored_read import read_stored
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import AuthoredDocument, HomeworkSubmission
 
@@ -446,7 +447,7 @@ async def _find(
     )
     if source is None or source.attempt_no is None:
         return None
-    review = _version_1_review(source.review_result)
+    review = _version_1_review(source.review_result, submission_id=source.id)
     if review is None:
         logger.warning(
             "attempt_dedup_review_unreadable",
@@ -486,13 +487,23 @@ def _evaluator_version_of(receipt: dict[str, Any] | None) -> str:
     return version
 
 
-def _version_1_review(review_result: dict[str, Any] | None) -> ReviewStructureV1 | None:
-    """The stored review as a version-1 structure, or ``None`` when it is not one."""
+def _version_1_review(
+    review_result: dict[str, Any] | None, *, submission_id: uuid.UUID | None = None
+) -> ReviewStructureV1 | None:
+    """The stored review as a version-1 structure, or ``None`` when it is not one.
+
+    Read, not written: a field the models do not know — written by a newer
+    release than this one — is left out, not a reason to review the same work
+    anew and charge for it (:func:`~course_supporter.models.stored_read.read_stored`).
+    ``submission_id`` is the source's, for that warning only.
+    """
     if not review_result or review_schema_version(review_result) != (
         REVIEW_SCHEMA_VERSION
     ):
         return None
     try:
-        return ReviewStructureV1.model_validate(review_result)
+        return read_stored(
+            ReviewStructureV1, review_result, submission_id=submission_id
+        )
     except ValidationError:
         return None

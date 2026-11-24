@@ -130,7 +130,7 @@ class TestTheProjectDoor:
         """Lock Z2 at the door: refused before anything is stored."""
         reading, hw_repo, s3 = await _run(
             monkeypatch,
-            {"app.py": b"x = 1\n", "lib/util.py": "y = 2  # ‮\n".encode()},
+            {"app.py": b"x = 1\n", "lib/util.py": "y = 2  # \u202e\n".encode()},
         )
         assert reading is None
         assert hw_repo.status == "rejected"

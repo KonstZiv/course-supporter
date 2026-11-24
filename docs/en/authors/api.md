@@ -387,7 +387,7 @@ Each criterion carries:
 | `id` | the criterion's tag — `c1`, `c2`, …; set by the system |
 | `text` | what to check |
 | `evidence` | the sign by which you can see it is done |
-| `weight` | weight: `must` — required, `should` — desirable, `may` — optional |
+| `weight` | weight: `must` — major, `should` — moderate, `may` — minor |
 | `check_method` | how to check: `model_verdict` — the system assesses the work by the criterion's text and sign; `mandatory_points` — the criterion is met when the work contains every mandatory point; `code_test` — a check by running code, only in a project |
 | `soft_descent` | `true` — the check by running code is done by the system's assessment for now: the system cannot run code yet |
 | `concepts` | the core concepts the criterion concerns |

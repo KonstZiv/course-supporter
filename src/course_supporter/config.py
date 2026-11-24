@@ -169,7 +169,7 @@ class Settings(BaseSettings):
 
     # --- Payments (BIL-PAY) ---
     # The payment providers a checkout may use, by adapter name, as a JSON list
-    # (BILLING_PROVIDERS=["paddle"]); the first is the default. Empty — the
+    # (BILLING_PROVIDERS=["creem"]); the first is the default. Empty — the
     # default — means payment is unavailable: a checkout answers 503 and every
     # provider's webhook 404. A name no adapter answers to stops the API's
     # startup (billing.payments.registry); the test adapter "fake" answers in

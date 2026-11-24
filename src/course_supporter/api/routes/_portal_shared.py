@@ -10,6 +10,7 @@ logic is byte-identical to the prior ``portal_submissions._curated_verdict``.
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING, Final
 
 import structlog
@@ -31,6 +32,7 @@ from course_supporter.models.review_schema import (
     review_schema_version,
 )
 from course_supporter.models.review_structure import ReviewStructureV1
+from course_supporter.models.stored_read import problems_without_values, read_stored
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.security.schemas import ViolationCategory
 from course_supporter.storage.orm import HomeworkStatus
@@ -44,6 +46,8 @@ logger = structlog.get_logger(__name__)
 
 def curated_structure(
     review_result: dict[str, object] | None,
+    *,
+    submission_id: uuid.UUID | None = None,
 ) -> ReviewStructureV1 | None:
     """The review structure, when the stored review is one (task 04).
 
@@ -61,18 +65,29 @@ def curated_structure(
     the student's problem: it is logged and read as absent, so the rest of the
     page still renders. Raising would turn one bad row into a broken page;
     dropping it without a word would make it unfindable.
+
+    A row is read, not written: a field the models do not know — a newer
+    release wrote it, and this one is older — is left out of what is read, with
+    a warning (:func:`~course_supporter.models.stored_read.read_stored`), not a
+    reason to show the student an empty review. ``submission_id`` is only for
+    that warning.
     """
     if not review_result:
         return None
     if review_schema_version(review_result) != REVIEW_SCHEMA_VERSION:
         return None
     try:
-        return ReviewStructureV1.model_validate(review_result)
+        return read_stored(
+            ReviewStructureV1, review_result, submission_id=submission_id
+        )
     except ValidationError as exc:
+        # The place and the kind of each error, never ``str(exc)``: pydantic
+        # puts the value of the failed field into it, and that is the review.
         logger.error(
             "review_structure_invalid",
             errors=exc.error_count(),
-            detail=str(exc),
+            problems=problems_without_values(exc),
+            submission_id=None if submission_id is None else str(submission_id),
         )
         return None
 
@@ -107,7 +122,10 @@ def version_1_outcome(
 
 
 def curated_verdict(
-    review_result: dict[str, object] | None, *, score: int | None
+    review_result: dict[str, object] | None,
+    *,
+    score: int | None,
+    submission_id: uuid.UUID | None = None,
 ) -> PortalVerdict | None:
     """Extract ONLY the caller-facing verdict from ``review_result``.
 
@@ -125,7 +143,7 @@ def curated_verdict(
     if not review_result:
         return None
     if review_schema_version(review_result) == REVIEW_SCHEMA_VERSION:
-        structure = curated_structure(review_result)
+        structure = curated_structure(review_result, submission_id=submission_id)
         if structure is None:
             return None
         passed, correct = version_1_outcome(structure, score)

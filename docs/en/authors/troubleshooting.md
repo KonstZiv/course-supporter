@@ -8,7 +8,7 @@ keywords:
   - limitations
   - what to do
   - platform administrator
-last_updated: 2026-11-22
+last_updated: 2026-11-24
 ---
 
 # If something goes wrong
@@ -34,7 +34,8 @@ This is how everything works as of November 2026. Some of the limitations will b
 |---|---|---|
 | The app did not accept a file, or a material got the "Error (Помилка)" state | Find the message in the table and act according to it | [If a material is not accepted or not processed](materials.md#problems) |
 | "The material did not pass the content security check…" («Матеріал не пройшов перевірку безпеки вмісту…») — or a material was accepted at first, then disappeared from the section, and the "Materials history (Історія матеріалів)" page shows "Material deleted (Матеріал видалено)" with a caption saying the author did it | This is the security check, not your action; the platform does not name the cause. Find quotations of phrases that resemble instructions to the model in the material and retell them in your own words; if you cannot, write to the platform administrator | [The material did not pass the security check](materials.md#safety) |
-| "Could not process this material — try again. If it happens again, write to us and we will sort it out." («Не вдалося обробити цей матеріал — спробуйте ще раз. Якщо повториться, напишіть нам, ми розберемося.») | Hover over the material's row and press the "Retry processing (Повторити обробку)" icon — no more than twice: each repeated processing charges units. If that does not help, write to the platform administrator | [If a material is not accepted or not processed](materials.md#problems) |
+| "Could not process this material — try again. If it happens again, write to us and we will sort it out." («Не вдалося обробити цей матеріал — спробуйте ще раз. Якщо повториться, напишіть нам, ми розберемося.») | Hover over the material's row and press the "Retry processing (Повторити обробку)" icon — no more than twice: units are charged for processing that finished. If that does not help, write to the platform administrator | [If a material is not accepted or not processed](materials.md#problems) |
+| "Processing has not started: there were not enough units for it…" | This is not a failure of the material: your package does not have enough units. Press "Buy units (Купити юніти)" under the message (or open "Units (Юніти)"), buy a package and press "Retry processing (Повторити обробку)" | [Who pays for processing](materials.md#cost) |
 | You chose "Process materials (Обробити матеріали)", and the window "There are no materials with an error in this section…" («Матеріалів із помилкою в цьому розділі немає…») appeared | This is how it should be: the item repeats processing only for materials in the "Error" state and is not needed before the Methodist | [The section menu](structure.md#menu) |
 | A material has the wrong role — educational instead of methodological or the other way round | Click the "📚 навчальний" (educational) or "📋 методичний" (methodological) label in the material's row. If the Methodist has already written the section description, it will not notice this change: write to the platform administrator and name the section | [The material's role](materials.md#role) |
 | A material got the wrong assignment type, and the type is not shown in the row | The assignment type is not shown after uploading and cannot be changed in the app. Delete the material and upload it again with the right type (units will be charged again for processing), or write to the platform administrator: they can change the type without processing it again | [Worth knowing before uploading](tasks.md#before-upload) |
@@ -79,6 +80,8 @@ How to work with section descriptions — on the page [Section descriptions: the
 
 | What you see | What to do | More |
 |---|---|---|
+| You have paid, but there are no units | The "Units (Юніти)" page checks the payment by itself: first "Adding… (Зараховуємо…)", then "The payment has not arrived yet… (Оплата ще не надійшла…)" — you can close the page, the units appear within a few minutes; press "Check again (Перевірити ще раз)". If there are still no units after an hour, write to the platform administrator | [Costs and history](costs-history.md#package) |
+| Under the header — "Reviews of your students' work are waiting for units: … To start them, you need … more" | You pay for these reviews, and your package does not have enough units. Press "Buy units (Купити юніти)": after the purchase the reviews start by themselves, nobody has to send the work again | [Costs and history](costs-history.md) |
 | You clicked, and nothing happened: this happens, in particular, with changing a material's role, with "Add subsection (Додати підрозділ)", with "Delete (Видалити)" in the section menu, with creating a course | In these places, the app may silently not perform the action. Refresh the page and check whether the action happened. If not, repeat it. If it keeps happening, write to the platform administrator | — |
 | English and technical words here and there on the screen | Language names in the list are in English, for example "Ukrainian"; tooltips and buttons contain "force", "STT", "LLM", "external ID". Their meaning is explained by the page "Guide to screens and names" (in preparation) | — |
 

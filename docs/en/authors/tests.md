@@ -12,7 +12,7 @@ keywords:
   - publishing
   - pass mark
   - explanations
-last_updated: 2026-11-22
+last_updated: 2026-11-24
 ---
 
 # Tests
@@ -110,7 +110,7 @@ publish the test, finish the marked places." («Щоб перевірити чи
 
 What it costs: checking a new or changed draft is one writing of explanations by the model — as much
 as publishing without a check would cost. Checking an unchanged draft that is already checked or
-published costs nothing. Changing the pass mark or your own explanations does not reset the check.
+published costs nothing. Changing the pass mark or your own explanations does not reset the check. The cost is shown in units under the toolbar and in the "Publish the test? (Опублікувати тест?)" window. If your package does not have enough units, checking with the model and publishing are stopped until you buy a package in the "Units (Юніти)" section.
 
 After you press it — "Check ordered: the model's explanations and doubts will appear next to the
 questions in a minute or two." («Перевірку замовлено: пояснення й сумніви моделі з'являться біля

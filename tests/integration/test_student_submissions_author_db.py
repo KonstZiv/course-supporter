@@ -31,13 +31,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
 from course_supporter.api.app import app
-from course_supporter.api.deps import get_current_tenant, get_s3_client
+from course_supporter.api.deps import (
+    get_current_student,
+    get_current_tenant,
+    get_s3_client,
+)
 from course_supporter.api.routes._portal_shared import (
     curated_presentation,
     curated_verdict,
 )
 from course_supporter.api.routes.student_submissions import FILE_LINK_TTL_SEC
-from course_supporter.auth.context import TenantContext
+from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
     VerdictItemKind,
@@ -45,6 +49,7 @@ from course_supporter.criteria_kinds import (
     WeightCategory,
 )
 from course_supporter.feedback_kinds import FeedbackTargetKind
+from course_supporter.homework import path_config
 from course_supporter.homework.criteria_form import (
     Criterion,
     MandatoryPoint,
@@ -57,12 +62,14 @@ from course_supporter.models.review_structure import (
     ReviewStructureV1,
     Verdict,
 )
+from course_supporter.models.source import AssignmentType
 from course_supporter.normalizer import (
     EntryClass,
     Manifest,
     ManifestEntry,
     manifest_to_jsonb,
 )
+from course_supporter.remark_kinds import CommentAuthor, CommentKind
 from course_supporter.storage.database import get_session
 from course_supporter.storage.orm import (
     AuthoredDocument,
@@ -79,6 +86,8 @@ from course_supporter.storage.orm import (
     Tenant,
 )
 from tests._helpers.course_node_factory import make_root_course_node
+from tests._helpers.path_config import shipped_with_replies_for
+from tests._helpers.remark_comments import a_stored_comment
 
 pytestmark = pytest.mark.requires_db
 
@@ -155,7 +164,7 @@ def _criterion(
         text=text,
         evidence=f"evidence of {cid}",
         weight=WeightCategory(weight),
-        check_method="mandatory_points" if points else "model_verdict",  # type: ignore[arg-type]
+        check_method="mandatory_points" if points else "model_verdict",
         soft_descent=False,
         concepts=(),
         mandatory_points=tuple(
@@ -196,7 +205,7 @@ def _review(
             passed=passed,
             why="Because of the list.",
             rule=PassRule(
-                basis=basis,  # type: ignore[arg-type]
+                basis=basis,
                 score=score,
                 threshold=threshold,
             ),
@@ -286,7 +295,13 @@ async def world(
                 **kw,
             )
 
-        task = doc(c1, title="Sort a list", filename="sort.md", task_type="task")
+        task = doc(
+            c1,
+            title="Sort a list",
+            filename="sort.md",
+            task_type="task",
+            content_hash="v1",
+        )
         quiz = doc(c1, title="Quiz", task_type="test", order=2)
         proj = doc(c2, task_type="project", order=7)
         foreign_task = doc(cb, title="Foreign task", task_type="task")
@@ -378,6 +393,7 @@ async def world(
             task,
             status="completed",
             attempt_no=1,
+            task_version="v1",
             score=40,
             review_result=failing,
             review_markdown="# Review one",
@@ -390,6 +406,7 @@ async def world(
             task,
             status="completed",
             attempt_no=2,
+            task_version="v1",
             previous_submission_id=a1.id,
             score=90,
             review_result=passing,
@@ -402,6 +419,7 @@ async def world(
             task,
             status="delivered",
             attempt_no=3,
+            task_version="v1",
             previous_submission_id=a2.id,
             score=90,
             review_result=_review(
@@ -595,6 +613,28 @@ async def world(
                 ),
             ]
         )
+        await s.flush()
+        # The talk under the review: two replies of the student on the first
+        # attempt, and the Mentor's answer to the first in the second review.
+        question = await a_stored_comment(s, a1, item_id="c1", minute=0)
+        await a_stored_comment(
+            s,
+            a1,
+            item_id="c2",
+            kind=CommentKind.OBJECTION,
+            body="Я не згоден: алгоритм названо в другому абзаці.",
+            minute=1,
+        )
+        await a_stored_comment(
+            s,
+            a2,
+            item_id="c1",
+            author=CommentAuthor.MENTOR,
+            kind=CommentKind.ANSWER,
+            body="Перевірку порожнього списку тепер видно в рядку 4.",
+            parent_id=question.id,
+            minute=2,
+        )
         s.add(
             StudentFeedback(
                 tenant_id=tenant.id,
@@ -731,6 +771,10 @@ def _file(student: uuid.UUID, submission: uuid.UUID) -> str:
     return f"{_detail(student, submission)}/file"
 
 
+def _comments(student: uuid.UUID, submission: uuid.UUID) -> str:
+    return f"{_detail(student, submission)}/comments"
+
+
 # ── The boundary ────────────────────────────────────────────────────────────
 
 
@@ -777,8 +821,10 @@ class TestBoundary:
         sid = world[submission] if submission else uuid.uuid4()
         detail = await ac.get(_detail(world[student], sid))
         link = await ac.get(_file(world[student], sid))
-        assert detail.status_code == link.status_code == 404
-        assert detail.json() == link.json() == {"detail": SUBMISSION_NOT_FOUND}
+        talk = await ac.get(_comments(world[student], sid))
+        assert detail.status_code == link.status_code == talk.status_code == 404
+        assert detail.json() == link.json() == talk.json()
+        assert talk.json() == {"detail": SUBMISSION_NOT_FOUND}
 
     async def test_an_unknown_student_gives_the_same_404_as_a_foreign_submission(
         self, client: Client, world: dict[str, Any]
@@ -799,6 +845,7 @@ class TestBoundary:
             _list(world["ada"]),
             _detail(world["ada"], world["a1"]),
             _file(world["ada"], world["a1"]),
+            _comments(world["ada"], world["a1"]),
         ):
             assert (await ac.get(path)).status_code == neighbour.status_code == 403
 
@@ -814,6 +861,7 @@ class TestBoundary:
             _list(world["ada"]),
             _detail(world["ada"], world["a1"]),
             _file(world["ada"], world["a1"]),
+            _comments(world["ada"], world["a1"]),
         ):
             assert (
                 await ac.get(path, headers=headers)
@@ -1350,3 +1398,97 @@ class TestFile:
             assert _URL_MARKER not in text
             assert "homework/work.py" not in text
             assert "signed.example" not in text
+
+
+# ── The talk under the review ───────────────────────────────────────────────
+
+THREADS_KEYS = {"accepting_replies", "threads"}
+THREAD_KEYS = {"item_id", "comments"}
+COMMENT_KEYS = {
+    "id",
+    "submission_id",
+    "item_id",
+    "parent_id",
+    "author",
+    "kind",
+    "body",
+    "created_at",
+    "answered_in_submission_id",
+}
+
+
+@pytest.fixture()
+def replies_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shipped file with replies on for ``task``, where the app reads it."""
+    config = shipped_with_replies_for(AssignmentType.TASK)
+    monkeypatch.setattr(path_config, "_config", config)
+
+
+class TestComments:
+    async def test_the_author_reads_what_the_student_reads_in_the_portal(
+        self, client: Client, world: dict[str, Any], replies_on: None
+    ) -> None:
+        ac, _ = client
+        app.dependency_overrides[get_current_student] = lambda: StudentContext(
+            student_id=world["ada"],
+            tenant_id=world["tenant"],
+            login="ada-login",
+            display_name="Ada",
+        )
+        for name in ("a1", "a2", "a3"):
+            theirs = await ac.get(f"/api/v1/portal/submissions/{world[name]}/comments")
+            ours = await ac.get(_comments(world["ada"], world[name]))
+            assert theirs.status_code == ours.status_code == 200, name
+            assert ours.json() == theirs.json(), name
+        a2 = (await ac.get(_comments(world["ada"], world["a2"]))).json()
+        # Two threads, in the order of the review's remarks: the question with
+        # the Mentor's answer under it, then the objection nobody answered yet.
+        assert [t["item_id"] for t in a2["threads"]] == ["c1", "c2"]
+        first, second = a2["threads"]
+        assert [(c["author"], c["kind"]) for c in first["comments"]] == [
+            ("student", "question"),
+            ("mentor", "answer"),
+        ]
+        assert first["comments"][1]["parent_id"] == first["comments"][0]["id"]
+        assert [(c["author"], c["kind"]) for c in second["comments"]] == [
+            ("student", "objection")
+        ]
+        assert a2["accepting_replies"] is False  # a3 came after it
+
+    async def test_the_keys_are_the_white_list(
+        self, client: Client, world: dict[str, Any], replies_on: None
+    ) -> None:
+        ac, _ = client
+        body = (await ac.get(_comments(world["ada"], world["a2"]))).json()
+        assert set(body) == THREADS_KEYS
+        assert body["threads"]
+        for thread in body["threads"]:
+            assert set(thread) == THREAD_KEYS
+            assert all(set(c) == COMMENT_KEYS for c in thread["comments"])
+
+    async def test_a_type_that_takes_no_replies_has_empty_threads(
+        self, client: Client, world: dict[str, Any]
+    ) -> None:
+        # The shipped file takes no replies: the same empty answer as the portal.
+        ac, _ = client
+        body = (await ac.get(_comments(world["ada"], world["a2"]))).json()
+        assert body == {"accepting_replies": False, "threads": []}
+
+    async def test_a_review_nobody_commented_on_has_empty_threads(
+        self, client: Client, world: dict[str, Any], replies_on: None
+    ) -> None:
+        ac, _ = client
+        for name in ("old", "rejected", "quiz"):
+            body = (await ac.get(_comments(world["ada"], world[name]))).json()
+            assert body["threads"] == [], name
+            assert set(body) == THREADS_KEYS
+
+    async def test_the_route_only_reads(
+        self, client: Client, world: dict[str, Any]
+    ) -> None:
+        ac, _ = client
+        resp = await ac.post(
+            _comments(world["ada"], world["a1"]),
+            json={"item_id": "c1", "kind": "question", "body": "x"},
+        )
+        assert resp.status_code == 405

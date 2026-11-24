@@ -9,8 +9,11 @@ Routes (tenant API key, scope ``PREP``, as the neighbouring ``/students`` routes
   pass rule that decided it.
 - ``GET /students/{student_id}/submissions/{submission_id}/file`` — a
   short-lived link to download the submitted file.
+- ``GET /students/{student_id}/submissions/{submission_id}/comments`` — the
+  student's talk with the Mentor under the remarks of the review: the very
+  threads the student reads in the portal, read-only.
 
-One boundary for all three: the student and the submission belong to the key's
+One boundary for all four: the student and the submission belong to the key's
 tenant, neither is soft-deleted, and the submission is this student's. Anything
 else is the one 404 of "there is no such thing" — the author never learns that
 something exists under another tenant, or under another student.
@@ -36,7 +39,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_s3_client, get_session
-from course_supporter.api.routes._feedback_shared import to_touch
+from course_supporter.api.routes._feedback_shared import (
+    remark_comments,
+    to_remark_threads,
+    to_touch,
+)
 from course_supporter.api.routes._portal_shared import (
     curated_not_opened,
     curated_presentation,
@@ -57,6 +64,7 @@ from course_supporter.api.schemas import (
     AuthorSubmissionFileLink,
     AuthorSubmissionListItem,
     AuthorSubmissionStudent,
+    RemarkThreads,
 )
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
@@ -67,6 +75,8 @@ from course_supporter.feedback_kinds import FeedbackTargetKind
 from course_supporter.homework.attempt_dedup import DEDUP_RECEIPT_KEY
 from course_supporter.homework.criteria_form import Criterion, author_musts
 from course_supporter.homework.judged_list import read_judged_list
+from course_supporter.homework.remark_comments import RemarkCommentRepository
+from course_supporter.homework.reply_core import read_threads
 from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
     review_schema_version,
@@ -108,6 +118,7 @@ router = APIRouter(tags=["students"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 PrepDep = Annotated[TenantContext, Depends(require_scope(AuthScope.PREP))]
 S3Dep = Annotated[S3Client, Depends(get_s3_client)]
+CommentsDep = Annotated[RemarkCommentRepository, Depends(remark_comments)]
 
 STUDENT_NOT_FOUND: Final = "Student not found."
 """The one text of every way the student of the list cannot be shown."""
@@ -314,6 +325,37 @@ async def get_student_submission_file(
     return AuthorSubmissionFileLink(
         url=url, expires_at=issued_at + timedelta(seconds=FILE_LINK_TTL_SEC)
     )
+
+
+@router.get(
+    "/students/{student_id}/submissions/{submission_id}/comments",
+    response_model=RemarkThreads,
+)
+async def get_student_submission_comments(
+    student_id: Annotated[uuid.UUID, Path(description="The student.")],
+    submission_id: Annotated[
+        uuid.UUID, Path(description="The submission (must be the student's).")
+    ],
+    tenant: PrepDep,
+    session: SessionDep,
+    comments: CommentsDep,
+) -> RemarkThreads:
+    """The threads on the remarks of the review: the student's replies and the
+    Mentor's answers, as the student reads them.
+
+    Read-only, and the core is the portal's and the school channel's own
+    (``reply_core.read_threads``): only the access is the author's. A type that
+    takes no replies, and a review nobody commented on, have no threads, as in
+    the portal. 404 (one text) for every submission the boundary of this module
+    does not cover.
+    """
+    student, submission = await _require_submission(
+        session, tenant, student_id, submission_id
+    )
+    threads = await read_threads(
+        session, submission=submission, student_id=student.id, comments=comments
+    )
+    return to_remark_threads(threads)
 
 
 # ── The boundary ────────────────────────────────────────────────────────────

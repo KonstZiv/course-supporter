@@ -32,13 +32,14 @@ def test_every_field_has_a_description(model: type[schemas.BaseModel]) -> None:
     assert undescribed == []
 
 
-def test_the_routes_answer_with_their_schemas() -> None:
+def test_the_four_routes_answer_with_their_schemas() -> None:
     spec = app.openapi()["paths"]
     base = "/api/v1/students/{student_id}/submissions"
     expected = {
         base: "AuthorStudentSubmissions",
         f"{base}/{{submission_id}}": "AuthorSubmissionDetail",
         f"{base}/{{submission_id}}/file": "AuthorSubmissionFileLink",
+        f"{base}/{{submission_id}}/comments": "RemarkThreads",
     }
     for path, name in expected.items():
         ref = spec[path]["get"]["responses"]["200"]["content"]["application/json"][

@@ -394,6 +394,30 @@ class TestClassifyError:
 # ── complete() async ────────────────────────────────────────────
 
 
+class TestIsTimeout:
+    """Only the SDK's client timeout is a timeout (DD-SP-DJ)."""
+
+    def test_builtin_timeout_error_is_a_timeout(self) -> None:
+        provider = _make_provider()
+        assert provider.is_timeout(TimeoutError()) is True
+        assert provider.is_timeout(asyncio.TimeoutError()) is True  # noqa: UP041
+
+    @pytest.mark.parametrize("status_code", [408, 429, 500, 503, 504])
+    def test_a_server_answer_is_not(self, status_code: int) -> None:
+        provider = _make_provider()
+        exc = DashScopeResponseError(status_code=status_code, code="", message="")
+        assert provider.is_timeout(exc) is False
+        # ...though it is still an infrastructure error, retried as before.
+        assert provider.classify_error(exc) == ErrorCategory.INFRASTRUCTURE
+
+    def test_other_errors_are_not(self) -> None:
+        from dashscope.common.error import AuthenticationError
+
+        provider = _make_provider()
+        assert provider.is_timeout(RuntimeError("???")) is False
+        assert provider.is_timeout(AuthenticationError("invalid api key")) is False
+
+
 class TestCompleteAsync:
     """``complete`` end-to-end via mocked ``AioMultiModalConversation.call``.
 

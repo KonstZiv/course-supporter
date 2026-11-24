@@ -84,6 +84,7 @@ def _ok_provider(content: str = "answer") -> LLMProvider:
     # classify_error is sync on real providers; not used on success path
     # but set explicitly to avoid Mock-as-ErrorCategory leaking elsewhere.
     p.classify_error = lambda _exc: ErrorCategory.SEMANTIC
+    p.is_timeout = lambda _exc: False
     return p  # type: ignore[return-value]
 
 
@@ -98,6 +99,9 @@ def _failing_provider(
     # Default to SEMANTIC -- matches the base-class fallback. Tests
     # that need INFRASTRUCTURE / INPUT_OVERFLOW override after build.
     p.classify_error = lambda _exc, _cat=classify_as: _cat
+    # A spec'd mock would answer ``is_timeout`` with a truthy Mock; a real
+    # connector says no unless the error is its own client timeout.
+    p.is_timeout = lambda _exc: False
     return p  # type: ignore[return-value]
 
 

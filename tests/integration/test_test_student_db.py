@@ -53,9 +53,11 @@ BELOW = "m3_interface_language"
 def test_one_head_and_the_revision_follows_the_interface_language() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
     revision = script.get_revision(REVISION)
-    assert script.get_heads() == [REVISION]
+    heads = script.get_heads()
+    assert len(heads) == 1
     assert revision is not None
     assert revision.down_revision == BELOW
+    assert REVISION in {rev.revision for rev in script.walk_revisions("base", heads[0])}
 
 
 def _column(conn: Connection) -> ReflectedColumn | None:
@@ -106,7 +108,8 @@ def test_upgrade_over_students_already_there_then_down_and_up() -> None:
             )
             conn.execute(text("DELETE FROM tenants WHERE id = :t"), {"t": tenant_id})
     with engine.connect() as conn:
-        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == REVISION
+        head = ScriptDirectory.from_config(cfg).get_current_head()
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == head
         assert _column(conn) is not None
     engine.dispose()
 

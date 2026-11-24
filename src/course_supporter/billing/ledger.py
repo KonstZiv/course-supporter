@@ -65,6 +65,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.billing import audit, benefit
 from course_supporter.billing.errors import (
+    ActionAlreadySettledError,
     BillingConflictError,
     BillingInvalidError,
     BillingNotFoundError,
@@ -581,7 +582,8 @@ async def settle(
             benefit is decided here, not by the caller).
         BillingNotFoundError: no reserve and no ``account_id``; no such account.
         BillingConflictError: the action was released (it failed), was settled
-            with another fact, or is reserved on another account.
+            with another fact (:class:`ActionAlreadySettledError`), or is
+            reserved on another account.
     """
     if fact_units < 0:
         raise BillingInvalidError("an action cannot cost a negative number of units")
@@ -616,7 +618,7 @@ async def settle(
         await session.flush()
     elif reservation.state == ReservationState.SETTLED.value:
         if reservation.fact_units != fact_units:
-            raise BillingConflictError(
+            raise ActionAlreadySettledError(
                 f"{action_kind.value} {action_key} was settled with "
                 f"{reservation.fact_units} units, not {fact_units}"
             )

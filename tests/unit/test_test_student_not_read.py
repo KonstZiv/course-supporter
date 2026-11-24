@@ -1,7 +1,8 @@
 """Lock of condition (в), BIL-5: the review path does not read the test mark.
 
-``students.is_test_student`` is read by the calibration report only
-(``cost_estimate/report.py`` and ``scripts/cost_estimate_report.py``). Agreed
+``students.is_test_student`` is read by the calibration report
+(``cost_estimate/report.py`` and ``scripts/cost_estimate_report.py``) and by the
+administrator's cost report (``billing/costs.py``, Б-2), nowhere else. Agreed
 with the owner of the student model (19.11): nothing in homework/, agents/,
 llm/, workers/ or cost_estimate/ beyond the report reads it, and the public
 numbers (``billing/public_numbers.py``) are computed with the service students

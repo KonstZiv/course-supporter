@@ -10,7 +10,7 @@ keywords:
   - starter archive
   - list of criteria
   - methodological guide
-last_updated: 2026-11-23
+last_updated: 2026-11-24
 ---
 
 # Assignments
@@ -60,6 +60,8 @@ A section has one description, so all assignments of a section — for example, 
 
 A project is an assignment in which the student submits an archive with a whole project. You can attach a **starter archive** to a project — the starting project the student begins work from. Then the Mentor sees what exactly the student changed and added. A project without a starter archive is also possible — then all of the student's work counts as new.
 
+Reviewing projects does not use up any units for now: neither from the student's package nor from yours.
+
 In the section panel, below the project row, there is "No starter archive attached." («Базовий архів не прикріплено.») and the "Attach starter archive (Прикріпити базовий архів)" button. A `.zip`, `.tar.gz`, `.tgz` or `.gz` archive of up to 100 MB will do.
 
 <!-- frame 16: a project in the section panel — "Starter archive, version 1 (Базовий архів, версія 1)", state "Done (Готово)", buttons "Manifest (Маніфест)" and "Again (Повторно)" -->
@@ -86,7 +88,7 @@ Important: an edit of the section's "Description" field after the first piece of
 
 The platform will put together a new list if the assignment itself changes — its text or type.
 
-You cannot see or correct the list in the author app yet: there is no screen for it — as of October 2026. It can only be done with API requests, described on the page [Tests and criteria via the API](api.md). If you need to see or correct the list, write to the Course Supporter platform administrator.
+You can view and edit the list in the author app: in the node panel, next to the assignment, press "Criteria (Критерії)". It shows the system’s list or yours, the pass rule and what the system noticed in the assignment; "Edit the list (Правити перелік)" opens editing, and "Return to the system’s list (Повернути перелік системи)" cancels your edit. The list appears after a student’s first submission. The same can be done with API requests — on the page [Tests and criteria via the API](api.md).
 
 ## What the Mentor does with a piece of work {#review}
 
@@ -96,10 +98,10 @@ First, the platform runs a security check on the work, and on the first submissi
 
 For each criterion that is not met, the review gives a comment in three parts: how it is done now, what the problem is, how it should be. In addition, up to three links to places in your course where this topic is explained can be added to a criterion: a time in a video or audio (minutes and seconds), a slide, a paragraph or a file. The platform picks the links by the criterion's core concepts, so a criterion whose concepts did not match the course's concepts will have no links. Only educational materials in the "Done" state go into the links; assignments, tests and service files do not.
 
-**Whether the work is passed.** Each criterion in the list has a weight: a required criterion weighs 3, a desirable one 2, an optional one 1. The work's score is the share of the weights of the criteria met, as a percentage, rounded down; only work in which everything is done gets 100. Usually the work is passed when the score is at least 80. The review tells the student the score, the pass mark and the rule by which the decision was made.
+**Whether the work is passed.** Each criterion in the list has a weight: a major criterion weighs 3, a moderate one 2, a minor one 1. The work's score is the share of the weights of the criteria met, as a percentage, rounded down; only work in which everything is done gets 100. Usually the work is passed when the score is at least 80. The review tells the student the score, the pass mark and the rule by which the decision was made.
 
-A criterion is mandatory for passing only if you marked it as mandatory yourself. "Required" marks suggested by the automatic check affect only the score until you confirm them: such a criterion is assessed, shown in the review and counts in the score, but does not block passing by itself — even when you saved the list, having only corrected something else in it. If your list has at least one criterion that you marked as mandatory yourself, the work is passed when every such criterion is met and the score is at least 70. A criterion can be marked only with API requests — details on the page [Tests and criteria via the API](api.md#criteria-pass).
+A criterion is mandatory for passing only if you marked it as mandatory yourself. The weight "major" suggested by the automatic check affects only the score until you mark the criterion mandatory for passing: such a criterion is assessed, shown in the review and counts in the score, but does not block passing by itself — even when you saved the list, having only corrected something else in it. If your list has at least one criterion that you marked as mandatory yourself, the work is passed when every such criterion is met and the score is at least 70. A criterion can be marked on the "Criteria (Критерії)" screen: while editing, use the switch "Mandatory for passing (Обов'язковий для заліку)" next to a criterion with the weight "major (головний)"; or with API requests — details on the page [Tests and criteria via the API](api.md#criteria-pass).
 
-If a student submits the same work again for the same assignment, and the assignment, the list of criteria and the Mentor itself have not changed in the meantime, they get the review of their previous attempt — the platform does not review it again; the review starts with a note that the work has not changed. When we update the Mentor (change its instructions, model or review rules), the same work is reviewed again, and the result may differ from the previous one. To see a new review on behalf of a test student, change the work.
+If a student submits the same work again for the same assignment, and the assignment, the list of criteria and the Mentor itself have not changed in the meantime, they get the review of their previous attempt — the platform does not review it again; the review starts with a note that the work has not changed. Units are not charged for such a repeated submission. When we update the Mentor (change its instructions, model or review rules), the same work is reviewed again, and the result may differ from the previous one. To see a new review on behalf of a test student, change the work.
 
 Next — [Tests](tests.md).

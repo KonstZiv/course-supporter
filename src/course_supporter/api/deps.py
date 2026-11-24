@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.auth.keys import hash_api_key
+from course_supporter.auth.rate_limits import RedisRateLimiter
 from course_supporter.auth.student_session import (
     SessionTokenError,
     decode_session_token,
@@ -37,6 +38,7 @@ __all__ = [
     "get_current_student",
     "get_current_tenant",
     "get_payment_registry",
+    "get_rate_limiter",
     "get_s3_client",
     "get_session",
     "get_stage_router",
@@ -157,6 +159,15 @@ async def get_arq_redis(request: Request) -> ArqRedis:
     Initialized during lifespan startup.
     """
     return cast("ArqRedis", request.app.state.arq_redis)
+
+
+def get_rate_limiter(request: Request) -> RedisRateLimiter:
+    """The Redis rate limiter of the open-course routes (O-1).
+
+    Counts on the app's Redis (the ARQ pool opened at startup); without it —
+    the app not started — every check passes with a WARNING.
+    """
+    return RedisRateLimiter(getattr(request.app.state, "arq_redis", None))
 
 
 async def get_stage_router(request: Request) -> StageRouter:

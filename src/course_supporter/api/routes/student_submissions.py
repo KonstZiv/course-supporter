@@ -44,9 +44,9 @@ from course_supporter.api.routes._portal_shared import (
     curated_rejection,
     curated_structure,
     curated_verdict,
-    delta_receipt,
     material_label,
 )
+from course_supporter.api.routes.portal_submissions import _delta_receipt
 from course_supporter.api.schemas import (
     AuthorCriterionVerdict,
     AuthorPassRule,
@@ -258,7 +258,7 @@ async def get_student_submission(
         ),
         structure=structure,
         review_markdown=submission.review_markdown,
-        delta=await delta_receipt(session, submission),
+        delta=await _delta_receipt(session, submission),
         own_feedback=to_touch(own) if own is not None else None,
         pass_rule=_pass_rule(structure, judged),
         criteria=criteria,

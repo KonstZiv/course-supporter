@@ -536,7 +536,11 @@ def _to_list_item(
         status=submission.status,
         presentation=curated_presentation(submission, held_for_author=held_for_author),
         score=submission.score,
-        verdict=curated_verdict(submission.review_result, score=submission.score),
+        verdict=curated_verdict(
+            submission.review_result,
+            score=submission.score,
+            submission_id=submission.id,
+        ),
         created_at=submission.created_at,
         original_filename=submission.original_filename,
         rejection=curated_rejection(submission),
@@ -628,8 +632,14 @@ def _to_detail(
         status=submission.status,
         presentation=curated_presentation(submission, held_for_author=held_for_author),
         score=submission.score,
-        verdict=curated_verdict(submission.review_result, score=submission.score),
-        structure=curated_structure(submission.review_result),
+        verdict=curated_verdict(
+            submission.review_result,
+            score=submission.score,
+            submission_id=submission.id,
+        ),
+        structure=curated_structure(
+            submission.review_result, submission_id=submission.id
+        ),
         review_markdown=submission.review_markdown,
         created_at=submission.created_at,
         original_filename=submission.original_filename,

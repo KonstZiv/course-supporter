@@ -348,3 +348,25 @@ class TestTask10Keys:
             validate_phrasebook(tmp_path, get_language_registry().languages)
 
         assert f"'eng' is missing the phrase '{key}'" in str(exc_info.value)
+
+
+class TestTheWorkOnlySentence:
+    """The fallback answer to a hostile reply carries ``reply.work_only``.
+
+    Word for word, in every shipped language: the rule the code holds a
+    model's joke to (``verdict_explanation.joke_faults``) holds for the
+    phrasebook's own answer too. Pinned when the English pair was reviewed
+    by the product owner (2026-11-23).
+    """
+
+    def test_every_language_s_fallback_carries_the_sentence(self) -> None:
+        book = load_phrasebook(get_settings().phrasebook_dir)
+
+        lacking = [
+            code
+            for code, phrases in book.items()
+            if phrases["reply.work_only"].text
+            not in phrases["reply.hostile.fallback"].text
+        ]
+        assert lacking == []
+        assert len(book) == len(get_language_registry().languages)

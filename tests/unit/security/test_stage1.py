@@ -896,7 +896,7 @@ class TestHomeworkSoftArchive:
         self,
     ) -> None:
         # The hard classes are not softened by the signal mode.
-        z = _make_zip([("sneaky.txt", "hello‮world\n".encode())])
+        z = _make_zip([("sneaky.txt", "hello\u202eworld\n".encode())])
         with pytest.raises(SecurityRejectedError) as exc_info:
             run_stage1(filename="hw.zip", content=z, context="homework")
         assert exc_info.value.category is ErrorCategory.SUSPICIOUS_UNICODE
@@ -969,7 +969,7 @@ class TestDocumentConveyor:
         with pytest.raises(SecurityRejectedError) as exc_info:
             run_stage1(
                 filename="hw.docx",
-                content=_real_docx("abc‮def"),
+                content=_real_docx("abc\u202edef"),
                 context="homework",
                 document_extractor=_doc_extractor,
             )

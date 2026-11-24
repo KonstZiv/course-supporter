@@ -24,3 +24,7 @@ class BillingConflictError(BillingError):
     """The request clashes with the current state (an active rule already
     exists, the rule is already ended, the terms revision is not current, the
     owner is not deleted)."""
+
+
+class ActionAlreadySettledError(BillingConflictError):
+    """The action was already settled with a different number of units."""

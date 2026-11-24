@@ -9,7 +9,7 @@ keywords:
   - test
   - webhook
   - replies
-last_updated: 2026-11-22
+last_updated: 2026-11-23
 ---
 
 # API
@@ -385,3 +385,111 @@ it.
 `suspicious_unicode` (text direction characters, tag or control characters) or
 `charset_violation` (a string that is not valid Unicode). Ask the student to rewrite the reply without
 them.
+
+## Open courses: enrollment by a link {#open-courses}
+
+An author can let students enroll in a course by themselves: the author opens the course's link and
+gives it out; a student who follows it signs up, confirms the email, and only then gets the course.
+The student pays for the reviews, as before. All refusals of these routes carry `detail` in the form
+`{"code": "…", "details": "…"}` and never repeat what was sent: no email, login, token or password.
+
+### The author's link {#enrollment-link}
+
+The routes take the school's access key in `X-API-Key` with the `PREP` scope and act on the author's
+own course — a root node. Another author's course, a section (not a root) or an unknown id is
+**404** `Course not found.`
+
+| Route | What it does |
+|---|---|
+| `GET /api/v1/nodes/{course_id}/enrollment-link` | The link and whether it is open. |
+| `POST /api/v1/nodes/{course_id}/enrollment-link/open` | Gives the course a key if it has none; again — nothing changes. |
+| `POST /api/v1/nodes/{course_id}/enrollment-link/rotate` | A new key: the old link stops working at once. |
+| `POST /api/v1/nodes/{course_id}/enrollment-link/close` | No key: the link stops working. |
+
+Each answers **200** `{"open": true, "key": "…", "url": "https://campus…/{tenant_id}/join/{key}"}`
+(`key` and `url` are `null` while closed). Students already enrolled keep the course whatever
+happens to the link. In `GET /api/v1/students` and `GET /api/v1/students/{student_id}/enrollments`
+each row has `source`: `author` — the author enrolled the student, `self` — the student enrolled by
+the link (for the roster: the source of the student's first enrollment).
+
+### Enrollment by the link {#join}
+
+These routes need no login.
+
+1. **`GET /api/v1/portal/join/{tenant_id}/{key}`** — the course the link leads to: **200**
+   `{"course_id", "course_title", "author_name", "languages"}`. A closed or unknown key, a deleted
+   course or an inactive author — one answer, **404** [`course_not_found`](#course_not_found).
+2. **`POST /api/v1/portal/join/{tenant_id}/{key}/signup`** with
+   `{"login", "password", "email", "display_name"?, "interface_language"?, "adult": true,
+   "terms_version", "text_sha256"}` — **202** `{"signup_id", "email_masked", "expires_at"}` and an
+   email with the confirm link `{portal}/{tenant_id}/join/confirm?token=…`, in the language of
+   `interface_language` (`en`/`eng` — English, otherwise Ukrainian). Nothing else is created yet: the
+   student is not in the author's roster and not in billing until the email is confirmed. The
+   request is void after 7 days. The same email may already be on other logins of this author (a
+   family, a shared mailbox) — the answer is the same either way. Refusals: `adult` not `true`, a
+   password shorter than 10 characters or an unknown language — **422**; another terms revision —
+   **409** `terms_changed`; the login is taken in this author's portal (by a login or by a pending
+   request) — **409** [`login_taken`](#login_taken).
+3. **`POST /api/v1/portal/join/resend`** with `{"signup_id"}` — **202**, a new link; the previous one
+   stops working, the 7 days are not extended. A confirmed or expired request — **404**
+   [`signup_not_found`](#signup_not_found).
+4. **`POST /api/v1/portal/join/confirm`** with `{"token"}` — creates at once the student, the login
+   with this email confirmed, the enrollment (`source: self`), the "18 or older" mark and the consent
+   to the terms, and answers **200** as `POST /api/v1/portal/login` does (`access_token`, …) plus
+   `tenant_id` and `course_id`. The course is enrolled even if its link was closed since the signup.
+   The same token again, or an expired one — **404** [`signup_not_found`](#signup_not_found). If
+   someone took the login since the signup — **409** [`login_taken`](#login_taken) with
+   `detail.signup_id`: the request stays; send **`POST /api/v1/portal/join/{signup_id}/login`** with
+   `{"login", "token"}` (the same token; **204**) and confirm again.
+
+### A student with a login joins a course {#courses-join}
+
+**`POST /api/v1/portal/courses/join`** with the portal session (`Authorization: Bearer …`) and
+`{"tenant_id", "key", "adult": true, "terms_version", "text_sha256"}` — one step: **201**
+`{"status": "enrolled", "course_id"}`, or **200** `{"status": "already_enrolled", "course_id"}`. The
+"18 or older" mark and the consent are recorded if missing. The student needs a confirmed email —
+otherwise **409** [`email_confirmation_required`](#email_confirmation_required) (add one with
+`POST /api/v1/portal/recovery-email`). A link of another author is **404**
+[`course_not_found`](#course_not_found): a session belongs to one author's portal.
+
+### Login by email {#login-by-email}
+
+**`POST /api/v1/portal/login-by-email`** with `{"email", "password"}` — for the shared login page. The
+password is checked against every active login with this **confirmed** email:
+
+- one match — **200** as `POST /api/v1/portal/login`, plus `tenant_id`;
+- several (the same password at two authors, or two logins of one author with one mailbox) —
+  **200** `{"choose": [{"tenant_id", "tenant_name", "login"}]}` with only the logins whose password
+  matched, and no session; send the request again with the chosen `tenant_id` and `login` — the
+  password is checked again for that login alone;
+- none — **401** `Invalid login or password`, the same as `POST /api/v1/portal/login`, whether the
+  email is unknown, not confirmed, the login deactivated or the password wrong.
+
+`POST /api/v1/portal/login` itself is unchanged.
+
+### Limits and codes {#open-courses-codes}
+
+The public routes are limited per client address, per course key, per request, per email and per
+student; the counts are shared by all server processes. Over a limit — **429**
+[`rate_limited`](#rate_limited) with `Retry-After` (seconds); the numbers of the limits are not in the
+answer.
+
+#### `course_not_found` {#course_not_found}
+
+**404.** No open course by this link.
+
+#### `signup_not_found` {#signup_not_found}
+
+**404.** No pending request: unknown, already confirmed or expired.
+
+#### `login_taken` {#login_taken}
+
+**409.** The login is taken in this author's portal; ask for another one.
+
+#### `email_confirmation_required` {#email_confirmation_required}
+
+**409.** Joining a course needs a confirmed email first.
+
+#### `rate_limited` {#rate_limited}
+
+**429.** Too many requests; try again after `Retry-After` seconds.

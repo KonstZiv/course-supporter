@@ -57,7 +57,6 @@ packages:
 # providers in test mode, providers_live in live mode — a checkout reads only
 # the table of its mode, never the other.
 providers:
-  paddle: {}   # Paddle price ids (pri_...): the Paddle adapter's task
   # Creem product ids (prod_...), one product per package, from the Creem
   # dashboard — of the test mode while CREEM_API_BASE is the test host (a test
   # product is unknown to the live API). Without an id the package cannot be

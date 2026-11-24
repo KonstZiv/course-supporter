@@ -236,3 +236,26 @@ jobs:
 
             echo "=== Disk usage after cleanup ==="
             docker system df || true
+
+      - name: Rebuild the site and about with the numbers of this deploy
+        # The site and about read the public numbers at build time; rebuild
+        # them once the server is live. A failed hook never fails the deploy.
+        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          HOOK_SITE: ${{ secrets.CF_PAGES_DEPLOY_HOOK_SITE }}
+          HOOK_DOCS: ${{ secrets.CF_PAGES_DEPLOY_HOOK_DOCS }}
+        run: |
+          for name in SITE DOCS; do
+            var="HOOK_$name"
+            url="${!var}"
+            if [ -z "$url" ]; then
+              echo "::warning::Deploy hook $name is not set"
+              continue
+            fi
+            if curl -fsS -X POST --max-time 30 -o /dev/null "$url"; then
+              echo "Rebuild requested: $name"
+            else
+              echo "::warning::Deploy hook $name failed"
+            fi
+          done

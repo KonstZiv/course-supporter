@@ -14,7 +14,12 @@ Interface:
     :class:`JudgedItem`, :class:`CriterionFacts`, :class:`ExplanationFacts` —
     the facts, criterion by criterion, in the list's order;
     :func:`explanation_facts` builds them from the list and its rows.
-    :class:`CriterionRemark`, :class:`ExplanationAnswer` — the model's answer.
+    :class:`ExampleLimits`, :func:`example_limits`, :class:`PreviousRemark`
+    — what a text type's request also shows (task 13, explanation side): how
+    many criteria its examples may cover, and the remark made before on a
+    criterion still open
+    (:func:`~course_supporter.homework.earlier_review.previous_remarks`).
+    :class:`CriterionRemark`,:class:`ExplanationAnswer` — the model's answer.
     :func:`read_explanation` — the answer, checked against the facts; a
     structural retry otherwise.
     :func:`drop_unshown_links` — the answer without the course links it was
@@ -323,6 +328,59 @@ def _judged(row: StoredVerdict) -> JudgedItem:
         # is "met", on the earlier line, and that is what is explained.
         kept_from_earlier=row.safeguard_fired,
     )
+
+
+# ── The limits of examples and the remark made before (task 13) ──
+
+
+@dataclass(frozen=True, slots=True)
+class ExampleLimits:
+    """How many criteria the examples of an explanation may cover, at most.
+
+    The product owner's decision of 2026-11-23 (task 13, explanation side): an
+    example "covers" a criterion when it shows how to satisfy that criterion
+    of this task, on the task's own data or on another case. The code counts
+    the limits from the number of criteria of the list, rounded down; the
+    prompt reads them and never counts. A limit of 0 is the rule "never the
+    solution": the construct and the place in the student's code, no example.
+
+    Attributes:
+        review: The whole review — the remarks and the rest of its text; also
+            every example of the stage's answer together, the answers to the
+            replies included.
+        reply: The answer to one reply of the student.
+    """
+
+    review: int
+    reply: int
+
+
+def example_limits(criteria: int) -> ExampleLimits:
+    """The limits of examples for a list of ``criteria`` criteria (task 13).
+
+    Half of the criteria for the review, 30 % for one answer to a reply, both
+    rounded down — so a list of one criterion allows no example in the
+    review, and one of up to three none in an answer.
+
+    >>> example_limits(1), example_limits(10)
+    (ExampleLimits(review=0, reply=0), ExampleLimits(review=5, reply=3))
+    """
+    return ExampleLimits(review=criteria // 2, reply=criteria * 3 // 10)
+
+
+@dataclass(frozen=True, slots=True)
+class PreviousRemark:
+    """The explanation's own remark on a criterion at the earlier attempt.
+
+    Shown beside a criterion whose remark stayed open — credited neither then
+    nor now (task 13, decision A) — so that the remark is not repeated word
+    for word and the attempt is acknowledged. The words of a review, never a
+    fact: the verdict's own fields weigh more.
+    """
+
+    what: str
+    why: str
+    todo: str
 
 
 FROM_THE_MODEL: Final = "from_the_model"

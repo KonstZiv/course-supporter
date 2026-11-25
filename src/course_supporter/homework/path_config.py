@@ -11,7 +11,7 @@ Purpose:
     estimates.
 
 Interface:
-    The file (``Settings.submission_paths_config_path``) has two sections:
+    The file (``Settings.submission_paths_config_path``) has three sections:
 
     * ``stages`` — named stage definitions, each written once, of two kinds
       (task 10, K5):
@@ -39,11 +39,19 @@ Interface:
       reply to the remarks of their last review (task 12a, K3;
       :func:`replies_enabled`).
 
-    No field has a default but ``test_mode`` and ``replies_enabled``: a
-    description that is missing fails loudly instead of standing in for a
-    guessed value. Those two are switches a type opts into beside its
-    ``served_by``; without them the type is charged as usual and takes no
-    replies.
+    * ``attempt_memory`` — what the evaluation of a repeated attempt of a
+      text type is shown of the attempt before it (task 13, K4;
+      :class:`AttemptMemory`): the share of changed lines above which the
+      work counts as rewritten, the lines of context of the difference, and
+      the most the memory may grow the request by.
+
+    No field has a default but ``test_mode``, ``replies_enabled`` and
+    ``attempt_memory``: a description that is missing fails loudly instead of
+    standing in for a guessed value. The first two are switches a type opts
+    into beside its ``served_by``; without them the type is charged as usual
+    and takes no replies. The third is a measured setting the file states
+    (its default is the operator's number of 2026-11-23), so a test that
+    builds a file of its own need not repeat it.
 
     :func:`load_path_config` reads the file and checks its shape; every shape
     fault is reported at once. :func:`get_path_config` is the same read, cached
@@ -283,6 +291,37 @@ class TaskTypePaths(BaseModel):
     replies_enabled: StrictBool = False
 
 
+class AttemptMemory(BaseModel):
+    """What the evaluation of a repeated attempt is shown of the one before it.
+
+    Task 13, K4 (``homework/earlier_review.py``, ``read_attempt_memory`` and
+    ``fit_memory``); the operator's decisions of 2026-11-23, to be refined by
+    the live measurement:
+
+    * ``rewritten_share`` — the share of changed lines above which the work
+      counts as rewritten and its difference from the earlier attempt is not
+      shown: (lines added + lines removed) / the larger of the two attempts'
+      line counts. 0.5.
+    * ``diff_context_lines`` — the unchanged lines the difference shows
+      around a change. 1: the work itself is in the request whole, so more
+      context only repeats it. The counts above do not depend on it.
+    * ``max_growth`` — the most the memory may grow the request by, as a
+      share of the request without it, in characters of the rendered system
+      and user messages. 0.33. Above it the memory goes without its
+      difference, marked rewritten; above it still, it does not go at all.
+
+    What the evaluation is shown is what a review says: a change of any of
+    them raises ``VERDICT_RULES_VERSION`` (``homework/criteria_verdicts.py``),
+    which pins these values beside it.
+    """
+
+    model_config = _STRICT
+
+    rewritten_share: float = Field(default=0.5, gt=0.0, le=1.0)
+    diff_context_lines: int = Field(default=1, ge=0)
+    max_growth: float = Field(default=0.33, gt=0.0)
+
+
 class PathConfig(BaseModel):
     """The whole submission-path file."""
 
@@ -290,6 +329,7 @@ class PathConfig(BaseModel):
 
     stages: dict[str, PathStage]
     task_types: dict[AssignmentType, TaskTypePaths]
+    attempt_memory: AttemptMemory = AttemptMemory()
 
 
 def load_path_config(config_path: Path) -> PathConfig:

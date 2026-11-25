@@ -23,7 +23,7 @@ from course_supporter.api.routes._portal_shared import (
     curated_verdict,
 )
 from course_supporter.api.schemas import PortalVerdict
-from course_supporter.homework import text_result
+from course_supporter.homework import earlier_review, text_result
 from course_supporter.homework.attempt_dedup import _version_1_review
 from course_supporter.homework.webhook import build_reviewed_payload
 from course_supporter.models.review_structure import ReviewStructureV1
@@ -302,10 +302,16 @@ class TestTheStoredExplanation:
     async def test_the_words_of_a_fixed_criterion_come_from_such_an_explanation(
         self,
     ) -> None:
-        """The first read: the earlier attempt's remarks, for a fixed criterion."""
-        earlier = SimpleNamespace(submission_id=uuid.uuid4())
+        """The first read: the earlier attempt's remarks, for a fixed criterion.
+
+        The builder reads the earlier attempt through
+        ``earlier_review.read_earlier_review`` since task 13 (merged with this
+        test on 2026-11-24), so the repository is replaced where that reads it.
+        """
+        earlier = SimpleNamespace(submission_id=uuid.uuid4(), rows=())
         explained = SimpleNamespace(
-            body=with_unknown(stored_explanation(), ("remarks", 0), ("remarks", 1))
+            body=with_unknown(stored_explanation(), ("remarks", 0), ("remarks", 1)),
+            language="eng",
         )
         verdicts = MagicMock()
         verdicts.earlier_attempt = AsyncMock(return_value=earlier)
@@ -314,7 +320,7 @@ class TestTheStoredExplanation:
 
         with (
             patch.object(
-                text_result, "SubmissionVerdictRepository", return_value=verdicts
+                earlier_review, "SubmissionVerdictRepository", return_value=verdicts
             ),
             patch.object(text_result, "read_judged_list", AsyncMock(return_value=())),
             capture_logs() as logs,

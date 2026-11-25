@@ -27,12 +27,29 @@ The same work, judged alike:
       the code — the review is written anew;
     * for a type judged against a criteria list — a text task (``short_task``,
       ``task``) or a project: the criteria list its verdicts were judged
-      against is the list in force for the task now.
+      against is the list in force for the task now;
+    * the language of its stored review (``ReviewStructureV1.language``, ISO
+      639-3) is the language this submission's review is to be written in —
+      the product owner's decision of 2026-11-23 (V-6, variant 1): a copy is
+      given in the same language only; the same work asked for in another
+      language is a new, full, paid review like any other. The submission's
+      language is the one its review will be written in
+      (:func:`~course_supporter.homework.review_language.review_language_of`:
+      the doors' answer — the language named on the submission, else the
+      student's stored one, else the task's — and without it the course root's,
+      as the review itself is; never the raw ``response_language``, which may
+      be empty). The price shown before the work is sent asks the same
+      function, so the price and the copy agree. It is a condition of the
+      choice, not a check on the latest attempt: of attempt 1 in Ukrainian,
+      attempt 2 the same work in English (a new review) and attempt 3 the same
+      work in Ukrainian, attempt 3 is given the review of attempt 1. A
+      submission to which not even the course root gives a language has
+      nothing to compare, and is an ordinary review.
 
     Anything else — no fingerprint (the ledger did not write one), no version,
     no evaluator's version (every review written before it was recorded),
     a type with no version (not on the new path, or no model stage), no list
-    in force, any key different — is an ordinary review.
+    in force, no language, any key different — is an ordinary review.
 
     And the same work is no copy while the student has a reply about the work
     to answer (task 12a, K3;
@@ -163,6 +180,7 @@ from course_supporter.homework.reply_source import (
     beside_the_work,
 )
 from course_supporter.homework.review_assembler import assemble_review
+from course_supporter.homework.review_language import review_language_of
 from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
     review_schema_version,
@@ -435,6 +453,19 @@ async def _find(
             return None
         criteria_list = (in_force.layer, in_force.source_id)
 
+    submission = await session.get(HomeworkSubmission, submission_id)
+    review_language = (
+        await review_language_of(session, submission)
+        if submission is not None
+        else None
+    )
+    if review_language is None:
+        # Not even the course root gives a language (a defect, the database
+        # refuses such a root): nothing to compare a stored review's language
+        # with, so no copy (the module; a missed repeat costs a review).
+        logger.info("attempt_dedup_language_unknown", submission_id=str(submission_id))
+        return None
+
     source = await HomeworkRepository(session).latest_unchanged_attempt(
         tenant_id=row.tenant_id,
         student_id=row.student_id,
@@ -444,6 +475,7 @@ async def _find(
         task_version=row.task_version,
         criteria_list=criteria_list,
         evaluator_version=version,
+        review_language=review_language,
     )
     if source is None or source.attempt_no is None:
         return None

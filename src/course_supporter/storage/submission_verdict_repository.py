@@ -35,7 +35,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import delete, exists, func, select, tuple_
+from sqlalchemy import delete, exists, func, select, true, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -266,7 +266,11 @@ class SubmissionVerdictRepository:
         return {row.item_id: row for row in result.scalars().all()}
 
     async def earlier_attempt(
-        self, *, tenant_id: uuid.UUID, submission_id: uuid.UUID
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        submission_id: uuid.UUID,
+        same_version: bool = True,
     ) -> EarlierAttempt | None:
         """The attempt the submission's remarks are compared with (task 12a).
 
@@ -278,6 +282,11 @@ class SubmissionVerdictRepository:
         by today's Mentor; a submission still in flight is not an attempt,
         whatever rows it already has. "Earlier" is by creation time, then by
         id, as :meth:`previous_verdicts` orders.
+
+        ``same_version=False`` drops the version alone: the attempt the
+        evaluation of a repeated attempt is shown (task 13, K4;
+        ``homework/earlier_review.py``, ``read_attempt_memory``), which says
+        itself whether the task changed since.
 
         The criteria list is not part of the key, as it is for the safeguard:
         the items are matched by id, which an author's edit keeps (task 08).
@@ -300,7 +309,9 @@ class SubmissionVerdictRepository:
                 earlier.student_id == current.student_id,
                 earlier.authored_document_id == current.authored_document_id,
                 # NULL on either side matches nothing: an unknown version.
-                earlier.task_version == current.task_version,
+                earlier.task_version == current.task_version
+                if same_version
+                else true(),
                 earlier.status.in_(ATTEMPT_STATUSES),
                 earlier.deleted_at.is_(None),
                 tuple_(earlier.created_at, earlier.id)

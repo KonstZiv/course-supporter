@@ -497,7 +497,11 @@ class TestTheEvaluationWithReplies:
 
         assert outcome == StageOutcome.ok()
         (request,) = router.requests
-        assert request["prompt_ref"] == "prompts/criteria_evaluation/v1_with_replies.md"
+        # v2_with_replies since task 13, K4 (2026-11-23): v1_with_replies and
+        # the block of the earlier attempt, which a submission with no earlier
+        # attempt is not shown.
+        assert request["prompt_ref"] == "prompts/criteria_evaluation/v2_with_replies.md"
+        assert "previous_attempt" not in request["render"]
         assert request["render"]["replies"] == [
             {
                 "item_id": "c2",
@@ -561,8 +565,16 @@ class TestTheExplanationWithReplies:
 
         assert outcome == StageOutcome.ok()
         (request,) = router.requests
-        assert request["prompt_ref"] == "prompts/review_explanation/v3_with_replies.md"
+        # Since task 13 (2026-11-23): v4_with_replies, with both limits.
+        assert request["prompt_ref"] == "prompts/review_explanation/v4_with_replies.md"
         assert "replies" in request["schema"]["properties"]
+        result = request["render"]["result"]
+        assert set(result) == {
+            "passed",
+            "score",
+            "example_limit",
+            "reply_example_limit",
+        }
         ids = _ids(request)
         assert ids["prompt_injection"] == "r6"
         to_answer = request["render"]["replies"]["to_answer"]

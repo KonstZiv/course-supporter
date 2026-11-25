@@ -303,11 +303,15 @@ def _context() -> dict[str, object]:
 class TestTheStageRendersV3:
     """Lock c."""
 
-    def test_the_stage_names_v3(self) -> None:
+    def test_the_stage_named_v3_until_v4(self) -> None:
+        """The stage read v3 from 2026-11-13 until task 13 (2026-11-23), which
+        moved it to v4 (``test_explanation_prompt_v4.py``); v3 stays beside it
+        as the calibrated history."""
         config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
         stage = config.stages["review_explanation"]
         assert isinstance(stage, ModelStage)
-        assert stage.prompt_ref == "prompts/" + _V3
+        assert stage.prompt_ref == "prompts/review_explanation/v4.md"
+        assert (_PROMPTS / _V3).is_file()
 
     def test_the_user_message_is_v2s_and_the_system_message_is_not(self) -> None:
         context = _context()
@@ -344,8 +348,17 @@ def test_the_prompt_is_the_one_on_main(path: str, digest: str) -> None:
 
 
 # Added since, on purpose, for a stage of its own; pinned where it was added
-# (task 12a, K4: ``tests/unit/test_prompts/test_reply_prompts.py``).
-_ADDED_SINCE = frozenset({"prompts/criteria_evaluation/v1_with_replies.md"})
+# (task 12a, K4: ``tests/unit/test_prompts/test_reply_prompts.py``; task 13,
+# K4: the text types' two evaluation stages read v2 and v2_with_replies since
+# 2026-11-23, pinned in ``test_calibrated_prompts_unchanged.py`` and
+# ``tests/unit/test_prompts/test_evaluation_prompt_v2.py``).
+_ADDED_SINCE = frozenset(
+    {
+        "prompts/criteria_evaluation/v1_with_replies.md",
+        "prompts/criteria_evaluation/v2.md",
+        "prompts/criteria_evaluation/v2_with_replies.md",
+    }
+)
 
 
 @pytest.mark.parametrize(

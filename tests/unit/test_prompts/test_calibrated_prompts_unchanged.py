@@ -10,6 +10,17 @@ in this file — and never a side effect.
 The explanation prompt v3 (2026-11-13) is pinned beside v2 as it was written:
 the stage reads v3 since, v2 stays as the calibrated history it is, and v3's
 calibration is the live measurement of v2 against v3 before the merge.
+
+The explanation prompts v4 and v4_with_replies (task 13, explanation side,
+2026-11-23) are pinned beside them as written: the text types' two stages
+read them since, v3 and v3_with_replies stay as the calibrated history, and
+their calibration is the live measurement of v3 against v4.
+
+The evaluation prompts v2 and v2_with_replies (task 13, K4, 2026-11-23) are
+pinned beside them as written: the text types' two evaluation stages read
+them since — copies of v1 and v1_with_replies with the block of the earlier
+attempt — v1 and v1_with_replies stay as the calibrated history, and their
+calibration is the live measurement of v1 against v2 on repeated attempts.
 """
 
 from __future__ import annotations
@@ -25,11 +36,26 @@ _PINNED = {
     "prompts/criteria_evaluation/v1.md": (
         "1067450153909de49254dfcd27d752b27d6753a142d04720149c845eb68d24a0"
     ),
+    "prompts/criteria_evaluation/v1_with_replies.md": (
+        "5b90a8c0161c3c5806f75923489a768f818db368c51977a32070d5e2d3fe4865"
+    ),
+    "prompts/criteria_evaluation/v2.md": (
+        "0abf6466df31c8d2ac3c6ef356d74bfbb845af72c12010f3935103e9c45e8242"
+    ),
+    "prompts/criteria_evaluation/v2_with_replies.md": (
+        "a60a656f2f21941101f7adeaab3b979d34c197902c00fb92c9d00fdc42dbbb2d"
+    ),
     "prompts/review_explanation/v2.md": (
         "315afd0b1e35aa13e9bb133de1702cfa36f6cc05732d04c59a32c6f29a7bf0f3"
     ),
     "prompts/review_explanation/v3.md": (
         "6b1bca3ca00762c5beabe84ca4bc415f16b75630024c8fe6ff76357c362ca435"
+    ),
+    "prompts/review_explanation/v4.md": (
+        "2fde8ef73e2817d12f8d9d171c9bb5a11900713214508e8bf6239e3ed3655113"
+    ),
+    "prompts/review_explanation/v4_with_replies.md": (
+        "d41ff085df498f72dc69345fef7f7dae5cc963c48595d994e5d37bc2111d06db"
     ),
 }
 

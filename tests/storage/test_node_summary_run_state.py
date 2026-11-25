@@ -104,7 +104,12 @@ class TestJsonbCompatibility:
 
 
 class TestExtraForbidden:
-    """``extra='forbid'`` pins the shape — unknown fields raise."""
+    """``extra='forbid'`` pins the shape for writing — unknown fields raise.
+
+    Reading a stored record (``from_jsonb``) leaves such a field out instead
+    (DD-SP-DN, ``tests/unit/test_strict_stored_readers.py``): a newer release
+    may have written it.
+    """
 
     def test_unknown_top_level_field_raises(self) -> None:
         payload = NodeSummaryRunState(vertex_node_id=uuid.uuid4()).to_jsonb()
@@ -112,7 +117,7 @@ class TestExtraForbidden:
         import pytest
 
         with pytest.raises(ValueError):
-            NodeSummaryRunState.from_jsonb(payload)
+            NodeSummaryRunState.model_validate(payload)
 
 
 class TestRunErrorMachineReadableFields:

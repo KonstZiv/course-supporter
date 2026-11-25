@@ -36,7 +36,7 @@ Adding or replacing a builder:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 from course_supporter.homework.path_config import ServedBy
 from course_supporter.models.source import AssignmentType
@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from course_supporter.storage.orm import HomeworkSubmission
 
 __all__ = [
+    "PATH_FAILED",
     "BuildContext",
     "BuiltResult",
     "ResultBuilder",
@@ -58,6 +59,16 @@ __all__ = [
     "missing_result_builders",
     "validate_result_builders",
 ]
+
+
+PATH_FAILED: Final = "path_failed"
+"""The code a submission fails with when the body broke for no reason of its own.
+
+A builder that refuses names its own code (:class:`ResultNotBuiltError`); this
+one covers everything else — a defect, a storage error, a delivery that raised —
+and a builder may name it too, when what broke is ours and the student has
+nothing to do about it (a stored row that does not read).
+"""
 
 
 @dataclass(frozen=True, slots=True)

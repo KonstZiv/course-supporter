@@ -34,15 +34,34 @@ Units billed beside the dollars (BIL-E2, operator 2026-11-15, 5b item 3):
 - ``--by task`` (``by="task"``): author → course → homework task, dollars and
   units through the one link :func:`.links.link_actions`; a processing is its
   course's (no task), an action that leads to no course is a row without one.
+
+What the students paid (BIL-COSTS Б-2, operator 2026-11-24), in the author and
+task rows and their totals (:class:`ReviewFigures`; reads only):
+- A review is counted once when it has a ``debit`` on a student's own account in
+  the period; ``units_per_review`` is the row's ``students_units`` ÷ the
+  reviews, rounded up (``None`` without reviews).
+- A debit taken from a PAID batch (a purchase not marked in
+  ``billing_test_batches``) is worth ``units * amount_paid_minor / batch.units``
+  in the batch's currency; a row sums the exact shares per currency and rounds
+  ONCE, half up (the totals row is rounded on its own, not summed from rounded
+  rows). A debit from a batch without money (an admin credit, or a marked test
+  purchase) is ``gift_units``. Refunds (``billing_refunds``) are neither
+  subtracted from the money nor counted in ``gift_units``.
+- A service student (``students.is_test_student``) is left out of all of it —
+  and of the existing ``students_units`` — unless ``include_test_students``;
+  their reviews are counted into :attr:`CostReport.excluded_test_reviews`. The
+  dollars of the calls are not touched by the mark.
 """
 
 from __future__ import annotations
 
+import math
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from fractions import Fraction
 from typing import Any, Literal
 
 from sqlalchemy import ColumnElement, Row, and_, case, func, not_, or_, select
@@ -51,7 +70,12 @@ from sqlalchemy.orm import aliased
 
 from course_supporter.billing.charging import PAID_BY_PAYER
 from course_supporter.billing.errors import BillingInvalidError
-from course_supporter.billing.kinds import AccountKind, ActionKind, MovementKind
+from course_supporter.billing.kinds import (
+    AccountKind,
+    ActionKind,
+    BatchSource,
+    MovementKind,
+)
 from course_supporter.billing.links import (
     PREPARATION_STAGES,
     PROCESSING_JOB_TYPES,
@@ -64,11 +88,14 @@ from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.storage.orm import (
     AuthoredDocument,
     BillingAccount,
+    BillingBatch,
     BillingMovement,
+    BillingTestBatch,
     CourseNode,
     ExternalServiceCall,
     HomeworkSubmission,
     Job,
+    Student,
     Tenant,
 )
 
@@ -199,6 +226,72 @@ class BilledUnits:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewFigures:
+    """What students paid for the reviews of a row (module docstring).
+
+    ``count`` — different reviews with a ``debit`` on a student's account;
+    ``units_per_review`` — the row's ``students_units`` ÷ ``count`` rounded up,
+    ``None`` when there are no reviews; ``money_minor`` — per currency (sorted
+    by code), whole minor units of the paid batches the debits were taken
+    from; ``gift_units`` — debited from batches without money.
+    """
+
+    count: int = 0
+    units_per_review: int | None = None
+    money_minor: tuple[tuple[str, int], ...] = ()
+    gift_units: int = 0
+
+
+class _ReviewTally:
+    """The exact sums behind a :class:`ReviewFigures`, kept until rounding."""
+
+    __slots__ = ("gift_units", "keys", "money")
+
+    def __init__(self) -> None:
+        self.keys: set[str] = set()
+        self.gift_units = 0
+        self.money: dict[str, Fraction] = {}
+
+    def add(self, debit: _ReviewDebit) -> None:
+        self.keys.add(debit.action_key)
+        self.gift_units += debit.gift_units
+        if debit.currency is not None:
+            self.money[debit.currency] = (
+                self.money.get(debit.currency, Fraction(0)) + debit.money
+            )
+
+    def merge(self, other: _ReviewTally) -> None:
+        self.keys |= other.keys
+        self.gift_units += other.gift_units
+        for currency, value in other.money.items():
+            self.money[currency] = self.money.get(currency, Fraction(0)) + value
+
+    def figures(self, students_units: int) -> ReviewFigures:
+        """Round once, half up; ``units_per_review`` from the row's students' units."""
+        count = len(self.keys)
+        return ReviewFigures(
+            count=count,
+            units_per_review=-(-students_units // count) if count else None,
+            money_minor=tuple(
+                (currency, math.floor(value + Fraction(1, 2)))
+                for currency, value in sorted(self.money.items())
+            ),
+            gift_units=self.gift_units,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _ReviewDebit:
+    """Debits of one review from one batch: its money, or its gift units."""
+
+    tenant_id: uuid.UUID
+    action_key: str
+    gift_units: int
+    currency: str | None
+    money: Fraction
+
+
+@dataclass(frozen=True, slots=True)
 class ActionSpend:
     """Spend totals for one author action category."""
 
@@ -231,6 +324,7 @@ class AuthorCostRow:
     review: ActionSpend
     other: ActionSpend
     units: BilledUnits = BilledUnits()
+    reviews: ReviewFigures = ReviewFigures()
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +337,7 @@ class AuthorCostTotals:
     review: ActionSpend
     other: ActionSpend
     units: BilledUnits = BilledUnits()
+    reviews: ReviewFigures = ReviewFigures()
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +378,7 @@ class TaskCostRow:
     task_title: str | None
     spend: SpendSummary
     units: BilledUnits
+    reviews: ReviewFigures = ReviewFigures()
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +387,7 @@ class TaskCostTotals:
 
     spend: SpendSummary
     units: BilledUnits
+    reviews: ReviewFigures = ReviewFigures()
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +406,11 @@ class CostReport:
     tasks_total: TaskCostTotals = TaskCostTotals(
         spend=SpendSummary.zero(), units=BilledUnits()
     )
+    include_test_students: bool = False
+    excluded_test_reviews: int = 0
+    """Reviews of test students (``students.is_test_student``) with a debit in
+    the period, left out of the students' units and of :class:`ReviewFigures`;
+    0 when they are included."""
 
 
 def default_month_bounds(now: datetime | None = None) -> tuple[date, date]:
@@ -392,6 +494,7 @@ async def _query_authors(
     start_dt: datetime,
     end_dt_exclusive: datetime,
     tenant_id: uuid.UUID | None,
+    include_test_students: bool = False,
 ) -> tuple[tuple[AuthorCostRow, ...], AuthorCostTotals]:
     effective_tenant_id = func.coalesce(Job.tenant_id, HomeworkSubmission.tenant_id)
     bucket_col = _action_bucket_expr().label("bucket")
@@ -437,7 +540,17 @@ async def _query_authors(
         start_dt=start_dt,
         end_dt_exclusive=end_dt_exclusive,
         tenant_id=tenant_id,
+        include_test_students=include_test_students,
     )
+    debits_of: dict[uuid.UUID, list[_ReviewDebit]] = defaultdict(list)
+    for debit in await _review_debits(
+        session,
+        start_dt=start_dt,
+        end_dt_exclusive=end_dt_exclusive,
+        tenant_id=tenant_id,
+        include_test_students=include_test_students,
+    ):
+        debits_of[debit.tenant_id].append(debit)
     known = {key[0] for key in grouped}
     names = await _tenant_names(session, set(units) - known)
     for only_units in set(units) - known:
@@ -450,6 +563,7 @@ async def _query_authors(
     total_review = ActionSpend.zero()
     total_other = ActionSpend.zero()
     total_units = BilledUnits()
+    total_reviews = _ReviewTally()
 
     for (t_id, t_name), buckets in sorted(
         grouped.items(), key=lambda item: (item[0][1] or "", str(item[0][0]))
@@ -473,6 +587,7 @@ async def _query_authors(
         review = _action_spend("review")
         other = _action_spend("other")
         row_units = units.get(t_id, BilledUnits()) if t_id else BilledUnits()
+        row_reviews = _tally(debits_of.get(t_id, []) if t_id else [])
 
         author_rows.append(
             AuthorCostRow(
@@ -484,6 +599,7 @@ async def _query_authors(
                 review=review,
                 other=other,
                 units=row_units,
+                reviews=row_reviews.figures(row_units.students_units),
             )
         )
         total_spend = total_spend + row_spend
@@ -492,6 +608,7 @@ async def _query_authors(
         total_review = total_review + review
         total_other = total_other + other
         total_units = total_units + row_units
+        total_reviews.merge(row_reviews)
 
     totals = AuthorCostTotals(
         spend=total_spend,
@@ -500,6 +617,7 @@ async def _query_authors(
         review=total_review,
         other=total_other,
         units=total_units,
+        reviews=total_reviews.figures(total_units.students_units),
     )
     return tuple(author_rows), totals
 
@@ -510,6 +628,7 @@ async def _query_students(
     start_dt: datetime,
     end_dt_exclusive: datetime,
     tenant_id: uuid.UUID | None,
+    include_test_students: bool = False,
 ) -> tuple[tuple[StudentCostRow, ...], StudentCostTotals]:
     effective_tenant_id = func.coalesce(Job.tenant_id, HomeworkSubmission.tenant_id)
 
@@ -551,6 +670,7 @@ async def _query_students(
         start_dt=start_dt,
         end_dt_exclusive=end_dt_exclusive,
         tenant_id=tenant_id,
+        include_test_students=include_test_students,
     )
 
     found: dict[tuple[uuid.UUID, uuid.UUID], StudentCostRow] = {}
@@ -604,6 +724,18 @@ def _units_of_actions() -> tuple[ColumnElement[bool], ...]:
     )
 
 
+def _billed_to_service_student(
+    account: type[BillingAccount], student: type[Student]
+) -> ColumnElement[bool]:
+    """A movement billed on a test student's own account (the mark is read here
+    and nowhere on the review path)."""
+    return and_(
+        BillingMovement.kind.in_(BILLED_KINDS),
+        account.kind == AccountKind.STUDENT.value,
+        student.is_test_student.is_(True),
+    )
+
+
 async def _tenant_names(
     session: AsyncSession, ids: set[uuid.UUID]
 ) -> dict[uuid.UUID, str]:
@@ -621,8 +753,12 @@ async def _units_by_tenant(
     start_dt: datetime,
     end_dt_exclusive: datetime,
     tenant_id: uuid.UUID | None,
+    include_test_students: bool = False,
 ) -> dict[uuid.UUID, BilledUnits]:
-    """Billed and covered units on each tenant's accounts (author's, students')."""
+    """Billed and covered units on each tenant's accounts (author's, students').
+
+    A test student's own billed units are left out unless ``include_test_students``.
+    """
     stmt = (
         select(
             BillingAccount.tenant_id,
@@ -631,6 +767,7 @@ async def _units_by_tenant(
             func.sum(BillingMovement.units),
         )
         .join(BillingAccount, BillingAccount.id == BillingMovement.account_id)
+        .outerjoin(Student, Student.id == BillingAccount.student_id)
         .where(
             *_units_of_actions(),
             BillingAccount.tenant_id.is_not(None),
@@ -641,6 +778,8 @@ async def _units_by_tenant(
     )
     if tenant_id is not None:
         stmt = stmt.where(BillingAccount.tenant_id == tenant_id)
+    if not include_test_students:
+        stmt = stmt.where(not_(_billed_to_service_student(BillingAccount, Student)))
     found: dict[uuid.UUID, BilledUnits] = defaultdict(BilledUnits)
     for t_id, payer_kind, kind, units in (await session.execute(stmt)).tuples():
         if t_id is not None:
@@ -656,11 +795,16 @@ async def _units_by_student(
     start_dt: datetime,
     end_dt_exclusive: datetime,
     tenant_id: uuid.UUID | None,
+    include_test_students: bool = False,
 ) -> dict[tuple[uuid.UUID, uuid.UUID], BilledUnits]:
     """Units of the reviews for each student: billed to the author (under a
-    payment rule) or to the student, and covered."""
+    payment rule) or to the student, and covered.
+
+    A test student's own billed units are left out unless ``include_test_students``.
+    """
     beneficiary = aliased(BillingAccount)
     payer = aliased(BillingAccount)
+    payer_student = aliased(Student)
     stmt = (
         select(
             beneficiary.tenant_id,
@@ -671,6 +815,7 @@ async def _units_by_student(
         )
         .join(beneficiary, beneficiary.id == BillingMovement.beneficiary_account_id)
         .join(payer, payer.id == BillingMovement.account_id)
+        .outerjoin(payer_student, payer_student.id == payer.student_id)
         .where(
             *_units_of_actions(),
             BillingMovement.action_kind == ActionKind.REVIEW.value,
@@ -689,6 +834,8 @@ async def _units_by_student(
     )
     if tenant_id is not None:
         stmt = stmt.where(beneficiary.tenant_id == tenant_id)
+    if not include_test_students:
+        stmt = stmt.where(not_(_billed_to_service_student(payer, payer_student)))
     found: dict[tuple[uuid.UUID, uuid.UUID], BilledUnits] = defaultdict(BilledUnits)
     for t_id, s_id, payer_kind, kind, units in (await session.execute(stmt)).tuples():
         if t_id is not None and s_id is not None:
@@ -696,6 +843,132 @@ async def _units_by_student(
                 kind, int(units), payer_kind=payer_kind
             )
     return dict(found)
+
+
+# ── What the students paid for the reviews (BIL-COSTS Б-2) ─────────────
+
+
+def _student_review_debits() -> tuple[ColumnElement[bool], ...]:
+    """Debits for a review on a student's own account of a tenant."""
+    return (
+        BillingMovement.kind == MovementKind.DEBIT.value,
+        BillingMovement.action_kind == ActionKind.REVIEW.value,
+        BillingMovement.action_key.is_not(None),
+        BillingAccount.kind == AccountKind.STUDENT.value,
+        BillingAccount.tenant_id.is_not(None),
+    )
+
+
+async def _review_debits(
+    session: AsyncSession,
+    *,
+    start_dt: datetime,
+    end_dt_exclusive: datetime,
+    tenant_id: uuid.UUID | None,
+    include_test_students: bool,
+) -> list[_ReviewDebit]:
+    """Each review's debits, by the batch they were taken from.
+
+    A paid batch (a purchase not marked as a test one) gives money, the
+    debit's share of what the batch cost: ``units * amount_paid_minor /
+    batch.units``, exact; any other batch (an admin credit, a marked test
+    purchase) gives gift units.
+    """
+    marked = BillingTestBatch.batch_id.is_not(None)
+    stmt = (
+        select(
+            BillingAccount.tenant_id,
+            BillingMovement.action_key,
+            BillingBatch.source,
+            BillingBatch.units,
+            BillingBatch.amount_paid_minor,
+            BillingBatch.currency,
+            marked.label("marked"),
+            func.sum(BillingMovement.units),
+        )
+        .select_from(BillingMovement)
+        .join(BillingAccount, BillingAccount.id == BillingMovement.account_id)
+        .join(BillingBatch, BillingBatch.id == BillingMovement.batch_id)
+        .outerjoin(BillingTestBatch, BillingTestBatch.batch_id == BillingBatch.id)
+        .outerjoin(Student, Student.id == BillingAccount.student_id)
+        .where(
+            *_student_review_debits(),
+            BillingMovement.created_at >= start_dt,
+            BillingMovement.created_at < end_dt_exclusive,
+        )
+        .group_by(
+            BillingAccount.tenant_id,
+            BillingMovement.action_key,
+            BillingBatch.id,
+            BillingBatch.source,
+            BillingBatch.units,
+            BillingBatch.amount_paid_minor,
+            BillingBatch.currency,
+            marked,
+        )
+    )
+    if tenant_id is not None:
+        stmt = stmt.where(BillingAccount.tenant_id == tenant_id)
+    if not include_test_students:
+        stmt = stmt.where(Student.is_test_student.is_not(True))
+
+    found: list[_ReviewDebit] = []
+    for t_id, key, source, batch_units, paid, currency, is_marked, units in (
+        await session.execute(stmt)
+    ).tuples():
+        if t_id is None or key is None:
+            continue
+        free = (
+            source != BatchSource.PURCHASE.value
+            or is_marked
+            or paid is None
+            or currency is None
+        )
+        found.append(
+            _ReviewDebit(
+                tenant_id=t_id,
+                action_key=key,
+                gift_units=int(units) if free else 0,
+                currency=None if free else currency,
+                money=(
+                    Fraction(0)
+                    if free or paid is None
+                    else Fraction(int(units) * int(paid), int(batch_units))
+                ),
+            )
+        )
+    return found
+
+
+def _tally(debits: list[_ReviewDebit]) -> _ReviewTally:
+    tally = _ReviewTally()
+    for debit in debits:
+        tally.add(debit)
+    return tally
+
+
+async def _test_student_reviews(
+    session: AsyncSession,
+    *,
+    start_dt: datetime,
+    end_dt_exclusive: datetime,
+    tenant_id: uuid.UUID | None,
+) -> int:
+    """Different reviews of test students with a debit in the period."""
+    stmt = (
+        select(func.count(func.distinct(BillingMovement.action_key)))
+        .join(BillingAccount, BillingAccount.id == BillingMovement.account_id)
+        .join(Student, Student.id == BillingAccount.student_id)
+        .where(
+            *_student_review_debits(),
+            Student.is_test_student.is_(True),
+            BillingMovement.created_at >= start_dt,
+            BillingMovement.created_at < end_dt_exclusive,
+        )
+    )
+    if tenant_id is not None:
+        stmt = stmt.where(BillingAccount.tenant_id == tenant_id)
+    return int((await session.execute(stmt)).scalar_one())
 
 
 # ── By task: author → course → homework task (BIL-E2) ─────────────────
@@ -718,6 +991,7 @@ async def _query_tasks(
     start_dt: datetime,
     end_dt_exclusive: datetime,
     tenant_id: uuid.UUID | None,
+    include_test_students: bool = False,
 ) -> tuple[tuple[TaskCostRow, ...], TaskCostTotals]:
     effective_tenant_id = func.coalesce(Job.tenant_id, HomeworkSubmission.tenant_id)
     calls = (
@@ -761,6 +1035,7 @@ async def _query_tasks(
             func.sum(BillingMovement.units),
         )
         .join(BillingAccount, BillingAccount.id == BillingMovement.account_id)
+        .outerjoin(Student, Student.id == BillingAccount.student_id)
         .where(
             *_units_of_actions(),
             BillingMovement.created_at >= start_dt,
@@ -776,6 +1051,8 @@ async def _query_tasks(
     )
     if tenant_id is not None:
         moves = moves.where(BillingAccount.tenant_id == tenant_id)
+    if not include_test_students:
+        moves = moves.where(not_(_billed_to_service_student(BillingAccount, Student)))
     moved = [
         (
             t_id,
@@ -788,20 +1065,36 @@ async def _query_tasks(
         if action_kind is not None and key is not None
     ]
 
+    debits = await _review_debits(
+        session,
+        start_dt=start_dt,
+        end_dt_exclusive=end_dt_exclusive,
+        tenant_id=tenant_id,
+        include_test_students=include_test_students,
+    )
+    reviewed = [
+        (debit, ActionRef(ActionKind.REVIEW, debit.action_key)) for debit in debits
+    ]
+
     links = await link_actions(
         session,
-        [ref for _, ref, _ in spent if ref is not None] + [ref for _, ref, _ in moved],
+        [ref for _, ref, _ in spent if ref is not None]
+        + [ref for _, ref, _ in moved]
+        + [ref for _, ref in reviewed],
     )
     spends: dict[TaskKey, SpendSummary] = defaultdict(SpendSummary.zero)
     units: dict[TaskKey, BilledUnits] = defaultdict(BilledUnits)
+    tallies: dict[TaskKey, _ReviewTally] = defaultdict(_ReviewTally)
     for t_id, call_ref, spend in spent:
         key = _task_key(t_id, call_ref, links.get(call_ref) if call_ref else None)
         spends[key] = spends[key] + spend
     for t_id, ref, summary in moved:
         key = _task_key(t_id, ref, links[ref])
         units[key] = units[key] + summary
+    for debit, ref in reviewed:
+        tallies[_task_key(debit.tenant_id, ref, links[ref])].add(debit)
 
-    keys = set(spends) | set(units)
+    keys = set(spends) | set(units) | set(tallies)
     tenants = await _tenant_names(session, {k[0] for k in keys if k[0] is not None})
     courses = await course_titles(session, {k[1] for k in keys if k[1] is not None})
     tasks = await task_titles(session, {k[2] for k in keys if k[2] is not None})
@@ -816,6 +1109,9 @@ async def _query_tasks(
                 task_title=tasks.get(d_id) if d_id else None,
                 spend=spends.get((t_id, c_id, d_id), SpendSummary.zero()),
                 units=units.get((t_id, c_id, d_id), BilledUnits()),
+                reviews=tallies[(t_id, c_id, d_id)].figures(
+                    units.get((t_id, c_id, d_id), BilledUnits()).students_units
+                ),
             )
             for t_id, c_id, d_id in keys
         ),
@@ -832,10 +1128,17 @@ async def _query_tasks(
     )
     total_spend = SpendSummary.zero()
     total_units = BilledUnits()
+    total_reviews = _ReviewTally()
     for task_row in task_rows:
         total_spend = total_spend + task_row.spend
         total_units = total_units + task_row.units
-    return tuple(task_rows), TaskCostTotals(spend=total_spend, units=total_units)
+    for tally in tallies.values():
+        total_reviews.merge(tally)
+    return tuple(task_rows), TaskCostTotals(
+        spend=total_spend,
+        units=total_units,
+        reviews=total_reviews.figures(total_units.students_units),
+    )
 
 
 async def course_titles(
@@ -871,6 +1174,7 @@ async def build_cost_report(
     to_date: date,
     tenant_id: uuid.UUID | None = None,
     by: CostReportScope = "both",
+    include_test_students: bool = False,
 ) -> CostReport:
     """Build a read-only external service cost report for ``[from_date, to_date]``.
 
@@ -883,6 +1187,10 @@ async def build_cost_report(
         tenant_id: Optional tenant filter.
         by: Which tables to populate (``'author'``, ``'student'``, ``'both'``,
             or ``'task'`` — author → course → homework task).
+        include_test_students: Count the reviews and units of service students
+            (``students.is_test_student``) too; by default they are left out
+            and their reviews are only counted
+            (:attr:`CostReport.excluded_test_reviews`).
     """
     if from_date > to_date:
         raise BillingInvalidError(
@@ -905,6 +1213,7 @@ async def build_cost_report(
             start_dt=start_dt,
             end_dt_exclusive=end_dt_exclusive,
             tenant_id=tenant_id,
+            include_test_students=include_test_students,
         )
 
     students: tuple[StudentCostRow, ...] = ()
@@ -915,12 +1224,23 @@ async def build_cost_report(
             start_dt=start_dt,
             end_dt_exclusive=end_dt_exclusive,
             tenant_id=tenant_id,
+            include_test_students=include_test_students,
         )
 
     tasks: tuple[TaskCostRow, ...] = ()
     tasks_total = TaskCostTotals(spend=SpendSummary.zero(), units=BilledUnits())
     if by == "task":
         tasks, tasks_total = await _query_tasks(
+            session,
+            start_dt=start_dt,
+            end_dt_exclusive=end_dt_exclusive,
+            tenant_id=tenant_id,
+            include_test_students=include_test_students,
+        )
+
+    excluded = 0
+    if not include_test_students:
+        excluded = await _test_student_reviews(
             session,
             start_dt=start_dt,
             end_dt_exclusive=end_dt_exclusive,
@@ -938,4 +1258,6 @@ async def build_cost_report(
         students_total=students_total,
         tasks=tasks,
         tasks_total=tasks_total,
+        include_test_students=include_test_students,
+        excluded_test_reviews=excluded,
     )

@@ -22,6 +22,10 @@ Interface:
     unknown fields, so a reader that handles that exception today handles it
     the same way after.
 
+    :func:`read_stored_with` — the same for a stored value that is not one
+    model but a list of them, checked as a whole by a ``TypeAdapter`` (a
+    task's criteria).
+
     :func:`problems_without_values` — what a reader writes to its log when a
     stored row does not read: the ``loc`` and the ``type`` of each error, and
     never the input. ``str(error)`` of pydantic holds the value of every field
@@ -33,7 +37,10 @@ How the fields are found:
     list or tuple of models — ``loc`` is the path to the field in the data
     itself (names and list indexes); a test walks each shape and checks it.
     A path that cannot be followed in the data is not guessed at: the row is
-    read as it always was, strictly.
+    read as it always was, strictly. The row is read without the fields it
+    names only when it then validates whole: any other error — one that was
+    there beside them, or one that only they hid — refuses the row with the
+    error the model itself gives for it.
 
 What is written down:
     One ``WARNING`` line per read that skipped fields: the model, the paths of
@@ -61,11 +68,11 @@ from __future__ import annotations
 
 import copy
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import structlog
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 logger = structlog.get_logger(__name__)
 
@@ -97,42 +104,101 @@ def read_stored[Stored: BaseModel](
             including a defect that only shows once the unknown fields are
             gone. The same error the model's own ``model_validate`` raises.
     """
+    return _read(
+        model.model_validate, data, name=model.__name__, submission_id=submission_id
+    )
+
+
+def read_stored_with[Stored](
+    adapter: TypeAdapter[Stored],
+    data: Mapping[str, Any] | Sequence[Any],
+    *,
+    name: str,
+    submission_id: uuid.UUID | None = None,
+) -> Stored:
+    """:func:`read_stored` for a stored value an ``adapter`` checks as a whole.
+
+    For a list of strict models with rules over the whole list (a task's
+    criteria: how many, ids unique), which no single model holds.
+
+    Args:
+        adapter: The adapter the value was written through.
+        data: The stored value. Not changed: fields are left out of a copy.
+        name: What the value is, for the log line (``"criteria"``).
+        submission_id: The submission the data belongs to, when the reader
+            knows it.
+
+    Raises:
+        pydantic.ValidationError: As :func:`read_stored`.
+    """
+    return _read(adapter.validate_python, data, name=name, submission_id=submission_id)
+
+
+def _read[Stored](
+    validate: Callable[[Any], Stored],
+    data: Mapping[str, Any] | Sequence[Any],
+    *,
+    name: str,
+    submission_id: uuid.UUID | None,
+) -> Stored:
     try:
-        return model.model_validate(data)
+        return validate(data)
     except ValidationError as error:
         found = _without_unknown_fields(data, error)
         if found is None:
             raise
-    pruned, paths = found
-    stored = model.model_validate(pruned)
-    log = logger.bind(model=model.__name__, fields=[_dotted(path) for path in paths])
+        pruned, paths = found
+        try:
+            stored = validate(pruned)
+        except ValidationError:
+            if _only_unknown_fields(error):
+                # A defect the unknown fields hid: the error of the copy.
+                raise
+            # A defect beside them: the error the model gives for the row.
+            raise error from None
+    log = logger.bind(model=name, fields=[_dotted(path) for path in paths])
     if submission_id is not None:
         log = log.bind(submission_id=str(submission_id))
     log.warning("stored_unknown_fields_ignored")
     return stored
 
 
+def _only_unknown_fields(error: ValidationError) -> bool:
+    """Whether every error of ``error`` is an unknown field."""
+    return all(
+        item["type"] == _EXTRA_FIELD
+        for item in error.errors(
+            include_url=False, include_context=False, include_input=False
+        )
+    )
+
+
 def _without_unknown_fields(
-    data: Mapping[str, Any], error: ValidationError
-) -> tuple[dict[str, Any], list[_Path]] | None:
+    data: Mapping[str, Any] | Sequence[Any], error: ValidationError
+) -> tuple[Any, list[_Path]] | None:
     """A copy of ``data`` without the fields ``error`` names, and their paths.
 
-    ``None`` unless unknown fields are *all* that is wrong, and every one of
-    them is at the path ``loc`` says: any other kind of error, or a path that
-    does not lead to its field in the data, leaves the row an error. The
-    errors are read without their input, so no stored value is held here.
+    ``None`` when ``error`` names no unknown field, or one is not at the path
+    its ``loc`` says (the data does not lead to it): the row is an error as it
+    is. Errors of any other kind are not looked at here — whether unknown
+    fields are *all* that is wrong is for the caller to find out, by reading
+    the copy: some errors are only consequences of the unknown ones (a list
+    whose every item has one is also "too short"). The errors are read without
+    their input, so no stored value is held here.
     """
     paths: list[_Path] = []
     for item in error.errors(
         include_url=False, include_context=False, include_input=False
     ):
         loc = item["loc"]
-        if item["type"] != _EXTRA_FIELD or not loc or not isinstance(loc[-1], str):
+        if item["type"] != _EXTRA_FIELD:
+            continue
+        if not loc or not isinstance(loc[-1], str):
             return None
         paths.append(loc)
     if not paths:
         return None
-    pruned = copy.deepcopy(dict(data))
+    pruned: Any = copy.deepcopy(dict(data) if isinstance(data, Mapping) else list(data))
     for *parents, name in paths:
         node: Any = pruned
         try:

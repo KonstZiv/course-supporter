@@ -40,11 +40,11 @@ from course_supporter.api.deps import (
     get_current_tenant,
 )
 from course_supporter.auth.context import TenantContext
-from course_supporter.homework.path_runner import PATH_FAILED
 from course_supporter.homework.reference_service import (
     GenerationInProgressError,
     RefusalCode,
 )
+from course_supporter.homework.result_builders import PATH_FAILED
 from course_supporter.homework.test_doors import DoorCode
 from course_supporter.homework.test_result import (
     TEST_NOT_READY as TEST_NOT_READY_FAILURE,

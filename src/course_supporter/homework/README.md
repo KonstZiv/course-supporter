@@ -1581,7 +1581,15 @@ GROUP BY repeat_reason ORDER BY rows DESC;
 **Збій.** Немає рядків вердиктів чи пояснення — шлях не перелічив обох стадій, або записане ними
 зникло — `ResultNotBuiltError` з кодом `review_parts_missing`: подача `failed` із цим кодом, подія
 вебхука `failed` із ним у `reason`; портал, як на будь-який провал, показує код `processing_failed`.
-Інший виняток збирача — загальний `path_failed` тіла.
+Інший виняток збирача — загальний `path_failed` тіла. Збережене пояснення, яке не читається
+(неправильний тип поля, не зайве поле — зайві поля читач збереженого пропускає,
+`models/stored_read.read_stored`), теж дає `path_failed`, але без значень: `ValidationError` pydantic
+цитує значення поля, а це слова Ментора про роботу студента, тож на межі читання він стає
+`ResultNotBuiltError` без значень (`from None`), у журнал іде один рядок `stored_explanation_unreadable`
+з `loc` і `type` кожної помилки, а загальний рядок `path_failed` для будь-якого `ValidationError`
+несе лише тип і ті самі `loc`/`type`.
+Тією самою межею (`explanation_read.read_stored_explanation`) читається й пояснення попередньої спроби
+(`earlier_review.read_earlier_review`: «виправлено» в збирачі й попередні зауваження в стадії пояснення).
 
 #### Стани зауважень між спробами (задача 12а, К2)
 

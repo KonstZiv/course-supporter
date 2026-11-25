@@ -8,7 +8,16 @@ Per-attempt fallback policy (vision §3 KD16):
 
 * ``INFRASTRUCTURE`` -- exponential backoff retry on the same model
   (1 + ``max_retries_infrastructure`` total attempts; default 4),
-  then fallback to the next ladder entry.
+  then fallback to the next ladder entry. A client-side *timeout*
+  (``LLMProvider.is_timeout``) is an infrastructure error too, but it is
+  repeated at most ``max_retries_timeout`` times on the rung (default 1,
+  so two attempts of it): it is already a long wait, and three more of
+  it almost never succeed. The timeout count is separate from the
+  general one and does not widen it: ``1 + max_retries_infrastructure``
+  attempts per rung stay the ceiling however 429/503 and timeouts
+  alternate. A server's own 408/504 is not a client timeout. When the
+  timeout limit ends the rung, the reason names the timeout and the
+  ladder goes on to the next rung, as after any exhausted retries.
 * ``STRUCTURAL`` -- single instructor-style retry with the parser
   feedback appended to the user prompt, then fallback. 0.5 ships
   the plumbing; Phase 1+ tasks add response validators that raise
@@ -382,6 +391,7 @@ class StageRouter:
         session_factory: async_sessionmaker[AsyncSession] | None = None,
         prompt_base_path: Path | None = None,
         max_retries_infrastructure: int = 3,
+        max_retries_timeout: int = 1,
         max_retries_structural: int = 1,
         record_full_input: bool = False,
     ) -> None:
@@ -396,6 +406,9 @@ class StageRouter:
         self._session_factory = session_factory
         self._prompt_base_path = prompt_base_path
         self._max_retries_infra = max_retries_infrastructure
+        # Client timeouts only (``provider.is_timeout``); counted apart from
+        # the general limit and capped by it (see ``_attempt_entry``).
+        self._max_retries_timeout = max_retries_timeout
         self._max_retries_structural = max_retries_structural
         # Wired from ``Settings.call_register_full_input``, which production
         # refuses to boot with; the router itself stays settings-free.
@@ -885,6 +898,12 @@ class StageRouter:
     ) -> _Attempt:
         """Walk one ladder entry: initial call + INFRASTRUCTURE retries.
 
+        An infrastructure error is retried while fewer than
+        ``1 + max_retries_infrastructure`` calls were made on the entry; a
+        client timeout (``provider.is_timeout``) is also counted on its own
+        and ends the entry once there have been more than
+        ``max_retries_timeout`` of them (the default: the second timeout).
+
         Returns an :class:`_Attempt`. On success its ``response`` is non-None
         and ``reason`` is ``""``; otherwise ``response`` is ``None`` and
         ``reason`` describes why the entry was abandoned. The initial call is
@@ -892,6 +911,7 @@ class StageRouter:
         as ``RequestKind.INFRA_RETRY``.
         """
         attempts_used = 0
+        timeouts = 0
 
         for attempt_idx in range(self._max_retries_infra + 1):
             attempts_used += 1
@@ -929,6 +949,23 @@ class StageRouter:
             except Exception as exc:
                 category = provider.classify_error(exc)
                 if category is ErrorCategory.INFRASTRUCTURE:
+                    timed_out = provider.is_timeout(exc)
+                    if timed_out:
+                        timeouts += 1
+                    if timed_out and (
+                        timeouts > self._max_retries_timeout
+                        or attempt_idx >= self._max_retries_infra
+                    ):
+                        return _Attempt(
+                            None,
+                            attempts_used,
+                            f"INFRASTRUCTURE: timeout - {timeouts} client "
+                            f"timeout(s) in {attempts_used} attempt(s), no "
+                            f"retries left (max_retries_timeout="
+                            f"{self._max_retries_timeout}, "
+                            f"max_retries_infrastructure="
+                            f"{self._max_retries_infra}) - {exc}",
+                        )
                     if attempt_idx >= self._max_retries_infra:
                         return _Attempt(
                             None,

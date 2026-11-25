@@ -160,6 +160,7 @@ async def _read_by_the_explanation_input(body: dict[str, Any]) -> FoundCourseLin
             submission,  # type: ignore[arg-type]
             submission_text="work",
             language="ukr",
+            text_type=False,
         )
     return stopped.value.found
 

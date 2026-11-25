@@ -59,6 +59,7 @@ from course_supporter.funds_port import (
 from course_supporter.homework.attempt_dedup import repeat_unchanged_review
 from course_supporter.homework.attempt_ledger import record_attempt
 from course_supporter.homework.doors import DoorReading
+from course_supporter.homework.earlier_review import DoorsEarlierWork
 from course_supporter.homework.evaluator_version import evaluator_version
 from course_supporter.homework.path_checkpoint import (
     FREEZE_REASON_FOR_LADDER_STOP,
@@ -100,6 +101,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from course_supporter.funds_port import FundsPort
+    from course_supporter.homework.earlier_review import EarlierWorkSource
     from course_supporter.homework.path_config import PathConfig
     from course_supporter.homework.path_selection import PathChoice
     from course_supporter.llm.stage_router import StageRouter
@@ -464,6 +466,7 @@ async def _run_path(
                     router,
                     session_factory=ctx["session_factory"],
                     arq=ctx.get("redis"),
+                    earlier_work=DoorsEarlierWork(s3),
                     submission=submission,
                     reading=reading,
                     language=language,
@@ -860,6 +863,7 @@ async def _run_stage(
     *,
     session_factory: async_sessionmaker[AsyncSession],
     arq: ArqRedis | None,
+    earlier_work: EarlierWorkSource | None,
     submission: HomeworkSubmission,
     reading: DoorReading,
     language: str | None,
@@ -867,7 +871,12 @@ async def _run_stage(
     config: PathConfig,
     stage_name: str,
 ) -> StageOutcome:
-    """Resolve the name to an executor and hand it the stage's description."""
+    """Resolve the name to an executor and hand it the stage's description.
+
+    ``earlier_work`` reads the student's earlier work for the evaluation of a
+    repeated attempt (task 13, K4): the S3 client the doors downloaded this
+    work with, behind the doors' own reading.
+    """
     executor = get_stage_executor(stage_name)
     return await executor(
         StageContext(
@@ -884,6 +893,7 @@ async def _run_stage(
             work=reading.files,
             arq=arq,
             config=config,
+            earlier_work=earlier_work,
         )
     )
 

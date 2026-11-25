@@ -314,6 +314,17 @@ class TestShippedFile:
         Moved again on merging the answers to the replies after it (task 12a,
         K4, 2026-11-22): the verdict rules went 8 -> 9, so the project's
         version ``ev1:9dfee05f5adf1871`` -> ``ev1:dbcfa16ba53d80cb``.
+        Moved on purpose by task 13 (explanation side, 2026-11-23): the
+        explanation sees its earlier remark on a criterion still open and the
+        code's limits of examples — the verdict rules, shared, went 9 -> 10,
+        so the project's version ``ev1:dbcfa16ba53d80cb`` ->
+        ``ev1:31e41e982208fcef``; its prompts did not move.
+        Moved on purpose by task 13, K4 (2026-11-23), rules 10 -> 11: the
+        evaluation of a repeated attempt of a text type sees the difference
+        from the earlier attempt and its earlier verdicts — the verdict rules,
+        shared, went 10 -> 11, so the project's version
+        ``ev1:31e41e982208fcef`` -> ``ev1:035d4e8fb7fe6854``; its prompts did
+        not move, and its evaluation is shown no memory.
         """
         shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
         before = shipped_with_todays_mentor_for(AssignmentType.PROJECT)
@@ -322,10 +333,10 @@ class TestShippedFile:
             return evaluator_version(task_type, config, prompt_base_path=_REPO_ROOT)
 
         assert version(AssignmentType.PROJECT, before) is None
-        assert version(AssignmentType.PROJECT, shipped) == "ev1:dbcfa16ba53d80cb"
+        assert version(AssignmentType.PROJECT, shipped) == "ev1:035d4e8fb7fe6854"
         for text_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
             assert version(text_type, shipped) == version(text_type, before)
-        assert criteria_verdicts.VERDICT_RULES_VERSION == 9
+        assert criteria_verdicts.VERDICT_RULES_VERSION == 11
 
     def test_the_text_types_version_is_unchanged_by_the_traces(self) -> None:
         """Lock (2026-11-16): the call traces leave the evaluator as it was.
@@ -351,11 +362,23 @@ class TestShippedFile:
         change what a review says (the section of replies, the copy without
         it), so the verdict rules went 8 -> 9 and the version
         ``ev1:575ab64bf49dbf71`` -> ``ev1:e054de5f5bc7b612``.
+
+        Moved on purpose by task 13 (explanation side, 2026-11-23): the
+        explanation stages read prompts v4 and v4_with_replies, and the
+        explanation sees its earlier remark on a criterion still open and the
+        code's limits of examples, so the verdict rules went 9 -> 10 and the
+        version ``ev1:e054de5f5bc7b612`` -> ``ev1:b7d174917a859921``.
+
+        Moved on purpose by task 13, K4 (2026-11-23), rules 10 -> 11: the
+        evaluation stages read prompts v2 and v2_with_replies, and the first
+        request about a repeated attempt sees the difference from the earlier
+        attempt and its earlier verdicts, so the verdict rules went 10 -> 11
+        and the version ``ev1:b7d174917a859921`` -> ``ev1:f260114be44c51bd``.
         """
         shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
         assert (
             evaluator_version(AssignmentType.TASK, shipped, prompt_base_path=_REPO_ROOT)
-            == "ev1:e054de5f5bc7b612"
+            == "ev1:f260114be44c51bd"
         )
-        assert criteria_verdicts.VERDICT_RULES_VERSION == 9
+        assert criteria_verdicts.VERDICT_RULES_VERSION == 11

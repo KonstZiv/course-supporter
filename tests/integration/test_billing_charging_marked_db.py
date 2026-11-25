@@ -453,7 +453,9 @@ async def gate(session_factory: async_sessionmaker[AsyncSession], w: World) -> N
     async with session_factory() as session:
         task = await session.get(AuthoredDocument, w.task_id)
         assert task is not None
-        await _require_units(session, task, student_of(w), file=None)
+        await _require_units(
+            session, task, student_of(w), file=None, response_language=None
+        )
         await session.commit()
 
 

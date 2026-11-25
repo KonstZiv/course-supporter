@@ -1188,7 +1188,7 @@ class CriteriaComposer(Protocol):
 | `course_links.py` | порт пошуку місць курсу (`CourseLinkFinder`), адаптер за поняттями і стадія-код `course_link_lookup`: рядки вердиктів → невиконані критерії → пошук → запис кандидатів |
 | `verdict_explanation.py` | чисті функції: факти для пояснення, форма відповіді, звірка відповіді з фактами, вирізання непоказаних посилань |
 | `review_explanation.py` | стадія `review_explanation`: рядки вердиктів → факти → показані місця курсу → запит → вирізання «вигадки» → запис пояснення |
-| `agents/review_explainer.py` | запит до моделі: промпт стадії — `prompts/review_explanation/v3.md` (v2 і v1 лишаються як історія) або для проєкту `prompts/review_explanation_project/v1.md`, схема відповіді на дроті |
+| `agents/review_explainer.py` | запит до моделі: промпт стадії — `prompts/review_explanation/v4.md` (v3, v2 і v1 лишаються як історія) або для проєкту `prompts/review_explanation_project/v1.md`, схема відповіді на дроті |
 | `agents/wire_schema.py` | схема відповіді на дроті — строга й без описів: вказівки моделі дає лише промпт, а описи полів пишуться для розробників |
 | `course_link_delivery.py` | перевірка посилань перед видачею (задача 10, К6): вибір моделі → місця → чи досі кандидати → заміна або «застарілість» → знімок у рядку кандидатів |
 | `text_result.py` | збирач рецензії `short_task`, `task` і (ланцюг проєкту, К6) `project`: читає рядки й пояснення, рахує, кладе посилання, розкладає зауваження за станами між спробами, складає структуру й markdown; після видачі — мірка справжності |
@@ -1404,6 +1404,17 @@ GROUP BY repeat_reason ORDER BY rows DESC;
    механіки перевірки («автоматична перевірка»); місцю курсу — лише те, що показують назва й
    уривок; без готового розв'язку. Змінні й слоти — ті самі, що у v2, тож user-повідомлення байт у
    байт v2-ве (`tests/unit/test_prompts/test_text_stage_inputs_unchanged.py`).
+   Промпт — `prompts/review_explanation/v4.md` (задача 13, сторона пояснення, 23.11): замість
+   «Never the solution» — **правило прикладів**: приклади разом покривають не більше
+   `result.example_limit` критеріїв (рахує код: `N // 2` від числа критеріїв переліку; у відповіді
+   на одну репліку — `result.reply_example_limit`, `N * 3 // 10`, лише у `v4_with_replies.md`;
+   `verdict_explanation.example_limits`); межа 0 — чинне правило дослівно; приклад — короткий, де
+   можливо на загальнішому випадку; рішення всього завдання — ніколи. І **минуле зауваження**:
+   критерій зі станом `open` отримує `previous_remark` (`what`, `why`, `todo` пояснення попередньої
+   спроби), якщо та спроба є, має пояснення тією самою мовою і зауваження з тим самим `id`
+   (`earlier_review.previous_remarks`; попередню спробу читає одна функція —
+   `earlier_review.read_earlier_review`, нею ж користується збирач для «виправлено»). Проєкт не
+   бачить ні того, ні іншого: його запит байт у байт той самий.
 4. **Звірка з фактами** — на кожній відповіді, на кожному щаблі (`read_explanation`, правила — в
    одній функції `_disagreements`): `passed` дорівнює заліку коду; рівно одне зауваження на кожен
    невиконаний критерій будь-якої ваги й жодного на виконаний чи на пункт; тексти, які друкує
@@ -1856,7 +1867,12 @@ Stage 1 або нормалізації проєкту, до Stage 2). Пода�
 - пошук і перевірка посилань на курс — `course_links`, `course_link_delivery`
   (`settle_course_links`, `replacement_for`), `course_link_position`;
 - збирач — `text_result`, `review_assembler`;
-- стани зауважень між спробами — `is_credited`, `remark_states`, `with_remark_states` (задача 12а).
+- стани зауважень між спробами — `is_credited`, `remark_states`, `with_remark_states` (задача 12а);
+- що бачить пояснення — минуле зауваження й межі прикладів (`earlier_review.previous_remarks`,
+  `verdict_explanation.example_limits`; задача 13, `10`);
+- що бачить оцінка повторної спроби — попередні вердикти й різницю роботи
+  (`earlier_review.read_attempt_memory`, `attempt_memory.rewritten_share` у
+  `config/submission_paths.yaml`; задача 13, К4, `11`).
 
 Забута — і та сама робота отримає копію рецензії, яку написав старий код. `2` — після виправлення
 перевірки цитат 07.11.
@@ -2188,7 +2204,8 @@ Decision 1 / OpenAI, вибір виміром 17.11): реалізує `classif
 **Стадії.** Ті самі виконавці під іншими іменами, як у проєкту: `criteria_evaluation_with_replies`
 і `review_explanation_with_replies` (`path_stages.py`), власні промпти
 `prompts/criteria_evaluation/v1_with_replies.md` і `prompts/review_explanation/v3_with_replies.md`
-(копії каліброваних із позначеними блоками `{# ── 12a K4 … ── #}`), драбини й стелі — базових
+(копії каліброваних із позначеними блоками `{# ── 12a K4 … ── #}`; з задачі 13 — `v4_with_replies.md`,
+копія `v4.md` з тими самими блоками), драбини й стелі — базових
 стадій (не калібровано — калібрує живий вимір 12а). Перемикання — за назвою стадії всередині
 `criteria_evaluation.evaluate_criteria` і `review_explanation.explain_verdicts`; решта шляхів і
 промптів — байт у байт ті самі (замок — `tests/unit/test_prompts/test_reply_prompts.py`). Стадія
@@ -2261,3 +2278,76 @@ Decision 1 / OpenAI, вибір виміром 17.11): реалізує `classif
 `test_reply_answers.py`, `test_replies_measure.py`, `tests/unit/test_prompts/test_reply_prompts.py`,
 `tests/integration/test_reply_stages_db.py`, `test_reply_answers_db.py`,
 `test_reply_answers_e2e_db.py`.
+
+## Пам'ять оцінки — двадцята частина (задача 13, К4)
+
+### 20. Що оцінка повторної спроби бачить про попередню — `earlier_review.py`, `attempt_memory_measure.py`
+
+**Призначення.** Повторну спробу `task` і `short_task` оцінюють не з нуля: перший запит стадії
+оцінки (`criteria_evaluation`, `criteria_evaluation_with_replies`) бачить, що знайшла рецензія
+попередньої спроби і що змінилось у роботі. Це **підказка, куди дивитися** (рішення оператора
+23.11, П2): кожен пункт модель вирішує сама, код вердиктів не переносить; запобіжник повторної
+здачі, правила заліку й балу — без змін. Тест — без пам'яті, проєкт — пізніше.
+
+**Вхід.** Одне місце — `earlier_review.read_attempt_memory` (поруч `read_earlier_review`, яке, як і
+досі, читає пояснення):
+
+- попередня спроба — найпізніша попередня спроба того самого студента над тим самим завданням, що
+  отримала рецензію з рядками вердиктів, **будь-якої версії завдання**
+  (`SubmissionVerdictRepository.earlier_attempt(..., same_version=False)`; пояснення й стани
+  зауважень і далі беруть лише ту саму версію);
+- її вердикти на пункти, про які модель питають тепер (`judged_items`): `met` — з цитатою,
+  `not_met` — з реченням `missing`, `unconfirmed` — як збережено (`quote_not_found`); тексту
+  зауважень попередньої рецензії оцінка не бачить;
+- її робота — файл спроби з S3, прочитаний кодом дверей (`DoorsEarlierWork`:
+  `path_runner.door_languages` + `path_runner.read_text_work`, тимчасовий файл видаляється);
+- різниця — `TextAttemptSnapshotter.diff` знімків обох спроб (рядкова різниця нормалізованого
+  тексту) з `attempt_memory.diff_context_lines` (1) рядком контексту довкола зміни: сама робота
+  є в запиті цілою. Лічильники доданих і видалених рядків від контексту не залежать.
+
+**Коли пам'яті немає або вона неповна** (краще менше, ніж хибне):
+
+| ситуація | вердикти | різниця | позначка |
+|---|---|---|---|
+| попередньої спроби з рецензією немає | — | — | запит як на першу спробу |
+| інша адреса переліку (`criteria_layer` + `criteria_source_id`) | немає | є | «перелік критеріїв змінено» |
+| інша (або невідома) `task_version` | є | є | «завдання змінено» |
+| (додані + видалені рядки) / max(рядків до, після) > `attempt_memory.rewritten_share` (0,5) | є | немає | «роботу переписано» |
+| файл попередньої спроби не читається | є | немає | «попередня робота недоступна»; у журнал — рядок без тексту роботи |
+| не лишилось ні вердиктів, ні різниці | — | — | запит як на першу спробу |
+| з пам'яттю запит більший за `(1 + max_growth)` × без неї | є | немає | «роботу переписано» (`diff_over_growth`) |
+| і без різниці понад стелю | — | — | запит як на першу спробу (`memory_over_growth`) |
+
+**Стеля приросту** (`earlier_review.fit_memory`, рішення оператора 23.11, 21:42): пам'ять може
+збільшити запит стадії щонайбільше на `attempt_memory.max_growth` (0,33) запиту без неї. Міра —
+знаки відрендереного системного й користувацького повідомлення; стадія рендерить обидва варіанти
+тим самим способом (`criteria_evaluator.request_chars`, промпт стадії). Причину пишемо в журнал
+окремо (`reason`: `rewritten_share`, `diff_over_growth`, `memory_over_growth`) з числами
+`base_chars`, `growth`, без тексту роботи. Наслідок: правила v2 самі важать ≈ 2 500 знаків, тож
+запит, коротший за ≈ 7 900 знаків, пам'яті не отримує ніколи.
+
+**Вихід — промпти `v2.md` і `v2_with_replies.md`** (копії `v1` і `v1_with_replies` з одним
+позначеним блоком). Блок пам'яті є лише в першому запиті повторної спроби: правила в системному
+повідомленні, позначки й два недовірені слоти в користувацькому — `<previous_attempt_verdicts>`
+(JSON) і `<previous_attempt_diff>` (unified diff); обидва названо в переліку недовіреного вводу.
+На першій спробі й у другому запиті про пункти (`repeat`, `<previous_problems>`) запит v2 байт у
+байт v1-вий (`tests/unit/test_prompts/test_text_stage_inputs_unchanged.py`).
+
+**Як змінити межу «переписано», контекст чи стелю.** `attempt_memory.rewritten_share`,
+`diff_context_lines`, `max_growth` у `config/submission_paths.yaml`; разом із ними —
+`VERDICT_RULES_VERSION` (замок `test_attempt_memory.py::TestTheSetting`).
+
+**Стенд виміру** (`attempt_memory_measure.py`, `scripts/measure_attempt_memory.py`): пари записаних
+входів (`scripts/record_evaluation_input.py` — перша й друга спроба) → три запити на перший щабель
+з тим самим зерном: перша спроба v1 (її вердикти), друга v1, друга v2 з пам'яттю. Звіряє вердикти
+пунктів, яких зміна не зачепила, і зачеплених; рахує застарілі цитати й приріст входу; пам'ять
+кладе під ту саму стелю, що й стадія, і пише причину. `--flip ITEM` (повторюваний) підкладає
+хибну історію: справжнє «виконано» пункту в пам'яті третього виклику показано як «не виконано»
+(без цитати, `missing = "(flipped for the measurement)"`); перші два виклики не змінюються, а
+`summary.json` рахує, скільки перевернутих пунктів модель оцінила за роботою, а скільки — за
+історією. «Не виконано» не перевертається (`flip_skipped`). Бази не
+торкається; `--dry-run` нічого не надсилає. Синтетична пара — `tests/fixtures/attempt_memory/`.
+
+Замки — `tests/unit/test_homework/test_attempt_memory.py`, `test_attempt_memory_measure.py`,
+`tests/unit/test_prompts/test_text_stage_inputs_unchanged.py`,
+`test_calibrated_prompts_unchanged.py`, `tests/integration/test_attempt_memory_db.py`.

@@ -39,6 +39,19 @@ Steps:
        fits the project's input budget, and without a mark when it does not
        (chain K5).
 
+The earlier attempt (task 13, K4):
+    On the two stages of the text types alone — ``criteria_evaluation`` and
+    ``criteria_evaluation_with_replies``, by the stage's name as the switches
+    above — and on a repeated attempt alone (a path of a ``repeat_*`` state),
+    the first request is also shown what the earlier attempt's review found
+    and what changed in the work since
+    (:func:`~course_supporter.homework.earlier_review.read_attempt_memory`):
+    a hint where to look, never an answer — nothing is carried over by code,
+    the verdicts are settled as ever, the safeguard included. The second
+    request about some items is what it was. No earlier attempt, or nothing
+    of it left to show — the request is a first attempt's. A project's stage
+    and a test are shown nothing.
+
 The student's replies (task 12a, K4):
     On ``criteria_evaluation_with_replies`` alone — the switch by the stage's
     name, as the project's — the request also shows the student's replies
@@ -75,6 +88,7 @@ from course_supporter.agents.criteria_evaluator import (
     CriteriaEvaluatorAgent,
     Evaluated,
     EvaluationInput,
+    request_chars,
 )
 from course_supporter.criteria_kinds import VerdictValue
 from course_supporter.homework.criteria_list_service import (
@@ -86,13 +100,22 @@ from course_supporter.homework.criteria_verdicts import (
     EvaluationAnswer,
     SubmittedWork,
     items_to_ask_again,
+    judged_items,
     settle_verdicts,
     with_remark_states,
 )
+from course_supporter.homework.doors import DoorReading
+from course_supporter.homework.earlier_review import fit_memory, read_attempt_memory
 from course_supporter.homework.mentor_context import mark_authors_lines
 from course_supporter.homework.path_checkpoint import FreezeReason
+from course_supporter.homework.path_config import (
+    ModelStage,
+    SubmissionState,
+    get_path_config,
+)
 from course_supporter.homework.path_continuation import resume_awaiting_criteria
 from course_supporter.homework.path_stages import (
+    CRITERIA_EVALUATION,
     CRITERIA_EVALUATION_WITH_REPLIES,
     PROJECT_CRITERIA_EVALUATION,
     StageOutcome,
@@ -113,6 +136,7 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from course_supporter.homework.earlier_review import AttemptMemory
     from course_supporter.homework.path_stages import StageContext
     from course_supporter.homework.reply_source import ReplySource
     from course_supporter.homework.student_replies import EvaluationReply
@@ -120,6 +144,11 @@ if TYPE_CHECKING:
     from course_supporter.storage.orm import HomeworkSubmission
 
 logger = structlog.get_logger(__name__)
+
+MEMORY_STAGES: frozenset[str] = frozenset(
+    {CRITERIA_EVALUATION, CRITERIA_EVALUATION_WITH_REPLIES}
+)
+"""The stages shown the earlier attempt (task 13, K4): the text types' two."""
 
 
 class CriteriaSource(Protocol):
@@ -201,6 +230,7 @@ async def evaluate_criteria(
         language=await course_language(context.session, submission),
         replies=await _replies_shown(context, reply_source, log=log),
     )
+    shown = replace(shown, memory=await _memory_shown(context, listed, shown, log=log))
     agent = CriteriaEvaluatorAgent(context.router)
 
     first = await agent.evaluate(shown, execution=execution)
@@ -277,6 +307,95 @@ async def _replies_shown(
         unjudged=len(read.unjudged),
     )
     return shown
+
+
+async def _memory_shown(
+    context: StageContext,
+    listed: CriteriaInForce,
+    shown: EvaluationInput,
+    *,
+    log: Any,
+) -> AttemptMemory | None:
+    """What the first request is shown of the earlier attempt (task 13, K4).
+
+    ``None`` on every stage but the text types' two and on a first attempt:
+    their request stays byte for byte what it was. The current work is the
+    doors' reading (``context.door``); a context without one — a test — is
+    read from its text and files. The share above which the work counts as
+    rewritten, the lines of context and the ceiling of the growth are the
+    path file's (``attempt_memory``). The ceiling is measured on this stage's
+    own request — ``shown`` (everything but the memory) rendered by its
+    prompt with the memory and without it
+    (:func:`~course_supporter.homework.earlier_review.fit_memory`); why the
+    difference or the memory is not shown is logged with the numbers and no
+    text of the work.
+    """
+    if context.stage_name not in MEMORY_STAGES:
+        return None
+    if context.path_key.state is SubmissionState.FIRST:
+        return None
+    config = context.config if context.config is not None else get_path_config()
+    current = (
+        context.door
+        if context.door is not None
+        else DoorReading(text=context.submission_text, files=context.work)
+    )
+    settings = config.attempt_memory
+    judged = judged_items(listed.criteria)
+    read = await read_attempt_memory(
+        context.session,
+        context.submission,
+        current=current,
+        criteria_layer=listed.layer,
+        criteria_source_id=listed.source_id,
+        judged=judged,
+        source=context.earlier_work,
+        rewritten_share=settings.rewritten_share,
+        context_lines=settings.diff_context_lines,
+    )
+    if read is None:
+        log.info("criteria_evaluation_memory_none", reason=None)
+        return None
+    stage = context.stage
+    if not isinstance(stage, ModelStage):  # pragma: no cover - a model stage
+        msg = f"{context.stage_name} is not a model stage"
+        raise TypeError(msg)
+    fitted = fit_memory(
+        read,
+        request_chars=lambda memory: request_chars(
+            replace(shown, memory=memory), prompt_ref=stage.prompt_ref, expected=judged
+        ),
+        max_growth=settings.max_growth,
+    )
+    memory = fitted.memory
+    if memory is None:
+        log.info(
+            "criteria_evaluation_memory_none",
+            reason=fitted.reason,
+            base_chars=fitted.base_chars,
+            growth=round(fitted.growth, 4),
+            max_growth=settings.max_growth,
+        )
+        return None
+    log.info(
+        "criteria_evaluation_memory_shown",
+        reason=fitted.reason,
+        base_chars=fitted.base_chars,
+        growth=round(fitted.growth, 4),
+        sent_growth=round(fitted.sent_growth, 4),
+        max_growth=settings.max_growth,
+        earlier_submission_id=str(memory.earlier_submission_id),
+        verdicts=None if memory.verdicts is None else len(memory.verdicts),
+        diff_chars=None if memory.diff is None else len(memory.diff),
+        lines_added=memory.lines_added,
+        lines_removed=memory.lines_removed,
+        changed_share=memory.changed_share,
+        criteria_changed=memory.criteria_changed,
+        task_changed=memory.task_changed,
+        rewritten=memory.rewritten,
+        earlier_work_unavailable=memory.earlier_work_unavailable,
+    )
+    return memory
 
 
 def _marked(context: StageContext) -> str:

@@ -43,6 +43,20 @@ Steps:
        and a retry would be paid for to win nothing the cut does not.
     6. The answer is kept as cut, in the language it was written in.
 
+The limits of examples and the remark made before (task 13, explanation side):
+    On a text type's two stages — ``review_explanation`` and
+    ``review_explanation_with_replies``, never the project's — the request
+    also shows how many criteria the examples may cover, counted from the
+    number of criteria of the judged list
+    (:func:`~course_supporter.homework.verdict_explanation.example_limits`),
+    and, beside each criterion whose remark stayed open since the earlier
+    attempt, the explanation's own remark on it then, in the same language
+    (:func:`~course_supporter.homework.earlier_review.previous_remarks`). The
+    earlier attempt is read by
+    :func:`~course_supporter.homework.earlier_review.read_earlier_review` —
+    the same attempt the evaluation stage counted the states against. The
+    check of the answer is the same.
+
 The student's replies (task 12a, K4):
     On ``review_explanation_with_replies`` alone — the switch by the stage's
     name — the request also shows the threads under the remarks and asks an
@@ -93,8 +107,13 @@ from course_supporter.agents.review_explainer import (
 )
 from course_supporter.homework.course_link_position import link_position
 from course_supporter.homework.course_links import FoundCourseLinks
+from course_supporter.homework.earlier_review import (
+    previous_remarks,
+    read_earlier_review,
+)
 from course_supporter.homework.judged_list import judged_layer, read_judged_list
 from course_supporter.homework.path_stages import (
+    REVIEW_EXPLANATION,
     REVIEW_EXPLANATION_WITH_REPLIES,
     StageOutcome,
 )
@@ -104,6 +123,7 @@ from course_supporter.homework.reply_source import (
     default_reply_source,
     reply_phrases,
 )
+from course_supporter.homework.review_language import language_for_review
 from course_supporter.homework.student_replies import RepliesPlan, plan_replies
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.homework.verdict_explanation import (
@@ -111,13 +131,13 @@ from course_supporter.homework.verdict_explanation import (
     ExplanationAnswer,
     ReplyPhrases,
     drop_unshown_links,
+    example_limits,
     explanation_facts,
     settle_reply_answers,
 )
-from course_supporter.language import display_name, resolve_review_language
+from course_supporter.language import display_name
 from course_supporter.models.stored_read import read_stored
 from course_supporter.service_logging import CourseLinkTrace, record_course_link_trace
-from course_supporter.storage.orm import CourseNode
 from course_supporter.storage.submission_verdict_repository import (
     SubmissionVerdictRepository,
 )
@@ -136,6 +156,10 @@ if TYPE_CHECKING:
     from course_supporter.storage.orm import HomeworkSubmission
 
 logger = structlog.get_logger(__name__)
+
+_TEXT_TYPE_STAGES = frozenset({REVIEW_EXPLANATION, REVIEW_EXPLANATION_WITH_REPLIES})
+"""The text types' stages: their request shows the limits of examples and the
+remarks made before (task 13); the project's stage shows neither."""
 
 
 async def explain_verdicts(
@@ -177,6 +201,7 @@ async def explain_verdicts(
         submission,
         submission_text=context.submission_text,
         language=context.language,
+        text_type=context.stage_name in _TEXT_TYPE_STAGES,
     )
     facts = shown.facts
     explained = await ReviewExplainerAgent(context.router).explain(
@@ -247,6 +272,7 @@ async def _explain_with_replies(
         submission,
         submission_text=context.submission_text,
         language=context.language,
+        text_type=context.stage_name in _TEXT_TYPE_STAGES,
     )
     read = await source.replies(
         context.session,
@@ -345,6 +371,7 @@ async def explanation_input(
     *,
     submission_text: str,
     language: str | None,
+    text_type: bool,
 ) -> tuple[ExplanationInput, str]:
     """What the model is shown about the submission, and its language code.
 
@@ -359,6 +386,10 @@ async def explanation_input(
         submission_text: The work exactly as the doors read it.
         language: The path's resolution of the language, as an ISO 639-3
             code; ``None`` takes the course root's.
+        text_type: The stage of a ``task`` or a ``short_task``: the input
+            also carries the limits of examples and the remarks made before
+            (task 13; see the module). ``False`` — the project's stage, whose
+            request stays what it was.
 
     Returns:
         The input of :class:`ReviewExplainerAgent`, and the language of the
@@ -403,6 +434,14 @@ async def explanation_input(
         language=display_name(code),
         course_links=shown_links,
     )
+    if text_type:
+        shown = replace(
+            shown,
+            example_limits=example_limits(len(criteria)),
+            previous_remarks=previous_remarks(
+                rows, await read_earlier_review(session, submission), language=code
+            ),
+        )
     return shown, code
 
 
@@ -448,19 +487,17 @@ async def _explanation_language(
     """The language of the explanation as an ISO 639-3 code.
 
     The path's resolution first (``explicit``); without it, the course
-    root's language, read only then.
+    root's language, read only then — the one rule of
+    :func:`~course_supporter.homework.review_language.language_for_review`,
+    which the key of a copy and the price read too.
 
     Raises:
         ValueError: Neither gives a language — a root without one is refused
             by the database and by every write of it, so this is a defect.
     """
-    root_language: str | None = None
-    if explicit is None:
-        root = await session.get(CourseNode, submission.course_node_id)
-        root_language = root.default_language if root is not None else None
-    code = resolve_review_language(
-        explicit=explicit, preferred=None, course=root_language
-    ).code
+    code = await language_for_review(
+        session, course_node_id=submission.course_node_id, doors_language=explicit
+    )
     if code is None:
         msg = "neither the student nor the course root gives a language"
         raise ValueError(msg)

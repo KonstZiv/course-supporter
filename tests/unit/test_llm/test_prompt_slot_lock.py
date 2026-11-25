@@ -278,6 +278,7 @@ class TestTheTemplatesOfBothRoads:
         [
             "review_explanation/v2.md",
             "review_explanation/v3.md",
+            "review_explanation/v4.md",
             "review_explanation_project/v1.md",
         ],
     )
@@ -340,6 +341,7 @@ class TestTheTemplatesOfBothRoads:
         [
             "review_explanation/v2.md",
             "review_explanation/v3.md",
+            "review_explanation/v4.md",
             "review_explanation_project/v1.md",
         ],
     )

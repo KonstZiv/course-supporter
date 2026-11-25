@@ -1,11 +1,9 @@
 """The author's three doors to a task's criteria list (mentor-rebuild task 08).
 
 Read the list — the model's, the author's edit, the one in force and the
-contradictions the model found — replace the edit whole, reset it. As with a
-test's key (``api/routes/references.py``), no screen calls them yet: the author
-uses an HTTP client, and the second echelon's panel will call these same three
-(``03-BINDING.md`` 2.3, clarified 2026-09-19), so they ship as the final
-routes.
+contradictions the model found — replace the edit whole, reset it. The author
+panel's criteria screen (course-supporter-ui, ``CriteriaEditorPage``) calls
+these same three; an author may also use an HTTP client.
 
 What the routes answer is decided in
 :class:`~course_supporter.homework.criteria_edit_service.CriteriaEditService`;

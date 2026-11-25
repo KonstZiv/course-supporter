@@ -16,7 +16,11 @@ from course_supporter.billing.benefit import (
     month_limit,
     setting_on,
 )
-from course_supporter.billing.errors import BillingInvalidError
+from course_supporter.billing.errors import (
+    ActionAlreadySettledError,
+    BillingConflictError,
+    BillingInvalidError,
+)
 from course_supporter.billing.journal import add_months
 from course_supporter.billing.kinds import Benefit
 from course_supporter.billing.refunds import refund_amount, units_for_amount
@@ -165,3 +169,7 @@ class TestUnitsForAmount:
     def test_a_negative_amount_is_refused(self) -> None:
         with pytest.raises(BillingInvalidError, match="negative"):
             units_for_amount(_batch(), -1)
+
+
+def test_action_already_settled_error_is_billing_conflict() -> None:
+    assert issubclass(ActionAlreadySettledError, BillingConflictError)

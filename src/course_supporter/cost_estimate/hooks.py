@@ -13,7 +13,8 @@ bound by its rule: it never raises, and it writes in its own transaction.
   the new path, and before ``key_explanation``.
 * :func:`shadow_node_summary_regeneration` — a ``node_summary_regeneration``
   job, once its scope is known and before its first node is visited
-  (``api/tasks.py``).
+  (``api/tasks.py``); the regeneration's charge starts right after it, as a
+  processing's (BIL-E, ``billing.funds``).
 """
 
 from __future__ import annotations
@@ -36,10 +37,7 @@ from course_supporter.cost_estimate.actions import (
 )
 from course_supporter.cost_estimate.core import ActionEstimate
 from course_supporter.cost_estimate.node_summary import read_node_summary_factors
-from course_supporter.cost_estimate.settings import (
-    EstimateSettings,
-    get_estimate_settings,
-)
+from course_supporter.cost_estimate.settings import EstimateSettings
 from course_supporter.cost_estimate.shadow import (
     load_catalog,
     load_ladder_stages,
@@ -226,18 +224,21 @@ async def shadow_node_summary_regeneration(
 ) -> None:
     """Estimate a regeneration job (key: the job, as for a processing).
 
-    The factors are read from the database in a session of their own, read-only,
-    inside the same guard as the write: a failed read is logged and the job goes
-    on, like a failed write.
+    The factors are read from the database once, in a session of their own,
+    read-only, inside the same guard as the write: a failed read is logged and
+    the job goes on, like a failed write, and nothing is charged (no estimate,
+    no charge). The regeneration's charge starts right after the estimate, on
+    the same factors (BIL-E, ``billing.funds``).
+
+    Raises:
+        InsufficientUnitsError: from the charge — an author without credit
+            who cannot cover the price; the job fails before its first model
+            call.
     """
     action_key = processing_key(job_id)
     try:
         async with session_factory() as session:
-            factors = await read_node_summary_factors(
-                session,
-                vertex_node_id,
-                child_summary_chars=get_estimate_settings().processing.node_summary.child_summary_chars,
-            )
+            factors = await read_node_summary_factors(session, vertex_node_id)
     except Exception:
         logger.exception("cost_estimate_failed", action_key=action_key)
         return
@@ -257,5 +258,14 @@ async def shadow_node_summary_regeneration(
         action_key=action_key,
         tenant_id=get_current_tenant_id(),
         job_id=job_id,
+        session_factory=session_factory,
+    )
+    # The charge (BIL-E): may raise; a no-op while charging is off.
+    from course_supporter.billing.funds import node_summary_regeneration_started
+
+    await node_summary_regeneration_started(
+        factors=factors,
+        job_id=job_id,
+        vertex_node_id=vertex_node_id,
         session_factory=session_factory,
     )

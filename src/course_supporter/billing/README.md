@@ -54,6 +54,14 @@ BIL-E2, BIL-TESTMARK; рішення оператора — у docstring кож�
   (`path_choice_failed` | `file_read_failed` | `typical_size_failed` | `estimate_failed` |
   `rate_not_set`) і класом помилки, без тексту роботи. Без K усе коштує 0, і N теж 0.
 
+* **Складання описів розділів (Методист)** — та сама дія автора «обробка», що й обробка матеріалу
+  (`ActionKind.PROCESSING`, ключ — задача `node_summary_regeneration`, рішення оператора 23.11 за
+  гайдом автора): поріг і резерв — `funds.node_summary_regeneration_started` після тіньової оцінки
+  й до першого виклику моделі (нестача без кредиту — задача `failed`, `insufficient_units`); кінець —
+  `funds.node_summary_regeneration_ended` (факт `job_fact_usd` або звільнення). E — одна функція
+  `estimates.node_summary_e_usd` для задачі й оцінки перед дією; усі вузли свіжі — E = 0, нічого не
+  резервується.
+
 Поки обидва перемикачі вимкнені, `build_funds_port` дає `AlwaysEnoughFundsPort`: нічого не
 резервується й не утримується.
 
@@ -221,6 +229,7 @@ Creem перевіряє магазин лише в бойовому режим�
 |---|---|---|
 | `POST /portal/tasks/{id}/estimate` | студент | ціна перевірки: `price_units`, `available_units`, `enough`, `missing_units`, `charging_enabled`, `basis`, `paid_by` |
 | `POST /nodes/{id}/documents/estimate` | автор (`prep`) | ціна обробки матеріалу: `price_units`, `available_units`, `enough`, `missing_units`, `charging_enabled`, `unpriced_reason`, `missing_features` |
+| `POST /nodes/{id}/summary/estimate` | автор (`prep`, свій вузол) | ціна складання описів розділів (Методист), тіло як у `.../summary/generate`; ті самі поля; усі вузли свіжі — `price_units = 0`, `unpriced_reason = "nothing_to_do"` |
 | `POST /documents/{id}/reference/estimate` | автор (`prep`) | ціна пояснень ключа тесту (ті самі поля) |
 | `GET /portal/billing/outlook` | студент | `reviews_left`, `warning`, `expiring_soon`, `paid_by`, `charging_enabled` |
 | `GET /billing/outlook` | автор (`prep`) | `days_left`, `warning`, `expiring_soon`, `held_reviews`, `charging_enabled` |
@@ -239,7 +248,8 @@ Creem перевіряє магазин лише в бойовому режим�
 матеріалу (`missing_features` — назви полів тіла: audio/video — `duration_sec`; presentation —
 `slides`, `text_chars`; text/web — `text_chars`; code — `files`, `text_chars`; таблиця —
 `cost_estimate.actions.REQUIRED_FACTORS`), або `estimate_failed` — збій самої оцінки. З ціною обидва
-поля `null`.
+поля `null`; виняток — ціна 0 з `unpriced_reason = "nothing_to_do"`: складання описів розділів, де
+всі вузли свіжі (модель не викликається, нічого не резервується й не списується).
 
 **`charging_enabled`** у нагадуваннях, оцінках і витратах — «списання застосовне до рахунку, про
 який ця відповідь» (`charging.charging_applies`): для автора — його рахунок; для оцінки — платник

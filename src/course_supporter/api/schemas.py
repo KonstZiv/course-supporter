@@ -1687,6 +1687,37 @@ class InterfaceLanguageResponse(BaseModel):
     )
 
 
+class AuthorInterfaceLanguageRequest(BaseModel):
+    """Request body for PUT /author/interface-language (V1).
+
+    Validated as the student's counterpart (M-3) is (``_validate_language``):
+    ISO 639-1, 639-3 or an English name is accepted, the canonical 639-3
+    code is what is stored, and a language outside ``config/languages.yaml``
+    is a 422. There is no null: the route sets a choice, never clears it.
+    """
+
+    language: str = Field(
+        description="Language of the author panel pages; ISO 639-1 or 639-3 "
+        "accepted, stored as 639-3.",
+        examples=["en", "ukr"],
+    )
+
+    @field_validator("language")
+    @classmethod
+    def _check_language(cls, raw: str) -> str:
+        return _validate_language(raw)
+
+
+class AuthorInterfaceLanguageResponse(BaseModel):
+    """Response for GET and PUT /author/interface-language (V1)."""
+
+    interface_language: str | None = Field(
+        description="Canonical ISO 639-3 language of the author panel pages "
+        "the author picked, or null if they never picked one (PUT always "
+        "answers with the stored code)."
+    )
+
+
 class RecoveryEmailRequest(BaseModel):
     """Request body for POST /portal/recovery-email (set/change; protected).
 
@@ -1820,6 +1851,10 @@ class SetStudentPasswordRequest(BaseModel):
     password: str = Field(min_length=1, description="New portal password (plaintext).")
 
 
+#: Who made an enrollment (O-1): ``student_enrollments.source``.
+EnrollmentSource = Literal["author", "self"]
+
+
 class EnrollmentRequest(BaseModel):
     """Request body for POST /students/enrollments (bind student↔course)."""
 
@@ -1857,6 +1892,12 @@ class StudentRosterItem(BaseModel):
     enrollment_count: int = Field(
         description="Number of course enrollments (correlated count)."
     )
+    source: EnrollmentSource = Field(
+        default="author",
+        description="How the student came (O-1): the source of their first "
+        "enrollment — 'self' when they enrolled by a course link, 'author' "
+        "when the author enrolled them; 'author' with no enrollment.",
+    )
 
 
 class StudentRosterResponse(BaseModel):
@@ -1886,6 +1927,10 @@ class StudentEnrollmentItem(BaseModel):
 
     course_node_id: uuid.UUID = Field(description="Enrolled root CourseNode id.")
     enrolled_at: datetime = Field(description="When the grant was created.")
+    source: EnrollmentSource = Field(
+        description="Who made the grant (O-1): 'author' — the author; 'self' — "
+        "the student by the course link."
+    )
 
 
 class StudentEnrollmentsResponse(BaseModel):
@@ -1894,6 +1939,210 @@ class StudentEnrollmentsResponse(BaseModel):
     student_id: uuid.UUID = Field(description="The student these grants belong to.")
     items: list[StudentEnrollmentItem] = Field(
         description="Enrollments, oldest-first (mirrors bind order)."
+    )
+
+
+# --- Open courses (O-1): enrollment by a course link ---
+
+
+def _email_shape(raw: str) -> str:
+    """A single ``@`` with a local part and a domain (as the recovery email;
+    the confirm mail proves the rest); lower-cased, as stored."""
+    local, sep, domain = raw.strip().partition("@")
+    if not sep or not local or not domain:
+        msg = "email must contain a local part and a domain (e.g. name@example.com)"
+        raise ValueError(msg)
+    return raw.strip().lower()
+
+
+def _must_be_adult(value: bool) -> bool:
+    if value is not True:
+        raise ValueError("adult must be true: enrollment is for people aged 18+")
+    return value
+
+
+#: An email of the open-course routes: shape-checked and lower-cased.
+JoinEmail = Annotated[
+    str,
+    Field(min_length=3, max_length=320, description="Email address."),
+    AfterValidator(_email_shape),
+]
+#: The "I am 18 or older" mark: required, and only ``true`` is accepted.
+AdultMark = Annotated[
+    bool,
+    Field(description='The "I am 18 or older" mark; must be true (422 otherwise).'),
+    AfterValidator(_must_be_adult),
+]
+#: The terms revision and fingerprint, as in ``BillingConsentRequest``.
+TermsVersion = Annotated[
+    str,
+    Field(
+        max_length=32,
+        description="The billing terms revision shown; must be the one in "
+        "force (409 terms_changed otherwise).",
+    ),
+]
+TermsTextSha256 = Annotated[
+    str,
+    Field(
+        pattern=r"^[0-9a-f]{64}$",
+        description="SHA-256 (lowercase hex) of the terms text shown.",
+    ),
+]
+
+
+class EnrollmentLinkResponse(BaseModel):
+    """GET/POST /nodes/{course_id}/enrollment-link[/open|/rotate|/close]."""
+
+    open: bool = Field(description="True while the course's link works.")
+    key: str | None = Field(
+        description="The course key; null while the link is closed."
+    )
+    url: str | None = Field(
+        description="The link to give out: {portal_base_url}/{tenant_id}/join/"
+        "{key}; null while closed."
+    )
+
+
+class JoinCourseCardResponse(BaseModel):
+    """GET /portal/join/{tenant_id}/{key}: the course the link leads to."""
+
+    course_id: uuid.UUID = Field(description="The course (root node) id.")
+    course_title: str = Field(description="The course title.")
+    author_name: str = Field(description="The author's (tenant's) name.")
+    languages: list[str] = Field(
+        description="ISO 639-3 languages of the course: its own language "
+        "first, then the other languages of its materials."
+    )
+    terms_version: str = Field(
+        description="Revision of the billing terms in force: the date it took "
+        "effect, YYYY-MM-DD. Signup sends it back as ``terms_version``."
+    )
+
+
+class JoinSignupRequest(BaseModel):
+    """POST /portal/join/{tenant_id}/{key}/signup."""
+
+    login: str = Field(min_length=1, max_length=200, description="Portal login.")
+    password: str = Field(
+        min_length=1,
+        max_length=1024,
+        description="Portal password (plaintext; only the argon2id hash is "
+        "kept). Must meet the minimum-length policy (422 otherwise).",
+    )
+    email: JoinEmail
+    display_name: str | None = Field(
+        default=None, max_length=200, description="Portal display name."
+    )
+    interface_language: str | None = Field(
+        default=None,
+        description="Language of the portal pages and of the confirm email; "
+        "ISO 639-1 or 639-3 accepted, stored as 639-3. Null: Ukrainian.",
+        examples=["en", "ukr"],
+    )
+    adult: AdultMark
+    terms_version: TermsVersion
+    text_sha256: TermsTextSha256
+
+    @field_validator("interface_language")
+    @classmethod
+    def _check_language(cls, raw: str | None) -> str | None:
+        return None if raw is None else _validate_language(raw)
+
+
+class JoinSignupResponse(BaseModel):
+    """202 of signup and resend: the request waits for the email."""
+
+    signup_id: uuid.UUID = Field(description="The request; resend names it.")
+    email_masked: str = Field(description="The email, masked: a***@d***.com.")
+    expires_at: datetime = Field(
+        description="Confirm before this, or the request is void (7 days)."
+    )
+
+
+class JoinResendRequest(BaseModel):
+    """POST /portal/join/resend."""
+
+    signup_id: uuid.UUID = Field(description="The pending request.")
+
+
+class JoinConfirmRequest(BaseModel):
+    """POST /portal/join/confirm."""
+
+    token: str = Field(min_length=1, description="The token of the mailed link.")
+
+
+class JoinChangeLoginRequest(BaseModel):
+    """POST /portal/join/{signup_id}/login: another login for a request whose
+    login was taken before it was confirmed."""
+
+    login: str = Field(min_length=1, max_length=200, description="The new login.")
+    token: str = Field(min_length=1, description="The token of the mailed link.")
+
+
+class JoinConfirmResponse(PortalLoginResponse):
+    """200 of confirm: a session, as POST /portal/login gives, and the course."""
+
+    tenant_id: uuid.UUID = Field(description="The student's tenant.")
+    course_id: uuid.UUID = Field(description="The course enrolled in.")
+
+
+class PortalCourseJoinRequest(BaseModel):
+    """POST /portal/courses/join: a student with a login joins by a link."""
+
+    tenant_id: uuid.UUID = Field(description="The tenant of the link.")
+    key: str = Field(min_length=1, max_length=200, description="The course key.")
+    adult: AdultMark
+    terms_version: TermsVersion
+    text_sha256: TermsTextSha256
+
+
+class PortalCourseJoinResponse(BaseModel):
+    """201 enrolled / 200 already_enrolled."""
+
+    status: Literal["enrolled", "already_enrolled"] = Field(
+        description="enrolled (201) or already_enrolled (200)."
+    )
+    course_id: uuid.UUID = Field(description="The course.")
+
+
+class PortalEmailLoginRequest(BaseModel):
+    """POST /portal/login-by-email (variant A)."""
+
+    email: JoinEmail
+    password: str = Field(
+        min_length=1, max_length=1024, description="Password (plaintext)."
+    )
+    tenant_id: uuid.UUID | None = Field(
+        default=None, description="The tenant chosen from ``choose``."
+    )
+    login: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="The login chosen from ``choose``.",
+    )
+
+
+class PortalEmailLoginResponse(PortalLoginResponse):
+    """200, one match: a session, as POST /portal/login gives."""
+
+    tenant_id: uuid.UUID = Field(description="The tenant signed in to.")
+
+
+class PortalEmailLoginChoice(BaseModel):
+    """A login the password matched; the portal asks which one."""
+
+    tenant_id: uuid.UUID
+    tenant_name: str = Field(description="The author's (tenant's) name.")
+    login: str
+
+
+class PortalEmailLoginChoiceResponse(BaseModel):
+    """200, several matches: no session; send again with tenant_id + login."""
+
+    choose: list[PortalEmailLoginChoice] = Field(
+        description="Only the logins whose password matched."
     )
 
 
@@ -2622,6 +2871,235 @@ class PortalSubmissionDetail(BaseModel):
             "counted."
         ),
     )
+
+
+class AuthorSubmissionStudent(BaseModel):
+    """The student a submission belongs to, as the author's screen names them."""
+
+    student_id: uuid.UUID = Field(description="Student primary key.")
+    display_name: str | None = Field(
+        default=None, description="Display name of the student, if one was set."
+    )
+
+
+class AuthorStudentHeader(AuthorSubmissionStudent):
+    """The student at the head of the author's submissions list."""
+
+    login: str | None = Field(
+        default=None,
+        description="Portal login of the student; null when no portal "
+        "credential was provisioned. Same source as GET /students.",
+    )
+
+
+class AuthorStudentEnrollment(BaseModel):
+    """A course the student is enrolled in, for the head of the list."""
+
+    course_id: uuid.UUID = Field(description="Root CourseNode id of the course.")
+    course_title: str = Field(description="Title of the course.")
+    enrolled_at: datetime = Field(description="When the student was enrolled.")
+
+
+class AuthorSubmissionBase(BaseModel):
+    """The fields a submission row and a submission detail have in common.
+
+    Never serialised on its own: the two author responses extend it. The
+    investigation trace (``safety_result``, ``sanity_result``, the raw
+    ``review_result``), the job, the storage key and every cost figure are
+    deliberately absent from both responses.
+    """
+
+    id: uuid.UUID = Field(description="Submission id.")
+    attempt_no: int | None = Field(
+        default=None,
+        description="Which attempt at the task this submission is (1 for the "
+        "first reviewed one); null for a submission made before attempts were "
+        "counted or one that took no number (refused, off-task, failed).",
+    )
+    previous_submission_id: uuid.UUID | None = Field(
+        default=None,
+        description="The student's latest earlier reviewed attempt at the same "
+        "task; null for the first.",
+    )
+    created_at: datetime = Field(description="When the work was submitted.")
+    reviewed_at: datetime | None = Field(
+        default=None,
+        description="When the review was written: the completion time of the "
+        "processing job that wrote it. Null while there is no review, and "
+        "when the job is not known to have finished.",
+    )
+    course_id: uuid.UUID = Field(description="Root CourseNode id of the course.")
+    course_title: str = Field(description="Title of the course.")
+    task_document_id: uuid.UUID = Field(
+        description="AuthoredDocument id of the task the work answers."
+    )
+    task_title: str = Field(
+        description="Label of the task: its title, else its file name, else "
+        "a derived '<source type> #<order>'."
+    )
+    task_type: str | None = Field(
+        default=None,
+        description="Kind of the task (short_task, task, project, test).",
+    )
+    status: str = Field(description="Lifecycle milestone of the submission.")
+    presentation: PortalPresentation = Field(
+        description="What to say about this attempt: the very answer the "
+        "student's portal shows, with 'awaiting_author_funds' when the review "
+        "waits for the author's units."
+    )
+    score: int | None = Field(default=None, description="Final 0-100 grade, if any.")
+    rejection: PortalRejection | None = Field(
+        default=None, description="Why the attempt was refused; null if it was not."
+    )
+    not_opened: list[PortalNotOpened] = Field(
+        default_factory=list,
+        description="Files skipped during checking, also on a passing attempt.",
+    )
+    recovered_encoding: str | None = Field(
+        default=None,
+        description="Encoding the submitted file was read as: 'utf-8' when read "
+        "directly, another name when recovered, null when it does not apply.",
+    )
+    is_repeat_copy: bool = Field(
+        description="True when this review is a copy of the earlier review of "
+        "the very same work (the work did not change), not a new evaluation."
+    )
+    review_language: str | None = Field(
+        default=None,
+        description="Language of the review, three-letter code as stored: the "
+        "review's own, else the language requested for the submission.",
+    )
+    original_filename: str | None = Field(
+        default=None, description="Name of the submitted file."
+    )
+
+
+class AuthorSubmissionListItem(AuthorSubmissionBase):
+    """One submission in the author's list of a student's work."""
+
+    passed: bool | None = Field(
+        default=None,
+        description="Whether the work was accepted, as the student's portal "
+        "reads it; null while there is no verdict.",
+    )
+
+
+class AuthorStudentSubmissions(BaseModel):
+    """GET /students/{student_id}/submissions: a student's work, newest first."""
+
+    student: AuthorStudentHeader = Field(description="The student.")
+    enrollments: list[AuthorStudentEnrollment] = Field(
+        description="Courses the student is enrolled in, oldest enrollment first."
+    )
+    items: list[AuthorSubmissionListItem] = Field(
+        description="The page of submissions, newest first."
+    )
+    total: int = Field(description="Submissions matching the filter, all pages.")
+    limit: int = Field(description="Page size that was applied.")
+    offset: int = Field(description="Submissions skipped before this page.")
+
+
+class AuthorPassRule(BaseModel):
+    """The pass rule that decided a criteria-judged review, as it was recorded."""
+
+    basis: str = Field(
+        description="Branch of the rule that decided: author_musts_met, "
+        "author_musts_unmet, author_musts_below_threshold, "
+        "no_author_musts_passed or no_author_musts_failed."
+    )
+    threshold: int = Field(
+        description="Pass threshold of that branch, whole percent (70 or 80)."
+    )
+    required_musts: int | None = Field(
+        default=None,
+        description="How many criteria the author made mandatory for the pass "
+        "(must_by_author) in the list the work was judged against; 0 for a "
+        "branch without them; null when the list cannot be read.",
+    )
+
+
+class AuthorCriterionVerdict(BaseModel):
+    """The verdict on one criterion or mandatory point of the judged list."""
+
+    item_id: str = Field(description="Identifier within the list: 'c3' or 'c3.p2'.")
+    item_kind: Literal["criterion", "point"] = Field(
+        description="Whether the item is a criterion or a mandatory point of one."
+    )
+    text: str = Field(description="The criterion's or point's text, as judged.")
+    weight: Literal["must", "should", "may"] | None = Field(
+        default=None, description="Weight category; null for a point."
+    )
+    must_by_author: bool = Field(
+        description="True when the author made this 'must' mandatory for the "
+        "pass themselves; false for everything else, a point included."
+    )
+    verdict: Literal["met", "not_met", "unconfirmed"] = Field(
+        description="'met'; 'not_met'; or 'unconfirmed': the model said met "
+        "and no line of the work bore it out, which counts as met for the "
+        "score and the pass."
+    )
+    quote: str | None = Field(
+        default=None, description="The evidence quoted from the work, if any."
+    )
+    quote_line_start: int | None = Field(
+        default=None,
+        description="First line of the quote in the file, from 1; null for a "
+        "document, or without a quote.",
+    )
+    missing: str | None = Field(
+        default=None, description="What is missing, for a 'not_met'."
+    )
+    remark_state: Literal["new", "open", "fixed", "broken"] | None = Field(
+        default=None,
+        description="State of the remark against the student's previous "
+        "attempt: new, open (still not credited), fixed, broken (credited "
+        "before, not now); null when credited now and before or without "
+        "comparison.",
+    )
+
+
+class AuthorSubmissionDetail(AuthorSubmissionBase):
+    """GET /students/{student_id}/submissions/{submission_id}: one work, whole."""
+
+    student: AuthorSubmissionStudent = Field(description="The student.")
+    verdict: PortalVerdict | None = Field(
+        default=None, description="Verdict as the student's portal reads it."
+    )
+    structure: ReviewStructureV1 | None = Field(
+        default=None,
+        description="The review as data, in the student's language (schema "
+        "version 1); null for a review written before the rebuild.",
+    )
+    review_markdown: str | None = Field(
+        default=None, description="Rendered Markdown review, once reviewed."
+    )
+    delta: PortalDeltaReceipt | None = Field(
+        default=None,
+        description="Comparison with the project's base, for a project "
+        "submission built on one; null otherwise.",
+    )
+    own_feedback: FeedbackTouch | None = Field(
+        default=None,
+        description="The student's own answer about this review; null when "
+        "they have not answered.",
+    )
+    pass_rule: AuthorPassRule | None = Field(
+        default=None,
+        description="The pass rule that decided the verdict; null for a test "
+        "and for a review written before the rule was recorded.",
+    )
+    criteria: list[AuthorCriterionVerdict] = Field(
+        description="Verdict on each criterion and mandatory point, in the "
+        "order of the list the work was judged against; empty when the review "
+        "has none (old review, test, refused work)."
+    )
+
+
+class AuthorSubmissionFileLink(BaseModel):
+    """A short-lived link to download the submitted file."""
+
+    url: str = Field(description="Temporary download link; do not store it.")
+    expires_at: datetime = Field(description="When the link stops working.")
 
 
 class PortalBaseDownload(BaseModel):

@@ -1,8 +1,9 @@
 """Periodic tasks: the system's one scheduler (ARQ ``cron_jobs``).
 
 Purpose:
-    Work that runs on the clock rather than on a request — today the four
-    billing tasks of BIL-B part 2; any direction adds its own the same way.
+    Work that runs on the clock rather than on a request — the billing tasks
+    (``billing.periodic``) and the cleanup of self-enrollment requests
+    (``open_courses.cleanup``, O-1); any direction adds its own the same way.
 
 Where it runs:
     In ONE worker, ``worker.WorkerSettings`` (the default queue, the

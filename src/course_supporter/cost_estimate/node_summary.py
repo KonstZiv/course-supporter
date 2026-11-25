@@ -43,6 +43,7 @@ from course_supporter.agents.methodist import (
     join_segment_texts,
 )
 from course_supporter.cost_estimate.actions import NodeSummaryFactors
+from course_supporter.cost_estimate.settings import get_estimate_settings
 from course_supporter.models.source import MaterialRole
 from course_supporter.storage.enclosing_context_hash import (
     EnclosingContextHashService,
@@ -231,13 +232,19 @@ async def read_node_summary_factors(
     session: AsyncSession,
     vertex_node_id: uuid.UUID,
     *,
-    child_summary_chars: int,
+    child_summary_chars: int | None = None,
 ) -> NodeSummaryFactors:
     """The factors of the regeneration job whose vertex is ``vertex_node_id``.
 
-    ``child_summary_chars`` is what a child that has no summary yet is read at
-    (the settings). Read-only; the caller owns the session.
+    ``child_summary_chars`` is what a child that has no summary yet is read at;
+    ``None`` — the settings' (``processing.node_summary.child_summary_chars``),
+    as the job and its price before the action read it. Read-only; the caller
+    owns the session.
     """
+    if child_summary_chars is None:
+        child_summary_chars = (
+            get_estimate_settings().processing.node_summary.child_summary_chars
+        )
     nodes = {n.id: n for n in await _subtree(session, vertex_node_id)}
     if not nodes:
         return NodeSummaryFactors(bottomup_chars=(), topdown_nodes=0, nodes=0)

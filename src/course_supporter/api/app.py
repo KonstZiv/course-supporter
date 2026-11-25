@@ -20,6 +20,9 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from course_supporter import boot
 from course_supporter.api.middleware import RequestLoggingMiddleware
+from course_supporter.api.routes.author_settings import (
+    router as author_settings_router,
+)
 from course_supporter.api.routes.billing import router as billing_router
 from course_supporter.api.routes.billing_estimates import (
     router as billing_estimates_router,
@@ -31,6 +34,9 @@ from course_supporter.api.routes.config import router as config_router
 from course_supporter.api.routes.cost import router as cost_router
 from course_supporter.api.routes.criteria import router as criteria_router
 from course_supporter.api.routes.documents import router as documents_router
+from course_supporter.api.routes.enrollment_links import (
+    router as enrollment_links_router,
+)
 from course_supporter.api.routes.feedback import router as feedback_router
 from course_supporter.api.routes.homework import router as homework_router
 from course_supporter.api.routes.jobs import router as jobs_router
@@ -46,6 +52,7 @@ from course_supporter.api.routes.portal_config import (
 from course_supporter.api.routes.portal_courses import (
     router as portal_courses_router,
 )
+from course_supporter.api.routes.portal_join import router as portal_join_router
 from course_supporter.api.routes.portal_materials import (
     router as portal_materials_router,
 )
@@ -60,6 +67,9 @@ from course_supporter.api.routes.public_numbers import (
 )
 from course_supporter.api.routes.references import router as references_router
 from course_supporter.api.routes.storage import router as storage_router
+from course_supporter.api.routes.student_submissions import (
+    router as student_submissions_router,
+)
 from course_supporter.api.routes.students import router as students_router
 from course_supporter.api.routes.test_objects import router as test_objects_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
@@ -322,9 +332,13 @@ app.include_router(portal_billing_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
 app.include_router(billing_estimates_router, prefix="/api/v1")
 app.include_router(billing_outlook_router, prefix="/api/v1")
+app.include_router(author_settings_router, prefix="/api/v1")
 app.include_router(portal_submissions_router, prefix="/api/v1")
 app.include_router(portal_materials_router, prefix="/api/v1")
 app.include_router(portal_courses_router, prefix="/api/v1")
 app.include_router(portal_recovery_router, prefix="/api/v1")
+app.include_router(portal_join_router, prefix="/api/v1")
+app.include_router(enrollment_links_router, prefix="/api/v1")
 app.include_router(students_router, prefix="/api/v1")
+app.include_router(student_submissions_router, prefix="/api/v1")
 app.include_router(public_numbers_router, prefix="/api/v1")

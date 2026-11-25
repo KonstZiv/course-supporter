@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from course_supporter.billing import (
     admin,
@@ -412,6 +413,48 @@ class TestStudentReview:
         assert moved[MovementKind.RESERVE.value] == TWO_E
         assert moved[MovementKind.DEBIT.value] == 36
         assert (await balance(session_factory, w.student)).available == 464
+
+    async def test_repeat_with_another_fact_charges_nothing_and_warns(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """A platform-initiated rerun of an already settled action with a
+        different fact returns None, adds no movements, and logs a WARNING."""
+        w = await make_world(session_factory)
+        await buy(session_factory, w.student, 500)
+        port = funds.LedgerFundsPort(session_factory)
+
+        await port.check_and_reserve(review(w), 1.0)
+        await call(session_factory, w.homework_job_id, "0.04")
+        await port.release_remainder(review(w), SubmissionOutcome.COMPLETED)
+
+        moved_before = await sums(session_factory, ActionKind.REVIEW, key_of(w))
+        bal_before = await balance(session_factory, w.student)
+
+        with capture_logs() as logs:
+            async with session_factory() as session:
+                settlement = await charging.finish(
+                    session,
+                    action_kind=ActionKind.REVIEW,
+                    action_key=key_of(w),
+                    fact_usd=Decimal("0.08"),
+                    tenant_id=w.tenant_id,
+                    course_node_id=w.course_id,
+                    student_id=w.student_id,
+                )
+
+        assert settlement is None
+        moved_after = await sums(session_factory, ActionKind.REVIEW, key_of(w))
+        assert moved_after == moved_before
+        assert await balance(session_factory, w.student) == bal_before
+
+        warnings = [
+            e for e in logs if e.get("event") == "billing_finish_repeat_not_charged"
+        ]
+        assert len(warnings) == 1
+        assert warnings[0]["log_level"] == "warning"
+        assert warnings[0]["fact_usd"] == "0.08"
+        assert "was settled with 36 units, not 72" in warnings[0]["error"]
+        assert not any(e.get("event") == "billing_finish_conflict" for e in logs)
 
     async def test_the_fact_leaves_out_the_task_preparation(
         self, session_factory: async_sessionmaker[AsyncSession]
@@ -1365,6 +1408,64 @@ async def test_the_portal_says_whose_units_a_held_review_waits_for(
     }
     assert listed.status_code == 200, listed.text
     assert listed.json()[0]["presentation"]["reason_code"] == "awaiting_author_funds"
+
+
+async def test_the_authors_screen_says_whose_units_a_held_review_waits_for(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """M-3: the author's list and detail read the portal's ``presentation``,
+    with ``awaiting_author_funds`` once the author pays and has no units."""
+    from httpx import ASGITransport, AsyncClient
+
+    from course_supporter.api.app import app
+    from course_supporter.api.deps import get_current_tenant
+    from course_supporter.auth.context import TenantContext
+    from course_supporter.storage.database import get_session
+
+    w = await make_world(session_factory)
+    async with session_factory() as session:
+        await session.execute(
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == w.submission_id)
+            .values(status="awaiting_funds")
+        )
+        await session.commit()
+
+    async def _session() -> Any:
+        async with session_factory() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[get_current_tenant] = lambda: TenantContext(
+        tenant_id=w.tenant_id,
+        tenant_name="m3",
+        scopes=["prep"],
+        plan_id="basic",
+        key_prefix="cs_m3",
+    )
+    base = f"/api/v1/students/{w.student_id}/submissions"
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            own = await client.get(base)
+            await course_rule(session_factory, w)
+            listed = await client.get(base)
+            detail = await client.get(f"{base}/{w.submission_id}")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert own.status_code == 200, own.text
+    assert own.json()["items"][0]["presentation"] == {
+        "state": "awaiting_funds",
+        "reason_code": "awaiting_funds",
+    }
+    waits_for_author = {
+        "state": "awaiting_funds",
+        "reason_code": "awaiting_author_funds",
+    }
+    assert listed.json()["items"][0]["presentation"] == waits_for_author
+    assert detail.json()["presentation"] == waits_for_author
 
 
 async def test_the_portal_detail_carries_the_billing_note(

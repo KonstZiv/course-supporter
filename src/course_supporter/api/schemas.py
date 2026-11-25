@@ -1687,6 +1687,37 @@ class InterfaceLanguageResponse(BaseModel):
     )
 
 
+class AuthorInterfaceLanguageRequest(BaseModel):
+    """Request body for PUT /author/interface-language (V1).
+
+    Validated as the student's counterpart (M-3) is (``_validate_language``):
+    ISO 639-1, 639-3 or an English name is accepted, the canonical 639-3
+    code is what is stored, and a language outside ``config/languages.yaml``
+    is a 422. There is no null: the route sets a choice, never clears it.
+    """
+
+    language: str = Field(
+        description="Language of the author panel pages; ISO 639-1 or 639-3 "
+        "accepted, stored as 639-3.",
+        examples=["en", "ukr"],
+    )
+
+    @field_validator("language")
+    @classmethod
+    def _check_language(cls, raw: str) -> str:
+        return _validate_language(raw)
+
+
+class AuthorInterfaceLanguageResponse(BaseModel):
+    """Response for GET and PUT /author/interface-language (V1)."""
+
+    interface_language: str | None = Field(
+        description="Canonical ISO 639-3 language of the author panel pages "
+        "the author picked, or null if they never picked one (PUT always "
+        "answers with the stored code)."
+    )
+
+
 class RecoveryEmailRequest(BaseModel):
     """Request body for POST /portal/recovery-email (set/change; protected).
 

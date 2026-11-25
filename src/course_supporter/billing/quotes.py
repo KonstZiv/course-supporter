@@ -175,13 +175,19 @@ async def _same_work(
     tenant_id: uuid.UUID,
     reading: Any,
     config: PathConfig,
+    response_language: str | None,
 ) -> bool:
     """Would this file be answered with an earlier review (task 13, K3)?
 
     The attempt dedup's own rule — fingerprint, task version, criteria list in
-    force, evaluator version — read for a work not yet stored. Any error reads
-    as "no": the price is then the usual one. Its reads run in a savepoint, so
-    a failed one leaves the session usable.
+    force, evaluator version, and the language of the review (V-6: a copy only
+    in the same language) — read for a work not yet stored. The language is
+    the one its review will be written in, from the same function as the
+    dedup's (:func:`~course_supporter.homework.review_language.review_language_of`)
+    over a probe made of the student, the task and ``response_language``, the
+    language the form names (``None``: none named). No language at all is no
+    copy. Any error reads as "no": the price is then the usual one. Its reads
+    run in a savepoint, so a failed one leaves the session usable.
     """
     from course_supporter.homework.attempt_dedup import _JUDGED_AGAINST_A_LIST
     from course_supporter.homework.attempt_ledger import task_version_of
@@ -191,7 +197,9 @@ async def _same_work(
     )
     from course_supporter.homework.criteria_list_service import load_in_force
     from course_supporter.homework.evaluator_version import evaluator_version
+    from course_supporter.homework.review_language import review_language_of
     from course_supporter.storage.homework_repository import HomeworkRepository
+    from course_supporter.storage.orm import HomeworkSubmission
 
     try:
         task_type = task.task_type or ""
@@ -211,6 +219,15 @@ async def _same_work(
                 if in_force is None:
                     return False
                 criteria_list = (in_force.layer, in_force.source_id)
+            probe = HomeworkSubmission(
+                student_id=student_id,
+                authored_document_id=task.id,
+                course_node_id=task.course_root_id,
+                response_language=response_language,
+            )
+            review_language = await review_language_of(session, probe)
+            if review_language is None:
+                return False
             source = await HomeworkRepository(session).latest_unchanged_attempt(
                 tenant_id=tenant_id,
                 student_id=student_id,
@@ -220,6 +237,7 @@ async def _same_work(
                 task_version=version,
                 criteria_list=criteria_list,
                 evaluator_version=evaluator,
+                review_language=review_language,
             )
     except Exception:
         logger.warning("billing_quote_same_work_failed", exc_info=True)
@@ -277,13 +295,18 @@ async def review_price(
     reading: Any | None = None,
     read_error: str | None = None,
     config: PathConfig | None = None,
+    response_language: str | None = None,
 ) -> ReviewPrice:
     """P of a review of ``task`` (not a test), whoever pays it (module docstring).
 
     ``reading`` — the doors' reading of the file about to be sent, ``None``
     for the typical size; ``read_error`` — the class of the error that broke
     the reading of the file sent: the price is the ceiling. 0 for a type
-    today's Mentor serves (S2) and for the same work again.
+    today's Mentor serves (S2) and for the same work again — in the language
+    its review will be written in; asked in another, the work is a new review
+    and has the usual price. ``response_language`` — the language the form
+    names, ``None`` if none (the student's stored one, the task's and the
+    course root's then decide, as for the dedup).
     """
     from course_supporter.homework.path_selection import choose_path
 
@@ -323,6 +346,7 @@ async def review_price(
             tenant_id=tenant_id,
             reading=reading,
             config=config,
+            response_language=response_language,
         ):
             return ReviewPrice(0, "file")
         chars, basis = len(reading.text), "file"
@@ -400,8 +424,13 @@ async def review_quote(
     reading: Any | None = None,
     read_error: str | None = None,
     config: PathConfig | None = None,
+    response_language: str | None = None,
 ) -> Quote:
     """What the student's review of ``task`` costs, and whether it may start.
+
+    ``response_language`` — the language the form of the submission names
+    (``None``: none named); the price of the same work again depends on it
+    (:func:`review_price`).
 
     ``reading`` — the doors' reading of the file about to be sent
     (:class:`~course_supporter.homework.doors.DoorReading`), or ``None`` for
@@ -440,6 +469,7 @@ async def review_quote(
             reading=reading,
             read_error=read_error,
             config=config,
+            response_language=response_language,
         )
         price, basis = found.units, found.basis
         threshold = price

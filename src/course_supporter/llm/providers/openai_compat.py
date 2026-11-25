@@ -232,6 +232,18 @@ class OpenAICompatProvider(LLMProvider):
             return ErrorCategory.SEMANTIC
         return super().classify_error(exc)
 
+    def is_timeout(self, exc: Exception) -> bool:
+        """A client-side timeout: ``openai.APITimeoutError``, any
+        ``httpx.TimeoutException`` or the builtin ``TimeoutError``.
+
+        ``openai.InternalServerError`` (HTTP 5xx, 504 included) and HTTP 408
+        are answers of the server, not a client timeout: ``False``.
+        """
+        return isinstance(
+            exc,
+            (openai.APITimeoutError, httpx.TimeoutException, TimeoutError),
+        )
+
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via OpenAI-compatible API.
 

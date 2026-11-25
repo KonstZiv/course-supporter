@@ -326,3 +326,66 @@ class TestOpenAICompatClassifier:
     def test_unknown_exception_falls_through_to_semantic(self) -> None:
         provider = _openai_compat_provider()
         assert provider.classify_error(ValueError("nope")) is ErrorCategory.SEMANTIC
+
+
+# ── is_timeout (DD-SP-DJ) ──────────────────────────────────────────
+#
+# A client-side timeout is told from the server's own answers: 429 and 503
+# are fast and cheap to repeat, a 504 is a gateway's answer, not the client
+# giving up. Only the connector's own timeout is ``True``.
+
+
+def _anthropic_server_error(status: int) -> Exception:
+    return anthropic.InternalServerError(
+        "upstream", response=_httpx_response(status), body=None
+    )
+
+
+def _openai_server_error(status: int) -> Exception:
+    return openai.InternalServerError(
+        "upstream",
+        response=_httpx_response(status, "https://api.openai.com/v1/chat/completions"),
+        body=None,
+    )
+
+
+class TestIsTimeout:
+    def test_default_is_false_even_for_a_builtin_timeout(self) -> None:
+        assert _StubProvider().is_timeout(TimeoutError("slow")) is False
+
+    @pytest.mark.parametrize(
+        ("factory", "expected"),
+        [
+            (_anthropic_timeout, True),
+            (_anthropic_rate_limit, False),  # 429
+            (lambda: _anthropic_server_error(503), False),
+            (lambda: _anthropic_server_error(504), False),
+            (_anthropic_connection_error, False),
+        ],
+    )
+    def test_anthropic(self, factory: Callable[[], Exception], expected: bool) -> None:
+        assert _anthropic_provider().is_timeout(factory()) is expected
+
+    @pytest.mark.parametrize(
+        ("factory", "expected"),
+        [
+            (_openai_timeout, True),
+            (_httpx_read_timeout, True),
+            (_builtin_timeout_error, True),
+            (_openai_rate_limit, False),  # 429
+            (lambda: _openai_server_error(503), False),
+            (lambda: _openai_server_error(504), False),
+            (_openai_connection_error, False),
+        ],
+    )
+    def test_openai_compat(
+        self, factory: Callable[[], Exception], expected: bool
+    ) -> None:
+        assert _openai_compat_provider().is_timeout(factory()) is expected
+
+    def test_gemini_keeps_the_default(self) -> None:
+        provider = _gemini_provider()
+
+        assert provider.is_timeout(_genai_server_error(503)) is False
+        assert provider.is_timeout(_genai_server_error(504)) is False
+        assert provider.is_timeout(TimeoutError()) is False

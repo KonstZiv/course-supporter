@@ -67,6 +67,9 @@ from course_supporter.api.routes.public_numbers import (
 )
 from course_supporter.api.routes.references import router as references_router
 from course_supporter.api.routes.storage import router as storage_router
+from course_supporter.api.routes.student_submissions import (
+    router as student_submissions_router,
+)
 from course_supporter.api.routes.students import router as students_router
 from course_supporter.api.routes.test_objects import router as test_objects_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
@@ -337,4 +340,5 @@ app.include_router(portal_recovery_router, prefix="/api/v1")
 app.include_router(portal_join_router, prefix="/api/v1")
 app.include_router(enrollment_links_router, prefix="/api/v1")
 app.include_router(students_router, prefix="/api/v1")
+app.include_router(student_submissions_router, prefix="/api/v1")
 app.include_router(public_numbers_router, prefix="/api/v1")

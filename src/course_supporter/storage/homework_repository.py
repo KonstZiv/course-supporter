@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,10 +12,12 @@ from sqlalchemy import bindparam, exists, func, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from course_supporter.storage.orm import (
     HomeworkStatus,
     HomeworkSubmission,
+    Job,
     SubmissionCriterionVerdict,
 )
 
@@ -337,6 +340,7 @@ class HomeworkRepository:
         task_version: str,
         criteria_list: tuple[str, uuid.UUID] | None,
         evaluator_version: str,
+        review_language: str | None = None,
     ) -> HomeworkSubmission | None:
         """The latest earlier attempt of the same work, judged alike (task 13, K3).
 
@@ -351,6 +355,15 @@ class HomeworkRepository:
         ``None`` for ``criteria_list`` means the type is judged against no
         list; the key is then the rest alone. Read through the partial index
         ``ix_homework_submissions_attempt_fingerprint``.
+
+        ``review_language`` — the ISO 639-3 code the asking submission's review
+        is written in (operator's decision of 2026-11-23, V-6): only an attempt
+        whose stored review is written in it qualifies, and it is a condition
+        of the choice, not a check on the latest attempt — the latest in the
+        same language wins. ``None`` puts no condition on the language; the
+        two readers of this rule — the dedup and the price of a work not yet
+        sent (``billing/quotes.py``) — both ask in a language, the same one
+        (:func:`~course_supporter.homework.review_language.review_language_of`).
         """
         conditions = [
             HomeworkSubmission.tenant_id == tenant_id,
@@ -375,6 +388,10 @@ class HomeworkRepository:
                     SubmissionCriterionVerdict.criteria_layer == layer,
                     SubmissionCriterionVerdict.criteria_source_id == source_id,
                 )
+            )
+        if review_language is not None:
+            conditions.append(
+                HomeworkSubmission.review_result["language"].astext == review_language
             )
         stmt = (
             select(HomeworkSubmission)
@@ -615,6 +632,95 @@ class HomeworkRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_for_author(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        student_id: uuid.UUID,
+        submission_id: uuid.UUID,
+    ) -> HomeworkSubmission | None:
+        """A live submission of this student of this tenant, for the author.
+
+        The author's read of one work: bounded by the tenant AND by the student
+        the route names, so a submission of another student of the same tenant,
+        or of another tenant, or a soft-deleted one, is ``None`` — the route
+        answers all of them with one 404.
+        """
+        stmt = select(HomeworkSubmission).where(
+            HomeworkSubmission.id == submission_id,
+            HomeworkSubmission.tenant_id == tenant_id,
+            HomeworkSubmission.student_id == student_id,
+            HomeworkSubmission.deleted_at.is_(None),
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def list_for_author(
+        self,
+        *,
+        tenant_id: uuid.UUID,
+        student_id: uuid.UUID,
+        course_node_id: uuid.UUID | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[HomeworkSubmission], int]:
+        """A page of a student's live submissions, newest first, and the total.
+
+        Bounded by the tenant and the student; soft-deleted rows are left out
+        of both the page and the total. ``course_node_id`` (the course root)
+        narrows both. The page leaves out the columns a list never shows —
+        the rendered review, the sanity trace and the project manifest — so a
+        page of a hundred does not carry a hundred reviews it will not read.
+        """
+        conditions = [
+            HomeworkSubmission.tenant_id == tenant_id,
+            HomeworkSubmission.student_id == student_id,
+            HomeworkSubmission.deleted_at.is_(None),
+        ]
+        if course_node_id is not None:
+            conditions.append(HomeworkSubmission.course_node_id == course_node_id)
+        total = await self._session.scalar(
+            select(func.count()).select_from(HomeworkSubmission).where(*conditions)
+        )
+        stmt = (
+            select(HomeworkSubmission)
+            .where(*conditions)
+            .options(
+                defer(HomeworkSubmission.review_markdown),
+                defer(HomeworkSubmission.sanity_result),
+                defer(HomeworkSubmission.snapshot_manifest),
+            )
+            .order_by(
+                HomeworkSubmission.created_at.desc(), HomeworkSubmission.id.desc()
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all()), int(total or 0)
+
+    async def completion_times(
+        self, job_ids: Iterable[uuid.UUID]
+    ) -> dict[uuid.UUID, datetime]:
+        """When each of the jobs finished its work, for the jobs that did.
+
+        One read for a page. Only a job that ended ``complete`` has a time
+        that means "the run that wrote the review ended": a failed, cancelled
+        or obsolete job's ``completed_at`` is the time of its termination.
+        """
+        ids = set(job_ids)
+        if not ids:
+            return {}
+        stmt = select(Job.id, Job.completed_at).where(
+            Job.id.in_(ids),
+            Job.status == "complete",
+            Job.completed_at.is_not(None),
+        )
+        result = await self._session.execute(stmt)
+        return {
+            row.id: row.completed_at for row in result if row.completed_at is not None
+        }
 
     async def update_status(
         self,

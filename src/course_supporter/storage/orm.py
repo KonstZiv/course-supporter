@@ -203,6 +203,11 @@ class Tenant(SoftDeleteMixin, Base):
         String(2000),
         comment="Default webhook URL for homework submission results",
     )
+    interface_language: Mapped[str | None] = mapped_column(
+        String(10),
+        comment="мова сторінок панелі автора, обрана автором; ISO 639-3, "
+        "нормалізована на вході; NULL — ще не обирав",
+    )
 
     # Relationships
     api_keys: Mapped[list["APIKey"]] = relationship(
@@ -287,6 +292,11 @@ class CourseNode(SoftDeleteMixin, Base):
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        Index("uq_course_nodes_enroll_key", "enroll_key", unique=True),
+        CheckConstraint(
+            "enroll_key IS NULL OR parent_id IS NULL",
+            name="ck_course_nodes_enroll_key_root",
+        ),
         {
             "comment": (
                 "Hierarchical course tree (vision §2.2). "
@@ -336,6 +346,15 @@ class CourseNode(SoftDeleteMixin, Base):
         "Phase 3.1 commit 4 fixed the KD9 NULL-at-INSERT regression: "
         "empty CourseNodes now carry a defined empty-hash, not NULL. "
         "Recomputed at INSERT/UPDATE via ContentHashService.invalidate_up.",
+    )
+    enroll_key: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Key of the course's self-enrollment link (O-1): a random "
+        "URL-safe secret of at least 128 bits in "
+        "{portal_base_url}/{tenant_id}/join/{key}. Root nodes only (CHECK); "
+        "unique. NULL = self-enrollment closed. The author opens, rotates and "
+        "closes it; enrollments already made are not affected.",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -1639,6 +1658,13 @@ class Student(SoftDeleteMixin, Base):
         "calibration of the review cost estimate. The review path does not "
         "read it.",
     )
+    adult_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment='When the student marked "I am 18 or older" (O-1): at '
+        "self-enrollment or when joining a course by its link. NULL = never "
+        "marked (e.g. a student the author provisioned).",
+    )
 
     # Relationships
     tenant: Mapped["Tenant"] = relationship()
@@ -2054,6 +2080,11 @@ class StudentCredential(Base):
             "login",
             unique=True,
         ),
+        Index(
+            "ix_student_credentials_confirmed_email",
+            text("lower(recovery_email)"),
+            postgresql_where=text("recovery_email_confirmed_at IS NOT NULL"),
+        ),
         {"comment": "Native portal login credential, 1:1-optional with Student"},
     )
 
@@ -2213,6 +2244,10 @@ class StudentEnrollment(Base):
             "course_node_id",
             unique=True,
         ),
+        CheckConstraint(
+            "source IN ('author', 'self')",
+            name="ck_student_enrollments_source",
+        ),
         {"comment": "Student↔course access grant (KD17); unbind = row DELETE"},
     )
 
@@ -2228,6 +2263,14 @@ class StudentEnrollment(Base):
         comment="FK → root CourseNode (the course). Root-ness "
         "(parent_id IS NULL) is validated at the bind route, not the FK.",
     )
+    source: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        server_default=text("'author'"),
+        comment="Who made the grant (O-1): 'author' — the author bound the "
+        "student (POST /students/enrollments); 'self' — the student enrolled "
+        "by the course's link. CHECK-guarded.",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -2236,6 +2279,134 @@ class StudentEnrollment(Base):
         return (
             f"StudentEnrollment(id={self.id!r}, student_id={self.student_id!r}, "
             f"course_node_id={self.course_node_id!r})"
+        )
+
+
+class PortalSignup(Base):
+    """A self-enrollment request waiting for its email to be confirmed (O-1).
+
+    A visitor with the course's link (``CourseNode.enroll_key``) fills the
+    signup form; this row keeps what they gave until they follow the mailed
+    confirm link. Until then NOTHING else exists: no ``Student``, no
+    ``StudentCredential``, no ``StudentEnrollment``, no billing account — so an
+    unconfirmed request is in neither the author's roster nor billing. Confirm
+    creates all of them in one transaction and stamps ``confirmed_at`` +
+    ``student_id``.
+
+    Only the SHA-256 of the confirm token is stored (``token_hash``, unique);
+    resending replaces it, so only the newest link works. ``login`` is held
+    while the request is pending: the partial unique index on
+    ``(tenant_id, login) WHERE confirmed_at IS NULL`` lets one pending request
+    per login exist, and the signup route first drops an expired pending
+    request of the same login. Expired requests and confirmed ones older than
+    30 days are deleted by the ``portal_signups_cleanup`` periodic task, so the
+    password hash is not kept past that. A plain ``Base`` — no soft-delete.
+    """
+
+    __tablename__ = "portal_signups"
+    __table_args__ = (
+        CheckConstraint("email = lower(email)", name="ck_portal_signups_email_lower"),
+        CheckConstraint(
+            "text_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_portal_signups_text_sha256",
+        ),
+        Index("uq_portal_signups_token_hash", "token_hash", unique=True),
+        Index(
+            "uq_portal_signups_pending_login",
+            "tenant_id",
+            "login",
+            unique=True,
+            postgresql_where=text("confirmed_at IS NULL"),
+        ),
+        {
+            "comment": "Self-enrollment request by a course link, waiting for "
+            "email confirmation (O-1)"
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        index=True,
+        comment="The tenant (author) whose course is joined.",
+    )
+    course_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → root CourseNode (the course) whose link was used. The "
+        "link was checked at signup; confirm enrolls even if it is closed since.",
+    )
+    login: Mapped[str] = mapped_column(
+        String(200),
+        comment="The login asked for; becomes StudentCredential.login at "
+        "confirm. Held by one pending request per tenant (partial unique index).",
+    )
+    password_hash: Mapped[str] = mapped_column(
+        Text,
+        comment="Argon2id hash of the password given (argon2-cffi); copied to "
+        "the credential at confirm. The raw password is never stored.",
+    )
+    email: Mapped[str] = mapped_column(
+        String(320),
+        comment="The email given, lower-cased (CHECK). Becomes the confirmed "
+        "recovery_email of the credential at confirm.",
+    )
+    display_name: Mapped[str | None] = mapped_column(
+        String(200),
+        comment="Portal display name given, if any.",
+    )
+    interface_language: Mapped[str | None] = mapped_column(
+        String(10),
+        comment="Language of the portal pages chosen at signup: ISO 639-3, "
+        "normalized on entry; picks the email language and becomes "
+        "Student.interface_language at confirm. NULL = not chosen (Ukrainian "
+        "email).",
+    )
+    adult_confirmed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        comment='When the visitor marked "I am 18 or older" (required); '
+        "becomes Student.adult_confirmed_at at confirm.",
+    )
+    terms_version: Mapped[str] = mapped_column(
+        String(32),
+        comment="Revision of the billing terms agreed to at signup (the one "
+        "in force then); recorded as the student's consent at confirm.",
+    )
+    text_sha256: Mapped[str] = mapped_column(
+        String(64),
+        comment="SHA-256 (hex) of the terms text shown, as the client "
+        "reports it; recorded with the consent at confirm.",
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(64),
+        comment="SHA-256 hex of the raw confirm token (hash_api_key); the raw "
+        "token lives only in the mailed link. Replaced on resend.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        comment="created_at + 7 days; an unconfirmed request past it is void "
+        "and deleted by the cleanup task. Resend does not extend it.",
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When the email was confirmed and the student created. NULL = pending.",
+    )
+    student_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("students.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="FK → the Student created at confirm. NULL while pending.",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"PortalSignup(id={self.id!r}, tenant_id={self.tenant_id!r}, "
+            f"course_node_id={self.course_node_id!r}, "
+            f"confirmed_at={self.confirmed_at!r})"
         )
 
 

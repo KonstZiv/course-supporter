@@ -272,7 +272,9 @@ async def submit_portal_homework(
     # --- Units (BIL-E, B3): a student who pays for their own review and
     # cannot cover its price is refused before anything is stored (402
     # insufficient_units). Nothing is refused while charging is off. ---
-    await _require_units(session, task_doc, student, file=file)
+    await _require_units(
+        session, task_doc, student, file=file, response_language=response_language
+    )
 
     result = await create_and_dispatch_submission(
         session=session,
@@ -350,7 +352,13 @@ async def submit_portal_test(
     task_doc = await _answerable_task(session, student, authored_document_id)
     published = await require_published(session, task_doc)
     # A test is free while the student's balance is above 0 (BIL-E, B3).
-    await _require_units(session, task_doc, student, file=None)
+    await _require_units(
+        session,
+        task_doc,
+        student,
+        file=None,
+        response_language=body.response_language,
+    )
     student_obj = await session.get(Student, student.student_id)
     if student_obj is None:
         raise HTTPException(status_code=401, detail="Session is no longer valid")
@@ -385,12 +393,17 @@ async def _require_units(
     student: StudentContext,
     *,
     file: UploadFile | None,
+    response_language: str | None,
 ) -> None:
     """Refuse a review its student cannot pay for: 402
     ``{"detail": {"code": "insufficient_units", "details": {...}}}``.
 
     The price of the file as the doors read it — the same function as the
-    estimate route (``billing.quotes.review_quote``); a file the doors refuse
+    estimate route (``billing.quotes.review_quote``), with the language the
+    form names (``response_language``, ``None``: none): the same work asked for
+    in another language than its earlier review's is a new, paid review and is
+    priced as one, so the price here is the one the copy rule will follow; a
+    file the doors refuse
     is left to them (it is refused for free); a price that could not be
     estimated is the ceiling N (BIL-E2, 4a). A test: free while the balance
     is above 0. A review the author pays for is never refused here: it is
@@ -432,6 +445,7 @@ async def _require_units(
         student_id=student.student_id,
         reading=sent.reading,
         read_error=sent.error,
+        response_language=response_language,
     )
     try:
         require_enough(quote, "the review cannot be paid for")

@@ -561,8 +561,16 @@ class TestTheExplanationWithReplies:
 
         assert outcome == StageOutcome.ok()
         (request,) = router.requests
-        assert request["prompt_ref"] == "prompts/review_explanation/v3_with_replies.md"
+        # Since task 13 (2026-11-23): v4_with_replies, with both limits.
+        assert request["prompt_ref"] == "prompts/review_explanation/v4_with_replies.md"
         assert "replies" in request["schema"]["properties"]
+        result = request["render"]["result"]
+        assert set(result) == {
+            "passed",
+            "score",
+            "example_limit",
+            "reply_example_limit",
+        }
         ids = _ids(request)
         assert ids["prompt_injection"] == "r6"
         to_answer = request["render"]["replies"]["to_answer"]

@@ -8,16 +8,22 @@ format ``scripts/record_explanation_input.py`` writes. Here:
 * the record reads back to the agent's input and writes out to the same JSON;
 * each prompt is rendered by the real router for the stage's first rung,
   pinned and limited as the path runs it, and nothing is sent: the system
-  messages are v2's and v3's own, the user message one and the same;
+  messages are v3's and v4's own; v3's user message is the one its stage
+  sent, without the fields of task 13, and v4's is the same with the limit of
+  examples (and, from a record that keeps them, the remarks made before);
 * one call per prompt over a provider double — no retry even on an answer
   the stage would refuse — priced by the registry and checked by the facts;
 * the summary and the answers land in the output folder;
 * the script's dry run prints the same, with no key and no call.
+
+Since task 13 (2026-11-23) the pair measured is v3 against v4, on the same
+record.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +36,10 @@ from course_supporter.agents.review_explainer import RESPONSE_SCHEMA, render_con
 from course_supporter.homework import explanation_measure as measure
 from course_supporter.homework.path_config import ModelStage, load_path_config
 from course_supporter.homework.path_stages import _execution
+from course_supporter.homework.verdict_explanation import (
+    ExampleLimits,
+    PreviousRemark,
+)
 from course_supporter.llm.error_categories import ErrorCategory
 from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.llm.providers.base import LLMProvider
@@ -124,6 +134,42 @@ class TestTheRecord:
             == record
         )
 
+    def test_the_limits_are_counted_from_the_criteria_as_the_stage_counts(
+        self, record: dict[str, Any]
+    ) -> None:
+        """Task 13: four criteria — 2 for the review, 1 for an answer."""
+        shown = measure.input_of(record)
+
+        assert shown.example_limits == ExampleLimits(review=2, reply=1)
+        assert shown.previous_remarks == {}
+
+    def test_the_remarks_made_before_are_kept_and_read_back(
+        self, record: dict[str, Any]
+    ) -> None:
+        remark = PreviousRemark(what="Тестів немає.", why="Не перевірено.", todo="Т")
+        with_remark = measure.record_of(
+            replace(measure.input_of(record), previous_remarks={"c4": remark}),
+            submission_id=record["submission_id"],
+            provenance=record["provenance"],
+        )
+
+        assert with_remark["input"]["previous_remarks"] == {
+            "c4": {"what": "Тестів немає.", "why": "Не перевірено.", "todo": "Т"}
+        }
+        assert measure.input_of(with_remark).previous_remarks == {"c4": remark}
+
+    def test_a_prompt_before_task_13_reads_neither(
+        self, record: dict[str, Any]
+    ) -> None:
+        remark = PreviousRemark(what="w", why="y", todo="t")
+        shown = replace(measure.input_of(record), previous_remarks={"c4": remark})
+
+        v3 = measure.as_prompt_reads(shown, "prompts/review_explanation/v3.md")
+        v4 = measure.as_prompt_reads(shown, "prompts/review_explanation/v4.md")
+
+        assert (v3.example_limits, v3.previous_remarks) == (None, {})
+        assert v4 is shown
+
     def test_another_format_is_refused(self, record: dict[str, Any]) -> None:
         with pytest.raises(ValueError, match="not a recorded explanation input"):
             measure.input_of({**record, "format": "something/else"})
@@ -146,11 +192,10 @@ class TestTheFirstRung:
 class TestRenderedWithoutTheNetwork:
     """Lock e: both prompts, rendered from the record, nothing sent."""
 
-    async def test_each_prompt_renders_its_own_system_and_the_same_user(
+    async def test_each_prompt_renders_its_own_system_and_its_stages_user(
         self, record: dict[str, Any], stage: ModelStage, registry: ModelRegistryConfig
     ) -> None:
         shown = measure.input_of(record)
-        context = render_context(shown)
 
         sent = [
             await measure.send_once(
@@ -168,7 +213,7 @@ class TestRenderedWithoutTheNetwork:
             assert item.request is not None
             assert item.response is None  # captured, never sent
             rendered = load_prompt(item.prompt_ref, base_path=_REPO_ROOT).render(
-                **context
+                **render_context(measure.as_prompt_reads(shown, item.prompt_ref))
             )
             assert item.request.system_prompt == rendered.system
             assert item.request.prompt == rendered.user
@@ -178,16 +223,19 @@ class TestRenderedWithoutTheNetwork:
             assert item.request.expects_json is True
             assert item.request.response_schema == RESPONSE_SCHEMA
             assert item.request.schema_mode is SchemaMode.STRICT
-        v2, v3 = sent
-        assert measure.same_user_message(sent)
-        assert v2.request is not None
+        v3, v4 = sent
         assert v3.request is not None
-        assert v2.request.system_prompt != v3.request.system_prompt
-        assert "**Ukrainian**" in (v3.request.system_prompt or "")
-        assert v2.request_hash != v3.request_hash
+        assert v4.request is not None
+        assert v3.request.system_prompt != v4.request.system_prompt
+        assert "**Ukrainian**" in (v4.request.system_prompt or "")
+        assert v3.request_hash != v4.request_hash
+        # v3's user message is its stage's, without the limit; v4's shows it.
+        assert not measure.same_user_message(sent)
+        assert "example_limit" not in v3.request.prompt
+        assert '"example_limit": 2' in v4.request.prompt
         # The work and the course links went in whole.
-        assert shown.submission_text in v3.request.prompt
-        assert "Тестування з pytest" in v3.request.prompt
+        assert shown.submission_text in v4.request.prompt
+        assert "Тестування з pytest" in v4.request.prompt
 
 
 class TestOneCallPerPrompt:
@@ -225,7 +273,7 @@ class TestOneCallPerPrompt:
         assert len(provider.requests) == 1
         assert result.check == "agrees"
         assert (result.label, result.tokens_in, result.tokens_out) == (
-            "v3",
+            "v4",
             10_000,
             1_000,
         )
@@ -308,7 +356,7 @@ class TestTheOutput:
 
 
 class TestTheScriptsDryRun:
-    async def test_it_calls_nothing_and_says_the_user_messages_are_the_same(
+    async def test_it_calls_nothing_and_says_whether_the_user_messages_are_the_same(
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def no_providers(*_args: Any) -> None:
@@ -324,6 +372,7 @@ class TestTheScriptsDryRun:
 
         out = capsys.readouterr().out
         assert code == 0
-        assert "user messages identical: True" in out
+        # v4's user message shows the limit of examples, v3's does not.
+        assert "user messages identical: False" in out
         for ref in measure.PROMPT_REFS:
             assert f"{ref}: dashscope/qwen3.7-max" in out

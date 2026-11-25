@@ -303,11 +303,15 @@ def _context() -> dict[str, object]:
 class TestTheStageRendersV3:
     """Lock c."""
 
-    def test_the_stage_names_v3(self) -> None:
+    def test_the_stage_named_v3_until_v4(self) -> None:
+        """The stage read v3 from 2026-11-13 until task 13 (2026-11-23), which
+        moved it to v4 (``test_explanation_prompt_v4.py``); v3 stays beside it
+        as the calibrated history."""
         config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
         stage = config.stages["review_explanation"]
         assert isinstance(stage, ModelStage)
-        assert stage.prompt_ref == "prompts/" + _V3
+        assert stage.prompt_ref == "prompts/review_explanation/v4.md"
+        assert (_PROMPTS / _V3).is_file()
 
     def test_the_user_message_is_v2s_and_the_system_message_is_not(self) -> None:
         context = _context()

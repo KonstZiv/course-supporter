@@ -203,6 +203,11 @@ class Tenant(SoftDeleteMixin, Base):
         String(2000),
         comment="Default webhook URL for homework submission results",
     )
+    interface_language: Mapped[str | None] = mapped_column(
+        String(10),
+        comment="мова сторінок панелі автора, обрана автором; ISO 639-3, "
+        "нормалізована на вході; NULL — ще не обирав",
+    )
 
     # Relationships
     api_keys: Mapped[list["APIKey"]] = relationship(

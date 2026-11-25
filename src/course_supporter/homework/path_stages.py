@@ -84,6 +84,7 @@ if TYPE_CHECKING:
 
     from course_supporter.homework.criteria_verdicts import WorkFile
     from course_supporter.homework.doors import DoorReading
+    from course_supporter.homework.earlier_review import EarlierWorkSource
     from course_supporter.homework.path_config import PathConfig, PathKey, PathStage
     from course_supporter.llm.stage_router import StageRouter
     from course_supporter.security.schemas import CourseContext
@@ -143,6 +144,13 @@ class StageContext:
     stage that reads the student's replies asks it whether the type takes
     them, as the body did (task 12a, K4). ``None`` — the cached file, the one
     the body reads in production.
+
+    ``earlier_work`` is where the work of the student's earlier attempt is
+    read from, for the evaluation of a repeated attempt of a text type (task
+    13, K4; ``homework/earlier_review.py``): the body hands production's, the
+    attempt's file in S3 read by the doors' own code. ``None`` — no source at
+    hand (a test that does not need one): the earlier work is then
+    unavailable, and the memory says so.
     """
 
     session: AsyncSession
@@ -158,6 +166,7 @@ class StageContext:
     work: tuple[WorkFile, ...] = ()
     arq: ArqRedis | None = None
     config: PathConfig | None = None
+    earlier_work: EarlierWorkSource | None = None
 
 
 @dataclass(frozen=True, slots=True)

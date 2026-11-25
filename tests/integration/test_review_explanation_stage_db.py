@@ -27,6 +27,7 @@ import json
 import tempfile
 import uuid
 from collections.abc import AsyncGenerator, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -50,6 +51,7 @@ from course_supporter.homework.course_links import (
     LinkCandidate,
 )
 from course_supporter.homework.criteria_form import Criterion, criteria_to_document
+from course_supporter.homework.criteria_verdicts import with_remark_states
 from course_supporter.homework.explanation_input_rebuild import (
     rebuild_input,
     verify_against_register,
@@ -413,8 +415,11 @@ class TestTheExplanationIsKept:
         assert request["money_ceiling_usd"] == 0.24
         assert request["stop_on_output_ceiling"] is True
         render = request["render"]
-        assert render["result"] == {"passed": False, "score": 60}
+        # Two criteria: 2 // 2 — one may be covered by an example (task 13).
+        assert render["result"] == {"passed": False, "score": 60, "example_limit": 1}
         assert [c["id"] for c in render["criteria"]] == ["c1", "c2"]
+        # A first attempt: no remark made before, anywhere.
+        assert "previous_remark" not in json.dumps(render["criteria"])
         assert render["criteria"][0]["place"] == {
             "file": "solution.py",
             "lines": [1, 1],
@@ -1019,11 +1024,12 @@ def _v3_router(
     )
 
 
-class TestTheStageSendsPromptV3:
-    """Lock c of prompt v3, through the real router: the system message is
-    v3's, the user message the one v2 renders from the same input."""
+class TestTheStageSendsPromptV4:
+    """Prompt v4 (task 13), through the real router: the request is v4's,
+    rendered from the input the stage builds — with the limit of examples —
+    and its user message is v3's with that limit alone on a first attempt."""
 
-    async def test_v3s_system_and_v2s_user_go_on_the_wire(
+    async def test_v4s_request_goes_on_the_wire(
         self,
         db_session: AsyncSession,
         submission: HomeworkSubmission,
@@ -1040,14 +1046,27 @@ class TestTheStageSendsPromptV3:
 
         (request,) = [call.args[0] for call in qwen.complete.await_args_list]
         shown, _ = await explanation_input(
-            db_session, submission, submission_text=_WORK, language="ukr"
+            db_session,
+            submission,
+            submission_text=_WORK,
+            language="ukr",
+            text_type=True,
         )
         context = review_explainer.render_context(shown)
-        v2 = load_prompt("prompts/review_explanation/v2.md", base_path=_REPO_ROOT)
+        before = review_explainer.render_context(
+            dataclasses.replace(shown, example_limits=None)
+        )
         v3 = load_prompt("prompts/review_explanation/v3.md", base_path=_REPO_ROOT)
-        assert request.system_prompt == v3.render(**context).system
-        assert request.prompt == v2.render(**context).user
-        assert request.system_prompt != v2.render(**context).system
+        v4 = load_prompt("prompts/review_explanation/v4.md", base_path=_REPO_ROOT)
+        assert request.system_prompt == v4.render(**context).system
+        assert request.prompt == v4.render(**context).user
+        v3_user = v3.render(**before).user
+        assert v3_user is not None
+        assert request.system_prompt != v3.render(**before).system
+        assert request.prompt == v3_user.replace(
+            '{"passed": false, "score": 60}',
+            '{"example_limit": 1, "passed": false, "score": 60}',
+        )
 
 
 _STORED = b"def fibonacci(n):\n    return n\n"
@@ -1097,6 +1116,110 @@ async def submission_job(
         await session.commit()
 
 
+class TestTheRemarkMadeBefore:
+    """Task 13, explanation side: on ``repeat_without_replies`` the request of
+    the second attempt shows, beside the criterion still open, the
+    explanation's own remark on it at the first — read from what the first
+    attempt's stage kept, in the same language. The model is a double."""
+
+    @staticmethod
+    async def _two_attempts(
+        session: AsyncSession,
+        first: HomeworkSubmission,
+        doc: AuthoredDocument,
+        *,
+        first_language: str,
+    ) -> tuple[HomeworkSubmission, _Router]:
+        """The first attempt judged, explained and delivered; the second judged
+        with its states against it, then explained; its router returned."""
+        source_id = await _authors_list(session, doc)
+        await _verdicts(session, first, layer=CriteriaLayer.AUTHOR, source_id=source_id)
+        await _explain(session, _Router(_answer()), first, language=first_language)
+        second = await HomeworkRepository(session).create(
+            tenant_id=first.tenant_id,
+            student_id=first.student_id,
+            course_node_id=first.course_node_id,
+            node_id=first.node_id,
+            authored_document_id=doc.id,
+            file_url="s3://bucket/solution.py",
+            file_type="text/plain",
+            original_filename="solution.py",
+        )
+        first.status = "delivered"
+        first.task_version = second.task_version = "v1"
+        first.created_at = datetime.now(UTC) - timedelta(hours=1)
+        await session.flush()
+
+        stored = SubmissionVerdictRepository(session)
+        earlier = await stored.earlier_attempt(
+            tenant_id=second.tenant_id, submission_id=second.id
+        )
+        assert earlier is not None
+        assert earlier.submission_id == first.id
+        await stored.replace_for_submission(
+            tenant_id=second.tenant_id,
+            submission_id=second.id,
+            criteria_layer=CriteriaLayer.AUTHOR,
+            criteria_source_id=source_id,
+            records=with_remark_states(_RECORDS, earlier.rows),
+        )
+        router = _Router(_answer())
+        context = dataclasses.replace(
+            _context(session, router, second),
+            path_key=PathKey(
+                AssignmentType.TASK, SubmissionState.REPEAT_WITHOUT_REPLIES
+            ),
+        )
+        assert await explain_verdicts(context, execution=_execution(context)) == (
+            StageOutcome.ok()
+        )
+        return second, router
+
+    async def test_the_second_attempt_is_shown_the_first_remark(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        second, router = await self._two_attempts(
+            db_session, submission, doc, first_language="ukr"
+        )
+
+        rows = await SubmissionVerdictRepository(db_session).list_for_submission(
+            tenant_id=second.tenant_id, submission_id=second.id
+        )
+        assert {row.item_id: row.remark_state for row in rows} == {
+            "c1": None,
+            "c2": "open",
+            "c2.p1": None,
+            "c2.p2": "open",
+        }
+        (request,) = router.requests
+        c1, c2 = request["render"]["criteria"]
+        [first_remark] = json.loads(_answer())["remarks"]
+        assert c2["previous_remark"] == {
+            "what": first_remark["what"],
+            "why": first_remark["why"],
+            "todo": first_remark["todo"],
+        }
+        assert "previous_remark" not in c1
+        assert all("previous_remark" not in point for point in c2["points"])
+        assert request["render"]["result"]["example_limit"] == 1
+
+    async def test_a_first_remark_in_another_language_is_not_shown(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        doc: AuthoredDocument,
+    ) -> None:
+        _, router = await self._two_attempts(
+            db_session, submission, doc, first_language="eng"
+        )
+
+        (request,) = router.requests
+        assert "previous_remark" not in json.dumps(request["render"]["criteria"])
+
+
 class TestTheInputIsRebuiltFromWhatTheStageLeft:
     """The recorder of the live measurement (``scripts/record_explanation_input.py``):
     the stage's input rebuilt from the rows, the stored file read again — and
@@ -1141,7 +1264,11 @@ class TestTheInputIsRebuiltFromWhatTheStageLeft:
         with job_scope(job_id):
             await explain_verdicts(context, execution=_execution(context))
         shown, _ = await explanation_input(
-            db_session, submission, submission_text=reading.text, language=language
+            db_session,
+            submission,
+            submission_text=reading.text,
+            language=language,
+            text_type=True,
         )
         return review_explainer.render_context(shown)
 
@@ -1171,7 +1298,7 @@ class TestTheInputIsRebuiltFromWhatTheStageLeft:
         )
 
         assert verification["matched"] is True
-        assert verification["prompts"]["prompts/review_explanation/v3.md"]["rows"] == 1
+        assert verification["prompts"]["prompts/review_explanation/v4.md"]["rows"] == 1
         assert review_explainer.render_context(rebuilt.shown) == sent
         assert rebuilt.stored_explanation is not None
         assert rebuilt.task_type == "task"

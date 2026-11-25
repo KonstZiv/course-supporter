@@ -8,7 +8,7 @@ BIL-E2, BIL-TESTMARK; рішення оператора — у docstring кож�
 
 | Модуль | Що робить |
 |---|---|
-| `accounts.py` | Рахунки: створення першою дією, що змінює стан (запис `account.create`), знеособлення |
+| `accounts.py` | Рахунки: створення першою дією, що змінює стан (запис `account.create`), знеособлення; знеособлення студента викликає видалення облікового запису на запит — `scripts/student_admin.py delete` (Б-2, `student_deletion/README.md`) |
 | `payer.py` | **Єдине** місце, що вирішує, хто платить: правило для студента → правило курсу → «сам»; `resolve_payer` для дії, `find_payer` для читання |
 | `ledger.py`, `journal.py` | Журнал: купівля, резерв, списання факту, звільнення, різниця |
 | `charging.py` | Ціна P, поріг, резерв, факт — усе в юнітах; перемикачі `BILLING_CHARGING_ENABLED` і `BILLING_CHARGING_MARKED` |

@@ -277,10 +277,12 @@ class TestPublishedForm:
         with_number = _POLYGON.to_jsonb()
         with_number["questions"][0]["number"] = "1"
 
+        # The model's own check — what an author's text goes through. A stored
+        # draft is read with ``from_jsonb``, which leaves such a field out.
         with pytest.raises(ValidationError, match="label"):
-            DraftBody.from_jsonb(with_letter)
+            DraftBody.model_validate(with_letter)
         with pytest.raises(ValidationError, match="number"):
-            DraftBody.from_jsonb(with_number)
+            DraftBody.model_validate(with_number)
 
     def test_a_mark_is_a_boolean_not_a_word(self) -> None:
         payload = _POLYGON.to_jsonb()

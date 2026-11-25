@@ -121,6 +121,8 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
 
+import structlog
+
 from course_supporter.criteria_kinds import (
     CriteriaLayer,
     VerdictItemKind,
@@ -139,6 +141,7 @@ from course_supporter.homework.criteria_verdicts import (
     pass_decision,
 )
 from course_supporter.homework.earlier_review import read_earlier_review
+from course_supporter.homework.explanation_read import read_stored_explanation
 from course_supporter.homework.judged_list import (
     judged_author_musts,
     judged_layer,
@@ -186,6 +189,8 @@ if TYPE_CHECKING:
         HomeworkSubmission,
         SubmissionCriterionVerdict,
     )
+
+logger = structlog.get_logger(__name__)
 
 __all__ = [
     "REVIEW_PARTS_MISSING",
@@ -567,8 +572,8 @@ class TextResultBuilder:
             raise ResultNotBuiltError(
                 REVIEW_PARTS_MISSING, "the submission has no explanation"
             )
-        answer = read_stored(
-            ExplanationAnswer, explained.body, submission_id=submission.id
+        answer = read_stored_explanation(
+            explained.body, submission_id=submission.id, whose="explanation"
         )
         links = await settle_course_links(
             context.session, context.session_factory, submission, answer, rows
@@ -629,7 +634,7 @@ class TextResultBuilder:
             tenant_id=submission.tenant_id, submission_id=submission.id
         )
         found = (
-            FoundCourseLinks.model_validate(kept.body)
+            read_stored(FoundCourseLinks, kept.body, submission_id=submission.id)
             if kept is not None
             else FoundCourseLinks(criteria=())
         )

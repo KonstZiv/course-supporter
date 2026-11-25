@@ -118,6 +118,7 @@ from typing import Any, Final, Literal, NamedTuple
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
 from course_supporter.homework.reference_key import AnswerKey, answers_digest
+from course_supporter.models.stored_read import read_stored
 
 __all__ = [
     "MAX_OPTIONS",
@@ -197,8 +198,14 @@ class DraftBody(BaseModel):
 
     @classmethod
     def from_jsonb(cls, payload: dict[str, Any]) -> DraftBody:
-        """Deserialize ``TestDraft.body``."""
-        return cls.model_validate(payload)
+        """Deserialize ``TestDraft.body``.
+
+        A field the model does not know — written by a newer release than
+        this one — is left out of what is read, with a warning, not a reason
+        to refuse a draft whose data is whole
+        (:func:`~course_supporter.models.stored_read.read_stored`).
+        """
+        return read_stored(cls, payload)
 
 
 class PublishedOption(BaseModel):
@@ -261,8 +268,12 @@ class PublishedBody(BaseModel):
 
     @classmethod
     def from_jsonb(cls, payload: dict[str, Any]) -> PublishedBody:
-        """Deserialize ``TestVersion.body``."""
-        return cls.model_validate(payload)
+        """Deserialize ``TestVersion.body``.
+
+        Read as :meth:`DraftBody.from_jsonb` is: an unknown field is left out,
+        and the version's digests stay the stored columns', not recomputed.
+        """
+        return read_stored(cls, payload)
 
 
 class VersionDigests(NamedTuple):

@@ -115,7 +115,13 @@ stages:
     # The same input twice must give the same verdicts (TASK.md lock 9);
     # qwen3.7-max answered byte for byte the same on the same input, live.
     deterministic: true
-    prompt_ref: "prompts/criteria_evaluation/v1.md"
+    # v2 (task 13, K4, 2026-11-23): a copy of v1 with one marked block — the
+    # first request about a repeated attempt is shown the earlier attempt:
+    # its verdicts and the line difference of the work, as a hint where to
+    # look (homework/earlier_review.py, `attempt_memory` below). A first
+    # attempt's request, and every second request, is byte for byte v1's.
+    # v1 stays beside it as history.
+    prompt_ref: "prompts/criteria_evaluation/v2.md"
     # The answer goes out with its schema (task 09a): strict on qwen3.7-max,
     # which holds one, JSON mode on DeepSeek, which answers 400 to a schema.
     requires: [json_mode]
@@ -148,6 +154,15 @@ stages:
       # billed — 10.3 times under; at a ceiling of 512 the two were close. The
       # number above stands until the measurement of this stage calibrates it.
       # DeepSeek is priced off-peak; peak hours bill twice that (DD-SP-BG).
+      # Prompt v2 (task 13, K4) is not counted in the number: on a repeated
+      # attempt the first request grows by the earlier verdicts, the
+      # difference and v2's rules — by `attempt_memory.max_growth` (0.33) of
+      # the request without them at most (below). At the largest input,
+      # 56 021 + 18 486 = 74 507 tokens:
+      #   qwen3.7-max, 16 384 out:     74 507 x 0.00165/1k + 16 384 x 0.004951/1k = 0.204054
+      #   deepseek-v4-pro, 32 768 out: 74 507 x 0.00066/1k + 32 768 x 0.00198/1k  = 0.114055
+      #   0.318109 — both rungs stay reachable under 0.55; the repeat shows no
+      # memory. The live measurement of v2 reads the real size.
       money_usd: 0.55
     ladder:
       # PRE-PLAN.md decision 8: qwen3.7-max first — a strict schema on the
@@ -374,7 +389,10 @@ stages:
   # Ladder, flags, ratio and ceilings are `criteria_evaluation`'s, copied.
   criteria_evaluation_with_replies:
     deterministic: true
-    prompt_ref: "prompts/criteria_evaluation/v1_with_replies.md"
+    # v2_with_replies (task 13, K4, 2026-11-23): v1_with_replies and v2's
+    # block of the earlier attempt; v1_with_replies stays beside it as
+    # history. The growth of the input as on `criteria_evaluation`.
+    prompt_ref: "prompts/criteria_evaluation/v2_with_replies.md"
     requires: [json_mode]
     input_budget_ratio: 0.5
     record_output: false
@@ -461,6 +479,25 @@ stages:
         model: deepseek-flash
         reasoning: null
         max_output_tokens: 8192
+
+# What the evaluation of a repeated attempt of a text type is shown of the
+# attempt before it (task 13, K4; homework/earlier_review.py): its verdicts,
+# and the line difference of the work unless the work counts as rewritten —
+# (lines added + lines removed) / the larger line count of the two attempts
+# above `rewritten_share`. The difference shows `diff_context_lines`
+# unchanged lines around a change (the work itself is in the request whole).
+# The memory may grow the stage's request — the characters of its rendered
+# system and user messages — by `max_growth` of the request without it at
+# most: above that it goes without its difference, marked rewritten, and
+# above that still not at all (the request is a first attempt's). The
+# operator's decisions of 2026-11-23 (0.5; 1 and 0.33 at 21:42); the live
+# measurement refines them. A change of any of them changes what a review
+# says, so it raises VERDICT_RULES_VERSION (homework/criteria_verdicts.py)
+# together with it.
+attempt_memory:
+  rewritten_share: 0.5
+  diff_context_lines: 1
+  max_growth: 0.33
 
 task_types:
   # A test makes no model call on any path. On the new path since task 07:

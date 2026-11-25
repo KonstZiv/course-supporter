@@ -30,20 +30,32 @@ now; on this input, a first attempt, the user message differs from v3's by
 the limit alone. v3's request stays pinned as it was calibrated — rendered
 from the input without the fields of task 13, as v3's stage sent it — and v3
 stays in the repository unchanged.
+
+The evaluation prompt v2 (task 13, K4, 2026-11-23) is the next such
+decision: the stage reads ``prompts/criteria_evaluation/v2.md`` since, so its
+definition has a new digest, taken on purpose — its ``prompt_ref`` the one
+field that changed. What v2 must NOT move is a first attempt's request and
+every second request: rendered by the stage's own prompt from the same
+input, both are v1's digests byte for byte. A repeated attempt's first
+request moves on purpose — the earlier verdicts and the difference of the
+work in slots of their own — and its digest is pinned on its own, taken from
+the input below with a fixed memory. v1 stays in the repository unchanged.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from course_supporter.agents import criteria_evaluator, review_explainer
-from course_supporter.criteria_kinds import CriteriaLayer
+from course_supporter.criteria_kinds import CriteriaLayer, VerdictValue
 from course_supporter.homework.criteria_form import Criterion
+from course_supporter.homework.earlier_review import AttemptMemory, PreviousVerdict
 from course_supporter.homework.path_config import ModelStage, load_path_config
 from course_supporter.homework.verdict_explanation import (
     example_limits,
@@ -57,10 +69,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # sha256 of the stage's definition as the router is handed it, taken on main;
 # review_explanation's re-taken for prompt v3 (2026-11-13), its prompt_ref the
 # one field that changed, and again for prompt v4 (task 13, 2026-11-23), the
-# same field.
+# same field; criteria_evaluation's re-taken for prompt v2 (task 13, K4,
+# 2026-11-23), its prompt_ref the one field that changed (on main, with v1:
+# 4eacfb9544225e13b807b6d95a4978c9317d64963283ee42739fd2f17a0adbc4).
 _STAGE_DIGESTS = {
     "criteria_evaluation": (
-        "4eacfb9544225e13b807b6d95a4978c9317d64963283ee42739fd2f17a0adbc4"
+        "db5e138bf50b49537208ff1fe0485cef9f922634e5e7bbde62136e051de5b505"
     ),
     "review_explanation": (
         "84d198df8f758e473c789c0b4cd5bd20738549a0933dccb06126e9ab16bb23b8"
@@ -73,6 +87,11 @@ _REQUEST_DIGESTS = {
     ),
     "criteria_evaluation/repeat": (
         "f2bad1a66337366dfa495064469a91ecafa5cc2f98404fac5da4e6de919d1395"
+    ),
+    # The stage's prompt since task 13, K4 (2026-11-23): v2, a repeated
+    # attempt's first request, with the earlier attempt (``_MEMORY``).
+    "criteria_evaluation/v2/memory": (
+        "3571fba975df211f67de7283a2704d1efc9c8349c130d7c35969bfddc2c7872b"
     ),
     "review_explanation/v2": (
         "f75759c0158b63f2dc1740d80d72ecb7bdfb686eb6e2125bf1d254c639ef21fb"
@@ -180,7 +199,34 @@ def _digest(ref: str, context: dict[str, object]) -> str:
     return hashlib.sha256(f"{system}\x00{user}".encode()).hexdigest()
 
 
-def _evaluation_request(*, repeat: bool) -> str:
+# The earlier attempt a repeated attempt's request is shown (task 13, K4):
+# every kind of verdict, a note, and a difference that ends without its LF.
+_MEMORY = AttemptMemory(
+    earlier_submission_id=uuid.UUID("00000000-0000-7000-8000-000000000013"),
+    verdicts=(
+        PreviousVerdict("c1", VerdictValue.MET, "def fib(n):", None, False),
+        PreviousVerdict("c2.p1", VerdictValue.NOT_MET, None, None, True),
+        PreviousVerdict(
+            "c2.p2", VerdictValue.NOT_MET, None, "Немає жодного тесту.", False
+        ),
+    ),
+    diff=(
+        "--- previous\n+++ current\n@@ -1,2 +1,2 @@\n"
+        " --- solution.py ---\n-def fib(n):\n+def fibonacci(n):\n"
+    ),
+    criteria_changed=False,
+    task_changed=True,
+    rewritten=False,
+    earlier_work_unavailable=False,
+)
+
+
+def _evaluation_request(
+    *,
+    repeat: bool,
+    ref: str = "criteria_evaluation/v1.md",
+    memory: AttemptMemory | None = None,
+) -> str:
     shown = criteria_evaluator.EvaluationInput(
         task_title="Числа Фібоначчі",
         task_description="Рекурсія",
@@ -188,6 +234,7 @@ def _evaluation_request(*, repeat: bool) -> str:
         criteria=_CRITERIA,
         submission_text=_WORK,
         language="Ukrainian",
+        memory=memory,
     )
     notes = (
         [
@@ -202,8 +249,7 @@ def _evaluation_request(*, repeat: bool) -> str:
     )
     expected = ["c1"] if repeat else ["c1", "c2.p1", "c2.p2", "c3", "c4"]
     return _digest(
-        "criteria_evaluation/v1.md",
-        criteria_evaluator.render_context(shown, expected=expected, repeat=notes),
+        ref, criteria_evaluator.render_context(shown, expected=expected, repeat=notes)
     )
 
 
@@ -245,10 +291,10 @@ def _explanation_request(ref: str, *, task_13: bool = False) -> str:
     return _digest(ref, _explanation_context(task_13=task_13))
 
 
-def _the_stages_prompt() -> str:
-    """The explanation stage's prompt, as ``load_prompt`` takes it here."""
+def _the_stages_prompt(name: str = "review_explanation") -> str:
+    """A stage's prompt, as ``load_prompt`` takes it here."""
     config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
-    stage = config.stages["review_explanation"]
+    stage = config.stages[name]
     assert isinstance(stage, ModelStage)
     return stage.prompt_ref.removeprefix("prompts/")
 
@@ -278,6 +324,44 @@ def test_the_repeated_evaluation_request_is_byte_for_byte_the_same() -> None:
     assert (
         _evaluation_request(repeat=True)
         == (_REQUEST_DIGESTS["criteria_evaluation/repeat"])
+    )
+
+
+def test_the_evaluation_stage_sends_v2_which_is_v1_on_a_first_attempt() -> None:
+    """Task 13, K4: the stage reads v2, and a first attempt's request — the
+    first and the second alike — is v1's byte for byte."""
+    ref = _the_stages_prompt("criteria_evaluation")
+
+    assert ref == "criteria_evaluation/v2.md"
+    assert (
+        _evaluation_request(repeat=False, ref=ref)
+        == _REQUEST_DIGESTS["criteria_evaluation/first"]
+    )
+    assert (
+        _evaluation_request(repeat=True, ref=ref)
+        == _REQUEST_DIGESTS["criteria_evaluation/repeat"]
+    )
+
+
+def test_a_repeated_attempts_second_request_is_v1s_byte_for_byte() -> None:
+    """The memory is shown to the first request alone: the second, about some
+    items, is what it was (``repeat``, ``<previous_problems>``)."""
+    ref = _the_stages_prompt("criteria_evaluation")
+
+    assert (
+        _evaluation_request(repeat=True, ref=ref, memory=_MEMORY)
+        == _REQUEST_DIGESTS["criteria_evaluation/repeat"]
+    )
+
+
+def test_a_repeated_attempts_first_request_is_pinned() -> None:
+    """Moved on purpose by task 13, K4: the earlier verdicts, the difference
+    and the note, in v2's slots — a new digest, taken from this input."""
+    ref = _the_stages_prompt("criteria_evaluation")
+
+    assert (
+        _evaluation_request(repeat=False, ref=ref, memory=_MEMORY)
+        == _REQUEST_DIGESTS["criteria_evaluation/v2/memory"]
     )
 
 

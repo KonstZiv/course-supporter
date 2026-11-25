@@ -1588,6 +1588,8 @@ GROUP BY repeat_reason ORDER BY rows DESC;
 `ResultNotBuiltError` без значень (`from None`), у журнал іде один рядок `stored_explanation_unreadable`
 з `loc` і `type` кожної помилки, а загальний рядок `path_failed` для будь-якого `ValidationError`
 несе лише тип і ті самі `loc`/`type`.
+Тією самою межею (`explanation_read.read_stored_explanation`) читається й пояснення попередньої спроби
+(`earlier_review.read_earlier_review`: «виправлено» в збирачі й попередні зауваження в стадії пояснення).
 
 #### Стани зауважень між спробами (задача 12а, К2)
 

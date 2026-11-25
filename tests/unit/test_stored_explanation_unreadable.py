@@ -22,7 +22,12 @@ import structlog
 from pydantic import BaseModel, ValidationError
 from structlog.testing import capture_logs
 
-from course_supporter.homework import path_runner, text_result
+from course_supporter.homework import (
+    earlier_review,
+    explanation_read,
+    path_runner,
+    text_result,
+)
 from course_supporter.homework.path_runner import _fail_the_submission
 from course_supporter.homework.result_builders import (
     PATH_FAILED,
@@ -43,7 +48,7 @@ def _fresh_loggers(monkeypatch: pytest.MonkeyPatch) -> None:
     A logger bound by an earlier test is cached (``cache_logger_on_first_use``)
     with the processors of that test and would slip past ``capture_logs``.
     """
-    for module in (text_result, path_runner, stored_read):
+    for module in (text_result, explanation_read, path_runner, stored_read):
         monkeypatch.setattr(module, "logger", structlog.get_logger())
 
 
@@ -155,7 +160,7 @@ class TestTheBoundaryOfTheBuilder:
 
         with (
             patch.object(
-                text_result, "SubmissionVerdictRepository", return_value=verdicts
+                earlier_review, "SubmissionVerdictRepository", return_value=verdicts
             ),
             capture_logs() as logs,
             pytest.raises(ResultNotBuiltError) as refused,
@@ -174,9 +179,38 @@ class TestTheBoundaryOfTheBuilder:
         assert MARKER not in repr(logs)
         assert MARKER not in "".join(traceback.format_exception(refused.value))
 
+    async def test_the_earlier_review_is_read_at_the_same_boundary(self) -> None:
+        """``read_earlier_review`` itself: the builder and the explanation stage."""
+        earlier = SimpleNamespace(submission_id=uuid.uuid4(), rows=())
+        verdicts = MagicMock()
+        verdicts.earlier_attempt = AsyncMock(return_value=earlier)
+        verdicts.get_explanation = AsyncMock(
+            return_value=SimpleNamespace(body=_wrong_type(), language="ukr")
+        )
+        submission = SimpleNamespace(tenant_id=uuid.uuid4(), id=uuid.uuid4())
+
+        with (
+            patch.object(
+                earlier_review, "SubmissionVerdictRepository", return_value=verdicts
+            ),
+            capture_logs() as logs,
+            pytest.raises(ResultNotBuiltError) as refused,
+        ):
+            await earlier_review.read_earlier_review(
+                MagicMock(),
+                submission,  # type: ignore[arg-type]
+            )
+
+        assert refused.value.code == PATH_FAILED
+        (line,) = [entry for entry in logs if entry["event"] == _UNREADABLE]
+        assert line["whose"] == "earlier explanation"
+        assert line["submission_id"] == str(earlier.submission_id)
+        assert MARKER not in repr(logs)
+        assert MARKER not in "".join(traceback.format_exception(refused.value))
+
     async def test_a_readable_explanation_is_read_in_silence(self) -> None:
         with capture_logs() as logs:
-            read = text_result.read_stored_explanation(
+            read = explanation_read.read_stored_explanation(
                 stored_explanation(), submission_id=uuid.uuid4(), whose="explanation"
             )
 

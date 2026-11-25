@@ -20,6 +20,9 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from course_supporter import boot
 from course_supporter.api.middleware import RequestLoggingMiddleware
+from course_supporter.api.routes.author_settings import (
+    router as author_settings_router,
+)
 from course_supporter.api.routes.billing import router as billing_router
 from course_supporter.api.routes.billing_estimates import (
     router as billing_estimates_router,
@@ -64,6 +67,9 @@ from course_supporter.api.routes.public_numbers import (
 )
 from course_supporter.api.routes.references import router as references_router
 from course_supporter.api.routes.storage import router as storage_router
+from course_supporter.api.routes.student_submissions import (
+    router as student_submissions_router,
+)
 from course_supporter.api.routes.students import router as students_router
 from course_supporter.api.routes.test_objects import router as test_objects_router
 from course_supporter.auth.rate_limiter import InMemoryRateLimiter
@@ -326,6 +332,7 @@ app.include_router(portal_billing_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
 app.include_router(billing_estimates_router, prefix="/api/v1")
 app.include_router(billing_outlook_router, prefix="/api/v1")
+app.include_router(author_settings_router, prefix="/api/v1")
 app.include_router(portal_submissions_router, prefix="/api/v1")
 app.include_router(portal_materials_router, prefix="/api/v1")
 app.include_router(portal_courses_router, prefix="/api/v1")
@@ -333,4 +340,5 @@ app.include_router(portal_recovery_router, prefix="/api/v1")
 app.include_router(portal_join_router, prefix="/api/v1")
 app.include_router(enrollment_links_router, prefix="/api/v1")
 app.include_router(students_router, prefix="/api/v1")
+app.include_router(student_submissions_router, prefix="/api/v1")
 app.include_router(public_numbers_router, prefix="/api/v1")

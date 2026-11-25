@@ -70,6 +70,10 @@ An API refusal carries the reason code and an explanation in the `detail` field:
 wording; `details` is a fallback text for a code it does not know yet. A code with a link leads to
 the section where it is described in detail.
 
+While the service is being updated (a few minutes), any route may answer **503** with the body
+`{"detail": "service_updating"}` and a `Retry-After` header (seconds until the retry, currently
+`15`). This is not a refusal of the request: repeat it after that time, unchanged.
+
 ## Submitting answers to a test
 
 Codes the school's platform gets when sending a student's answers. Nothing from a refused submission

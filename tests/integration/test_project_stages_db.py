@@ -516,6 +516,11 @@ class TestTheExplanationOfAProject:
         assert QUOTE_OF_NEIGHBOR not in verdicts
         assert "quote_from_base" not in p2
         assert "quote_from_base" not in c1
+        # Task 13 is the text types' alone: the project's request shows no
+        # limit of examples and no remark made before.
+        result = request.prompt.split("\n<result>\n", 1)[1].split("\n</result>\n", 1)[0]
+        assert set(json.loads(result)) == {"passed", "score"}
+        assert "previous_remark" not in request.prompt
 
         kept = await SubmissionVerdictRepository(db_session).get_explanation(
             tenant_id=submission.tenant_id, submission_id=submission.id

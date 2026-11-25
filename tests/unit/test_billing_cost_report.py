@@ -212,11 +212,13 @@ class TestCostsParserAndDispatch:
             to_date: date,
             tenant_id: uuid.UUID | None,
             by: billing_costs.CostReportScope,
+            include_test_students: bool,
         ) -> billing_costs.CostReport:
             captured["from_date"] = from_date
             captured["to_date"] = to_date
             captured["tenant_id"] = tenant_id
             captured["by"] = by
+            captured["include_test_students"] = include_test_students
             return _sample_report(by=by)
 
         async def fake_run(args: object) -> str:
@@ -239,7 +241,31 @@ class TestCostsParserAndDispatch:
             "to_date": date(2026, 11, 11),
             "tenant_id": None,
             "by": "student",
+            "include_test_students": False,
         }
+
+    def test_include_test_students_flag_reaches_the_report(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[bool] = []
+
+        async def fake_build(
+            session: object, *, by: billing_costs.CostReportScope, **kwargs: object
+        ) -> billing_costs.CostReport:
+            seen.append(bool(kwargs["include_test_students"]))
+            return _sample_report(by=by)
+
+        async def fake_run(args: object) -> str:
+            session = AsyncMock()
+            session.get_bind = lambda: None
+            return await billing_admin.costs_cmd(session, args)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(billing_costs, "build_cost_report", fake_build)
+        monkeypatch.setattr(billing_admin, "run", fake_run)
+
+        assert billing_admin.main(["costs"]) == 0
+        assert billing_admin.main(["costs", "--include-test-students"]) == 0
+        assert seen == [False, True]
 
     def test_refuses_unknown_tenant_uuid(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

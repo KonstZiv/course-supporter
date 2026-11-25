@@ -1,4 +1,4 @@
-"""Measure the explanation prompts v2 and v3 on one recorded input.
+"""Measure the explanation prompts v3 and v4 on one recorded input.
 
 Each prompt is rendered from the recorded input exactly as the stage renders
 it, and sent ONCE to the first rung of ``review_explanation`` in
@@ -8,6 +8,7 @@ The logic is ``course_supporter.homework.explanation_measure``.
 Usage (from the repository root)::
 
     # what would be sent, and whether the user messages are the same: no call
+    # (v4's differs from v3's by design: the limits of examples, task 13)
     uv run python scripts/measure_explanation_prompt.py RECORD.json --dry-run
 
     # one paid call per prompt; the first rung's key from the environment
@@ -15,13 +16,16 @@ Usage (from the repository root)::
     uv run python scripts/measure_explanation_prompt.py RECORD.json --out DIR
 
 ``RECORD.json`` is written by ``scripts/record_explanation_input.py``. ``DIR``
-receives ``v2.answer.json``, ``v3.answer.json`` and ``summary.json``: tokens,
+receives ``v3.answer.json``, ``v4.answer.json`` and ``summary.json``: tokens,
 price from the registry (``config/external_services.yaml``), the check of
 each answer against the facts, and the recorder's provenance. The record and
 the answers hold a student's work: keep them out of the repository.
 
 Exit code: 0 when every prompt got an answer that agrees with the facts,
-1 otherwise (the summary says which and why).
+1 otherwise (the summary says which and why). A dry run exits 0 once every
+request is captured: whether the user messages are the same is reported, not
+required — v4's user message shows the limits of examples and the remarks
+made before, v3's does not.
 """
 
 from __future__ import annotations
@@ -55,7 +59,7 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
         "--prompts",
         nargs="+",
         default=list(PROMPT_REFS),
-        help="prompt files to compare (default: v2 and v3)",
+        help="prompt files to compare (default: v3 and v4)",
     )
     parser.add_argument(
         "--dry-run",
@@ -99,7 +103,7 @@ async def _main(args: argparse.Namespace) -> int:
                 f"user {len(request.prompt)} chars, hash {item.request_hash}"
             )
         print(f"user messages identical: {same_user}")
-        return 0 if same_user else 1
+        return 0
 
     results = [measured(item, shown.facts, registry=registry) for item in sent]
     summary = write_measurement(args.out, results, record=record, same_user=same_user)

@@ -49,13 +49,16 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Path, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_current_student, get_session
 from course_supporter.api.routes.portal_submissions import _answerable_task
-from course_supporter.api.schemas import NodeSummaryGenerateRequest
+from course_supporter.api.schemas import (
+    NodeSummaryGenerateRequest,
+    OptionalLanguageForm,
+)
 from course_supporter.auth.context import StudentContext, TenantContext
 from course_supporter.auth.scopes import require_scope
 from course_supporter.billing.estimates import (
@@ -306,11 +309,23 @@ async def estimate_portal_review(
         UploadFile | None,
         File(description="The file about to be sent; omitted — the typical price."),
     ] = None,
+    response_language: Annotated[
+        OptionalLanguageForm,
+        Form(
+            description="Language of the review the student is about to ask for, "
+            "as on the submission: ISO 639-1 or 639-3. The same work again is "
+            "free only in the language of its earlier review (V-6), so the price "
+            "depends on it. If omitted: the student's stored preference, then "
+            "the course language — as for the submission.",
+        ),
+    ] = None,
 ) -> ReviewEstimateResponse:
     """The price of a review of this task before it is sent; nothing is stored.
 
     The access gates of a submission (one 404). A file the doors refuse is 422
-    with the doors' reason, as the submission would be.
+    with the doors' reason, as the submission would be. The price is the one
+    the submission's gate asks for, with the language of the form
+    (``response_language``) the same way.
     """
     from course_supporter.security.exceptions import SecurityRejectedError
 
@@ -338,6 +353,7 @@ async def estimate_portal_review(
         student_id=student.student_id,
         reading=sent.reading,
         read_error=sent.error,
+        response_language=response_language,
     )
     if file is not None and quote.basis == "typical":
         # A file the price does not read (a test's answers, a project): it was

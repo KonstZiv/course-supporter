@@ -31,6 +31,9 @@ from course_supporter.api.routes.config import router as config_router
 from course_supporter.api.routes.cost import router as cost_router
 from course_supporter.api.routes.criteria import router as criteria_router
 from course_supporter.api.routes.documents import router as documents_router
+from course_supporter.api.routes.enrollment_links import (
+    router as enrollment_links_router,
+)
 from course_supporter.api.routes.feedback import router as feedback_router
 from course_supporter.api.routes.homework import router as homework_router
 from course_supporter.api.routes.jobs import router as jobs_router
@@ -46,6 +49,7 @@ from course_supporter.api.routes.portal_config import (
 from course_supporter.api.routes.portal_courses import (
     router as portal_courses_router,
 )
+from course_supporter.api.routes.portal_join import router as portal_join_router
 from course_supporter.api.routes.portal_materials import (
     router as portal_materials_router,
 )
@@ -329,6 +333,8 @@ app.include_router(portal_submissions_router, prefix="/api/v1")
 app.include_router(portal_materials_router, prefix="/api/v1")
 app.include_router(portal_courses_router, prefix="/api/v1")
 app.include_router(portal_recovery_router, prefix="/api/v1")
+app.include_router(portal_join_router, prefix="/api/v1")
+app.include_router(enrollment_links_router, prefix="/api/v1")
 app.include_router(students_router, prefix="/api/v1")
 app.include_router(student_submissions_router, prefix="/api/v1")
 app.include_router(public_numbers_router, prefix="/api/v1")

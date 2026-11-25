@@ -24,8 +24,9 @@ class EmailTemplate(NamedTuple):
 
 
 # message-id -> template by language. Supported languages: "ukr" and "eng".
-# The two ids mirror the token purposes in ``student_credential_tokens`` (R2):
-# ``password_reset`` and ``email_confirm``.
+# Two ids mirror the token purposes in ``student_credential_tokens`` (R2):
+# ``password_reset`` and ``email_confirm``; ``portal_signup_confirm`` is the
+# confirm email of a self-enrollment by a course link (O-1).
 _TEMPLATES: dict[str, dict[str, EmailTemplate]] = {
     "ukr": {
         "password_reset": EmailTemplate(
@@ -51,6 +52,25 @@ _TEMPLATES: dict[str, dict[str, EmailTemplate]] = {
                 "проігноруйте цей лист.\n"
             ),
         ),
+        "portal_signup_confirm": EmailTemplate(
+            subject="Підтвердіть запис на курс «{course_title}»",
+            body=(
+                "Вітаємо!\n\n"
+                "Ви записуєтеся на курс «{course_title}» автора {author_name} "
+                "на навчальному порталі. Щоб завершити запис, підтвердіть цю "
+                "адресу за посиланням:\n"
+                "{confirm_url}\n\n"
+                "Підтвердіть протягом {ttl}, інакше запис буде скасовано — "
+                "доведеться записатися знову.\n\n"
+                "Якщо у вас уже є вхід у цього автора, підтверджувати не "
+                "обов'язково: увійдіть і запишіться на курс зі сторінки "
+                "запису.\n\n"
+                "Вхід до порталу автора: {author_login_url}\n"
+                "Спільна сторінка входу: {shared_login_url}\n\n"
+                "Якщо ви не записувалися на цей курс, просто проігноруйте цей "
+                "лист.\n"
+            ),
+        ),
     },
     "eng": {
         "password_reset": EmailTemplate(
@@ -74,6 +94,25 @@ _TEMPLATES: dict[str, dict[str, EmailTemplate]] = {
                 "{confirm_url}\n\n"
                 "The link is valid for {ttl}. If you did not add this address, "
                 "simply ignore this email.\n"
+            ),
+        ),
+        "portal_signup_confirm": EmailTemplate(
+            subject="Confirm your enrollment in “{course_title}”",
+            body=(
+                "Hello!\n\n"
+                "You are enrolling in the course “{course_title}” by "
+                "{author_name} on the learning portal. To complete the "
+                "enrollment, confirm this address by following this link:\n"
+                "{confirm_url}\n\n"
+                "Please confirm within {ttl}, otherwise the enrollment will be "
+                "cancelled and you will have to enroll again.\n\n"
+                "If you already have a login with this author, you do not need "
+                "to confirm: sign in and join the course from the enrollment "
+                "page.\n\n"
+                "Sign in to the author's portal: {author_login_url}\n"
+                "Shared sign-in page: {shared_login_url}\n\n"
+                "If you did not enroll in this course, simply ignore this "
+                "email.\n"
             ),
         ),
     },

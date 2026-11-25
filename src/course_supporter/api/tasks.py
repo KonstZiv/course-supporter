@@ -1375,7 +1375,33 @@ async def arq_process_homework(
             raise
 
 
-@through_seam()
+async def _regenerate_on_terminal(
+    ctx: dict[str, Any],
+    job_id: str,
+    vertex_node_id: str,
+    *_rest: Any,
+    outcome: SeamTerminal,
+    **_kwargs: Any,
+) -> None:
+    """The regeneration's charge ends here on every outcome (BIL-E).
+
+    The author's processing, as :func:`_ingest_on_terminal`: ``complete``
+    settles the cost of the job's calls the author pays, ``failed`` and
+    ``obsolete`` release its reserve
+    (``billing.funds.node_summary_regeneration_ended``; never raises, nothing
+    while charging is off). Runs after the seam's durable terminal write.
+    """
+    from course_supporter.billing.funds import node_summary_regeneration_ended
+
+    await node_summary_regeneration_ended(
+        ctx["session_factory"],
+        job_id=uuid.UUID(job_id),
+        vertex_node_id=uuid.UUID(vertex_node_id),
+        completed=outcome.status == "complete",
+    )
+
+
+@through_seam(on_terminal=_regenerate_on_terminal)
 async def arq_regenerate_node_summary(
     ctx: dict[str, Any],
     job_id: str,
@@ -1388,11 +1414,12 @@ async def arq_regenerate_node_summary(
     ``Job.status`` lifecycle (active → complete on return / failed on raise) and
     the vertex-node liveness check (a soft-deleted vertex → ``obsolete``, this
     body skipped). The body is therefore pure domain: ContextVar plumbing so
-    every ESC row resolves the caller's tenant/job, then ``orch.run`` to
-    completion. Per-node errors are recorded into ``Job.stage_progress.errors[]``
-    by the orchestrator regardless; a raised exception becomes the seam's
-    ``failed`` terminal (the body's session rolls back on exit, the seam writes
-    the terminal in its own fresh session).
+    every ESC row resolves the caller's tenant/job, the shadow estimate and the
+    author's threshold and reserve, then ``orch.run`` to completion. Per-node
+    errors are recorded into ``Job.stage_progress.errors[]`` by the orchestrator
+    regardless; a raised exception becomes the seam's ``failed`` terminal (the
+    body's session rolls back on exit, the seam writes the terminal in its own
+    fresh session). The charge ends in :func:`_regenerate_on_terminal`.
 
     The single production-shaped entry point for ``orch.run()`` (Phase 3.2.4
     invariant 4 — routes never invoke the orchestrator synchronously).
@@ -1427,8 +1454,11 @@ async def arq_regenerate_node_summary(
     set_job_from_arq(jid)
     log.info("node_summary_regeneration_started")
 
-    # Shadow price estimate (BIL-D): the scope and the stale nodes are known,
-    # the first model call is below. Never raises.
+    # Shadow price estimate (BIL-D), then the author's threshold and reserve
+    # (BIL-E): the scope and the stale nodes are known, the first model call is
+    # below. An author without credit short of the price fails the job here
+    # (InsufficientUnitsError → error_category insufficient_units), before any
+    # model call; the estimate itself never raises.
     await shadow_node_summary_regeneration(
         session_factory=session_factory, vertex_node_id=vid, job_id=jid
     )

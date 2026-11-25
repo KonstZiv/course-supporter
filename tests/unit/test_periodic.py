@@ -131,6 +131,8 @@ DEFAULT_SCHEDULE = {
     "periodic:billing_purge": ({30}, {3}),
     # BIL-E: held-for-funds reviews continued once their payer can pay.
     "periodic:billing_resume_funded": (set(range(0, 60, 5)), None),
+    # O-1: expired and old confirmed self-enrollment requests deleted daily.
+    "periodic:portal_signups_cleanup": ({40}, {3}),
 }
 
 
@@ -168,6 +170,7 @@ class TestRegistration:
                 periodic_billing_purge_enabled=False,
                 periodic_billing_stale_reserves_enabled=False,
                 periodic_billing_resume_funded_enabled=False,
+                periodic_portal_signups_cleanup_enabled=False,
             )
         )
         assert [j.name for j in jobs] == [

@@ -143,6 +143,7 @@ ignore = [
 "tests/integration/test_attempt_dedup_db.py" = ["RUF002", "RUF003"]
 # O-1: the task's locks are lettered (а)-(ї) in Ukrainian.
 "tests/integration/test_open_courses_*.py" = ["RUF002", "RUF003"]
+"tests/integration/test_billing_students_money_db.py" = ["RUF002", "RUF003"]
 "tests/integration/test_login_by_email_db.py" = ["RUF002", "RUF003"]
 "tests/unit/test_review_unchanged_note.py" = ["RUF002"]
 "tests/unit/security/test_regex_patterns.py" = ["RUF002"]

@@ -3568,6 +3568,81 @@ class BillingSpendingResponse(BaseModel):
     )
 
 
+class BillingMoneyAmount(BaseModel):
+    """Money in one currency, in minor units of it (cents)."""
+
+    currency: str = Field(description="ISO 4217 code of the batch's currency.")
+    amount_minor: int = Field(description="Whole minor units, rounded once, half up.")
+
+
+class BillingMoneyFigures(BaseModel):
+    """What students paid for some reviews from their own accounts."""
+
+    reviews: int = Field(description="Different reviews with a debit in the period.")
+    units: int = Field(
+        description="Units debited from the students' accounts for them: the "
+        "units of paid batches and `gift_units` together."
+    )
+    money: list[BillingMoneyAmount] = Field(
+        description="The students' money by the price of the batch each debit "
+        "was taken from, per currency (sorted by code); refunds are not "
+        "subtracted."
+    )
+    gift_units: int = Field(
+        description="Units taken from batches without money (a gift, or a "
+        "marked test purchase): not in `money`."
+    )
+
+
+class BillingMoneyStudent(BillingMoneyFigures):
+    """A student of a course: what they paid for reviews of it."""
+
+    student_id: uuid.UUID
+    display_name: str | None = Field(
+        description="The student's name; null for a deleted student."
+    )
+    deleted: bool = Field(description="The student has been deleted.")
+
+
+class BillingMoneyCourse(BillingMoneyFigures):
+    """A course: what its students paid for reviews, and each of them."""
+
+    course_node_id: uuid.UUID
+    title: str | None
+    students: list[BillingMoneyStudent] = Field(
+        description="Students with reviews in the period, by units, the biggest first."
+    )
+
+
+class BillingMoneyTotals(BillingMoneyFigures):
+    """All the tenant's students' money in the period."""
+
+    excluded_test_reviews: int = Field(
+        description="Reviews of service students, left out of everything else."
+    )
+
+
+class BillingStudentsMoneyResponse(BaseModel):
+    """GET /billing/students-money: what students paid for reviews, by course.
+
+    Only reviews a student paid from their own account; a review the author
+    pays for under a rule is not here. Service students are left out.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_date: date = Field(alias="from", description="The first day, UTC.")
+    to_date: date = Field(alias="to", description="The last day, UTC (included).")
+    totals: BillingMoneyTotals
+    courses: list[BillingMoneyCourse] = Field(
+        description="Courses with reviews in the period, by units, the biggest first."
+    )
+    unlinked: BillingMoneyFigures = Field(
+        description="Reviews that lead to no course of the author (a deleted "
+        "row): in the totals, in no course, kept not lost."
+    )
+
+
 class BillingCheckoutStateResponse(BaseModel):
     """GET /billing/checkouts/{checkout_ref}, GET /portal/billing/checkouts/
     {checkout_ref}: where a checkout stands. Coming back from the provider

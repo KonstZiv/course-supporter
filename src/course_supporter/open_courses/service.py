@@ -8,9 +8,10 @@ Signup and confirm:
     A signup keeps the visitor's form in ``portal_signups`` and creates nothing
     else (R3: the course only after the email is confirmed). Confirm creates,
     in the route's one transaction, the student, the credential with the
-    confirmed email, the 'self' enrollment, the adult mark and the consent to
-    the terms (``billing.consent.record_student_consent`` — which also creates
-    the student's billing account).
+    confirmed email, the 'self' enrollment with its event (carrying the
+    signup's ``source_tag``, Б-4), the adult mark and the consent to the terms
+    (``billing.consent.record_student_consent`` — which also creates the
+    student's billing account).
 
 Logins:
     A login is unique per tenant among credentials (any state — the unique
@@ -46,6 +47,9 @@ from course_supporter.storage.orm import (
     StudentCredential,
     StudentEnrollment,
     Tenant,
+)
+from course_supporter.storage.student_enrollment_repository import (
+    StudentEnrollmentRepository,
 )
 
 SOURCE_AUTHOR = "author"
@@ -224,6 +228,8 @@ class SignupForm:
     interface_language: str | None
     terms_version: str
     text_sha256: str
+    source_tag: str | None = None
+    """The join link's campaign tag, already checked (``source_tag.py``)."""
 
 
 async def create_signup(
@@ -250,6 +256,7 @@ async def create_signup(
         adult_confirmed_at=now,
         terms_version=form.terms_version,
         text_sha256=form.text_sha256,
+        source_tag=form.source_tag,
         token_hash=hash_token(raw_token),
         created_at=now,
         expires_at=now + SIGNUP_TTL,
@@ -397,12 +404,12 @@ async def confirm_signup(
             await session.flush()
     except IntegrityError as exc:  # a credential took the login meanwhile
         raise LoginTakenError(signup.id) from exc
-    session.add(
-        StudentEnrollment(
-            student_id=student.id,
-            course_node_id=signup.course_node_id,
-            source=SOURCE_SELF,
-        )
+    await StudentEnrollmentRepository(session).bind(
+        tenant_id=signup.tenant_id,
+        student_id=student.id,
+        course_node_id=signup.course_node_id,
+        source=SOURCE_SELF,
+        source_tag=signup.source_tag,
     )
     # The consent is to the revision the visitor was shown at signup; if the
     # terms changed since, billing asks for the new one before a purchase.
@@ -440,11 +447,13 @@ async def join_course(
     current_version: str,
     text_sha256: str,
     now: datetime,
+    source_tag: str | None = None,
 ) -> JoinOutcome:
     """Enroll a student of the course's tenant by the link ('self').
 
     The adult mark and the consent are recorded when missing (a consent to the
-    same revision writes nothing).
+    same revision writes nothing). The enrollment's event carries
+    ``source_tag`` (the join link's campaign tag, already checked).
 
     Raises:
         EmailConfirmationRequiredError: the student has no confirmed email.
@@ -478,14 +487,13 @@ async def join_course(
         return JoinOutcome.ALREADY_ENROLLED
     try:
         async with session.begin_nested():
-            session.add(
-                StudentEnrollment(
-                    student_id=student_id,
-                    course_node_id=open_course.course.id,
-                    source=SOURCE_SELF,
-                )
+            await StudentEnrollmentRepository(session).bind(
+                tenant_id=open_course.tenant.id,
+                student_id=student_id,
+                course_node_id=open_course.course.id,
+                source=SOURCE_SELF,
+                source_tag=source_tag,
             )
-            await session.flush()
     except IntegrityError:  # enrolled by a parallel request
         return JoinOutcome.ALREADY_ENROLLED
     return JoinOutcome.ENROLLED

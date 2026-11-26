@@ -5,6 +5,7 @@ import re
 from collections.abc import Iterator, Sequence
 from typing import Any
 
+import httpx
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
@@ -235,6 +236,19 @@ class GeminiProvider(LLMProvider):
                 return ErrorCategory.INPUT_OVERFLOW
             return ErrorCategory.SEMANTIC
         return super().classify_error(exc)
+
+    def is_timeout(self, exc: Exception) -> bool:
+        """The client's own timeout, as google-genai 1.62.0 raises it.
+
+        Probed 2026-11-26 against a local server that never answered, retries
+        off as in :data:`_NO_SDK_RETRIES`: the async client rides ``aiohttp``
+        (it is in the lock file) and the timeout arrives as the builtin
+        ``TimeoutError``, unwrapped; where ``aiohttp`` is absent the SDK falls
+        back to ``httpx`` and it arrives as ``httpx.TimeoutException``
+        (``ReadTimeout``). An answer of the server — ``ClientError`` 408,
+        ``ServerError`` 504 — is not a client timeout: ``False``.
+        """
+        return isinstance(exc, httpx.TimeoutException | TimeoutError)
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via Gemini.

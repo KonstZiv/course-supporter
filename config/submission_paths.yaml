@@ -71,6 +71,45 @@ stages:
         reasoning: null
         max_output_tokens: null
 
+  # Is a student's reply about the work? (task 12a, K3; the reply screen's
+  # second question, homework/reply_topic.py). Not on any path: the reply screen
+  # runs it under the action `reply_topic`, and `validate_path_config` demands it
+  # of every type that takes replies. A decision model answers fixed questions
+  # about an input instead of writing text (Gemini Decision 1, chosen by the
+  # measurements of 2026-11-17 and 2026-11-26; llm/providers/gemini_decisions.py),
+  # so the prompt file renders the request body whole and nothing here is
+  # shaped by a chat: no system prompt, no JSON mode, no schema.
+  reply_topic:
+    deterministic: true
+    prompt_ref: "prompts/reply_topic/v1.md"
+    requires: []
+    # The registry names no context window for the model, and one rung needs no
+    # skip: `null` is the choice "estimate nothing".
+    input_budget_ratio: null
+    # The topic and the confidence are small numbers; the text of the reply
+    # stays out of the register as everywhere else.
+    record_output: false
+    ceilings:
+      tool_steps: 0
+      # The model writes no text and the endpoint takes no output cap: the
+      # number is only the pin on the rung that the stage's shape asks for,
+      # and output is free (price 0), so it changes no cost. The answer is two
+      # short objects, a few dozen tokens; 256 is ample.
+      output_tokens: 256
+      # не калібровано: rung gemini_decisions/gemini-decision-1, $0.10 per 1M
+      # input tokens, output free (config/external_services.yaml, 2026-11-26).
+      # The dearest single attempt: the task's condition cut to 8000 characters,
+      # a title, a remark (what, why, todo) of about 3000, a reply of at most
+      # 2000 (REPLY_MAX_CHARS), the labels and the questions of about 1000 —
+      # about 14 300 characters, 4086 tokens at the router's 3.5 characters a
+      # token, = $0.00041, rounded up. A budget of the whole ladder, of one rung.
+      money_usd: 0.001
+    ladder:
+      - provider: gemini_decisions
+        model: gemini-decision-1
+        reasoning: null
+        max_output_tokens: null
+
   # "Does this look like an attempt at the task?" — run on a first submission
   # only. Starting content is a copy of the `sanity_check` ladder in
   # ladders_mentor.yaml (DD-SP-AM).

@@ -39,6 +39,7 @@ from course_supporter.billing.kinds import (
     ActionKind,
     MarkOrigin,
     PayerSource,
+    ReservationState,
     RuleScope,
 )
 from course_supporter.config import RateLimit, get_settings
@@ -1117,6 +1118,102 @@ async def test_h_an_unfinished_submission_refuses_the_run(
 
     assert await _table_counts(session_factory) == tables
     assert len(await _storage_hits(s3_client, seeded)) == 2
+
+
+async def _untouched(
+    session_factory: async_sessionmaker[AsyncSession],
+    s3: S3Client,
+    seeded: Seeded,
+) -> tuple[object, ...]:
+    """What a refused run must leave as it was: the student, the sign-in, the
+    enrollments, the billing account's status and the stored file names."""
+    async with session_factory() as session:
+        student = await session.get(Student, seeded.student_id)
+        account = await session.get(BillingAccount, seeded.account_id)
+        credentials = (
+            await session.execute(
+                select(func.count()).where(
+                    StudentCredential.student_id == seeded.student_id
+                )
+            )
+        ).scalar_one()
+        enrollments = (
+            await session.execute(
+                select(func.count()).where(
+                    StudentEnrollment.student_id == seeded.student_id
+                )
+            )
+        ).scalar_one()
+    assert student is not None and account is not None
+    names = sorted(
+        o["key"] for o in await s3.list_objects(f"homework/{seeded.world.tenant_a}/")
+    )
+    return (
+        student.deleted_at,
+        student.external_id,
+        student.display_name,
+        credentials,
+        enrollments,
+        account.status,
+        account.anonymized_at,
+        names,
+    )
+
+
+async def test_h_an_active_reserve_refuses_the_run(
+    session_factory: async_sessionmaker[AsyncSession],
+    s3_client: S3Client,
+    arq_redis: ArqRedis,
+    seeded: Seeded,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # An action in flight holds units on the student's account: no submission
+    # is unfinished, so only the reserve can refuse the run.
+    key = str(uuid.uuid4())
+    async with session_factory() as session:
+        held = await ledger.reserve(
+            session,
+            action_kind=ActionKind.REVIEW,
+            action_key=key,
+            account_id=seeded.account_id,
+            units=10,
+        )
+        await session.commit()
+    assert held.state == ReservationState.ACTIVE.value
+    a, sid = str(seeded.world.tenant_a), str(seeded.student_id)
+
+    dry = await _run(session_factory, s3_client, arq_redis, seeded, dry_run=True)
+    assert (dry.active_reserves, dry.unfinished_submissions) == (1, 0)
+    assert (
+        await _main(
+            _cli("--tenant", a, "--student", sid, "--reason", REASON, "--dry-run")
+        )
+        == 0
+    )
+    assert "0 unfinished submission(s), 1 active reserve(s)" in capsys.readouterr().out
+
+    tables = await _table_counts(session_factory)
+    before = await _untouched(session_factory, s3_client, seeded)
+    assert before[0] is None and before[5] == "active"
+    assert await _main(_cli("--tenant", a, "--student", sid, "--reason", REASON)) == 1
+    err = capsys.readouterr().err
+    assert "refused:" in err and "1 active reserve(s)" in err
+    assert not any(n.lower() in err.lower() for n in seeded.needles)
+    with pytest.raises(DeletionRefusedError, match=r"1 active reserve\(s\)"):
+        await _run(session_factory, s3_client, arq_redis, seeded)
+
+    assert await _table_counts(session_factory) == tables
+    assert await _untouched(session_factory, s3_client, seeded) == before
+
+    # Once the action has ended and its reserve is released, the run goes through.
+    async with session_factory() as session:
+        await ledger.release(session, action_kind=ActionKind.REVIEW, action_key=key)
+        await session.commit()
+    report = await _run(session_factory, s3_client, arq_redis, seeded)
+    assert not report.dry_run and report.failed_steps == []
+    async with session_factory() as session:
+        student = await session.get(Student, seeded.student_id)
+    assert student is not None and student.deleted_at is not None
 
 
 async def test_h_a_copy_that_fails_changes_nothing(

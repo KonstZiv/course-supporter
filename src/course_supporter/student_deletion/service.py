@@ -12,14 +12,18 @@ What is erased, what is kept (step 1 of Б-2, ``README.md`` beside this file):
   (``api/deps.py``), so it stops working with the commit; nothing to erase.
 * **Personal, outside the work** — the comment on a submission, the student's
   replies to remarks, the free text of feedback; the NAME of the submitted
-  file (owner's decision of 25.11, option A): the stored object is copied to
-  ``…/<submission>/submission.<extension>`` byte for byte, ``file_url``,
-  ``original_filename`` and the verdicts' ``quote_file`` follow it, and the old
-  key is deleted after the commit.
+  file (owner's decisions of 25.11, option A, and of 26.11): the stored object
+  is copied to ``…/<submission>/submission.<extension>`` byte for byte,
+  ``file_url`` and ``original_filename`` follow it, the old key is deleted
+  after the commit, and every other place that names the old file — the
+  verdicts' ``quote_file``, the review's positions and text, the stages'
+  answers, the call register's input and output, the job rows — has the old
+  name replaced by the new one (:mod:`.file_names`).
 * **The work** — the file's bytes, test answers, reviews, verdicts, quotes,
-  explanations, stage outputs — stays as it is, tied to the student row, which
-  is now a marker without personal data (``deleted_at`` set). Submission rows
-  keep counting for the author's statistics and for billing.
+  explanations, stage outputs — stays, tied to the student row, which is now a
+  marker without personal data (``deleted_at`` set); only the old file name in
+  them is replaced. Submission rows keep counting for the author's statistics
+  and for billing.
 * **Legal evidence** — consents and the billing audit log (opaque ids only)
   are not touched. The student's billing accounts are closed and anonymized
   by :func:`.billing.accounts.anonymize_student_accounts` in the same
@@ -68,14 +72,18 @@ from course_supporter.homework.submission_core import (
     ALLOWED_HOMEWORK_EXTENSIONS,
     TEST_ANSWERS_FILENAME,
 )
+from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.remark_kinds import CommentAuthor
 from course_supporter.storage.orm import (
+    ActionCostEstimate,
     BillingAccount,
     BillingPaymentRule,
     BillingReservation,
     BillingTestBatch,
+    ExternalServiceCall,
     HomeworkStatus,
     HomeworkSubmission,
+    Job,
     PortalSignup,
     RemarkComment,
     Student,
@@ -83,9 +91,12 @@ from course_supporter.storage.orm import (
     StudentCredentialToken,
     StudentEnrollment,
     StudentFeedback,
+    SubmissionCourseLinkCandidates,
     SubmissionCriterionVerdict,
+    SubmissionExplanation,
     Tenant,
 )
+from course_supporter.student_deletion.file_names import NameReplacer, name_replacer
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
@@ -146,6 +157,8 @@ class PlaceCount:
     fields: str
     """The fields written, comma-separated, or ``deleted``."""
     rows: int
+    unit: str = "row(s)"
+    """What ``rows`` counts: rows, or occurrences of the old file name."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +218,7 @@ class _Rename:
     old_key: str
     new_key: str
     old_names: frozenset[str]
-    """The file's names a verdict's ``quote_file`` can carry."""
+    """The file's old names: the original and the key's last part."""
     new_name: str
 
 
@@ -219,13 +232,101 @@ class _Place:
     """None — the rows are deleted."""
 
 
+@dataclass(frozen=True, slots=True)
+class _NameChange:
+    """One row whose texts name the old file: its new values, and how many
+    occurrences each column had."""
+
+    model: Any
+    row_id: uuid.UUID
+    values: dict[Any, Any]
+    occurrences: dict[str, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _NameTarget:
+    """A table whose text and JSON columns can name the submitted file, and
+    how its rows of the student's are found."""
+
+    model: Any
+    columns: tuple[Any, ...]
+    scope: Callable[[list[uuid.UUID], list[uuid.UUID]], tuple[Any, ...]]
+    """(submission ids, job ids) → the WHERE of the student's rows."""
+
+
+_NAME_TARGETS: Final = (
+    _NameTarget(
+        HomeworkSubmission,
+        (
+            HomeworkSubmission.review_result,
+            HomeworkSubmission.review_markdown,
+            HomeworkSubmission.sanity_result,
+            HomeworkSubmission.safety_result,
+            HomeworkSubmission.snapshot_manifest,
+            HomeworkSubmission.attempt_receipt,
+            HomeworkSubmission.error_message,
+        ),
+        lambda subs, _: (HomeworkSubmission.id.in_(subs),),
+    ),
+    _NameTarget(
+        SubmissionCriterionVerdict,
+        (
+            SubmissionCriterionVerdict.quote_file,
+            SubmissionCriterionVerdict.quote,
+            SubmissionCriterionVerdict.missing,
+        ),
+        lambda subs, _: (SubmissionCriterionVerdict.submission_id.in_(subs),),
+    ),
+    _NameTarget(
+        SubmissionExplanation,
+        (SubmissionExplanation.body,),
+        lambda subs, _: (SubmissionExplanation.submission_id.in_(subs),),
+    ),
+    _NameTarget(
+        SubmissionCourseLinkCandidates,
+        (SubmissionCourseLinkCandidates.body,),
+        lambda subs, _: (SubmissionCourseLinkCandidates.submission_id.in_(subs),),
+    ),
+    _NameTarget(
+        RemarkComment,
+        (RemarkComment.body,),
+        # The student's own replies become DELETED_TEXT (a place of its own).
+        lambda subs, _: (
+            RemarkComment.submission_id.in_(subs),
+            RemarkComment.author == CommentAuthor.MENTOR.value,
+        ),
+    ),
+    _NameTarget(
+        Job,
+        (Job.input_params, Job.result_data, Job.stage_progress, Job.error_message),
+        lambda _, jobs: (Job.id.in_(jobs),),
+    ),
+    _NameTarget(
+        ExternalServiceCall,
+        (
+            ExternalServiceCall.input_text,
+            ExternalServiceCall.output_text,
+            ExternalServiceCall.error_message,
+        ),
+        lambda _, jobs: (ExternalServiceCall.job_id.in_(jobs),),
+    ),
+    _NameTarget(
+        ActionCostEstimate,
+        (ActionCostEstimate.inputs, ActionCostEstimate.breakdown),
+        lambda subs, _: (ActionCostEstimate.submission_id.in_(subs),),
+    ),
+)
+"""Every place, besides the stored file and ``file_url`` / ``original_filename``,
+where the old file name can stand (доповнення 1, step 3 of the inventory)."""
+
+
 @dataclass(slots=True)
 class _Context:
     tenant_id: uuid.UUID
     student: Student
     places: list[_Place]
     renames: list[_Rename]
-    quote_files: int
+    name_changes: list[_NameChange]
     account_ids: list[uuid.UUID]
     student_rules: int
     unfinished: int
@@ -604,9 +705,7 @@ async def _gather(
         student=student,
         places=_places(tenant_id, sid, addresses, now),
         renames=renames,
-        quote_files=sum(
-            [await _scalar_count(session, *_quote_file_of(r)) for r in renames]
-        ),
+        name_changes=await _scan_names(session, submissions, renames),
         account_ids=account_ids,
         student_rules=await _scalar_count(
             session,
@@ -631,18 +730,99 @@ async def _gather(
     )
 
 
-def _quote_file_of(rename: _Rename) -> tuple[Any, ...]:
-    return (
-        SubmissionCriterionVerdict.submission_id == rename.submission_id,
-        SubmissionCriterionVerdict.quote_file.in_(sorted(rename.old_names)),
-    )
+async def _student_job_ids(
+    session: AsyncSession, submissions: list[HomeworkSubmission]
+) -> list[uuid.UUID]:
+    """The jobs of the student's submissions: by the typed subject, and the
+    job each submission names."""
+    ids = [s.id for s in submissions]
+    by_subject = (
+        await session.execute(
+            select(Job.id).where(
+                Job.subject_type == JOB_SUBJECT_TYPE[JobType.HOMEWORK_PROCESSING],
+                Job.subject_id.in_(ids),
+            )
+        )
+    ).scalars()
+    named = {s.job_id for s in submissions if s.job_id is not None}
+    return sorted(set(by_subject) | named)
+
+
+async def _scan_names(
+    session: AsyncSession,
+    submissions: list[HomeworkSubmission],
+    renames: list[_Rename],
+) -> list[_NameChange]:
+    """Every row of the student's that names an old file, with its new values.
+
+    One replacer for all the student's renames: a later review may name an
+    earlier attempt's file.
+    """
+    replacer = name_replacer({old: r.new_name for r in renames for old in r.old_names})
+    if replacer.pattern is None:
+        return []
+    subs = [s.id for s in submissions]
+    jobs = await _student_job_ids(session, submissions)
+    changes: list[_NameChange] = []
+    for target in _NAME_TARGETS:
+        rows = await session.execute(
+            select(target.model.id, *target.columns).where(*target.scope(subs, jobs))
+        )
+        for row in rows.tuples():
+            change = _name_change(target, row, replacer)
+            if change is not None:
+                changes.append(change)
+    named_jobs = [c.row_id for c in changes if c.model is Job]
+    if named_jobs and await _scalar_count(
+        session, Job.id.in_(named_jobs), Job.deleted_at.isnot(None)
+    ):
+        # The soft-delete trigger would refuse the rewrite.
+        raise DeletionRefusedError(
+            "a soft-deleted job of the student's submissions names the file; "
+            "nothing changed"
+        )
+    return changes
+
+
+def _name_change(
+    target: _NameTarget, row: tuple[Any, ...], replacer: NameReplacer
+) -> _NameChange | None:
+    row_id, *values = row
+    new_values: dict[Any, Any] = {}
+    occurrences: dict[str, int] = {}
+    for column, value in zip(target.columns, values, strict=True):
+        if value is None:
+            continue
+        rewritten, found = replacer.value(value)
+        if found:
+            new_values[column] = rewritten
+            occurrences[column.key] = found
+    if not new_values:
+        return None
+    return _NameChange(target.model, row_id, new_values, occurrences)
+
+
+def _name_places(changes: list[_NameChange]) -> list[PlaceCount]:
+    """Occurrences of the old file name by table and column, in target order."""
+    totals: dict[tuple[str, str], int] = {}
+    for target in _NAME_TARGETS:
+        for column in target.columns:
+            totals[(target.model.__tablename__, column.key)] = 0
+    for change in changes:
+        for column, found in change.occurrences.items():
+            totals[(change.model.__tablename__, column)] += found
+    return [
+        PlaceCount(table, f"{column}: old file name replaced", n, "occurrence(s)")
+        for (table, column), n in totals.items()
+        if n
+    ]
 
 
 def _report_places(
     counted: list[tuple[_Place, int]],
     *,
     renamed: int,
-    quote_files: int,
+    name_changes: list[_NameChange],
     accounts: int,
     rules: int,
     counters: int,
@@ -655,7 +835,7 @@ def _report_places(
             "original_filename, file_url (file renamed)",
             renamed,
         ),
-        PlaceCount("submission_criterion_verdicts", "quote_file", quote_files),
+        *_name_places(name_changes),
     ]
     places += [
         PlaceCount("billing_accounts", "closed and anonymized", accounts),
@@ -689,8 +869,7 @@ async def _write(
 
 async def _rename_rows(
     session: AsyncSession, s3: S3Client, renames: list[_Rename]
-) -> int:
-    quote_files = 0
+) -> None:
     for rename in renames:
         await session.execute(
             update(HomeworkSubmission)
@@ -701,14 +880,21 @@ async def _rename_rows(
             )
             .execution_options(synchronize_session=False)
         )
+
+
+async def _replace_names(session: AsyncSession, changes: list[_NameChange]) -> None:
+    for change in changes:
         result: Any = await session.execute(
-            update(SubmissionCriterionVerdict)
-            .where(*_quote_file_of(rename))
-            .values(quote_file=rename.new_name)
+            update(change.model)
+            .where(change.model.id == change.row_id)
+            .values(change.values)
             .execution_options(synchronize_session=False)
         )
-        quote_files += int(result.rowcount)
-    return quote_files
+        if result.rowcount != 1:  # pragma: no cover - the row was read above
+            raise DeletionRefusedError(
+                f"{change.model.__tablename__} {change.row_id} changed under "
+                "the run; nothing changed"
+            )
 
 
 def _sha256(data: bytes) -> str:
@@ -816,7 +1002,8 @@ async def delete_student(
                     "run again once they have finished; nothing changed"
                 )
             written = await _write(session, context, now)
-            quote_files = await _rename_rows(session, s3, context.renames)
+            await _rename_rows(session, s3, context.renames)
+            await _replace_names(session, context.name_changes)
             anonymized = await anonymize_student_accounts(
                 session, student_id, actor=actor, now=now
             )
@@ -867,7 +1054,7 @@ async def delete_student(
     report.places = _report_places(
         written,
         renamed=len(context.renames),
-        quote_files=quote_files,
+        name_changes=context.name_changes,
         accounts=len(anonymized.account_ids),
         rules=len(anonymized.ended_rule_ids),
         counters=counters,
@@ -913,7 +1100,7 @@ async def _dry_run(
         places=_report_places(
             counted,
             renamed=len(context.renames),
-            quote_files=context.quote_files,
+            name_changes=context.name_changes,
             accounts=len(context.account_ids),
             rules=context.student_rules,
             counters=counters,

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -26,7 +27,7 @@ from typing import Any
 import pytest
 from arq.connections import ArqRedis
 from scripts import student_admin
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.auth.rate_limits import KEY_PREFIX, RedisRateLimiter, counter_key
@@ -41,11 +42,14 @@ from course_supporter.billing.kinds import (
     RuleScope,
 )
 from course_supporter.config import RateLimit, get_settings
+from course_supporter.jobs.job_type import JobType
 from course_supporter.storage.orm import (
     AuthoredDocument,
     BillingAccount,
     BillingPaymentRule,
+    ExternalServiceCall,
     HomeworkSubmission,
+    Job,
     PortalSignup,
     RemarkComment,
     Student,
@@ -78,6 +82,10 @@ from tests._helpers.open_courses import (
 pytestmark = [pytest.mark.requires_db, pytest.mark.requires_redis]
 
 ACTOR = "kostiantyn"
+VERDICT = {"passed": True, "correctness": 0.9}
+REVIEW_TEXT = "Good work: the function sums the list."
+REMARK = "An empty list must return zero."
+ARCHIVE_MEMBER = "src/main.py"
 REASON = "ticket 4242"
 _TEXT_TYPES = ("text", "character varying", "jsonb", "json", "ARRAY")
 
@@ -103,6 +111,8 @@ class Seeded:
     batches: dict[str, uuid.UUID]
     stranger_signup: uuid.UUID
     """A pending signup of another person in the same tenant: must survive."""
+    job_id: uuid.UUID
+    call_id: uuid.UUID
     accounts: list[uuid.UUID] = field(default_factory=list)
 
     @property
@@ -247,6 +257,8 @@ async def _seed(
 
         def submission(key: str, name: str, data: bytes, **extra: Any) -> Any:
             extra.setdefault("status", "completed")
+            extra.setdefault("review_markdown", REVIEW_TEXT)
+            extra.setdefault("review_result", {"verdict": VERDICT})
             return HomeworkSubmission(
                 tenant_id=a,
                 student_id=student.id,
@@ -257,8 +269,6 @@ async def _seed(
                 file_type="text/plain",
                 original_filename=name,
                 file_hash=hashlib.sha256(data).hexdigest(),
-                review_markdown="Good work: the function sums the list.",
-                review_result={"verdict": {"passed": True, "correctness": 0.9}},
                 score=90,
                 **extra,
             )
@@ -269,6 +279,15 @@ async def _seed(
             file_bytes,
             student_note=f"{surname}: please check the edge cases",
             task_version="v1",
+            # The remark's place, as text_result._place_of and
+            # review_assembler._position_line write it.
+            review_result={
+                "verdict": VERDICT,
+                "remarks": {
+                    "c2": {"position": {"kind": "file", "value": f"{surname}_dz3.py:1"}}
+                },
+            },
+            review_markdown=f"{REVIEW_TEXT}\n\n*файл {surname}_dz3.py:1*\n{REMARK}",
         )
         project_sub = submission(
             project_key,
@@ -276,9 +295,47 @@ async def _seed(
             project_bytes,
             snapshot_key=snapshot_key,
             status="delivered",
+            # A path inside the archive is the work's: it stays as it is.
+            snapshot_manifest={"included": [{"path": ARCHIVE_MEMBER}]},
+            review_result={
+                "verdict": VERDICT,
+                "remarks": {
+                    "c1": {"position": {"kind": "file", "value": f"{ARCHIVE_MEMBER}:3"}}
+                },
+            },
         )
         test_sub = submission(test_key, "answers.json", test_bytes)
         session.add_all([file_sub, project_sub, test_sub])
+        await session.flush()
+        job = Job(
+            tenant_id=a,
+            job_type=JobType.HOMEWORK_PROCESSING.value,
+            subject_type="homework_submission",
+            subject_id=file_sub.id,
+            input_params={"submission_id": str(file_sub.id)},
+        )
+        session.add(job)
+        await session.flush()
+        file_sub.job_id = job.id
+        call = ExternalServiceCall(
+            job_id=job.id,
+            action="criteria_evaluation",
+            strategy="default",
+            input_text=f"=== {surname}_dz3.py ===\n{file_bytes.decode()}",
+            output_text=json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": "c2",
+                            "verdict": "not_met",
+                            "quote_file": f"{surname}_dz3.py",
+                            "quote_lines": [1, 1],
+                        }
+                    ]
+                }
+            ),
+        )
+        session.add(call)
         await session.flush()
         session.add(
             SubmissionCriterionVerdict(
@@ -439,6 +496,8 @@ async def _seed(
             "test": test.batch.id,
         },
         stranger_signup=stranger.id,
+        job_id=job.id,
+        call_id=call.id,
         accounts=[account.id],
     )
 
@@ -451,6 +510,18 @@ async def seeded(
 ) -> AsyncIterator[Seeded]:
     made = await _seed(session_factory, s3_client, arq_redis)
     yield made
+    async with session_factory() as session:
+        # Jobs outlive their tenant (SET NULL); the register rows point at them.
+        await session.execute(
+            delete(ExternalServiceCall).where(ExternalServiceCall.job_id == made.job_id)
+        )
+        await session.execute(
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.job_id == made.job_id)
+            .values(job_id=None)
+        )
+        await session.execute(delete(Job).where(Job.id == made.job_id))
+        await session.commit()
     for obj in await s3_client.list_objects(f"homework/{made.world.tenant_a}/"):
         await s3_client.delete_object(obj["key"])
     await drop_billing_of_tenant(
@@ -591,7 +662,17 @@ async def test_a_dry_run_writes_nothing_and_shows_refunds(
     assert report.rows("student_credential_tokens") == 2
     assert report.rows("portal_signups") == 2
     assert report.rows("storage") == 2  # the file and the archive; not answers.json
-    assert report.rows("submission_criterion_verdicts") == 1
+    assert {
+        (p.place, p.fields.split(":")[0]): p.rows
+        for p in report.places
+        if p.unit == "occurrence(s)"
+    } == {
+        ("homework_submissions", "review_result"): 1,
+        ("homework_submissions", "review_markdown"): 1,
+        ("submission_criterion_verdicts", "quote_file"): 1,
+        ("external_service_calls", "input_text"): 1,
+        ("external_service_calls", "output_text"): 1,
+    }
     assert report.rows("redis") == 2
     assert report.rows("billing_accounts") == 1
     assert report.rows("billing_payment_rules") == 1
@@ -809,7 +890,26 @@ async def test_d_the_work_stays_and_the_personal_texts_go(
     assert test.original_filename == "answers.json"  # the platform's own name
     assert s3_client.extract_key(test.file_url) == seeded.old_keys[seeded.test_sub]
     assert project.snapshot_key == seeded.snapshot_key
-    assert file_sub.review_markdown == "Good work: the function sums the list."
+    assert file_sub.review_markdown == (
+        f"{REVIEW_TEXT}\n\n*файл submission.py:1*\n{REMARK}"
+    )
+    assert file_sub.review_result == {
+        "verdict": VERDICT,
+        "remarks": {"c2": {"position": {"kind": "file", "value": "submission.py:1"}}},
+    }
+    # The archive's own paths are the work: untouched.
+    assert project.snapshot_manifest == {"included": [{"path": ARCHIVE_MEMBER}]}
+    assert project.review_result is not None
+    assert project.review_result["remarks"]["c1"]["position"]["value"] == (
+        f"{ARCHIVE_MEMBER}:3"
+    )
+    async with session_factory() as session:
+        call = await session.get(ExternalServiceCall, seeded.call_id)
+    assert call is not None and call.output_text is not None
+    assert json.loads(call.output_text)["items"][0]["quote_file"] == "submission.py"
+    assert call.input_text == (
+        f"=== submission.py ===\n{seeded.contents[seeded.file_sub].decode()}"
+    )
     assert (file_sub.score, file_sub.status, project.status) == (
         90,
         "completed",
@@ -858,6 +958,10 @@ async def test_e_nothing_personal_is_left_anywhere(
         "homework_submissions.file_url",
         "homework_submissions.student_note",
         "submission_criterion_verdicts.quote_file",
+        "homework_submissions.review_result",
+        "homework_submissions.review_markdown",
+        "external_service_calls.input_text",
+        "external_service_calls.output_text",
         "remark_comments.body",
         "student_feedback.text",
     ):

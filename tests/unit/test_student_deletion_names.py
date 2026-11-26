@@ -12,6 +12,7 @@ from course_supporter.student_deletion import (
     neutral_key,
     neutral_name,
 )
+from course_supporter.student_deletion.file_names import name_replacer
 from course_supporter.student_deletion.service import (
     EMAIL_COUNTERS,
     STUDENT_COUNTERS,
@@ -92,3 +93,52 @@ def test_the_counters_deleted_are_the_ones_the_routes_keep() -> None:
     routes = (ROOT / "src/course_supporter/api/routes/portal_join.py").read_text()
     for name in (*EMAIL_COUNTERS, *STUDENT_COUNTERS):
         assert f'"{name}"' in routes, name
+
+
+# ── The old name, replaced in texts (доповнення 1) ─────────────────────────
+
+_REPLACE = {"Ivanenko_dz3.py": "submission.py", "a.py": "submission.py"}
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "found"),
+    [
+        ("Ivanenko_dz3.py", "submission.py", 1),
+        ("*файл Ivanenko_dz3.py:12-14*", "*файл submission.py:12-14*", 1),
+        ("see a.py.", "see submission.py.", 1),
+        ("(a.py, a.py)", "(submission.py, submission.py)", 2),
+        # Part of a longer name or word: not the file.
+        ("data.py", "data.py", 0),
+        ("a.pyc", "a.pyc", 0),
+        ("a.py.bak", "a.py.bak", 0),
+        ("my-a.py", "my-a.py", 0),
+        # After a path separator: a path inside an archive, the work's.
+        ("src/a.py:3", "src/a.py:3", 0),
+        ("src\\a.py", "src\\a.py", 0),
+    ],
+)
+def test_only_the_whole_name_standing_alone_is_replaced(
+    before: str, after: str, found: int
+) -> None:
+    assert name_replacer(_REPLACE).text(before) == (after, found)
+
+
+def test_json_keys_and_values_are_rewritten_and_counted() -> None:
+    value = {
+        "Ivanenko_dz3.py": {"lines": [1, 2]},
+        "remarks": [{"position": {"value": "a.py:1"}}, None, 3, True],
+    }
+    assert name_replacer(_REPLACE).value(value) == (
+        {
+            "submission.py": {"lines": [1, 2]},
+            "remarks": [{"position": {"value": "submission.py:1"}}, None, 3, True],
+        },
+        2,
+    )
+
+
+def test_nothing_to_replace_finds_nothing() -> None:
+    assert name_replacer({"submission.py": "submission.py"}).text("submission.py") == (
+        "submission.py",
+        0,
+    )

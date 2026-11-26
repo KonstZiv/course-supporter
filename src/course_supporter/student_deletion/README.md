@@ -23,7 +23,9 @@ docker exec -it course-supporter-app python -m scripts.student_admin delete \
 **`--dry-run`** нічого не пише (транзакція READ ONLY, сховище й Redis — лише читання).
 Він друкує:
 
-- скільки рядків і яких полів зміниться в кожному місці;
+- скільки рядків і яких полів зміниться в кожному місці; для старої назви файла — скільки
+  входжень буде замінено в кожному полі (лише кількості, без самих назв; поле без
+  входжень не друкується);
 - скільки незавершених подач і активних резервів (з ними справжній запуск відмовить);
 - по кожній чинній партії юнітів студента — невикористані юніти, сплачену суму, валюту
   й суму повернення: сума партії × невикористані ÷ юніти партії, ціле в мінорних
@@ -47,7 +49,11 @@ would change:
   remark_comments                    1 row(s)  [body (the student's replies)]
   student_feedback                   1 row(s)  [text]
   homework_submissions               2 row(s)  [original_filename, file_url (file renamed)]
-  submission_criterion_verdicts      1 row(s)  [quote_file]
+  homework_submissions               1 occurrence(s)  [review_result: old file name replaced]
+  homework_submissions               1 occurrence(s)  [review_markdown: old file name replaced]
+  submission_criterion_verdicts      1 occurrence(s)  [quote_file: old file name replaced]
+  external_service_calls             1 occurrence(s)  [input_text: old file name replaced]
+  external_service_calls             1 occurrence(s)  [output_text: old file name replaced]
   students                           1 row(s)  [external_id, display_name, metadata, mentor_preferences, deleted_at]
   billing_accounts                   1 row(s)  [closed and anonymized]
   billing_payment_rules              1 row(s)  [student rules ended]
@@ -108,11 +114,34 @@ same confirmed e-mail in other tenants: none
    `homework/<орендар>/<подача>/submission.<розширення>` — вміст байт у байт той самий,
    копія звіряється з оригіналом за SHA-256 до коміту. Розширення береться з
    оригінального імені, якщо двері завантаження його приймають (`.tar.gz` — цілим);
-   інакше — просто `submission`. Слідом переписуються `file_url`, `original_filename` і
-   `quote_file` у вердиктах, де він дорівнював імені файлу.
+   інакше — просто `submission`. Слідом переписуються `file_url` і `original_filename`.
+6. **Стара назва файла — всюди, де вона лишилась** (рішення власника 26.11, `file_names.py`):
+   у тій самій транзакції точне входження старої назви (повної, з розширенням) замінюється
+   на `submission.<розширення>` у всіх текстових і JSON-полях рядків студента:
+   - подачі: `review_result` (місце зауваження `назва:рядки`, `text_result._place_of`),
+     `review_markdown` (рядок місця, `review_assembler._position_line`), `sanity_result`,
+     `safety_result`, `snapshot_manifest`, `attempt_receipt`, `error_message`;
+   - вердикти: `quote_file`, `quote`, `missing`; тіла пояснень; кандидати посилань;
+     відповіді Ментора на репліки;
+   - завдання подач (`jobs`: `input_params`, `result_data`, `stage_progress`,
+     `error_message`) і їхні рядки реєстру (`external_service_calls`: `input_text`,
+     `output_text`, `error_message`); оцінки вартості подач (`action_cost_estimates`).
+
+   Структуроване значення (`quote_file`, місце `назва:рядки`) і вільний текст — одним
+   правилом: назва ціла й окремо (не частина довшого слова: `a.py` у `data.py` не
+   замінюється) і **не після `/` чи `\`** — шлях усередині архіву проєкту (`src/main.py`) —
+   це вміст роботи, не назва завантаження, і лишається. У JSON переписуються ключі й
+   рядкові значення. Одна заміна на всі подачі студента: пізніша рецензія може назвати
+   файл попередньої спроби. М'яко видалене завдання, що містить назву, — відмова (тригер
+   м'якого видалення не дасть його переписати).
+
+   Цілісність: жоден код не звіряє хеш `review_result`, `review_markdown` чи `output_text`.
+   `input_hash` реєстру лишається як був (хеш, назви не містить); інструменти вимірювання
+   `scripts/record_explanation_input.py` / `record_evaluation_input.py` для подач видаленого
+   студента покажуть `matched=false` — перебудований вхід уже з новою назвою.
    Ключі **без** імені студента не змінюються: відповіді тесту (`…/<uuid>/answers.json` —
    назва платформи), знімок проєкту (`…/<подача>/snapshot.zip`).
-6. **Облік:** `anonymize_student_accounts` у тій самій транзакції — рахунки закрито й
+7. **Облік:** `anonymize_student_accounts` у тій самій транзакції — рахунки закрито й
    знеособлено, правила оплати про студента завершено (аудит пише вона сама: `account.anonymize`,
    `payment_rule.end`).
 
@@ -147,10 +176,10 @@ same confirmed e-mail in other tenants: none
   юніти лишаються на закритому рахунку й згасають наявним завданням `billing_expire` у
   кінці терміну дії партії.
 - **Не змінює вміст файлів робіт** (рішення 1): ім'я, вписане студентом у сам файл,
-  неможливо відрізнити від решти тексту.
+  неможливо відрізнити від решти тексту. Шляхи файлів усередині архіву проєкту — теж
+  вміст роботи.
 - **Не видаляє подачі, вердикти, пояснення, рецензії й цитати з роботи.** На них
-  тримаються статистика автора й облік. Ім'я файлу, згадане у вільному тексті рецензій чи
-  цитат, лишається як вміст роботи.
+  тримаються статистика автора й облік; у них замінюється лише стара назва файла.
 - **Не чіпає юридичних доказів:** згоди (`billing_consents`: рахунок, канал, версія умов,
   SHA-256 тексту — без IP і пристрою) і аудит білінгу (знімки без власника, непрозорі
   id); партії, оформлення, події посередника й повернення (id замовлень, суми; пошти
@@ -172,10 +201,9 @@ same confirmed e-mail in other tenants: none
 | `portal_signups` (підтверджена студента; незавершені з його поштою в орендарі) | вхід і особа | видалити |
 | `student_enrollments` | доступ | видалити |
 | `homework_submissions.student_note`, `remark_comments.body` (лише студента), `student_feedback.text` | особисте поза роботою | NULL / маркер |
-| `homework_submissions.original_filename`, `file_url`, `submission_criterion_verdicts.quote_file`, ключ об'єкта | особисте поза роботою (ім'я файлу) | нейтральне `submission.<розширення>` |
-| review_result / review_markdown, sanity / safety_result, snapshot_manifest, вердикти (quote, missing), пояснення, кандидати посилань, вміст файлів | вміст роботи | без змін |
-| `jobs` (input_params — лише id; stage_progress — стадії) | особистого немає | без змін |
-| `external_service_calls` (input_text на проді завжди NULL; output_text — відповіді моделі) | вміст роботи | без змін |
+| `homework_submissions.original_filename`, `file_url`, ключ об'єкта | особисте поза роботою (ім'я файлу) | нейтральне `submission.<розширення>`, об'єкт скопійовано байт у байт |
+| стара назва файла в: `review_result`, `review_markdown`, `sanity_result`, `safety_result`, `snapshot_manifest`, `attempt_receipt`, `error_message`; вердиктах (`quote_file`, `quote`, `missing`); поясненнях; кандидатах посилань; відповідях Ментора; `jobs`; `external_service_calls` (`input_text`, `output_text`, `error_message`); `action_cost_estimates` | особисте поза роботою (ім'я файлу) | точна заміна назви на `submission.<розширення>` |
+| решта тексту рецензій, вердиктів, пояснень, виходів стадій; шляхи всередині архіву; вміст файлів у сховищі | вміст роботи | без змін |
 | згоди, аудит білінгу, партії, оформлення, події посередника, повернення | юридичний доказ | без змін |
 | Redis `rl:…` за поштою й id студента | вхід і особа (псевдонім) | видалити після коміту |
 | журнали контейнерів; лічильник входу в пам'яті API | поза базою | не чіпає (див. вище) |

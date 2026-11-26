@@ -65,7 +65,7 @@ def render(report: DeletionReport) -> str:
     lines = [f"student {report.student_id}  tenant {report.tenant_id}  {head}"]
     lines.append("would change:" if report.dry_run else "changed:")
     for p in report.places:
-        lines.append(f"  {p.place:<30} {p.rows:>5} row(s)  [{p.fields}]")
+        lines.append(f"  {p.place:<30} {p.rows:>5} {p.unit}  [{p.fields}]")
     if not report.redis_checked:
         lines.append("  (redis not reachable: its counters were not checked)")
     if report.dry_run:

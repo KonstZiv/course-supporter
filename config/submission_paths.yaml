@@ -548,12 +548,11 @@ task_types:
   # A project (project chain K8): the stages of a text task under the
   # project's own names — its verdicts on the criteria over its delta context,
   # the places of the course for the failed ones, their explanation — and the
-  # review laid out by the text types' builder. On the new path in test mode:
-  # served by the new path, not charged for. `todays_mentor` here, without
-  # `test_mode`, is the way back.
+  # review laid out by the text types' builder. On the new path and charged
+  # for, as `task` and `short_task` (the operator's decision of 2026-11-26: the
+  # test mode is off). `todays_mentor` here is the way back.
   project:
     served_by: new_path
-    test_mode: true
     paths:
       first:
         [safety, attempt_classifier, project_criteria_evaluation, course_link_lookup, project_review_explanation]

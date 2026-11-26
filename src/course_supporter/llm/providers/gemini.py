@@ -222,9 +222,15 @@ class GeminiProvider(LLMProvider):
         * ClientError code 400 with a message matching a known
           context-overflow pattern -> INPUT_OVERFLOW.
         * Other ClientError -> SEMANTIC.
-        * Anything else (including raw httpx transport errors that
+        * The client's own timeout (:meth:`is_timeout`: builtin
+          ``TimeoutError``, ``httpx.TimeoutException``) -> INFRASTRUCTURE:
+          the router repeats it on the rung at most once
+          (``max_retries_timeout``), then descends (KD7).
+        * Anything else (including other raw httpx transport errors that
           bypass the SDK error namespace) -> SEMANTIC (via base).
         """
+        if self.is_timeout(exc):
+            return ErrorCategory.INFRASTRUCTURE
         if isinstance(exc, genai_errors.ServerError):
             return ErrorCategory.INFRASTRUCTURE
         if isinstance(exc, genai_errors.ClientError):

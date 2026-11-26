@@ -190,6 +190,12 @@ class TestGeminiClassifier:
                 ErrorCategory.SEMANTIC,
             ),
             (_genai_client_error(401, "auth"), ErrorCategory.SEMANTIC),
+            # The client's own timeout, as google-genai 1.62.0 raises it:
+            # the builtin on the aiohttp path, httpx's on the fallback.
+            (TimeoutError(), ErrorCategory.INFRASTRUCTURE),
+            (httpx.ReadTimeout("slow"), ErrorCategory.INFRASTRUCTURE),
+            # Other transport errors are not decided here.
+            (httpx.ConnectError("down"), ErrorCategory.SEMANTIC),
         ],
     )
     def test_known_exceptions(

@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 from arq import Retry
+from pydantic import BaseModel, ValidationError
+from structlog.testing import capture_logs
 
 from course_supporter.jobs import execution_seam as seam
 from course_supporter.jobs.execution_seam import (
@@ -523,3 +525,80 @@ async def test_on_terminal_receives_task_args(
 
     await task(_ctx(store, calls), str(jid), "mat-123")
     assert received_args == ["mat-123"]
+
+
+# ── DD-SP-DO: ValidationError never leaks field values to Job or logs ────
+
+_MENTOR_MARKER = "MARKER-slova-mentora-7731"
+
+
+class _M(BaseModel):
+    n: int
+
+
+def _validation_error_with_marker() -> ValidationError:
+    try:
+        _M.model_validate({"n": _MENTOR_MARKER})
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("expected ValidationError")  # pragma: no cover
+
+
+async def test_validation_error_in_body_writes_no_values_to_job_or_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _alive(monkeypatch, True)
+    jid = uuid.uuid4()
+    store = {jid: _FakeJob("queued", "homework_submission", uuid.uuid4())}
+    calls: list[Any] = []
+
+    @through_seam()
+    async def task(ctx: dict, job_id: str) -> None:
+        raise _validation_error_with_marker()
+
+    with capture_logs() as logs:
+        await task(_ctx(store, calls), str(jid))
+
+    assert store[jid].status == "failed"
+    assert store[jid].error_message == "ValidationError: n int_parsing"
+    assert _MENTOR_MARKER not in (store[jid].error_message or "")
+    assert _MENTOR_MARKER not in repr(logs)
+
+
+async def test_validation_error_as_retry_cause_writes_no_values_to_job_or_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _alive(monkeypatch, True)
+    jid = uuid.uuid4()
+    store = {jid: _FakeJob("queued", "homework_submission", uuid.uuid4())}
+    calls: list[Any] = []
+
+    @through_seam()
+    async def task(ctx: dict, job_id: str) -> None:
+        raise Retry(defer=1) from _validation_error_with_marker()
+
+    with capture_logs() as logs, pytest.raises(Retry):
+        await task(_ctx(store, calls, job_try=3), str(jid))
+
+    assert store[jid].status == "failed"
+    assert store[jid].error_message == "ValidationError: n int_parsing"
+    assert _MENTOR_MARKER not in (store[jid].error_message or "")
+    assert _MENTOR_MARKER not in repr(logs)
+
+
+async def test_runtime_error_in_body_keeps_its_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _alive(monkeypatch, True)
+    jid = uuid.uuid4()
+    store = {jid: _FakeJob("queued", "homework_submission", uuid.uuid4())}
+    calls: list[Any] = []
+
+    @through_seam()
+    async def task(ctx: dict, job_id: str) -> None:
+        raise RuntimeError("boom")
+
+    await task(_ctx(store, calls), str(jid))
+
+    assert store[jid].status == "failed"
+    assert store[jid].error_message == "boom"

@@ -306,6 +306,103 @@ class TestReview:
         ) / Decimal(1000)
         assert crit.cost_usd == single_call_cost * 2
 
+    def test_a_project_of_76245_characters_first_by_hand(
+        self, paths: PathConfig, settings: EstimateSettings, catalog: Catalog
+    ) -> None:
+        """M-10: the project's lines calibrated on the live measurement of
+        2026-11-26 (one work, 76 245 characters = 21 784 tokens of work beside
+        each prompt; max x 1.25 of two real reviews).
+
+        project_criteria_evaluation  qwen3.7-max  33126 in, 9325 out x 1
+        project_review_explanation   qwen3.7-max  37064 in, 8192 out (the
+            stage ceiling: the line says 10 857, the estimate cuts it)
+        """
+        estimate = _review(
+            paths,
+            settings,
+            catalog,
+            AssignmentType.PROJECT,
+            SubmissionState.FIRST,
+            76_245,
+        )
+
+        assert [
+            (s.step, s.model, s.tokens_in, s.tokens_out, s.calls)
+            for s in estimate.steps
+        ] == [
+            ("safety", "mistral-small-latest", 24889, 65, Decimal(1)),
+            ("attempt_classifier", "mistral-small-latest", 24197, 120, Decimal(1)),
+            ("project_criteria_evaluation", "qwen3.7-max", 33126, 9325, Decimal(1)),
+            ("project_review_explanation", "qwen3.7-max", 37064, 8192, Decimal(1)),
+        ]
+        assert estimate.e_usd == Decimal("0.210761457")
+        assert not estimate.uncalibrated
+        k = settings.units_per_usd
+        assert (
+            price_units(estimate.e_usd, margin=settings.margin, units_per_usd=k) == 228
+        )
+        assert reserve_units(estimate.e_usd, units_per_usd=k) == 380
+
+    def test_a_project_of_76245_characters_repeated_by_hand(
+        self, paths: PathConfig, settings: EstimateSettings, catalog: Catalog
+    ) -> None:
+        """The same work again: no attempt classifier."""
+        estimate = _review(
+            paths,
+            settings,
+            catalog,
+            AssignmentType.PROJECT,
+            SubmissionState.REPEAT_WITHOUT_REPLIES,
+            76_245,
+        )
+
+        assert [s.step for s in estimate.steps] == [
+            "safety",
+            "project_criteria_evaluation",
+            "project_review_explanation",
+        ]
+        assert estimate.e_usd == Decimal("0.206689752")
+        k = settings.units_per_usd
+        assert (
+            price_units(estimate.e_usd, margin=settings.margin, units_per_usd=k) == 224
+        )
+        assert reserve_units(estimate.e_usd, units_per_usd=k) == 373
+
+    @pytest.mark.parametrize(
+        "state", [SubmissionState.FIRST, SubmissionState.REPEAT_WITHOUT_REPLIES]
+    )
+    def test_the_reserve_of_a_project_covers_a_repeated_question(
+        self,
+        paths: PathConfig,
+        settings: EstimateSettings,
+        catalog: Catalog,
+        state: SubmissionState,
+    ) -> None:
+        """The worst case of M-10: the criteria stage asks again. The repeat
+        goes to the rung that answered first (qwen3.7-max, pinned to 16 384
+        tokens out), with the same input, a full answer and 10 000 tokens of
+        reasoning at the output price (the arithmetic of ``money_usd`` of the
+        stage). The estimate holds one call, the reserve is twice E: the repeat
+        has to fit in it."""
+        estimate = _review(
+            paths, settings, catalog, AssignmentType.PROJECT, state, 76_245
+        )
+        [crit] = [s for s in estimate.steps if s.step == "project_criteria_evaluation"]
+        pin = model_stages(paths)["project_criteria_evaluation"].ladder[0]
+        assert pin.max_output_tokens == 16_384
+        assert crit.tokens_in is not None
+        assert crit.price_in_per_1k_usd is not None
+        assert crit.price_out_per_1k_usd is not None
+        repeat_usd = (
+            crit.tokens_in * crit.price_in_per_1k_usd
+            + (pin.max_output_tokens + 10_000) * crit.price_out_per_1k_usd
+        ) / Decimal(1000)
+
+        k = settings.units_per_usd
+        reserve = reserve_units(estimate.e_usd, units_per_usd=k)
+        assert reserve is not None
+        assert (estimate.e_usd + repeat_usd) * k <= reserve
+
     def test_a_repeat_skips_the_attempt_classifier(
         self, paths: PathConfig, settings: EstimateSettings, catalog: Catalog
     ) -> None:
@@ -661,16 +758,16 @@ class TestSettings:
 
     def test_calibration_flags(self, settings: EstimateSettings) -> None:
         """Stage 2 calibration (READING-2026-11-07.md): review stages and
-        criteria_decomposition have calibrated=True. key_explanation, the
-        stages of the `project` path (no live data: it is not switched yet),
-        the stages with the student's replies (task 12a, K4: no live data
-        until its measurement) and processing stages remain uncalibrated."""
-        project = {"project_criteria_evaluation", "project_review_explanation"}
+        criteria_decomposition have calibrated=True; so have the stages of the
+        `project` path since the live measurement of 2026-11-26 (M-10).
+        key_explanation, the stages with the student's replies (task 12a, K4:
+        no live data until its measurement) and processing stages remain
+        uncalibrated."""
         replies = {
             "criteria_evaluation_with_replies",
             "review_explanation_with_replies",
         }
-        uncalibrated = project | replies
+        uncalibrated = replies
         assert set(settings.review) >= uncalibrated
         assert not any(settings.review[name].calibrated for name in uncalibrated)
         assert all(

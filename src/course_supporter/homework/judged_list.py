@@ -105,8 +105,10 @@ async def read_judged_list(
         msg = f"the {layer} list {source_id} of the verdict rows is not this task's"
         raise ValueError(msg)
     if layer == CriteriaLayer.AUTHOR:
-        return author_criteria_from_document(listed.criteria)
-    return criteria_from_document(listed.criteria)
+        return author_criteria_from_document(
+            listed.criteria, submission_id=submission.id
+        )
+    return criteria_from_document(listed.criteria, submission_id=submission.id)
 
 
 async def judged_author_musts(

@@ -161,10 +161,12 @@ uv run python scripts/billing_admin.py show-account --account <id>   # рядо�
   журналу `student_test_mark_set` з `actor`, `student_id`, `before`, `after`, **не** запис
   `billing_audit_log`: п'ятирічне знищення журналу аудиту (`retention.py`) іде за рахунками, а
   позначка не на рахунку — запис про студента лишився б назавжди.
-* **Хто читає** — лише звіт калібрування (`scripts/cost_estimate_report.py`,
+* **Хто читає** — звіт калібрування (`scripts/cost_estimate_report.py`,
   `cost_estimate.report.select_reviews`): перевірки тестових студентів за замовчуванням не входять,
   `--include-test-students` повертає їх; рядок звіту — скільки виключено і скільки різних нетестових
-  студентів у вибірці review. Оцінки обробки й підготовки фільтр не чіпає.
+  студентів у вибірці review. Оцінки обробки й підготовки фільтр не чіпає. І звіт витрат
+  `billing_admin.py costs` (`billing/costs.py`, Б-2): гроші студентів за перевірки й юніти студентів
+  без службових, той самий прапорець (див. «Звіт адміністратора про витрати»).
 * **Свідомо не читають** — шлях перевірки (homework/, agents/, llm/, workers/; замок —
   `tests/unit/test_test_student_not_read.py`), публічні числа (`public_numbers.py`: поки рахуються
   разом зі службовими, `includes_internal = true`), нагадування, ворота подачі, резерв, списання.
@@ -335,7 +337,7 @@ covered_units}}`.
 
 ```bash
 uv run python scripts/billing_admin.py costs [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--tenant ...] \
-    [--by author|student|both|task] [--format table|csv]
+    [--by author|student|both|task] [--format table|csv] [--include-test-students]
 ```
 
 Транзакція READ ONLY. Поруч із собівартістю USD — юніти з журналу (`costs.BilledUnits`), виставлені
@@ -354,3 +356,23 @@ USD, яку не оплачує жоден платник (повтори, сп�
 
 У шапці таблиці — рядок `costs.DATING_NOTE`: долари датовано викликом, юніти — рухом журналу, тож
 на межі періоду вони можуть розійтися (CSV лишається чистою таблицею, без цього рядка).
+
+**Гроші студентів за перевірки (Б-2, 24.11)** — у рядках автора й завдання та в підсумках
+(`costs.ReviewFigures`; у CSV — стовпці `reviews`, `units_per_review`, `students_money_minor`,
+`gift_units`, `excluded_test_reviews`), лише з рухів на **власних рахунках студентів**:
+
+* `reviews` — скільки різних перевірок (`review`) мали рух `debit` за період; `units_per_review` —
+  `виставлено_студентам` рядка ÷ `reviews`, ціле вгору, `—`, якщо перевірок немає;
+* `students_money_minor` — гроші студентів: кожен `debit` з **оплаченої** партії (`source = purchase`,
+  не позначеної в `billing_test_batches`) дає `units × amount_paid_minor ÷ batch.units` у валюті
+  партії; рядок складає точні частки окремо за кожною валютою й округлює **один раз**, половина
+  вгору, до мінорних одиниць (`EUR 1200; USD 300`; `0`, якщо грошей немає). Підсумок округлено сам,
+  а не складено з округлених рядків;
+* `gift_units` — юніти, списані з партій без грошей (`admin_credit`) або з позначених тестових;
+  повернення (`billing_refunds`) не віднімаються від грошей і в `gift_units` не входять;
+* перевірку, оплачену автором за правилом, сюди не віднесено — вона в `виставлено_авторові`.
+
+Службові студенти (`students.is_test_student`) за замовчуванням не входять ні в ці поля, ні в
+наявні стовпчики юнітів студентів (у таблицях автора, завдань і студентів); під кожною таблицею —
+рядок `excluded: N reviews of test students` (у CSV — `excluded_test_reviews` підсумку).
+`--include-test-students` повертає їх. Долари собівартості позначка не чіпає.

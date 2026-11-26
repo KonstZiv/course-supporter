@@ -52,7 +52,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Annotated, Any, Final, Self
+from typing import TYPE_CHECKING, Annotated, Any, Final, Self
 
 from pydantic import (
     AfterValidator,
@@ -71,6 +71,10 @@ from course_supporter.criteria_kinds import (
     WeightCategory,
 )
 from course_supporter.models.source import AssignmentType
+from course_supporter.models.stored_read import read_stored_with
+
+if TYPE_CHECKING:
+    import uuid
 
 CRITERIA_FORM_VERSION: Final = 2
 """The form this module defines, as ``task_criteria_lists.form_version`` stores it.
@@ -528,17 +532,29 @@ _DOCUMENT: Final[TypeAdapter[tuple[Criterion, ...]]] = TypeAdapter(
 
 def criteria_from_document(
     document: Sequence[Mapping[str, Any]],
+    *,
+    submission_id: uuid.UUID | None = None,
 ) -> tuple[Criterion, ...]:
     """Read a stored criteria document, checking the whole form.
+
+    The models are strict for writing; reading leaves out a field they do not
+    know — a newer release wrote it, and this one is older — with a warning,
+    instead of refusing a list whose data is whole
+    (:func:`~course_supporter.models.stored_read.read_stored_with`).
+    ``submission_id`` is only for that warning.
 
     Raises:
         pydantic.ValidationError: The document is not a list of this form.
     """
-    return _DOCUMENT.validate_python(document)
+    return read_stored_with(
+        _DOCUMENT, document, name="criteria", submission_id=submission_id
+    )
 
 
 def author_criteria_from_document(
     document: Sequence[Mapping[str, Any]],
+    *,
+    submission_id: uuid.UUID | None = None,
 ) -> tuple[Criterion, ...]:
     """Read the author's stored edit: every criterion with ``must_by_author``.
 
@@ -562,7 +578,7 @@ def author_criteria_from_document(
         criterion
         if criterion.must_by_author is not None
         else criterion.model_copy(update={"must_by_author": False})
-        for criterion in criteria_from_document(document)
+        for criterion in criteria_from_document(document, submission_id=submission_id)
     )
 
 

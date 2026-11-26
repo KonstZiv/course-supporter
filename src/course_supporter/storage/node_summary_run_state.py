@@ -36,6 +36,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from course_supporter.models.stored_read import read_stored
+
 
 class NodeSummaryNodeStatus(StrEnum):
     """Per-node lifecycle status inside a ``node_summary_regeneration`` run."""
@@ -199,5 +201,11 @@ class NodeSummaryRunState(BaseModel):
 
     @classmethod
     def from_jsonb(cls, payload: dict[str, Any]) -> NodeSummaryRunState:
-        """Deserialize from ``Job.stage_progress`` JSONB content."""
-        return cls.model_validate(payload)
+        """Deserialize from ``Job.stage_progress`` JSONB content.
+
+        Strict to write, lenient to read: a top-level or scope field this
+        release does not know is left out, with a warning, not a reason to
+        refuse a run state whose data is whole
+        (:func:`~course_supporter.models.stored_read.read_stored`).
+        """
+        return read_stored(cls, payload)

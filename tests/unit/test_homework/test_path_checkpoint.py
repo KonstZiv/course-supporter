@@ -10,6 +10,7 @@ revision's latest job — is pinned in
 from __future__ import annotations
 
 import pytest
+import structlog
 
 from course_supporter.homework.path_checkpoint import (
     FREEZE_REASON_FOR_LADDER_STOP,
@@ -19,6 +20,7 @@ from course_supporter.homework.path_checkpoint import (
 )
 from course_supporter.homework.path_config import PathKey, SubmissionState
 from course_supporter.llm.error_categories import LadderStop
+from course_supporter.models import stored_read
 from course_supporter.models.source import AssignmentType
 
 _KEY = PathKey(AssignmentType.TASK, SubmissionState.FIRST)
@@ -56,13 +58,28 @@ class TestShape:
         assert back == cp
         assert back.to_jsonb() == cp.to_jsonb()
 
-    def test_an_unknown_key_is_refused(self) -> None:
+    def test_an_unknown_key_is_refused_for_writing(self) -> None:
         """``extra='forbid'``: a typo must not be stored as a silent passenger."""
         payload = PathCheckpoint.started(_KEY, []).to_jsonb()
         payload["stagez"] = {}
 
         with pytest.raises(ValueError, match="stagez"):
-            PathCheckpoint.from_jsonb(payload)
+            PathCheckpoint.model_validate(payload)
+
+    def test_an_unknown_key_is_left_out_for_reading(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A record a newer release wrote is read, not refused (DD-SP-DN).
+
+        The reader's logger is swapped for a fresh one: bound here
+        (``cache_logger_on_first_use``), it would keep the processors of this
+        test and slip past the ``capture_logs`` of the reader's own tests.
+        """
+        monkeypatch.setattr(stored_read, "logger", structlog.get_logger())
+        checkpoint = PathCheckpoint.started(_KEY, ["safety"])
+        payload = {**checkpoint.to_jsonb(), "stagez": {}}
+
+        assert PathCheckpoint.from_jsonb(payload) == checkpoint
 
     def test_a_finished_stage_clears_the_freeze(self) -> None:
         """A stage that ran is the answer to why the run had stopped."""

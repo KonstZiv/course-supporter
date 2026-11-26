@@ -404,6 +404,11 @@ class _Spy(LLMProvider):
             return ErrorCategory.SEMANTIC
         return self.inner.classify_error(exc)
 
+    def is_timeout(self, exc: Exception) -> bool:
+        if self.inner is None:
+            return False
+        return self.inner.is_timeout(exc)
+
 
 async def send_once(
     shown: ExplanationInput,

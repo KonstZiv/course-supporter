@@ -157,6 +157,12 @@ or the platform). The dollars are dated by the call, the units by the movement:
 at the period's edge they can part (the report's head says so). --by task
 breaks it down author → course → homework task (processing is the course's):
     costs --by task --from 2026-11-01 --to 2026-11-30 [--format csv]
+The students' side of the reviews (Б-2, operator 2026-11-24), in the author and
+task rows: reviews, units_per_review, students_money_minor and gift_units
+(``costs --help`` says what each is); the service students
+(students.is_test_student) are left out of them and of the students' units, and
+the report says how many reviews that was, until --include-test-students:
+    costs --by author --include-test-students
 
 Exit status: 0 on success; 1 when the operation is refused (the message says
 why; nothing is written) or a periodic task failed or found its lock held;
@@ -787,6 +793,7 @@ def _render_author_table(report: billing_costs.CostReport) -> list[str]:
         "сума_usd",
         _PLATFORM_HEADER,
         *_UNITS_HEADERS,
+        *_REVIEW_HEADERS,
         "exact",
         "estimated",
         "unknown",
@@ -806,6 +813,7 @@ def _render_author_table(report: billing_costs.CostReport) -> list[str]:
         review: billing_costs.ActionSpend,
         other: billing_costs.ActionSpend,
         units: billing_costs.BilledUnits,
+        reviews: billing_costs.ReviewFigures,
     ) -> list[str]:
         cells = [
             tenant_id_str,
@@ -814,6 +822,7 @@ def _render_author_table(report: billing_costs.CostReport) -> list[str]:
             _fmt_usd(spend.known_usd),
             _fmt_usd(spend.platform_usd),
             *_units_cells(units),
+            *_reviews_cells(reviews),
             f"{spend.exact_calls} / {_fmt_usd(spend.exact_usd)}",
             f"{spend.estimated_calls} / {_fmt_usd(spend.estimated_usd)}",
             str(spend.unknown_calls),
@@ -835,6 +844,7 @@ def _render_author_table(report: billing_costs.CostReport) -> list[str]:
             row.review,
             row.other,
             row.units,
+            row.reviews,
         )
         for row in report.authors
     ]
@@ -848,14 +858,19 @@ def _render_author_table(report: billing_costs.CostReport) -> list[str]:
         totals.review,
         totals.other,
         totals.units,
+        totals.reviews,
     )
     lines = ["По авторах:"]
     lines.extend(
         _format_ascii_table(
-            headers, rows, total_row, right_align={2, 3, 4, 5, 6, 7, 10}
+            headers,
+            rows,
+            total_row,
+            right_align={2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14},
         )
     )
     lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
+    lines.append(_excluded_line(report))
     return lines
 
 
@@ -916,6 +931,7 @@ def _render_student_table(report: billing_costs.CostReport) -> list[str]:
         )
     )
     lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
+    lines.append(_excluded_line(report))
     return lines
 
 
@@ -926,6 +942,12 @@ infrastructure, the reply screen (``costs.SpendSummary.platform_usd``)."""
 _UNITS_HEADERS = ("виставлено_авторові", "виставлено_студентам", "покрито_юнітів")
 """Units billed to the author, to students, and borne by the benefit or the
 platform (``costs.BilledUnits``)."""
+
+_REVIEW_HEADERS = ("reviews", "units_per_review", "students_money_minor", "gift_units")
+"""What the students paid for the reviews (``costs.ReviewFigures``)."""
+
+NO_AVERAGE = "—"
+"""``units_per_review`` of a row without reviews."""
 
 NO_COURSE = "(без курсу)"
 NO_TASK = "(без завдання)"
@@ -939,6 +961,31 @@ def _units_cells(units: billing_costs.BilledUnits) -> list[str]:
     ]
 
 
+def _money_cell(figures: billing_costs.ReviewFigures) -> str:
+    """``EUR 1234; USD 500`` (minor units, one part per currency); ``0`` if none."""
+    if not figures.money_minor:
+        return "0"
+    return "; ".join(f"{currency} {minor}" for currency, minor in figures.money_minor)
+
+
+def _reviews_cells(figures: billing_costs.ReviewFigures) -> list[str]:
+    per_review = figures.units_per_review
+    return [
+        str(figures.count),
+        NO_AVERAGE if per_review is None else str(per_review),
+        _money_cell(figures),
+        str(figures.gift_units),
+    ]
+
+
+def _excluded_line(report: billing_costs.CostReport) -> str:
+    """The summary line about the service students' reviews left out."""
+    line = f"excluded: {report.excluded_test_reviews} reviews of test students"
+    if report.include_test_students:
+        line += " (--include-test-students)"
+    return line
+
+
 def _render_task_table(report: billing_costs.CostReport) -> list[str]:
     headers = [
         "орендар",
@@ -948,6 +995,7 @@ def _render_task_table(report: billing_costs.CostReport) -> list[str]:
         "сума_usd",
         _PLATFORM_HEADER,
         *_UNITS_HEADERS,
+        *_REVIEW_HEADERS,
         "unknown",
         "курс_id",
         "завдання_id",
@@ -959,6 +1007,7 @@ def _render_task_table(report: billing_costs.CostReport) -> list[str]:
         task: str,
         spend: billing_costs.SpendSummary,
         units: billing_costs.BilledUnits,
+        reviews: billing_costs.ReviewFigures,
         course_id: str,
         task_id: str,
     ) -> list[str]:
@@ -970,6 +1019,7 @@ def _render_task_table(report: billing_costs.CostReport) -> list[str]:
             _fmt_usd(spend.known_usd),
             _fmt_usd(spend.platform_usd),
             *_units_cells(units),
+            *_reviews_cells(reviews),
             str(spend.unknown_calls),
             course_id,
             task_id,
@@ -982,18 +1032,27 @@ def _render_task_table(report: billing_costs.CostReport) -> list[str]:
             (row.task_title or "-") if row.authored_document_id else NO_TASK,
             row.spend,
             row.units,
+            row.reviews,
             str(row.course_node_id) if row.course_node_id else "",
             str(row.authored_document_id) if row.authored_document_id else "",
         )
         for row in report.tasks
     ]
     totals = report.tasks_total
-    total_row = _cells("разом", "", "", totals.spend, totals.units, "", "")
+    total_row = _cells(
+        "разом", "", "", totals.spend, totals.units, totals.reviews, "", ""
+    )
     lines = ["По завданнях (автор → курс → завдання):"]
     lines.extend(
-        _format_ascii_table(headers, rows, total_row, right_align={3, 4, 5, 6, 7, 8, 9})
+        _format_ascii_table(
+            headers,
+            rows,
+            total_row,
+            right_align={3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13},
+        )
     )
     lines.append(f"вартість невідома: {totals.spend.unknown_calls} викликів")
+    lines.append(_excluded_line(report))
     return lines
 
 
@@ -1046,6 +1105,11 @@ _CSV_FIELDNAMES = (
     "billed_author_units",
     "billed_students_units",
     "covered_units",
+    "reviews",
+    "units_per_review",
+    "students_money_minor",
+    "gift_units",
+    "excluded_test_reviews",
     "course_id",
     "course_title",
     "task_id",
@@ -1093,6 +1157,29 @@ def _units_csv_fields(units: billing_costs.BilledUnits) -> dict[str, str]:
     }
 
 
+_NO_REVIEWS_CSV: dict[str, str] = {
+    "reviews": "",
+    "units_per_review": "",
+    "students_money_minor": "",
+    "gift_units": "",
+}
+"""The student rows have no figures of the reviews they are billed for."""
+
+
+def _reviews_csv_fields(
+    figures: billing_costs.ReviewFigures, *, excluded: int | None = None
+) -> dict[str, str]:
+    """The review figures of a row; ``excluded`` only on a totals row."""
+    per_review = figures.units_per_review
+    return {
+        "reviews": str(figures.count),
+        "units_per_review": NO_AVERAGE if per_review is None else str(per_review),
+        "students_money_minor": _money_cell(figures),
+        "gift_units": str(figures.gift_units),
+        "excluded_test_reviews": "" if excluded is None else str(excluded),
+    }
+
+
 def _action_csv_fields(
     processing: billing_costs.ActionSpend,
     prep: billing_costs.ActionSpend,
@@ -1131,6 +1218,7 @@ def _render_cost_csv(report: billing_costs.CostReport) -> str:
                         row.processing, row.task_preparation, row.review, row.other
                     ),
                     **_units_csv_fields(row.units),
+                    **_reviews_csv_fields(row.reviews),
                     **_NO_TASK_CSV,
                     "note": "",
                 }
@@ -1152,6 +1240,9 @@ def _render_cost_csv(report: billing_costs.CostReport) -> str:
                     totals.other,
                 ),
                 **_units_csv_fields(totals.units),
+                **_reviews_csv_fields(
+                    totals.reviews, excluded=report.excluded_test_reviews
+                ),
                 **_NO_TASK_CSV,
                 "note": f"вартість невідома: {totals.spend.unknown_calls} викликів",
             }
@@ -1170,6 +1261,7 @@ def _render_cost_csv(report: billing_costs.CostReport) -> str:
                     **_spend_csv_fields(srow.spend),
                     **_EMPTY_ACTION_CSV,
                     **_units_csv_fields(srow.units),
+                    **_NO_REVIEWS_CSV,
                     **_NO_TASK_CSV,
                     "note": "",
                 }
@@ -1186,6 +1278,8 @@ def _render_cost_csv(report: billing_costs.CostReport) -> str:
                 **_spend_csv_fields(stotals.spend),
                 **_EMPTY_ACTION_CSV,
                 **_units_csv_fields(stotals.units),
+                **_NO_REVIEWS_CSV,
+                "excluded_test_reviews": str(report.excluded_test_reviews),
                 **_NO_TASK_CSV,
                 "note": f"вартість невідома: {stotals.spend.unknown_calls} викликів",
             }
@@ -1204,6 +1298,7 @@ def _render_cost_csv(report: billing_costs.CostReport) -> str:
                     **_spend_csv_fields(trow.spend),
                     **_EMPTY_ACTION_CSV,
                     **_units_csv_fields(trow.units),
+                    **_reviews_csv_fields(trow.reviews),
                     "course_id": str(trow.course_node_id)
                     if trow.course_node_id
                     else "",
@@ -1227,6 +1322,9 @@ def _render_cost_csv(report: billing_costs.CostReport) -> str:
                 **_spend_csv_fields(ttotals.spend),
                 **_EMPTY_ACTION_CSV,
                 **_units_csv_fields(ttotals.units),
+                **_reviews_csv_fields(
+                    ttotals.reviews, excluded=report.excluded_test_reviews
+                ),
                 **_NO_TASK_CSV,
                 "note": f"вартість невідома: {ttotals.spend.unknown_calls} викликів",
             }
@@ -1236,8 +1334,9 @@ def _render_cost_csv(report: billing_costs.CostReport) -> str:
 
 
 async def costs_cmd(session: AsyncSession, args: argparse.Namespace) -> str:
-    """Report real USD external service spend, with the units billed to payers:
-    per author and per student, or per author → course → task (``--by task``)."""
+    """Report real USD external service spend, with the units billed to payers
+    and what the students paid for the reviews: per author and per student, or
+    per author → course → task (``--by task``)."""
     # Enforce read-only at Postgres level before any query in this transaction.
     try:
         bind = session.get_bind()
@@ -1269,6 +1368,7 @@ async def costs_cmd(session: AsyncSession, args: argparse.Namespace) -> str:
         to_date=to_date,
         tenant_id=tenant_id,
         by=args.by,
+        include_test_students=args.include_test_students,
     )
     if args.fmt == "csv":
         return _render_cost_csv(report)
@@ -1303,6 +1403,28 @@ COMMANDS: dict[str, Handler] = {
 SELF_TRANSACTED: dict[str, Callable[[argparse.Namespace], Awaitable[str]]] = {
     "run-periodic": run_periodic,
 }
+
+
+_COSTS_FIELDS_HELP = """\
+report real USD external service spend, with the units billed and what the
+students paid for the reviews. The review fields (author and task rows):
+
+  reviews               different reviews with a debit on a student's own
+                        account in the period.
+  units_per_review      the row's billed students' units divided by reviews,
+                        rounded up; a dash when there are no reviews.
+  students_money_minor  money the students paid for those reviews, per
+                        currency in minor units: each debit from a paid
+                        purchase batch is units * amount_paid_minor / batch
+                        units, summed per row and rounded once, half up.
+  gift_units            units debited from batches without money (an admin
+                        credit, or a purchase marked as a test one).
+
+Refunds (billing_refunds) are not subtracted from students_money_minor and are
+not counted in gift_units.
+Test students (students.is_test_student) are left out of these fields and of
+the students' units unless --include-test-students.
+"""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1466,6 +1588,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="table",
         help="output format (default: table)",
     )
+    p.add_argument(
+        "--include-test-students",
+        dest="include_test_students",
+        action="store_true",
+        help="count the reviews and units of test students too "
+        "(default: left out and counted in the 'excluded' line)",
+    )
+    p.formatter_class = argparse.RawDescriptionHelpFormatter
+    p.description = _COSTS_FIELDS_HELP
 
     p = command("run-periodic", "run a periodic task by hand", changes=False)
     p.add_argument(

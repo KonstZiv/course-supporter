@@ -136,6 +136,7 @@ from course_supporter.homework.verdict_explanation import (
     settle_reply_answers,
 )
 from course_supporter.language import display_name
+from course_supporter.models.stored_read import read_stored
 from course_supporter.service_logging import CourseLinkTrace, record_course_link_trace
 from course_supporter.storage.submission_verdict_repository import (
     SubmissionVerdictRepository,
@@ -415,7 +416,7 @@ async def explanation_input(
     )
     shown_links = links_to_show(
         facts.unmet,
-        FoundCourseLinks.model_validate(kept_links.body)
+        read_stored(FoundCourseLinks, kept_links.body, submission_id=submission.id)
         if kept_links is not None
         else FoundCourseLinks(criteria=()),
     )

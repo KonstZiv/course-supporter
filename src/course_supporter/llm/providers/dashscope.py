@@ -283,11 +283,15 @@ class DashScopeProvider(LLMProvider):
     def classify_error(self, exc: Exception) -> ErrorCategory:
         """Map DashScope-surfaced failures to ladder categories.
 
+        Every ``INFRASTRUCTURE`` error is retried on the same rung, but a
+        client timeout (:meth:`is_timeout`) fewer times than the rest: the
+        router counts it separately (``max_retries_timeout``).
+
         Mapping:
         * Builtin ``TimeoutError`` (alias of ``asyncio.TimeoutError``
-          since Py3.11) -> INFRASTRUCTURE.
+          since Py3.11) -> INFRASTRUCTURE (a client timeout).
         * ``DashScopeResponseError`` with status 429/408/504/5xx
-          -> INFRASTRUCTURE.
+          -> INFRASTRUCTURE (a server answer, not a client timeout).
         * Status 413 / 400 matching overflow code prefix or pattern
           -> INPUT_OVERFLOW.
         * Status 400 / 401 / 403 / other 4xx -> SEMANTIC.
@@ -326,6 +330,14 @@ class DashScopeProvider(LLMProvider):
         if isinstance(exc, DashScopeException):
             return ErrorCategory.SEMANTIC
         return super().classify_error(exc)
+
+    def is_timeout(self, exc: Exception) -> bool:
+        """The SDK's client timeout: the builtin ``TimeoutError``.
+
+        A ``DashScopeResponseError`` with status 408/504 is the server's
+        answer, not this client giving up: ``False``.
+        """
+        return isinstance(exc, TimeoutError)
 
     def _build_messages(self, request: LLMRequest) -> list[dict[str, Any]]:
         """Build DashScope-shape messages from LLMRequest.

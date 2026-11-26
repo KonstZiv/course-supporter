@@ -84,6 +84,14 @@ class AnthropicProvider(LLMProvider):
             return ErrorCategory.SEMANTIC
         return super().classify_error(exc)
 
+    def is_timeout(self, exc: Exception) -> bool:
+        """A client-side timeout: ``anthropic.APITimeoutError``.
+
+        ``anthropic.InternalServerError`` (HTTP 5xx, 504 included) is the
+        server's answer, not a client timeout: ``False``.
+        """
+        return isinstance(exc, anthropic.APITimeoutError)
+
     async def complete(self, request: LLMRequest) -> LLMResponse:
         """Generate text completion via Anthropic."""
         model = request.model or self._default_model

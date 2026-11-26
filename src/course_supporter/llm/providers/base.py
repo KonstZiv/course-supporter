@@ -102,6 +102,20 @@ class LLMProvider(abc.ABC):
         """
         return ErrorCategory.SEMANTIC
 
+    def is_timeout(self, exc: Exception) -> bool:
+        """Whether ``exc`` is this connector's own client-side timeout.
+
+        Asked by the router for an error :meth:`classify_error` called
+        ``INFRASTRUCTURE``: a client timeout is a long wait that has already
+        been paid for, so the rung repeats it fewer times than a fast 429/503
+        (``StageRouter(max_retries_timeout=...)``). A response the server
+        sent (HTTP 408, 504) is not a client timeout: the connector answers
+        ``False`` and the error stays an ordinary infrastructure one.
+        Default: ``False`` -- no error is a timeout unless the connector says
+        so.
+        """
+        return False
+
     @classmethod
     def supports_reasoning(cls, reasoning: dict[str, Any]) -> bool:
         """Whether this connector can translate a ladder ``reasoning`` form.

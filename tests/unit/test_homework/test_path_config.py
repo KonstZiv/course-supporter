@@ -11,6 +11,7 @@ import yaml
 from course_supporter.homework.path_config import (
     REPLY_SAFETY_ACTION,
     REPLY_SCREEN_STAGE,
+    REPLY_TOPIC_STAGE,
     CodeStage,
     ModelStage,
     PathKey,
@@ -347,6 +348,7 @@ class TestRepliesEnabled:
 
     def test_a_type_on_the_new_path_may_take_replies(self, tmp_path: Path) -> None:
         data = _config()
+        data["stages"][REPLY_TOPIC_STAGE] = _stage(0.001)
         data["task_types"]["task"].update(served_by="new_path", replies_enabled=True)
         config = load_path_config(_write(tmp_path, data))
         validate_path_config(config, _registry(), prompt_base_path=tmp_path)
@@ -396,6 +398,47 @@ class TestRepliesEnabled:
         assert (
             f"Task type 'task' takes replies, but no model stage "
             f"'{REPLY_SCREEN_STAGE}' is defined"
+        ) in _validation_error(tmp_path, data)
+
+    def test_replies_need_the_topic_stage(self, tmp_path: Path) -> None:
+        """Only the topic stage is missing: the safety stage is there."""
+        data = _config()
+        data["task_types"]["task"].update(served_by="new_path", replies_enabled=True)
+
+        error = _validation_error(tmp_path, data)
+
+        assert (
+            f"Task type 'task' takes replies, but no model stage "
+            f"'{REPLY_TOPIC_STAGE}' is defined"
+        ) in error
+        assert f"no model stage '{REPLY_SCREEN_STAGE}'" not in error
+
+    def test_the_topic_stage_must_be_a_model_stage(self, tmp_path: Path) -> None:
+        data = _config()
+        data["stages"][REPLY_TOPIC_STAGE] = {"code": True, "deterministic": True}
+        data["task_types"]["task"].update(served_by="new_path", replies_enabled=True)
+
+        assert (
+            f"takes replies, but no model stage '{REPLY_TOPIC_STAGE}' is defined"
+        ) in _validation_error(tmp_path, data)
+
+    def test_a_type_that_takes_no_replies_needs_no_topic_stage(
+        self, tmp_path: Path
+    ) -> None:
+        validate_path_config(
+            load_path_config(_write(tmp_path, _config())),
+            _registry(),
+            prompt_base_path=tmp_path,
+        )
+
+    def test_no_path_lists_the_topic_stage(self, tmp_path: Path) -> None:
+        """Its name is the register's name for the screen's calls: costs would sum."""
+        data = _config()
+        data["stages"][REPLY_TOPIC_STAGE] = _stage(0.001)
+        data["task_types"]["task"]["paths"]["first"] = ["safety", REPLY_TOPIC_STAGE]
+
+        assert (
+            f"Path 'task/first' lists stage '{REPLY_TOPIC_STAGE}'"
         ) in _validation_error(tmp_path, data)
 
     def test_no_stage_takes_the_reply_screens_name(self, tmp_path: Path) -> None:

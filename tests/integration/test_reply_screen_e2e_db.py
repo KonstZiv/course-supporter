@@ -32,7 +32,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from course_supporter.homework.attempt_dedup import DEDUP_RECEIPT_KEY
-from course_supporter.homework.path_config import REPLY_SAFETY_ACTION, SubmissionState
+from course_supporter.homework.path_config import (
+    REPLY_SAFETY_ACTION,
+    REPLY_TOPIC_ACTION,
+    SubmissionState,
+)
 from course_supporter.homework.path_stages import (
     CRITERIA_EVALUATION_WITH_REPLIES,
     REVIEW_EXPLANATION_WITH_REPLIES,
@@ -92,11 +96,27 @@ _UNSAFE_REPLY = json.dumps(
 )
 
 
+def _topic_answer(asked: str) -> str:
+    """The decision model's answers to the question asked about a reply."""
+    off = asked.endswith(_BESIDE)
+    return json.dumps(
+        {
+            "topic": {
+                "type": "choice",
+                "choice": "off_topic" if off else "on_topic",
+                "confidence": 0.9 if off else 0.95,
+            },
+            "influence": {"type": "noul", "noul": 0.1, "confidence": 0.9},
+        }
+    )
+
+
 class _ScreeningRouter(_RouterDouble):
     """The walks' router, and an answer for each reply the screen asks about.
 
-    A reply's call leaves its register row as a stage's does, under the name
-    it was asked by.
+    A reply's calls leave their register rows as a stage's do, under the names
+    they were asked by: the safety check, then, for a reply it did not refuse,
+    the topic question.
     """
 
     def __init__(
@@ -110,10 +130,11 @@ class _ScreeningRouter(_RouterDouble):
     async def execute_stage(
         self, stage: StageConfig, stage_name: str, /, **kwargs: Any
     ) -> StageResult:
-        if stage_name != REPLY_SAFETY_ACTION:
+        if stage_name not in (REPLY_SAFETY_ACTION, REPLY_TOPIC_ACTION):
             return await super().execute_stage(stage, stage_name, **kwargs)
         self.calls.append(stage_name)
         rung = stage.ladder[0]
+        topic = stage_name == REPLY_TOPIC_ACTION
         await _persist(
             self._session_factory,
             action=stage_name,
@@ -121,10 +142,14 @@ class _ScreeningRouter(_RouterDouble):
             provider=rung.provider,
             model_id=rung.model,
             unit_type="tokens",
-            priced=priced_exact(0.0004),
+            priced=priced_exact(0.00001 if topic else 0.0004),
         )
         return StageResult(
-            content=self._answers(kwargs["submission_text"]),
+            content=(
+                _topic_answer(kwargs["input"])
+                if topic
+                else self._answers(kwargs["submission_text"])
+            ),
             provider_used=rung.provider,
             model_used=rung.model,
             attempt_count=1,
@@ -250,23 +275,35 @@ class TestTheSameWorkWithRepliesIsReviewedAndTheRepliesScreened:
         )
         # Each reply its own call, under its own name, before anything paid;
         # then the path with replies, on its own two stages (task 12a, K4).
+        # The hostile reply is refused by the safety check and never reaches
+        # the topic question.
         assert router.calls == [
             REPLY_SAFETY_ACTION,
+            REPLY_TOPIC_ACTION,
             REPLY_SAFETY_ACTION,
             REPLY_SAFETY_ACTION,
+            REPLY_TOPIC_ACTION,
             SAFETY,
             CRITERIA_EVALUATION_WITH_REPLIES,
             REVIEW_EXPLANATION_WITH_REPLIES,
         ]
         actions = await _actions_of(session_factory, job.id)
         assert actions.count(REPLY_SAFETY_ACTION) == 3
-        assert actions[:3] == [REPLY_SAFETY_ACTION] * 3
+        assert actions.count(REPLY_TOPIC_ACTION) == 2
+        assert actions[:5] == [
+            REPLY_SAFETY_ACTION,
+            REPLY_TOPIC_ACTION,
+            REPLY_SAFETY_ACTION,
+            REPLY_SAFETY_ACTION,
+            REPLY_TOPIC_ACTION,
+        ]
         marks = await _marks(session_factory, benign, hostile, beside)
         # Marked on the rows, not refused: the hostile one by its category.
-        assert marks[benign] == ("on_topic", None, None)
+        assert marks[benign] == ("on_topic", 0.95, None)
         assert marks[hostile] == ("hostile", 0.97, "prompt_injection")
-        # Off-topic alone is no attempt: the topic port (the placeholder) says.
-        assert marks[beside] == ("on_topic", None, None)
+        # Off-topic alone is no attempt: the topic question says, and the
+        # topic model's confidence is the one written.
+        assert marks[beside] == ("off_topic", 0.9, None)
         # The safety check of the work read the work, not a reply.
         assert _HOSTILE not in router.rendered[SAFETY]["submission_text"]
 
@@ -299,6 +336,7 @@ class TestTheSameWorkWithRepliesIsReviewedAndTheRepliesScreened:
         )
 
         assert REPLY_SAFETY_ACTION not in router.calls
+        assert REPLY_TOPIC_ACTION not in router.calls
         second = await _row(session_factory, second_id)
         _assert_reviewed_anew(second)
         job = await _job_of(session_factory, second_id)

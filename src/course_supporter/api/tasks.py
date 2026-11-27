@@ -10,8 +10,10 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import anyio
 import structlog
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from course_supporter.api.routes._portal_shared import FAILED_REASON_CODE
 from course_supporter.cost_estimate.hooks import shadow_node_summary_regeneration
 from course_supporter.homework.doors import (
     DoorReading,
@@ -27,6 +29,10 @@ from course_supporter.ingestion.factory import (
 )
 from course_supporter.jobs.execution_seam import SeamTerminal, through_seam
 from course_supporter.models.source import SourceType
+from course_supporter.models.stored_read import (
+    error_text_without_values,
+    problems_without_values,
+)
 from course_supporter.service_logging import (
     reset_progress_writer,
     set_job_from_arq,
@@ -1353,7 +1359,7 @@ async def arq_process_homework(
                 failed_set = False
                 try:
                     await err_hw_repo.update_status(
-                        sid, "failed", error_message=str(exc)
+                        sid, "failed", error_message=error_text_without_values(exc)
                     )
                     failed_set = True
                 except ValueError as status_exc:
@@ -1368,10 +1374,19 @@ async def arq_process_homework(
                 # the processing failure.
                 if failed_set:
                     try:
-                        await _notify_homework_failed(err_session, sid, reason=str(exc))
+                        await _notify_homework_failed(
+                            err_session, sid, reason=FAILED_REASON_CODE
+                        )
                     except Exception:
                         log.warning("homework_failed_webhook_skipped", exc_info=True)
-            log.error("homework_processing_failed", error=str(exc))
+            if isinstance(exc, ValidationError):
+                log.error(
+                    "homework_processing_failed",
+                    error=type(exc).__name__,
+                    problems=problems_without_values(exc),
+                )
+            else:
+                log.error("homework_processing_failed", error=str(exc))
             raise
 
 

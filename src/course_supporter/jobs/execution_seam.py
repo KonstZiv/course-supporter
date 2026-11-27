@@ -65,6 +65,7 @@ from arq import Retry
 
 from course_supporter.config import get_settings
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE
+from course_supporter.models.stored_read import error_text_without_values
 from course_supporter.security.exceptions import ErrorCategory
 from course_supporter.service_logging import set_job_from_arq, set_tenant_from_job
 from course_supporter.storage.job_repository import (
@@ -311,7 +312,11 @@ async def _run_seam(
             cause = retry_exc.__cause__
             terminal = SeamTerminal(
                 status="failed",
-                error_message=str(cause) if cause else "retry budget exhausted",
+                error_message=(
+                    error_text_without_values(cause)
+                    if cause
+                    else "retry budget exhausted"
+                ),
                 # DD-SP-D: retry-exhaustion is an internal pipeline failure; the
                 # seam never leaves a NULL category (see the body-except below).
                 error_category=ErrorCategory.PIPELINE_FAILURE,
@@ -325,7 +330,7 @@ async def _run_seam(
         category = getattr(exc, "category", None)
         terminal = SeamTerminal(
             status="failed",
-            error_message=str(exc),
+            error_message=error_text_without_values(exc),
             # DD-SP-D: a failure that does not carry its own structural category
             # is an internal pipeline failure by default — the seam never
             # persists a NULL category. External-source points (yt-dlp download,

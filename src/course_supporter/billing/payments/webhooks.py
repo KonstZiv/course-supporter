@@ -19,6 +19,8 @@ One event, one transaction:
          to the account the custom data names: the units of the package from
          the catalog (on sale or not by now — it was paid for), the amount
          and currency the provider says were paid, its transaction and line.
+         The tax and the fee the event carries (Creem: the tax) go on the
+         batch with it (:func:`.provider_figures.record_from_purchase`, Б-3).
          No such account, or a closed one: the event FAILS with a WARNING and
          is answered 200 — the provider repeating it would not help; the row
          waits for a person. The batch is then linked to the checkout the
@@ -72,7 +74,7 @@ import structlog
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.billing import ledger, refunds, testmark
+from course_supporter.billing import ledger, provider_figures, refunds, testmark
 from course_supporter.billing.errors import BillingError, BillingNotFoundError
 from course_supporter.billing.kinds import AccountStatus, EventState, MarkOrigin
 from course_supporter.billing.payments.catalog import Catalog
@@ -364,6 +366,13 @@ async def _credit(
         provider=provider,
         provider_transaction_id=event.transaction_id,
         provider_line_id=event.line_id,
+        now=now,
+    )
+    await provider_figures.record_from_purchase(
+        session,
+        batch=credit.batch,
+        tax_minor=event.tax_minor,
+        fee_minor=event.fee_minor,
         now=now,
     )
     if test_purchases and credit.created:

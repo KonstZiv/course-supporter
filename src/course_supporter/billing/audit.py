@@ -2,7 +2,8 @@
 
 What writes one entry, in the same transaction as the change:
 
-* the administrator's changes through :mod:`.admin` — author settings,
+* the administrator's changes through :mod:`.admin` — author settings (the
+  partner's share rate among them, Б-3),
   payment rules (set, ended), the mark of an account for test purchases
   (:func:`.admin.set_test_purchase`), the end of a dispute
   (:func:`.admin.end_dispute`), a hold of a refund by order and its release;
@@ -10,6 +11,8 @@ What writes one entry, in the same transaction as the change:
   contract invoice credited by the administrator (:mod:`.payments.invoice`)
   and the void of a test purchase's free units
   (:func:`.testmark.void_test_batches`, BIL-TESTMARK);
+* the provider's figures of a purchase written from its API by the
+  administrator (:func:`.provider_figures.sync_batches`, Б-3);
 * :mod:`.accounts` — the anonymization of an account, and the CREATION of an
   account (``account.create``, BIL-E3): one entry per account, written by the
   call that inserted the row, whatever action needed it first.
@@ -78,6 +81,7 @@ def settings_snapshot(settings: BillingAuthorSettings) -> dict[str, Any]:
         "monthly_limit_units": settings.monthly_limit_units,
         "benefit_started_at": _instant(settings.benefit_started_at),
         "credit_allowed": settings.credit_allowed,
+        "partner_share_bps": settings.partner_share_bps,
     }
 
 

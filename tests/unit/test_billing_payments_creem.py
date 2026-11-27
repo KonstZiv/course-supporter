@@ -41,6 +41,7 @@ from course_supporter.billing.payments.port import (
     RefundApproved,
     RefundRequest,
     RefundUnavailableError,
+    TransactionFigures,
     Unknown,
 )
 from course_supporter.billing.payments.registry import (
@@ -319,6 +320,7 @@ class TestCheckoutCompleted:
             currency="EUR",
             transaction_id=ORDER,
             line_id=ORDER,
+            tax_minor=210,  # order.tax_amount (Б-3); Creem names no fee
         )
 
     def test_without_an_account_the_purchase_names_none(self) -> None:
@@ -618,3 +620,105 @@ def test_the_api_host_is_creems_test_or_live_one_only() -> None:
     assert Settings(creem_api_base=LIVE_API_BASE).creem_api_base == LIVE_API_BASE
     with pytest.raises(ValidationError):
         Settings(creem_api_base="https://creem.example/v1")  # type: ignore[arg-type]
+
+
+# ── The figures of a purchase (Б-3) ────────────────────────────────────
+
+
+def transaction(**changes: Any) -> dict[str, Any]:
+    """A ``TransactionEntity`` as Creem's reference shows it
+    (https://docs.creem.io/api-reference/endpoint/get-transactions): no fee."""
+    found: dict[str, Any] = {
+        "id": "tran_5yMaWzAl3jxuGJMCOrYWwk",
+        "mode": "test",
+        "object": "transaction",
+        "amount": 1000,
+        "amount_paid": 1210,
+        "discount_amount": 0,
+        "currency": "EUR",
+        "type": "payment",
+        "tax_country": "NL",
+        "tax_amount": 210,
+        "status": "paid",
+        "refunded_amount": 0,
+        "order": ORDER,
+        "customer": "cust_1OcIK1GEuVvXZwD19tjq2z",
+        "description": "Starter",
+        "created_at": 1728734313097,
+    }
+    return found | changes
+
+
+def listing(*items: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "items": list(items),
+        "pagination": {"total_records": len(items), "current_page": 1},
+    }
+
+
+class TestPurchaseFigures:
+    def test_the_webhook_tax_is_not_taken_in_another_currency(self) -> None:
+        """``order.tax_amount`` is in ``fx_currency`` when the payer was charged
+        in another currency: not the batch's, so not taken."""
+        payload = copy.deepcopy(CHECKOUT_COMPLETED)
+        payload["object"]["order"] |= {"fx_currency": "SEK", "fx_amount": 128195}
+        [event] = creem().parse_webhook(*signed(payload))
+        assert isinstance(event, PurchaseCompleted)
+        assert event.tax_minor is None and event.fee_minor is None
+
+    async def test_the_order_is_asked_and_its_payment_read_without_a_fee(
+        self,
+    ) -> None:
+        sent: list[httpx.Request] = []
+
+        def answer(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            refunded = transaction(status="partialRefund", refunded_amount=400)
+            return httpx.Response(200, json=listing(refunded))
+
+        found = await creem(answer).transaction_figures(ORDER)
+        assert found == TransactionFigures(
+            currency="EUR", tax_minor=210, fee_minor=None, refunded_minor=400
+        )
+        [request] = sent
+        assert request.method == "GET"
+        assert request.url.path == "/v1/transactions/search"
+        assert request.url.params["order_id"] == ORDER
+        assert request.headers["x-api-key"] == TEST_KEY
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            httpx.Response(200, json=listing()),
+            httpx.Response(200, json=listing(transaction(status="declined"))),
+            httpx.Response(200, json=listing(transaction(order="ord_other"))),
+            httpx.Response(404, json={"trace_id": "t"}),
+        ],
+    )
+    async def test_an_order_without_a_payment_is_none(
+        self, answer: httpx.Response
+    ) -> None:
+        assert await creem(lambda _: answer).transaction_figures(ORDER) is None
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            httpx.Response(200, json=listing(transaction(), transaction())),
+            httpx.Response(200, json={"items": "no"}),
+            httpx.Response(200, json=listing(transaction(tax_amount=-1))),
+            httpx.Response(500, json={"trace_id": "t"}),
+            httpx.Response(429),
+        ],
+    )
+    async def test_an_answer_that_names_no_single_payment_is_an_error(
+        self, answer: httpx.Response
+    ) -> None:
+        with pytest.raises(PaymentProviderError):
+            await creem(lambda _: answer).transaction_figures(ORDER)
+
+    async def test_a_network_error_is_an_error(self) -> None:
+        def fail(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("timeout", request=request)
+
+        with pytest.raises(PaymentProviderError, match="ConnectTimeout"):
+            await creem(fail).transaction_figures(ORDER)

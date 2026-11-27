@@ -20,13 +20,17 @@ Its webhook body (JSON)::
 
 * ``purchase.completed`` — ``data``: ``custom_data`` {``account_id``,
   ``package_id``, ``checkout_ref``} (as the checkout sent them), ``transaction_id``,
-  ``line_id``, ``amount_minor``, ``currency``;
+  ``line_id``, ``amount_minor``, ``currency``, and optionally ``tax_minor``,
+  ``fee_minor`` (Б-3);
 * ``refund.approved`` / ``refund.rejected`` — ``adjustment_id``, and
   optionally ``transaction_id``, ``amount_minor``, ``currency``;
 * ``chargeback.created`` — ``custom_data`` {``account_id``},
   ``transaction_id``, ``amount_minor``, ``currency``, and optionally
   ``dispute_id`` (the event's id when absent);
 * any other ``event_type`` — :class:`~.port.Unknown`.
+
+It also answers :class:`~.port.TransactionLookup` (Б-3): the figures a test
+puts in :attr:`FakeProvider.transactions`, by transaction id.
 """
 
 from __future__ import annotations
@@ -52,6 +56,7 @@ from course_supporter.billing.payments.port import (
     RefundApproved,
     RefundRejected,
     RefundRequest,
+    TransactionFigures,
     Unknown,
 )
 
@@ -81,6 +86,8 @@ class _Purchase(BaseModel):
     line_id: str
     amount_minor: int
     currency: str
+    tax_minor: int | None = None
+    fee_minor: int | None = None
 
 
 class _Refund(BaseModel):
@@ -125,6 +132,8 @@ class FakeProvider:
         """Every checkout opened, by its id."""
         self.refunds: dict[str, RefundRequest] = {}
         """Every refund requested, by its adjustment id."""
+        self.transactions: dict[str, TransactionFigures] = {}
+        """What :meth:`transaction_figures` answers, by transaction id."""
 
     def sign(self, body: bytes) -> str:
         """The signature a webhook of this body carries."""
@@ -162,6 +171,12 @@ class FakeProvider:
         self.refunds[adjustment_id] = request
         return adjustment_id
 
+    async def transaction_figures(
+        self, transaction_id: str
+    ) -> TransactionFigures | None:
+        """What the test put in :attr:`transactions` (module docstring)."""
+        return self.transactions.get(transaction_id)
+
     # ── Playing the provider (tests, local development) ──
 
     def webhook(
@@ -189,11 +204,14 @@ class FakeProvider:
         *,
         currency: str = REQUIRED_CURRENCY,
         amount_minor: int | None = None,
+        tax_minor: int | None = None,
+        fee_minor: int | None = None,
         event_id: str | None = None,
     ) -> tuple[dict[str, str], bytes]:
         """The checkout was paid: its account and package come back as sent.
 
-        The amount is the package's price in ``currency`` unless given.
+        The amount is the package's price in ``currency`` unless given; the
+        tax and the fee travel only when given.
         """
         request = self.checkouts[checkout_id]
         token = checkout_id.removeprefix("fake_chk_")
@@ -214,6 +232,8 @@ class FakeProvider:
                 "line_id": f"fake_line_{token}",
                 "amount_minor": amount,
                 "currency": currency,
+                **({} if tax_minor is None else {"tax_minor": tax_minor}),
+                **({} if fee_minor is None else {"fee_minor": fee_minor}),
             },
             event_id=event_id,
         )
@@ -249,6 +269,8 @@ class FakeProvider:
                 currency=paid.currency,
                 transaction_id=paid.transaction_id,
                 line_id=paid.line_id,
+                tax_minor=paid.tax_minor,
+                fee_minor=paid.fee_minor,
             )
         if envelope.event_type in (REFUND_APPROVED, REFUND_REJECTED):
             refund = _Refund.model_validate(envelope.data)

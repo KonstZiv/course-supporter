@@ -25,7 +25,9 @@ Rules:
 Author settings:
     Benefit (none | monthly_limit | unlimited) and credit. A change of the KIND
     of benefit stamps ``benefit_started_at``; a new limit within monthly_limit
-    keeps it. Computing what a limit leaves is BIL-B / BIL-E.
+    keeps it. Computing what a limit leaves is BIL-B / BIL-E. The school's
+    share rate for the partner's report (``partner_share_bps``, Б-3): 0 to
+    10000 hundredths of a per cent, or none; nothing that charges reads it.
 
 Accounts (BIL-E3):
     A read (:func:`get_author_settings`, :func:`find_accounts`,
@@ -53,6 +55,8 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
+from typing import Final, Literal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -106,6 +110,9 @@ class AuthorSettingsView:
     credit_allowed: bool
     updated_at: datetime | None
     """None while the defaults were never changed."""
+    partner_share_bps: int | None = None
+    """The school's share in the partner's report, hundredths of a per cent;
+    None — no rate (Б-3)."""
 
 
 @dataclass(frozen=True)
@@ -139,6 +146,7 @@ def _settings_view(
         benefit_started_at=row.benefit_started_at,
         credit_allowed=row.credit_allowed,
         updated_at=row.updated_at,
+        partner_share_bps=row.partner_share_bps,
     )
 
 
@@ -349,6 +357,17 @@ def _next_limit(
     return limit
 
 
+class _Keep(Enum):
+    KEEP = "keep"
+
+
+KEEP: Final = _Keep.KEEP
+"""Leave the share rate as it is (None is a value: no rate)."""
+
+MAX_SHARE_BPS: Final = 10_000
+"""100 %, in hundredths of a per cent."""
+
+
 async def update_author_settings(
     session: AsyncSession,
     tenant_id: uuid.UUID,
@@ -357,17 +376,28 @@ async def update_author_settings(
     benefit: Benefit | None = None,
     monthly_limit_units: int | None = None,
     credit_allowed: bool | None = None,
+    partner_share_bps: int | None | Literal[_Keep.KEEP] = KEEP,
     now: datetime | None = None,
 ) -> AuthorSettingsView:
     """Change what is given; leave the rest. Audited; a no-op writes nothing
     but the account it may have created (``account.create``).
 
+    ``partner_share_bps`` — the school's share rate (module docstring); None
+    removes it, :data:`KEEP` leaves it.
+
     Raises:
         BillingNotFoundError: no such live tenant.
-        BillingInvalidError: a limit without the monthly_limit benefit, or
-            monthly_limit without a positive limit.
+        BillingInvalidError: a limit without the monthly_limit benefit,
+            monthly_limit without a positive limit, or a share rate outside
+            0-10000.
     """
     actor = audit.require_actor(actor)
+    if isinstance(partner_share_bps, int) and not (
+        0 <= partner_share_bps <= MAX_SHARE_BPS
+    ):
+        raise BillingInvalidError(
+            "the partner's share is 0 to 100 % (0 to 10000 hundredths)"
+        )
     await _live_tenant(session, tenant_id)
     account = await get_or_create_author_account(
         session, tenant_id=tenant_id, actor=actor
@@ -387,6 +417,8 @@ async def update_author_settings(
     draft.benefit = next_benefit.value
     if credit_allowed is not None:
         draft.credit_allowed = credit_allowed
+    if partner_share_bps is not KEEP:
+        draft.partner_share_bps = partner_share_bps
 
     after = audit.settings_snapshot(draft)
     if after == baseline:
@@ -415,6 +447,7 @@ def _default_settings(account_id: uuid.UUID) -> BillingAuthorSettings:
         monthly_limit_units=None,
         benefit_started_at=None,
         credit_allowed=False,
+        partner_share_bps=None,
     )
 
 

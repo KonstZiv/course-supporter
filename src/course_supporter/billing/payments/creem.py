@@ -43,8 +43,10 @@ Creem ``eventType``    normalized event     from ``object``
 ``checkout.completed`` PurchaseCompleted    ``metadata`` (account, package),
                                             ``order.amount_paid`` (tax
                                             included), ``order.currency``,
-                                            ``order.id``; only an order
-                                            ``paid`` (else Unknown)
+                                            ``order.id``,
+                                            ``order.tax_amount`` (below);
+                                            only an order ``paid`` (else
+                                            Unknown)
 ``refund.created``     RefundApproved       ``id`` (``ref_…``: the adjustment),
                                             ``refund_amount``,
                                             ``refund_currency``, the order's
@@ -55,6 +57,28 @@ Creem ``eventType``    normalized event     from ``object``
                                             ``checkout.metadata`` (account)
 anything else          Unknown              —
 =====================  ===================  ==================================
+
+The figures of a purchase (Б-3, read 2026-11-27):
+
+* ``checkout.completed`` carries ``order.tax_amount`` — in ``order.fx_currency``
+  when that is set (the payer was charged in another currency than the
+  price), else in ``order.currency``
+  (https://docs.creem.io/api-reference/endpoint/get-checkout, the Order
+  object). It becomes :attr:`~.port.PurchaseCompleted.tax_minor` only when no
+  other currency was charged; otherwise None, and ``creem-sync`` asks.
+* ``GET /v1/transactions/search?order_id=…``
+  (https://docs.creem.io/api-reference/endpoint/get-transactions) lists the
+  order's transactions; a batch keeps the order's id (below), so it is asked
+  by order, not by ``GET /v1/transactions?transaction_id=…``. A
+  transaction (``TransactionEntity``) has ``amount``, ``amount_paid``,
+  ``discount_amount``, ``tax_amount``, ``tax_country``, ``refunded_amount``,
+  ``currency``, ``status``, ``order`` — and NO fee: neither the transaction,
+  the order nor a webhook names Creem's fee (only the dashboard's statistics
+  give revenue "after fees", for a whole period). :meth:`transaction_figures`
+  answers ``fee_minor`` None, always. The order's one transaction that took
+  money (``paid``, ``refunded``, ``partialRefund``, ``chargedBack`` /
+  ``chargeback``) gives ``tax_amount`` and ``refunded_amount``; none: None;
+  two: :class:`~.port.PaymentProviderError`.
 
 Ids: a Creem order is one product bought once — ``order.id`` (``ord_…``) is
 both the transaction and the line of a purchase, as an invoice's number is.
@@ -108,6 +132,7 @@ from course_supporter.billing.payments.port import (
     RefundApproved,
     RefundRequest,
     RefundUnavailableError,
+    TransactionFigures,
     Unknown,
 )
 
@@ -131,6 +156,11 @@ TIMEOUT: Final = httpx.Timeout(15.0, connect=5.0)
 _PAID: Final = "paid"
 _SUCCEEDED: Final = "succeeded"
 
+TOOK_MONEY: Final = frozenset(
+    {"paid", "refunded", "partialRefund", "chargedBack", "chargeback"}
+)
+"""Statuses of a Creem transaction that took the payer's money (module docstring)."""
+
 
 # ── Creem's shapes (only what billing reads; the rest is ignored) ───────
 
@@ -148,6 +178,20 @@ class _Order(BaseModel):
     amount_paid: int | None = None
     currency: str
     status: str | None = None
+    tax_amount: int | None = None
+    fx_currency: str | None = None
+
+
+class _Transaction(BaseModel):
+    order: str | None = None
+    currency: str
+    status: str
+    tax_amount: int | None = None
+    refunded_amount: int | None = None
+
+
+class _Transactions(BaseModel):
+    items: list[_Transaction]
 
 
 class _CheckoutRef(BaseModel):
@@ -322,7 +366,60 @@ class CreemProvider:
             f"{request.transaction_id}); its refund.created tells the journal"
         )
 
+    # ── The figures of a purchase (TransactionLookup, Б-3) ──
+
+    async def transaction_figures(
+        self, transaction_id: str
+    ) -> TransactionFigures | None:
+        """The tax and the refunded part of an order; no fee (module docstring).
+
+        ``transaction_id`` is the batch's: Creem's order id (``ord_…``).
+        """
+        path = "/transactions/search"
+        response = await self._get(path, {"order_id": transaction_id})
+        if response.status_code == httpx.codes.NOT_FOUND:
+            return None
+        body = self._answer(response, path)
+        try:
+            found = _Transactions.model_validate(body)
+        except ValidationError as exc:
+            msg = "creem answered a list of transactions of another shape"
+            raise PaymentProviderError(msg) from exc
+        took = [
+            t
+            for t in found.items
+            if t.status in TOOK_MONEY and t.order in (None, transaction_id)
+        ]
+        if not took:
+            return None
+        if len(took) > 1:
+            msg = f"creem lists {len(took)} payments of order {transaction_id}"
+            raise PaymentProviderError(msg)
+        return TransactionFigures(
+            currency=took[0].currency,
+            tax_minor=took[0].tax_amount,
+            fee_minor=None,
+            refunded_minor=took[0].refunded_amount,
+        )
+
     # ── HTTP ──
+
+    async def _get(self, path: str, params: Mapping[str, str]) -> httpx.Response:
+        """One read; a network error or a timeout is PaymentProviderError."""
+        try:
+            async with httpx.AsyncClient(
+                base_url=self._api_base,
+                headers={"x-api-key": self._api_key, "accept": "application/json"},
+                timeout=TIMEOUT,
+                transport=self._transport,
+            ) as client:
+                return await client.get(path, params=dict(params))
+        except httpx.HTTPError as exc:
+            log.warning(
+                "billing_creem_unreachable", path=path, error=type(exc).__name__
+            )
+            msg = f"creem {path}: {type(exc).__name__}"
+            raise PaymentProviderError(msg) from exc
 
     async def _post(self, path: str, payload: Mapping[str, Any]) -> httpx.Response:
         """One call; a network error or a timeout is PaymentProviderError."""
@@ -393,6 +490,7 @@ class CreemProvider:
             raise InvalidWebhookError("a purchase names no package")
         if paid.order.amount_paid is None:
             raise InvalidWebhookError("a purchase without the amount paid")
+        charged_as_priced = paid.order.fx_currency in (None, paid.order.currency)
         return PurchaseCompleted(
             **common,
             account_id=_uuid(_metadata(paid.metadata, "account_id")),
@@ -402,6 +500,7 @@ class CreemProvider:
             currency=paid.order.currency,
             transaction_id=paid.order.id,
             line_id=paid.order.id,
+            tax_minor=paid.order.tax_amount if charged_as_priced else None,
         )
 
     @staticmethod

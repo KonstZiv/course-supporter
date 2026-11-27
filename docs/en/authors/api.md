@@ -13,7 +13,7 @@ keywords:
   - criteria
   - text assignment
   - refusal codes
-last_updated: 2026-11-27
+last_updated: 2026-11-24
 ---
 
 # Tests and criteria via the API

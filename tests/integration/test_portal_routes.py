@@ -39,6 +39,7 @@ from course_supporter.storage.orm import (
     AuthoredDocument,
     CourseNode,
     DocumentSummary,
+    EnrollmentEvent,
     HomeworkSubmission,
     Job,
     Student,
@@ -96,6 +97,13 @@ async def portal_seed(
             delete(StudentEnrollment)
             .where(StudentEnrollment.student_id.in_(student_ids))
             .execution_options(synchronize_session=False)
+        )
+        # Б-4: an event has no ON DELETE on its student (a student is never
+        # hard-deleted outside tests), so it goes before the students.
+        await session.execute(
+            delete(EnrollmentEvent).where(
+                EnrollmentEvent.tenant_id == seed["tenant_id"]
+            )
         )
         await session.execute(
             delete(StudentCredential).where(

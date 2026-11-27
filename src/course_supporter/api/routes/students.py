@@ -295,7 +295,10 @@ async def bind_enrollment(
     enroll_repo = StudentEnrollmentRepository(session)
     try:
         await enroll_repo.bind(
-            student_id=body.student_id, course_node_id=body.course_node_id
+            tenant_id=tenant.tenant_id,
+            student_id=body.student_id,
+            course_node_id=body.course_node_id,
+            source=SOURCE_AUTHOR,
         )
         await session.commit()
     except IntegrityError as exc:

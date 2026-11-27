@@ -22,6 +22,8 @@ BIL-E2, BIL-TESTMARK; рішення оператора — у docstring кож�
 | `links.py` | Зв'язок «рух журналу → курс → завдання» — один для `spending.py` і `costs.py` |
 | `spending.py` | Витрати автора в юнітах по курсах і завданнях (без доларів) |
 | `costs.py` | Звіт адміністратора: собівартість у доларах поруч із виставленими юнітами |
+| `review_money.py` | Гроші студентів за перевірки — одне місце підрахунку: для `costs.py` і `students_money.py` |
+| `students_money.py` | Гроші студентів за перевірки по курсах і студентах для автора (без доларів платформи) |
 | `testmark.py` | Позначка тестових купівель і зняття їхніх вільних юнітів (BIL-TESTMARK) |
 | `promotion.py` | Позначка шляху просування орендаря (`tenants.promotion_path`, Б-4) |
 | `funnel.py` | Воронка «записався → перша здача → перша купівля → повторна» з грошима (Б-4) |
@@ -238,6 +240,7 @@ Creem перевіряє магазин лише в бойовому режим�
 | `GET /portal/billing/outlook` | студент | `reviews_left`, `warning`, `expiring_soon`, `paid_by`, `charging_enabled` |
 | `GET /billing/outlook` | автор (`prep`) | `days_left`, `warning`, `expiring_soon`, `held_reviews`, `charging_enabled` |
 | `GET /billing/spending?from=&to=` | автор (`prep`) | витрати в юнітах по курсах і завданнях |
+| `GET /billing/students-money?from=&to=` | автор (`prep`) | гроші студентів за перевірки по курсах і студентах, від більшого до меншого за юнітами |
 | `GET /public/numbers` | будь-хто, без входу й ключа | публічні числа (нижче) |
 
 **Оцінка перевірки студента.** `basis`: `typical` (типовий розмір роботи), `file` (надісланий файл),
@@ -293,6 +296,25 @@ covered_units}}`.
 * Дія без курсу (рядок зник) — у `unlinked`, не губиться.
 * Жодних доларів (замок-тест). `from` після `to` — 422 `invalid_period`.
 * Поки списання до рахунку автора не застосовне — нулі й `charging_enabled = false`.
+
+**`GET /billing/students-money`** (Б-1, 26.11) — те саме, що рахує `costs` у Б-2, у просторі автора й
+розкладене по курсах і студентах; межі включно, дати UTC, за замовчуванням поточний місяць, `from`
+після `to` — 422 `invalid_period`. Рахує `review_money.review_debits` — та сама функція, що й у
+`costs` (гроші за ціною партії, `gift_units`, службові студенти — правила в `review_money.py` і в
+розділі про звіт `costs` нижче). Відповідь: `{from, to, totals: {reviews, units, money:
+[{currency, amount_minor}], gift_units, excluded_test_reviews}, courses: [{course_node_id, title,
+reviews, units, money, gift_units, students: [{student_id, display_name, deleted, reviews, units,
+money, gift_units}]}], unlinked: {reviews, units, money, gift_units}}`.
+
+* лише перевірки, які студент оплатив зі свого рахунку; перевірка, оплачена автором за правилом, сюди
+  не входить; `units` — юніти, списані з рахунків студентів (юніти оплачених партій і `gift_units`);
+* курси й студенти — за `units` від більшого до меншого (юніти не залежать від валюти), за рівності —
+  за `course_node_id` / `student_id`; курс чи студент без перевірок за період не показується;
+* видалений студент (`students.deleted_at`) лишає рядок: `display_name = null`, `deleted = true`;
+* службові студенти не показуються, їхні перевірки — `excluded_test_reviews`;
+* перевірка, що веде не до курсу орендаря (рядок зник), — у `totals` і в `unlinked`, у жодному курсі;
+* усі запити несуть умову орендаря (`impl-rules#9`); доларів платформи немає; частки автора немає —
+  її додасть окремий запуск разом зі ставкою.
 
 ## Публічні числа (`public_numbers.py`)
 

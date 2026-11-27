@@ -36,32 +36,24 @@ Units billed beside the dollars (BIL-E2, operator 2026-11-15, 5b item 3):
   course's (no task), an action that leads to no course is a row without one.
 
 What the students paid (BIL-COSTS Б-2, operator 2026-11-24), in the author and
-task rows and their totals (:class:`ReviewFigures`; reads only):
-- A review is counted once when it has a ``debit`` on a student's own account in
-  the period; ``units_per_review`` is the row's ``students_units`` ÷ the
-  reviews, rounded up (``None`` without reviews).
-- A debit taken from a PAID batch (a purchase not marked in
-  ``billing_test_batches``) is worth ``units * amount_paid_minor / batch.units``
-  in the batch's currency; a row sums the exact shares per currency and rounds
-  ONCE, half up (the totals row is rounded on its own, not summed from rounded
-  rows). A debit from a batch without money (an admin credit, or a marked test
-  purchase) is ``gift_units``. Refunds (``billing_refunds``) are neither
-  subtracted from the money nor counted in ``gift_units``.
-- A service student (``students.is_test_student``) is left out of all of it —
-  and of the existing ``students_units`` — unless ``include_test_students``;
-  their reviews are counted into :attr:`CostReport.excluded_test_reviews`. The
-  dollars of the calls are not touched by the mark.
+task rows and their totals (:class:`ReviewFigures`; reads only): counted by
+:mod:`.review_money`, the one place that does it (the author's students' money,
+:mod:`.students_money`, uses it too). A review is counted once when it has a
+``debit`` on a student's own account in the period; ``units_per_review`` is the
+row's ``students_units`` ÷ the reviews, rounded up (``None`` without reviews).
+A service student (``students.is_test_student``) is left out of all of it — and
+of the existing ``students_units`` — unless ``include_test_students``; their
+reviews are counted into :attr:`CostReport.excluded_test_reviews`. The dollars
+of the calls are not touched by the mark.
 """
 
 from __future__ import annotations
 
-import math
 import uuid
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
-from fractions import Fraction
 from typing import Any, Literal
 
 from sqlalchemy import ColumnElement, Row, and_, case, func, not_, or_, select
@@ -73,7 +65,6 @@ from course_supporter.billing.errors import BillingInvalidError
 from course_supporter.billing.kinds import (
     AccountKind,
     ActionKind,
-    BatchSource,
     MovementKind,
 )
 from course_supporter.billing.links import (
@@ -83,14 +74,22 @@ from course_supporter.billing.links import (
     action_of_call,
     link_actions,
 )
+from course_supporter.billing.review_money import (
+    ReviewDebit,
+    ReviewTally,
+    excluded_test_reviews,
+    review_debits,
+    tally,
+)
+from course_supporter.billing.review_money import (
+    ReviewFigures as ReviewFigures,
+)
 from course_supporter.cost_kinds import CostKind
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.storage.orm import (
     AuthoredDocument,
     BillingAccount,
-    BillingBatch,
     BillingMovement,
-    BillingTestBatch,
     CourseNode,
     ExternalServiceCall,
     HomeworkSubmission,
@@ -226,72 +225,6 @@ class BilledUnits:
 
 
 @dataclass(frozen=True, slots=True)
-class ReviewFigures:
-    """What students paid for the reviews of a row (module docstring).
-
-    ``count`` — different reviews with a ``debit`` on a student's account;
-    ``units_per_review`` — the row's ``students_units`` ÷ ``count`` rounded up,
-    ``None`` when there are no reviews; ``money_minor`` — per currency (sorted
-    by code), whole minor units of the paid batches the debits were taken
-    from; ``gift_units`` — debited from batches without money.
-    """
-
-    count: int = 0
-    units_per_review: int | None = None
-    money_minor: tuple[tuple[str, int], ...] = ()
-    gift_units: int = 0
-
-
-class _ReviewTally:
-    """The exact sums behind a :class:`ReviewFigures`, kept until rounding."""
-
-    __slots__ = ("gift_units", "keys", "money")
-
-    def __init__(self) -> None:
-        self.keys: set[str] = set()
-        self.gift_units = 0
-        self.money: dict[str, Fraction] = {}
-
-    def add(self, debit: _ReviewDebit) -> None:
-        self.keys.add(debit.action_key)
-        self.gift_units += debit.gift_units
-        if debit.currency is not None:
-            self.money[debit.currency] = (
-                self.money.get(debit.currency, Fraction(0)) + debit.money
-            )
-
-    def merge(self, other: _ReviewTally) -> None:
-        self.keys |= other.keys
-        self.gift_units += other.gift_units
-        for currency, value in other.money.items():
-            self.money[currency] = self.money.get(currency, Fraction(0)) + value
-
-    def figures(self, students_units: int) -> ReviewFigures:
-        """Round once, half up; ``units_per_review`` from the row's students' units."""
-        count = len(self.keys)
-        return ReviewFigures(
-            count=count,
-            units_per_review=-(-students_units // count) if count else None,
-            money_minor=tuple(
-                (currency, math.floor(value + Fraction(1, 2)))
-                for currency, value in sorted(self.money.items())
-            ),
-            gift_units=self.gift_units,
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class _ReviewDebit:
-    """Debits of one review from one batch: its money, or its gift units."""
-
-    tenant_id: uuid.UUID
-    action_key: str
-    gift_units: int
-    currency: str | None
-    money: Fraction
-
-
-@dataclass(frozen=True, slots=True)
 class ActionSpend:
     """Spend totals for one author action category."""
 
@@ -324,7 +257,7 @@ class AuthorCostRow:
     review: ActionSpend
     other: ActionSpend
     units: BilledUnits = BilledUnits()
-    reviews: ReviewFigures = ReviewFigures()
+    reviews: ReviewFigures = field(default_factory=ReviewFigures)
 
 
 @dataclass(frozen=True, slots=True)
@@ -337,7 +270,7 @@ class AuthorCostTotals:
     review: ActionSpend
     other: ActionSpend
     units: BilledUnits = BilledUnits()
-    reviews: ReviewFigures = ReviewFigures()
+    reviews: ReviewFigures = field(default_factory=ReviewFigures)
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,7 +311,7 @@ class TaskCostRow:
     task_title: str | None
     spend: SpendSummary
     units: BilledUnits
-    reviews: ReviewFigures = ReviewFigures()
+    reviews: ReviewFigures = field(default_factory=ReviewFigures)
 
 
 @dataclass(frozen=True, slots=True)
@@ -387,7 +320,7 @@ class TaskCostTotals:
 
     spend: SpendSummary
     units: BilledUnits
-    reviews: ReviewFigures = ReviewFigures()
+    reviews: ReviewFigures = field(default_factory=ReviewFigures)
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,8 +475,8 @@ async def _query_authors(
         tenant_id=tenant_id,
         include_test_students=include_test_students,
     )
-    debits_of: dict[uuid.UUID, list[_ReviewDebit]] = defaultdict(list)
-    for debit in await _review_debits(
+    debits_of: dict[uuid.UUID, list[ReviewDebit]] = defaultdict(list)
+    for debit in await review_debits(
         session,
         start_dt=start_dt,
         end_dt_exclusive=end_dt_exclusive,
@@ -563,7 +496,7 @@ async def _query_authors(
     total_review = ActionSpend.zero()
     total_other = ActionSpend.zero()
     total_units = BilledUnits()
-    total_reviews = _ReviewTally()
+    total_reviews = ReviewTally()
 
     for (t_id, t_name), buckets in sorted(
         grouped.items(), key=lambda item: (item[0][1] or "", str(item[0][0]))
@@ -587,7 +520,7 @@ async def _query_authors(
         review = _action_spend("review")
         other = _action_spend("other")
         row_units = units.get(t_id, BilledUnits()) if t_id else BilledUnits()
-        row_reviews = _tally(debits_of.get(t_id, []) if t_id else [])
+        row_reviews = tally(debits_of.get(t_id, []) if t_id else [])
 
         author_rows.append(
             AuthorCostRow(
@@ -845,132 +778,6 @@ async def _units_by_student(
     return dict(found)
 
 
-# ── What the students paid for the reviews (BIL-COSTS Б-2) ─────────────
-
-
-def _student_review_debits() -> tuple[ColumnElement[bool], ...]:
-    """Debits for a review on a student's own account of a tenant."""
-    return (
-        BillingMovement.kind == MovementKind.DEBIT.value,
-        BillingMovement.action_kind == ActionKind.REVIEW.value,
-        BillingMovement.action_key.is_not(None),
-        BillingAccount.kind == AccountKind.STUDENT.value,
-        BillingAccount.tenant_id.is_not(None),
-    )
-
-
-async def _review_debits(
-    session: AsyncSession,
-    *,
-    start_dt: datetime,
-    end_dt_exclusive: datetime,
-    tenant_id: uuid.UUID | None,
-    include_test_students: bool,
-) -> list[_ReviewDebit]:
-    """Each review's debits, by the batch they were taken from.
-
-    A paid batch (a purchase not marked as a test one) gives money, the
-    debit's share of what the batch cost: ``units * amount_paid_minor /
-    batch.units``, exact; any other batch (an admin credit, a marked test
-    purchase) gives gift units.
-    """
-    marked = BillingTestBatch.batch_id.is_not(None)
-    stmt = (
-        select(
-            BillingAccount.tenant_id,
-            BillingMovement.action_key,
-            BillingBatch.source,
-            BillingBatch.units,
-            BillingBatch.amount_paid_minor,
-            BillingBatch.currency,
-            marked.label("marked"),
-            func.sum(BillingMovement.units),
-        )
-        .select_from(BillingMovement)
-        .join(BillingAccount, BillingAccount.id == BillingMovement.account_id)
-        .join(BillingBatch, BillingBatch.id == BillingMovement.batch_id)
-        .outerjoin(BillingTestBatch, BillingTestBatch.batch_id == BillingBatch.id)
-        .outerjoin(Student, Student.id == BillingAccount.student_id)
-        .where(
-            *_student_review_debits(),
-            BillingMovement.created_at >= start_dt,
-            BillingMovement.created_at < end_dt_exclusive,
-        )
-        .group_by(
-            BillingAccount.tenant_id,
-            BillingMovement.action_key,
-            BillingBatch.id,
-            BillingBatch.source,
-            BillingBatch.units,
-            BillingBatch.amount_paid_minor,
-            BillingBatch.currency,
-            marked,
-        )
-    )
-    if tenant_id is not None:
-        stmt = stmt.where(BillingAccount.tenant_id == tenant_id)
-    if not include_test_students:
-        stmt = stmt.where(Student.is_test_student.is_not(True))
-
-    found: list[_ReviewDebit] = []
-    for t_id, key, source, batch_units, paid, currency, is_marked, units in (
-        await session.execute(stmt)
-    ).tuples():
-        if t_id is None or key is None:
-            continue
-        free = (
-            source != BatchSource.PURCHASE.value
-            or is_marked
-            or paid is None
-            or currency is None
-        )
-        found.append(
-            _ReviewDebit(
-                tenant_id=t_id,
-                action_key=key,
-                gift_units=int(units) if free else 0,
-                currency=None if free else currency,
-                money=(
-                    Fraction(0)
-                    if free or paid is None
-                    else Fraction(int(units) * int(paid), int(batch_units))
-                ),
-            )
-        )
-    return found
-
-
-def _tally(debits: list[_ReviewDebit]) -> _ReviewTally:
-    tally = _ReviewTally()
-    for debit in debits:
-        tally.add(debit)
-    return tally
-
-
-async def _test_student_reviews(
-    session: AsyncSession,
-    *,
-    start_dt: datetime,
-    end_dt_exclusive: datetime,
-    tenant_id: uuid.UUID | None,
-) -> int:
-    """Different reviews of test students with a debit in the period."""
-    stmt = (
-        select(func.count(func.distinct(BillingMovement.action_key)))
-        .join(BillingAccount, BillingAccount.id == BillingMovement.account_id)
-        .join(Student, Student.id == BillingAccount.student_id)
-        .where(
-            *_student_review_debits(),
-            Student.is_test_student.is_(True),
-            BillingMovement.created_at >= start_dt,
-            BillingMovement.created_at < end_dt_exclusive,
-        )
-    )
-    if tenant_id is not None:
-        stmt = stmt.where(BillingAccount.tenant_id == tenant_id)
-    return int((await session.execute(stmt)).scalar_one())
-
-
 # ── By task: author → course → homework task (BIL-E2) ─────────────────
 
 TaskKey = tuple[uuid.UUID | None, uuid.UUID | None, uuid.UUID | None]
@@ -1065,7 +872,7 @@ async def _query_tasks(
         if action_kind is not None and key is not None
     ]
 
-    debits = await _review_debits(
+    debits = await review_debits(
         session,
         start_dt=start_dt,
         end_dt_exclusive=end_dt_exclusive,
@@ -1084,7 +891,7 @@ async def _query_tasks(
     )
     spends: dict[TaskKey, SpendSummary] = defaultdict(SpendSummary.zero)
     units: dict[TaskKey, BilledUnits] = defaultdict(BilledUnits)
-    tallies: dict[TaskKey, _ReviewTally] = defaultdict(_ReviewTally)
+    tallies: dict[TaskKey, ReviewTally] = defaultdict(ReviewTally)
     for t_id, call_ref, spend in spent:
         key = _task_key(t_id, call_ref, links.get(call_ref) if call_ref else None)
         spends[key] = spends[key] + spend
@@ -1128,12 +935,12 @@ async def _query_tasks(
     )
     total_spend = SpendSummary.zero()
     total_units = BilledUnits()
-    total_reviews = _ReviewTally()
+    total_reviews = ReviewTally()
     for task_row in task_rows:
         total_spend = total_spend + task_row.spend
         total_units = total_units + task_row.units
-    for tally in tallies.values():
-        total_reviews.merge(tally)
+    for task_tally in tallies.values():
+        total_reviews.merge(task_tally)
     return tuple(task_rows), TaskCostTotals(
         spend=total_spend,
         units=total_units,
@@ -1240,7 +1047,7 @@ async def build_cost_report(
 
     excluded = 0
     if not include_test_students:
-        excluded = await _test_student_reviews(
+        excluded = await excluded_test_reviews(
             session,
             start_dt=start_dt,
             end_dt_exclusive=end_dt_exclusive,

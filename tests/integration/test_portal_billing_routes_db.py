@@ -174,4 +174,6 @@ def test_billing_has_no_administrator_route() -> None:
         ("/api/v1/portal/billing/outlook", "GET"),  # BIL-E reminders, the student's
         ("/api/v1/billing/outlook", "GET"),  # BIL-E reminders, the tenant's key
         ("/api/v1/billing/spending", "GET"),  # BIL-E2 spending, the tenant's key
+        # BIL-COSTS Б-1 students' money, the tenant's key
+        ("/api/v1/billing/students-money", "GET"),
     }

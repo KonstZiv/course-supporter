@@ -515,7 +515,7 @@ class S3Client:
         )
         return result
 
-    async def get_object(self, key: str) -> bytes:
+    async def get_object(self, key: str, *, log_key: bool = True) -> bytes:
         """Download an object from S3 and return its full body in memory.
 
         Distinct from :meth:`download_file` (which streams to a local
@@ -527,6 +527,8 @@ class S3Client:
 
         Args:
             key: Object key in the bucket.
+            log_key: False keeps the key out of the failure's log line — for a
+                key that carries a person's file name (student deletion).
 
         Returns:
             Full object body as ``bytes``.
@@ -548,7 +550,7 @@ class S3Client:
             error_code = e.response.get("Error", {}).get("Code", "")
             log.error(
                 "s3_get_object_failed",
-                key=key,
+                key=key if log_key else "<withheld>",
                 bucket=self._bucket,
                 error_code=error_code,
                 error=str(e),
@@ -558,18 +560,41 @@ class S3Client:
         body: bytes = await response["Body"].read()
         return body
 
-    async def delete_object(self, key: str) -> None:
+    async def delete_object(self, key: str, *, log_key: bool = True) -> None:
         """Delete a single object from the bucket.
 
         Args:
             key: Object key to delete.
+            log_key: False keeps the key out of the log line — for a key that
+                carries a person's file name (student deletion).
         """
         if self._client is None:
             msg = "S3Client not initialized. Use 'async with S3Client(...)'"
             raise RuntimeError(msg)
 
         await self._client.delete_object(Bucket=self._bucket, Key=key)
-        logger.info("s3_delete", key=key)
+        logger.info("s3_delete", key=key if log_key else "<withheld>")
+
+    async def copy_object(self, source_key: str, dest_key: str) -> None:
+        """Copy an object to another key in the same bucket, server-side.
+
+        The bytes are not read here and do not change. Nothing is logged: the
+        caller (student deletion) copies away from a key that carries a
+        person's file name, and logs its own line without the keys.
+
+        Args:
+            source_key: Key of the object to copy.
+            dest_key: Key the copy is written to (replaced if it exists).
+        """
+        if self._client is None:
+            msg = "S3Client not initialized. Use 'async with S3Client(...)'"
+            raise RuntimeError(msg)
+
+        await self._client.copy_object(
+            Bucket=self._bucket,
+            Key=dest_key,
+            CopySource={"Bucket": self._bucket, "Key": source_key},
+        )
 
     async def list_objects(self, prefix: str) -> list[dict[str, Any]]:
         """List objects with a given prefix.

@@ -39,6 +39,7 @@ from botocore.exceptions import ClientError
 from scripts import storage_admin
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from structlog.testing import capture_logs
 
 from course_supporter.config import get_settings
 from course_supporter.storage.orm import (
@@ -589,3 +590,72 @@ class TestALargeRunIsQueuedInChunks:
         assert sizes == [1, 2, 2]
         assert _queued(arq) == keys
         assert report.jobs == 3
+
+
+class TestTheRealRun:
+    async def test_it_logs_who_ran_it_and_how_many_and_no_key(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        s3: S3Client,
+        world: World,
+    ) -> None:
+        archive, snapshot = await _put_base(s3, world.tenant, world.dead)
+        other = await _put(s3, _upload_key(world.tenant, world.dead), size=5)
+
+        arq = _arq()
+        with capture_logs() as logs:
+            await run_orphans(
+                session_factory,
+                s3,
+                arq,
+                actor="kos",
+                min_age=timedelta(hours=48),
+                now=datetime.now(UTC) + LONG_AGO,
+            )
+        world.job_ids.extend(
+            uuid.UUID(call.kwargs["job_id"]) for call in arq.enqueue_job.call_args_list
+        )
+
+        (line,) = [e for e in logs if e["event"] == "storage_orphans_enqueued"]
+        assert line["actor"] == "kos"
+        assert (line["archives"], line["snapshots"], line["other"]) == (1, 1, 1)
+        assert (line["orphans"], line["tenants"], line["jobs"]) == (3, 1, 1)
+        assert line["bytes"] == 25
+        assert not {archive, snapshot, other} & {str(v) for v in line.values()}
+        assert not any(
+            key in str(entry) for entry in logs for key in (archive, snapshot, other)
+        )
+
+    @pytest.mark.parametrize(("taken", "code"), [(True, 0), (False, 3)])
+    async def test_the_command_reports_a_job_arq_did_not_take(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        s3: S3Client,
+        world: World,
+        taken: bool,
+        code: int,
+    ) -> None:
+        await _put(s3, _upload_key(world.tenant, world.dead))
+        arq = _arq()
+        if not taken:
+            arq.enqueue_job.return_value = None
+        asked: list[bool] = []
+
+        @asynccontextmanager
+        async def infrastructure(
+            with_arq: bool,
+        ) -> AsyncIterator[
+            tuple[async_sessionmaker[AsyncSession], S3Client, AsyncMock | None]
+        ]:
+            asked.append(with_arq)
+            yield session_factory, s3, arq
+
+        args = argparse.Namespace(actor="test", min_age_hours=0.0, dry_run=False)
+        out, status = await storage_admin.run(args, infrastructure)
+        world.job_ids.extend(
+            uuid.UUID(call.kwargs["job_id"]) for call in arq.enqueue_job.call_args_list
+        )
+
+        assert (status, asked) == (code, [True])
+        assert out.startswith("storage orphans  queued\n")
+        assert ("NOT DISPATCHED: 1" in out) is (not taken)

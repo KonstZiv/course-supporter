@@ -33,7 +33,7 @@ from typing import Any
 
 import structlog
 from arq.connections import ArqRedis
-from sqlalchemy import Text, or_, select, text
+from sqlalchemy import Row, Text, or_, select, text
 from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -247,7 +247,9 @@ async def _orphans_of_page(
     return orphans
 
 
-async def _node_rows(session: AsyncSession, node_ids: set[uuid.UUID]) -> dict[Any, Any]:
+async def _node_rows(
+    session: AsyncSession, node_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, Row[Any]]:
     """The rows of the named nodes, soft-deleted ones included, by id."""
     stmt = select(CourseNode.id, CourseNode.tenant_id, CourseNode.deleted_at).where(
         CourseNode.id.in_(node_ids)

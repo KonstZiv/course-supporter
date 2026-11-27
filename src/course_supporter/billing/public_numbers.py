@@ -32,7 +32,9 @@ Purpose:
         smallest package's units: ``typical`` with the group's typical P and
         F; ``low`` and ``high`` the least and the most of the same number
         computed per task (its median P and F, rounded the same way) that
-        has both.
+        has both. When ``low`` and ``high`` are present, ``typical`` is
+        clamped to ``[low, high]`` because the group's typical P and F come
+        from different tasks and could otherwise fall outside that range.
 
       Every number is a whole unit, rounded once here: the site, the portal
       and :func:`.outlook.student_outlook` take these very numbers and round
@@ -242,6 +244,23 @@ def _typical_fact(facts: Sequence[int]) -> int:
     return round_half_up(_median(facts))
 
 
+def _smallest_package_reviews(
+    smallest_units: int,
+    typical_p: int,
+    typical_f: int,
+    per_task: Sequence[int],
+) -> SmallestPackageReviews:
+    """Range and clamped typical reviews for the smallest package."""
+    low = min(per_task, default=None)
+    high = max(per_task, default=None)
+    typical = reviews_left(smallest_units, typical_p, typical_f)
+    if low is not None and high is not None:
+        # The group's typical P and F come from different tasks, so without
+        # clamping typical can fall outside [low, high].
+        typical = min(max(typical, low), high)
+    return SmallestPackageReviews(low=low, typical=typical, high=high)
+
+
 def _empty_group(status: Status, window_days: int) -> ReviewGroup:
     """A group without numbers: none in the sample, or not charged."""
     return ReviewGroup(
@@ -315,11 +334,7 @@ async def _group(
             for t in per_task_f
             if t in per_task_p
         ]
-        left = SmallestPackageReviews(
-            low=min(per_task, default=None),
-            typical=reviews_left(smallest_units, typical_p, typical_f),
-            high=max(per_task, default=None),
-        )
+        left = _smallest_package_reviews(smallest_units, typical_p, typical_f, per_task)
     return ReviewGroup(
         status="ready",
         actual=Actual(min(facts.values()), typical_f, max(facts.values())),

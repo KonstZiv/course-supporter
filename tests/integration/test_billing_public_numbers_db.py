@@ -169,6 +169,29 @@ class TestTheNumbers:
         # dear: 1 + 68 // 270; the other: 1 + 392 // 45; typical: P 270, F 157.5
         assert (found.low, found.typical, found.high) == (1, 2, 9)
 
+    async def test_typical_above_high_from_cross_task_medians_is_clamped(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """Two tasks whose per-task medians give 2 each while the group's
+        cross-task medians give unclamped 3 -> clamped into [low, high]."""
+        w = await bil.make_world(session_factory)
+        second = await task(session_factory, w, "task")
+        for fact_usd, e_usd in (("0.30", "0.10"), ("0.30", "0.10"), ("0.15", "0.10")):
+            await review(session_factory, w, [(fact_usd, FIRST)], e_usd=e_usd)
+        for fact_usd, e_usd in (("0.15", "0.30"), ("0.15", "0.30"), ("0.15", "0.10")):
+            await review(
+                session_factory, w, [(fact_usd, FIRST)], task_id=second, e_usd=e_usd
+            )
+
+        found = (await numbers(session_factory, w)).review_cost.homework
+        left = found.smallest_package_reviews
+
+        assert (
+            left.low is not None and left.high is not None and left.typical is not None
+        )
+        assert left.low <= left.typical <= left.high
+        assert (left.low, left.typical, left.high) == (2, 2, 2)
+
     async def test_an_empty_world_has_no_numbers_for_homework_and_project(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:

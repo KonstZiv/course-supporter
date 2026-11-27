@@ -7,18 +7,23 @@ line and the reserve's multiplier. The numbers from a base:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.app import app
 from course_supporter.api.schemas import PublicNumbersResponse
+from course_supporter.billing import charging
+from course_supporter.billing.outlook import reviews_left
 from course_supporter.billing.payments.catalog import get_catalog
 from course_supporter.billing.public_numbers import (
+    HOMEWORK_TYPES,
     KEY_PREFIX,
     KEY_TTL_SECONDS,
     Actual,
@@ -31,7 +36,9 @@ from course_supporter.billing.public_numbers import (
     SmallestPackageReviews,
     StartThreshold,
     _empty_group,
+    _group,
     _packages,
+    _smallest_package_reviews,
     _typical_fact,
     _typical_price,
     dump,
@@ -279,3 +286,88 @@ class TestTheReserveMultiplier:
         assert RESERVE_MULTIPLIER == 2
         assert reserve_units(Decimal("0.25"), units_per_usd=Decimal(900)) == 450
         assert make_numbers().rules.reserve_multiplier == 2
+
+
+class _FakeTuples:
+    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[tuple[Any, ...]]:
+        return self._rows
+
+    def __iter__(self) -> Iterator[tuple[Any, ...]]:
+        return iter(self._rows)
+
+
+class _FakeResult:
+    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+        self._rows = rows
+
+    def tuples(self) -> _FakeTuples:
+        return _FakeTuples(self._rows)
+
+
+class _FakeSession:
+    def __init__(self, responses: list[list[tuple[Any, ...]]]) -> None:
+        self._responses = list(responses)
+
+    async def execute(self, _query: Any) -> _FakeResult:
+        return _FakeResult(self._responses.pop(0))
+
+
+class TestSmallestPackageReviewsClamping:
+    async def test_typical_above_high_from_cross_task_medians_is_clamped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two tasks whose per-task reviews are 2 while the group's cross-task
+        medians give unclamped typical 3 -> clamped into [low, high]."""
+        task_a, task_b = uuid.uuid4(), uuid.uuid4()
+        # (submission_id, task_id, fact_usd, e_usd)
+        # Task A: 2x (P=108, F=270), 1x (P=108, F=135) -> median (108, 270) -> 2
+        # Task B: 2x (P=324, F=135), 1x (P=108, F=135) -> median (324, 135) -> 2
+        # Group: typical P=108, typical F=135 -> reviews_left(500, 108, 135) = 3
+        samples = [
+            (uuid.uuid4(), task_a, Decimal("0.30"), Decimal("0.10")),
+            (uuid.uuid4(), task_a, Decimal("0.30"), Decimal("0.10")),
+            (uuid.uuid4(), task_a, Decimal("0.15"), Decimal("0.10")),
+            (uuid.uuid4(), task_b, Decimal("0.15"), Decimal("0.30")),
+            (uuid.uuid4(), task_b, Decimal("0.15"), Decimal("0.30")),
+            (uuid.uuid4(), task_b, Decimal("0.15"), Decimal("0.10")),
+        ]
+        submission_rows = [(sid, tid) for sid, tid, _, _ in samples]
+        estimate_rows = [(sid, e_usd) for sid, _, _, e_usd in samples]
+        facts_usd = {sid: f_usd for sid, _, f_usd, _ in samples}
+
+        async def fake_review_facts_usd(
+            _session: AsyncSession, _submission_ids: list[uuid.UUID]
+        ) -> dict[uuid.UUID, Decimal]:
+            return facts_usd
+
+        monkeypatch.setattr(charging, "review_facts_usd", fake_review_facts_usd)
+        session = cast(AsyncSession, _FakeSession([submission_rows, estimate_rows]))
+
+        found = await _group(
+            session,
+            HOMEWORK_TYPES,
+            since=datetime.now(UTC),
+            window_days=90,
+            smallest_units=500,
+            tenant_ids=None,
+        )
+
+        left = found.smallest_package_reviews
+        assert (
+            left.low is not None and left.high is not None and left.typical is not None
+        )
+        assert left.low <= left.typical <= left.high
+        assert (left.low, left.typical, left.high) == (2, 2, 2)
+
+    def test_empty_per_task_keeps_typical_unclamped(self) -> None:
+        found = _smallest_package_reviews(500, 108, 135, [])
+
+        assert found == SmallestPackageReviews(
+            low=None,
+            typical=reviews_left(500, 108, 135),
+            high=None,
+        )
+        assert found.typical == 3

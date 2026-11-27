@@ -235,6 +235,36 @@ def problems_without_values(error: ValidationError) -> list[dict[str, str]]:
     ]
 
 
+def error_text_without_values(exc: BaseException) -> str:
+    """Short error string without failed field values for ``ValidationError``.
+
+    For a ``ValidationError``, returns ``"ValidationError: "`` followed by
+    ``"<loc> <type>"`` pairs from :func:`problems_without_values` separated by
+    ``"; "`` — never the input values, which may be the student's work or the
+    Mentor's words about it. For any other exception, returns ``str(exc)``.
+
+    >>> from pydantic import BaseModel
+    >>> class Point(BaseModel):
+    ...     x: int
+    >>> try:
+    ...     Point.model_validate({"x": "secret-mentor-text"})
+    ... except ValidationError as error:
+    ...     text = error_text_without_values(error)
+    >>> text
+    'ValidationError: x int_parsing'
+    >>> "secret-mentor-text" in text
+    False
+    >>> error_text_without_values(RuntimeError("boom"))
+    'boom'
+    """
+    if isinstance(exc, ValidationError):
+        parts = "; ".join(
+            f"{p['loc']} {p['type']}" for p in problems_without_values(exc)
+        )
+        return f"ValidationError: {parts}"
+    return str(exc)
+
+
 def _dotted(path: _Path) -> str:
     """``new_remarks.0.item_id``: the names and indexes of a path, nothing else."""
     return ".".join(str(step) for step in path)

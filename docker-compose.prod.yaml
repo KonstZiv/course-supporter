@@ -132,6 +132,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - netdata-config:/etc/netdata
       - netdata-lib:/var/lib/netdata
+      # Metrics database on its own volume, bounded by the [db] section of
+      # deploy/netdata/netdata.conf (Z-22). Before, it grew without a limit
+      # in the container layer (2.3 GB by 2026-11-26).
+      - netdata-cache:/var/cache/netdata
+      - ./deploy/netdata/netdata.conf:/etc/netdata/netdata.conf:ro
     environment:
       - DO_NOT_TRACK=1
       - NETDATA_CLAIM_TOKEN=
@@ -154,3 +159,4 @@ volumes:
   redis-data:
   netdata-config:
   netdata-lib:
+  netdata-cache:

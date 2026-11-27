@@ -15,6 +15,7 @@ from course_supporter.auth.context import TenantContext
 from course_supporter.jobs.cancellation_service import JobCancellationService
 from course_supporter.storage.course_node_repository import CourseNodeRepository
 from course_supporter.storage.database import get_session
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
 
 STUB_TENANT = TenantContext(
     tenant_id=uuid.uuid4(),
@@ -648,6 +649,74 @@ class TestDeleteNode:
             "tenants/t/deck.pptx",
             "tenants/t/nodes/n/slides/d/0001.webp",
             "tenants/t/nodes/n/slides/d/0002.webp",
+        ]
+
+    async def test_subtree_project_base_keys_included_in_s3_cleanup(
+        self, client: AsyncClient, mock_s3: AsyncMock
+    ) -> None:
+        """Subtree delete collects project base archive_key and snapshot_key
+        alongside regular document source_url keys without duplicates.
+        """
+        project_doc = MagicMock()
+        project_doc.id = uuid.uuid4()
+        project_doc.task_type = "project"
+        project_doc.source_url = "https://example.com/project"
+        project_doc.slide_keys = None
+
+        regular_doc = MagicMock()
+        regular_doc.id = uuid.uuid4()
+        regular_doc.task_type = None
+        regular_doc.source_url = "http://localhost:9000/bucket/tenants/t/doc.pdf"
+        regular_doc.slide_keys = None
+
+        base = MagicMock()
+        base.archive_key = "tenants/t/bases/d/v1/original.zip"
+        base.snapshot_key = "tenants/t/bases/d/v1/snapshot.zip"
+
+        node = _mock_node()
+        tree_node = _mock_node(node_id=node.id)
+        tree_node.documents = [project_doc, regular_doc]
+        tree_node.children = []
+
+        mock_s3.extract_key = MagicMock(
+            side_effect=lambda url: (
+                "tenants/t/doc.pdf" if url == regular_doc.source_url else None
+            )
+        )
+        list_bases_mock = AsyncMock(return_value=[base])
+        cascade_mock = AsyncMock()
+        enqueue_mock = AsyncMock()
+        with (
+            patch.object(CourseNodeRepository, "get_by_id", return_value=node),
+            patch.object(
+                CourseNodeRepository,
+                "get_subtree_with_active_documents",
+                return_value=[tree_node],
+            ),
+            patch.object(
+                ProjectBaseRepository,
+                "list_for_documents",
+                new=list_bases_mock,
+            ),
+            patch(
+                "course_supporter.storage.cascade.CascadeDeleteService."
+                "soft_delete_with_cascade",
+                cascade_mock,
+            ),
+            patch(
+                "course_supporter.api.routes.nodes.enqueue_s3_cleanup",
+                enqueue_mock,
+            ),
+        ):
+            resp = await client.delete(f"/api/v1/nodes/{node.id}")
+        assert resp.status_code == 204
+        list_bases_mock.assert_awaited_once_with([project_doc.id])
+        cascade_mock.assert_awaited_once()
+        enqueue_mock.assert_awaited_once()
+        assert enqueue_mock.call_args.kwargs["file_keys"] == [
+            "tenants/t/doc.pdf",
+            "tenants/t/bases/d/v1/original.zip",
+            "tenants/t/bases/d/v1/snapshot.zip",
         ]
 
     async def test_no_enqueue_when_no_s3_keys(

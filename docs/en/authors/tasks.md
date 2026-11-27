@@ -10,7 +10,7 @@ keywords:
   - starter archive
   - list of criteria
   - methodological guide
-last_updated: 2026-11-25
+last_updated: 2026-11-27
 ---
 
 # Assignments
@@ -60,7 +60,7 @@ A section has one description, so all assignments of a section — for example, 
 
 A project is an assignment in which the student submits an archive with a whole project. You can attach a **starter archive** to a project — the starting project the student begins work from. Then the Mentor sees what exactly the student changed and added. A project without a starter archive is also possible — then all of the student's work counts as new.
 
-Reviewing projects does not use up any units for now: neither from the student's package nor from yours.
+A project review is paid for in units, just like reviews of other work: from the student's package, or from yours if you pay for this student's reviews ([Costs and history](costs-history.md)).
 
 In the section panel, below the project row, there is "No starter archive attached." («Базовий архів не прикріплено.») and the "Attach starter archive (Прикріпити базовий архів)" button. A `.zip`, `.tar.gz`, `.tgz` or `.gz` archive of up to 100 MB will do.
 

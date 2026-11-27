@@ -190,6 +190,11 @@ _NOT_APPLICABLE: dict[tuple[str, str], str] = {
 }
 
 _NO_DATE = "the official page gives no date the price is in force from"
+_DECISION_BRIEF = (
+    "the 2026-11-26 measurement (report B2) names the input price, $0.10 per 1M "
+    "tokens, and a free output; it says nothing of a cache price, a date or a "
+    "prompt-size tier"
+)
 
 _NOT_ESTABLISHED: dict[tuple[str, str], str] = {
     ("gemini-3-flash-preview", "price_effective_from"): _NO_DATE,
@@ -201,6 +206,9 @@ _NOT_ESTABLISHED: dict[tuple[str, str], str] = {
     ("qwen3.7-max", "price_effective_from"): _NO_DATE,
     ("gpt-4o-mini-transcribe", "price_effective_from"): _NO_DATE,
     ("scribe_v1", "price_effective_from"): _NO_DATE,
+    ("gemini-decision-1", "cost_per_1k_in_cached"): _DECISION_BRIEF,
+    ("gemini-decision-1", "price_effective_from"): _DECISION_BRIEF,
+    ("gemini-decision-1", "price_holds_to_input_tokens"): _DECISION_BRIEF,
     ("gemini-3.8-flash", "price_effective_from"): (
         "the pricing page and the model page give only the end of the "
         "introductory price ('through December 31, 2026'), not its start"

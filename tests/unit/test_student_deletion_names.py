@@ -3,10 +3,15 @@ reason, the rate-limit counters it deletes."""
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from course_supporter.storage.orm import ExternalServiceCall
 from course_supporter.student_deletion import (
     DeletionRefusedError,
     neutral_key,
@@ -14,8 +19,12 @@ from course_supporter.student_deletion import (
 )
 from course_supporter.student_deletion.file_names import name_replacer
 from course_supporter.student_deletion.service import (
+    _NAME_TARGETS,
     EMAIL_COUNTERS,
     STUDENT_COUNTERS,
+    _name_change,
+    _NameChange,
+    _replace_names,
     check_reason,
 )
 
@@ -142,3 +151,106 @@ def test_nothing_to_replace_finds_nothing() -> None:
         "submission.py",
         0,
     )
+
+
+class _FakeSession:
+    """In-memory AsyncSession stand-in recording compiled UPDATE statements."""
+
+    def __init__(self, rowcount: int = 1) -> None:
+        self._rowcount = rowcount
+        self.updates: list[tuple[str, dict[str, Any]]] = []
+
+    async def execute(self, stmt: Any) -> SimpleNamespace:
+        self.updates.append((stmt.table.name, dict(stmt.compile().params)))
+        return SimpleNamespace(rowcount=self._rowcount)
+
+
+async def test_replace_names_rewrites_plain_text_remark_place_and_json_string() -> None:
+    replacer = name_replacer({"Ivanenko_dz3.py": "submission.py"})
+    target = next(t for t in _NAME_TARGETS if t.model is ExternalServiceCall)
+    row_id = uuid.uuid4()
+    change = _name_change(
+        target,
+        (
+            row_id,
+            "Review of Ivanenko_dz3.py completed.",
+            '{"quote_file": "Ivanenko_dz3.py"}',
+            "Ivanenko_dz3.py:12",
+        ),
+        replacer,
+    )
+    assert change is not None
+
+    session = _FakeSession()
+    await _replace_names(cast(AsyncSession, session), [change])
+
+    assert session.updates == [
+        (
+            "external_service_calls",
+            {
+                "input_text": "Review of submission.py completed.",
+                "output_text": '{"quote_file": "submission.py"}',
+                "error_message": "submission.py:12",
+                "id_1": row_id,
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize("text", ["my_Ivanenko_dz3.py_old", "src/Ivanenko_dz3.py"])
+async def test_replace_names_ignores_word_parts_and_archive_paths(text: str) -> None:
+    replacer = name_replacer({"Ivanenko_dz3.py": "submission.py"})
+    rewritten, found = replacer.text(text)
+    assert (rewritten, found) == (text, 0)
+    assert rewritten is text
+
+    target = next(t for t in _NAME_TARGETS if t.model is ExternalServiceCall)
+    assert _name_change(target, (uuid.uuid4(), text, None, None), replacer) is None
+
+    session = _FakeSession()
+    await _replace_names(cast(AsyncSession, session), [])
+    assert session.updates == []
+
+
+async def test_replace_names_replaces_multiple_and_keeps_clean_text() -> None:
+    replacer = name_replacer({"Ivanenko_dz3.py": "submission.py"})
+    clean = "No student file name is mentioned here."
+    clean_out, clean_found = replacer.text(clean)
+    assert clean_found == 0
+    assert clean_out is clean
+
+    target = next(t for t in _NAME_TARGETS if t.model is ExternalServiceCall)
+    row_id = uuid.uuid4()
+    change = _name_change(
+        target,
+        (row_id, "First Ivanenko_dz3.py, then Ivanenko_dz3.py:12.", clean, None),
+        replacer,
+    )
+    assert change is not None
+    assert change.occurrences == {"input_text": 2}
+
+    session = _FakeSession()
+    await _replace_names(cast(AsyncSession, session), [change])
+
+    assert session.updates == [
+        (
+            "external_service_calls",
+            {
+                "input_text": "First submission.py, then submission.py:12.",
+                "id_1": row_id,
+            },
+        )
+    ]
+
+
+async def test_replace_names_refuses_when_row_disappeared() -> None:
+    row_id = uuid.uuid4()
+    change = _NameChange(
+        ExternalServiceCall,
+        row_id,
+        {ExternalServiceCall.input_text: "submission.py"},
+        {"input_text": 1},
+    )
+    session = _FakeSession(rowcount=0)
+    with pytest.raises(DeletionRefusedError, match="changed under the run"):
+        await _replace_names(cast(AsyncSession, session), [change])

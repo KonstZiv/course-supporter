@@ -65,6 +65,14 @@ review:
   # у спостережених даних такого випадку не було, калібрування його не покриває.
   review_explanation: {prompt_tokens: 10399, output_tokens: 8475, calls: 1, calibrated: true}
 
+  # The topic question of the reply screen (task 12a, K3): on no path, so no
+  # estimate or reserve prices it — the screen's calls are not reported to the
+  # funds port; their price is the sum of the `reply_topic` rows of the call
+  # register. The line is here because every model stage of the file has one.
+  # не калібровано: the dearest single attempt, as the stage's money ceiling in
+  # config/submission_paths.yaml states it — 4086 tokens; output is free.
+  reply_topic: {prompt_tokens: 4086, output_tokens: 0, calls: 1, calibrated: false}
+
   # Stages of the `project` path (config/submission_paths.yaml:
   # project_criteria_evaluation, project_review_explanation — on every path of
   # `project` since project chain K8, in test mode, after safety and

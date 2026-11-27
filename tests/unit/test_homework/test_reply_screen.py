@@ -246,6 +246,7 @@ class TestEachReplyIsJudgedByTheSafetyCheckUnderItsOwnName:
                 router=_Router(_SAFE),  # type: ignore[arg-type]
                 config=_REPLIES_ON,
                 comments=store,
+                classifier=EverythingOnTopic(),
             )
 
         mark = store.marks[reply.id]

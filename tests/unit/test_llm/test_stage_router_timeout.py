@@ -17,6 +17,7 @@ import uuid
 from typing import Any
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from course_supporter.call_outcome import CallOutcome, RequestKind
@@ -28,6 +29,7 @@ from course_supporter.llm.providers.dashscope import (
     DashScopeProvider,
     DashScopeResponseError,
 )
+from course_supporter.llm.providers.gemini import GeminiProvider
 from course_supporter.llm.schemas import LLMRequest, LLMResponse
 from course_supporter.llm.stage_router import StageRouter
 from tests._helpers.registry import empty_registry
@@ -391,3 +393,62 @@ class TestTheRegisterHasOneRowPerCall:
             RequestKind.INFRA_RETRY,
             RequestKind.INFRA_RETRY,
         ]
+
+
+class _Gemini(GeminiProvider):
+    """The real Gemini connector's classification, a scripted SDK call."""
+
+    def __init__(self, *script: Exception | LLMResponse) -> None:
+        super().__init__(api_keys=("dummy",), default_model="gemini-x")
+        self._script = list(script)
+        self.calls = 0
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        self.calls += 1
+        step = self._script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+
+class TestAGeminiClientTimeoutIsRepeatedOnce:
+    """google-genai 1.62.0 raises the builtin ``TimeoutError`` (aiohttp)."""
+
+    @pytest.mark.parametrize("failure", [TimeoutError, lambda: httpx.ReadTimeout("t")])
+    async def test_two_timeouts_end_the_rung_and_the_ladder_descends(
+        self, failure: Any, sleeps: list[float]
+    ) -> None:
+        slow = _Gemini(failure(), failure())
+        spare = _Scripted(_answer("from the next rung"))
+
+        result = await _router({"slow": slow, "spare": spare}).execute_stage(
+            _stage("slow", "spare"), "demo"
+        )
+
+        assert slow.calls == 2  # one repeat, not four
+        assert sleeps == [1]
+        assert result.provider_used == "spare"
+        assert result.attempt_count == 3
+
+    async def test_a_timeout_then_success_answers_from_the_second_attempt(
+        self, sleeps: list[float]
+    ) -> None:
+        gemini = _Gemini(TimeoutError(), _answer("recovered"))
+
+        result = await _router({"g": gemini}).execute_stage(_stage("g"), "demo")
+
+        assert result.content == "recovered"
+        assert result.attempt_count == 2
+        assert gemini.calls == 2
+        assert sleeps == [1]
+
+    async def test_a_single_rung_says_it_was_the_timeout(
+        self, sleeps: list[float]
+    ) -> None:
+        gemini = _Gemini(TimeoutError(), TimeoutError())
+
+        with pytest.raises(LadderExhaustedError) as caught:
+            await _router({"g": gemini}).execute_stage(_stage("g"), "demo")
+
+        ((_provider, _model, reason),) = caught.value.attempts
+        assert reason.startswith("INFRASTRUCTURE: timeout - ")

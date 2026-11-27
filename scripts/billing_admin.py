@@ -120,8 +120,9 @@ Audited as refund.order_hold / refund.order_release:
     refund-release --order ord_6vSsOdTANP5PhOzuDlUuXE [--provider creem] \
         --actor kostiantyn      # the refund did not happen
 
-Anonymization, AFTER the tenant or the student was deleted by hand (there is
-no account-deletion flow yet; when one appears it calls the same functions).
+Anonymization, AFTER the tenant or the student was deleted by hand. A
+student's deletion at their request (``scripts/student_admin.py delete``, Б-2)
+calls the same function itself; there is no tenant deletion flow yet.
 It closes and anonymizes the owner's accounts and ends the active payment
 rules about the owner — a student's student rules, every rule of a tenant —
 each ending audited as payment_rule.end; a second run changes nothing:

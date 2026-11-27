@@ -937,7 +937,7 @@ class TestAFirstSubmissionOfAProject:
         assert receipt is not None
         assert receipt["fingerprint"] == submission.fingerprint
         assert receipt["path"] == ServedBy.NEW_PATH.value
-        assert receipt["test_mode"] is True
+        assert receipt["test_mode"] is False
         assert DEDUP_RECEIPT_KEY not in receipt
         # The evaluator that wrote the review is the project's, not the text
         # types' (their stages are others').
@@ -1161,13 +1161,13 @@ class TestAChangedWorkAgain:
 class TestTheConfigurationOfTheWalk:
     """What the runs above stand on: the shipped file, as the body reads it."""
 
-    def test_the_project_is_on_the_new_path_in_test_mode(self) -> None:
+    def test_the_project_is_on_the_new_path_out_of_test_mode(self) -> None:
         shipped = _shipped()
 
         assert shipped.task_types[AssignmentType.PROJECT].served_by is (
             ServedBy.NEW_PATH
         )
-        assert in_test_mode(AssignmentType.PROJECT, shipped) is True
+        assert in_test_mode(AssignmentType.PROJECT, shipped) is False
 
     def test_the_attempt_classifier_asks_on_the_first_submission_alone(
         self,

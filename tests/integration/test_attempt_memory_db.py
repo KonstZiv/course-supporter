@@ -917,8 +917,7 @@ class TestAttemptReceiptMemoryMarkDb:
         await db_session.refresh(second)
         assert second.attempt_receipt == {**baseline, "memory": second_mark}
 
-        first.attempt_receipt = None
-        await db_session.flush()
+        assert first.attempt_receipt is None
         await repo.store_attempt_memory(first.id, memory=first_mark)
         await db_session.refresh(first)
         assert first.attempt_receipt is None

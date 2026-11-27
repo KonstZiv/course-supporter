@@ -1,5 +1,13 @@
+# Base image pinned by multi-arch digest: python:3.13-slim exactly as built
+# into prod by deploys #175-#177 (2026-11-24/25). With the floating tag, every
+# new python:3.13-slim on Docker Hub rebuilt all layers on the next deploy:
+# deploy #175 took ~20 min instead of ~6 and held +2.7 GB of disk until the
+# next one. Update deliberately, in a dedicated PR that changes all four
+# "FROM python:" lines in Dockerfile and Dockerfile.worker together; the first
+# deploy after it rebuilds every layer (~20 min, needs ~6 GB free on the server).
+
 # ── Build stage ──
-FROM python:3.13-slim AS builder
+FROM python:3.13-slim@sha256:7249d5587b78209a006dc4a3b5340678f84ea729239193aa559962cd8c1fce50 AS builder
 
 WORKDIR /build
 
@@ -33,7 +41,7 @@ COPY alembic.ini .
 COPY scripts/ scripts/
 
 # ── Runtime stage ──
-FROM python:3.13-slim
+FROM python:3.13-slim@sha256:7249d5587b78209a006dc4a3b5340678f84ea729239193aa559962cd8c1fce50
 
 # System dependencies: libpq for psycopg, ffmpeg for ingestion,
 # libmagic for security file-type detection (KD14).

@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     field_validator,
@@ -43,6 +44,10 @@ from course_supporter.language import (
 from course_supporter.models.review_structure import ReplyKind, ReviewStructureV1
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 from course_supporter.normalizer import Manifest
+from course_supporter.open_courses.source_tag import (
+    SOURCE_TAG_PATTERN,
+    parse_source_tag,
+)
 from course_supporter.remark_kinds import CommentAuthor, CommentKind
 from course_supporter.storage.course_node_repository import SummaryStatus
 
@@ -1989,6 +1994,18 @@ TermsTextSha256 = Annotated[
         description="SHA-256 (lowercase hex) of the terms text shown.",
     ),
 ]
+#: The join link's campaign tag (``?src=``, Б-4). Never a 422: a value that
+#: breaks the rule is kept as null (``open_courses/source_tag.py``).
+SourceTag = Annotated[
+    Annotated[str, Field(max_length=40, pattern=SOURCE_TAG_PATTERN)] | None,
+    BeforeValidator(parse_source_tag),
+    Field(
+        description="Campaign tag of the join link (its src parameter): "
+        "a-z, 0-9, '-', '_', 1-40 characters. Optional; a value that breaks "
+        "the rule does not refuse the request — it is stored as null.",
+        examples=["fb-dec-ads"],
+    ),
+]
 
 
 class EnrollmentLinkResponse(BaseModel):
@@ -2043,6 +2060,7 @@ class JoinSignupRequest(BaseModel):
     adult: AdultMark
     terms_version: TermsVersion
     text_sha256: TermsTextSha256
+    source_tag: SourceTag = None
 
     @field_validator("interface_language")
     @classmethod
@@ -2095,6 +2113,7 @@ class PortalCourseJoinRequest(BaseModel):
     adult: AdultMark
     terms_version: TermsVersion
     text_sha256: TermsTextSha256
+    source_tag: SourceTag = None
 
 
 class PortalCourseJoinResponse(BaseModel):

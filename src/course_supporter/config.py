@@ -31,6 +31,7 @@ class Environment(StrEnum):
 
 _LLM_PROVIDER_KEYS = (
     "gemini",
+    "gemini_decisions",
     "anthropic",
     "openai",
     "deepseek",
@@ -478,6 +479,12 @@ class Settings(BaseSettings):
     gemini_api_key_raw: SecretStr | None = Field(
         None, validation_alias="gemini_api_key"
     )
+    # Same ENV var (GEMINI_API_KEY) powers the decision models of the native
+    # endpoint: their own provider, the operator's single Gemini key pool (the
+    # ``deepseek_thinking`` precedent below).
+    gemini_decisions_api_key_raw: SecretStr | None = Field(
+        None, validation_alias="gemini_api_key"
+    )
     anthropic_api_key_raw: SecretStr | None = Field(
         None, validation_alias="anthropic_api_key"
     )
@@ -566,6 +573,9 @@ class Settings(BaseSettings):
     # Configurable per environment via env vars.
     # Defaults can be overridden via external_services.yaml registry.
     gemini_default_model: str = "gemini-3.5-flash-lite"
+    # StageRouter always sets the model per rung; the decision model measured
+    # on 2026-11-17 and 2026-11-26 (task 12a, K3).
+    gemini_decisions_default_model: str = "gemini-decision-1"
     anthropic_default_model: str = "claude-sonnet-5-5"
     openai_default_model: str = "gpt-4o-mini"
     deepseek_default_model: str = "deepseek-flash"

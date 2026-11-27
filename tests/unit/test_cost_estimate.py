@@ -761,13 +761,14 @@ class TestSettings:
         criteria_decomposition have calibrated=True; so have the stages of the
         `project` path since the live measurement of 2026-11-26 (M-10).
         key_explanation, the stages with the student's replies (task 12a, K4:
-        no live data until its measurement) and processing stages remain
+        no live data until its measurement), the reply screen's topic question
+        (on no path, never priced; M-9) and processing stages remain
         uncalibrated."""
         replies = {
             "criteria_evaluation_with_replies",
             "review_explanation_with_replies",
         }
-        uncalibrated = replies
+        uncalibrated = replies | {"reply_topic"}
         assert set(settings.review) >= uncalibrated
         assert not any(settings.review[name].calibrated for name in uncalibrated)
         assert all(

@@ -33,7 +33,7 @@ from course_supporter.models.review_structure import (
     Verdict,
     Verification,
 )
-from course_supporter.models.stored_read import read_stored
+from course_supporter.models.stored_read import error_text_without_values, read_stored
 from tests._helpers.stored_review import (
     MARKER,
     REVIEW_PLACES,
@@ -310,3 +310,30 @@ class TestDocstrings:
 
         assert results.failed == 0
         assert results.attempted > 0
+
+
+_MENTOR_MARKER = "MARKER-slova-mentora-7731"
+
+
+class _M(BaseModel):
+    n: int
+
+
+def _validation_error_with_marker() -> ValidationError:
+    try:
+        _M.model_validate({"n": _MENTOR_MARKER})
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("expected ValidationError")  # pragma: no cover
+
+
+class TestErrorTextWithoutValues:
+    def test_validation_error_omits_value_and_keeps_type_and_place(self) -> None:
+        text = error_text_without_values(_validation_error_with_marker())
+
+        assert _MENTOR_MARKER not in text
+        assert "n int_parsing" in text
+        assert text == "ValidationError: n int_parsing"
+
+    def test_other_exception_keeps_str_unchanged(self) -> None:
+        assert error_text_without_values(RuntimeError("x")) == "x"

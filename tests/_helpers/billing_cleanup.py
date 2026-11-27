@@ -8,6 +8,7 @@ purchase, a hold by order). A test that commits billing rows removes them.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -23,13 +24,22 @@ from course_supporter.storage.orm import (
     BillingPaymentRule,
     BillingRefund,
     BillingReservation,
+    BillingTestBatch,
 )
 
 
 async def drop_billing_of_tenant(
-    session_factory: async_sessionmaker[AsyncSession], tenant_id: uuid.UUID
+    session_factory: async_sessionmaker[AsyncSession],
+    tenant_id: uuid.UUID,
+    *,
+    also_accounts: Sequence[uuid.UUID] = (),
 ) -> None:
-    """Delete every billing row of the tenant's accounts, then the accounts."""
+    """Delete every billing row of the tenant's accounts, then the accounts.
+
+    ``also_accounts`` — accounts the tenant no longer names: an anonymized
+    account has lost its ``tenant_id``, so the test that anonymized it passes
+    the ids it kept.
+    """
     async with session_factory() as session:
         accounts = list(
             (
@@ -40,6 +50,7 @@ async def drop_billing_of_tenant(
                 )
             ).scalars()
         )
+        accounts += [a for a in also_accounts if a not in accounts]
         if not accounts:
             return
         rules = select(BillingPaymentRule.id).where(
@@ -54,6 +65,9 @@ async def drop_billing_of_tenant(
                 | BillingAuditEntry.entity_id.in_(refunds)
                 | BillingAuditEntry.entity_id.in_(batches)
             )
+        )
+        await session.execute(
+            delete(BillingTestBatch).where(BillingTestBatch.batch_id.in_(batches))
         )
         for table in (
             BillingMovement,

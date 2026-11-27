@@ -169,7 +169,7 @@ class TestTheNumbers:
         # dear: 1 + 68 // 270; the other: 1 + 392 // 45; typical: P 270, F 157.5
         assert (found.low, found.typical, found.high) == (1, 2, 9)
 
-    async def test_an_empty_world_has_no_numbers_and_the_project_is_not_charged(
+    async def test_an_empty_world_has_no_numbers_for_homework_and_project(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         w = await bil.make_world(session_factory)
@@ -177,13 +177,14 @@ class TestTheNumbers:
         found = await numbers(session_factory, w)
 
         declared = load_path_config(SHIPPED_PATHS).task_types[AssignmentType.PROJECT]
-        # Project chain K8: the project is on the new path in test mode —
-        # served by it, not charged for — so its numbers are "not_charged".
+        # M-10 (2026-11-26): the project is on the new path out of test mode,
+        # charged like the text types — its numbers wait for data, they are
+        # not "not_charged".
         assert declared.served_by is ServedBy.NEW_PATH
-        assert declared.test_mode
+        assert not declared.test_mode
         for group, status in (
             (found.review_cost.homework, "insufficient_data"),
-            (found.review_cost.project, "not_charged"),
+            (found.review_cost.project, "insufficient_data"),
         ):
             assert group.status == status
             assert (group.actual.min, group.actual.typical, group.actual.max) == (
@@ -199,18 +200,16 @@ class TestTheNumbers:
             assert (left.low, left.typical, left.high) == (None, None, None)
             assert group.sample.reviews == 0
 
-    async def test_a_project_on_the_new_path_is_counted_as_homework(
+    async def test_a_project_out_of_test_mode_is_given_its_range(
         self, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
         w = await bil.make_world(session_factory)
         project = await task(session_factory, w, "project")
         await review(session_factory, w, [("0.10", FIRST)], e_usd="0.25")
         await review(session_factory, w, [("0.20", FIRST)], task_id=project, e_usd="1")
-        config = paths_with(
-            project={"served_by": ServedBy.NEW_PATH.value, "test_mode": False}
-        )
 
-        found = await numbers(session_factory, w, path_config=config)
+        # The shipped file, as it is: the project is charged.
+        found = await numbers(session_factory, w)
 
         project_cost = found.review_cost.project
         assert project_cost.status == "ready"
@@ -219,6 +218,24 @@ class TestTheNumbers:
             1080,
         )
         assert found.review_cost.homework.actual.typical == 90
+
+    async def test_a_project_put_back_in_test_mode_is_not_charged(
+        self, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        w = await bil.make_world(session_factory)
+        project = await task(session_factory, w, "project")
+        await review(session_factory, w, [("0.20", FIRST)], task_id=project, e_usd="1")
+
+        found = await numbers(
+            session_factory,
+            w,
+            path_config=paths_with(
+                project={"served_by": ServedBy.NEW_PATH.value, "test_mode": True}
+            ),
+        )
+
+        assert found.review_cost.project.status == "not_charged"
+        assert found.review_cost.project.sample.reviews == 0
 
     async def test_homework_on_the_test_mode_is_not_charged(
         self, session_factory: async_sessionmaker[AsyncSession]

@@ -75,15 +75,25 @@ review:
 
   # Stages of the `project` path (config/submission_paths.yaml:
   # project_criteria_evaluation, project_review_explanation — on every path of
-  # `project` since project chain K8, in test mode, after safety and
-  # attempt_classifier, both priced above). No live measurement exists yet:
-  # each line is its twin's calibrated line plus the characters its own prompt
-  # adds over the twin's at 3.5 characters a token (2026-11-15). Replace with a
-  # measured median after the live measurement of K8.
-  # prompts/criteria_evaluation_project/v1.md 8366 chars - prompts/criteria_evaluation/v1.md 4446 = 3920 chars = 1120 tokens: 4870 + 1120
-  project_criteria_evaluation: {prompt_tokens: 5990, output_tokens: 8548, calls: 2, calibrated: false}
-  # prompts/review_explanation_project/v1.md 10633 chars - prompts/review_explanation/v3.md 9182 = 1451 chars = 414 tokens: 10399 + 414
-  project_review_explanation: {prompt_tokens: 10813, output_tokens: 8475, calls: 1, calibrated: false}
+  # `project` (charged from the roll-out of 2026-11-27), after safety and attempt_classifier,
+  # both priced above). Calibrated on the live measurement of 2026-11-26: two
+  # real reviews of one work (~75 000 characters), the call register and
+  # `action_cost_estimates.breakdown`. The work's share of the input is the one
+  # the estimate itself counts: the estimate's input minus the line's former
+  # prompt_tokens (criteria 21 263 / 21 784 tokens, the same for the explanation
+  # at ≈ 74 400 / 76 245 characters); the prompt's own share is the fact's input
+  # minus that, the larger of the two reviews.
+  # калібрування за живим виміром 26.11 — дві подачі однієї роботи (≈ 75 тис. символів, `t-spare`), max × 1,25; переглянути після десяти справжніх перевірок проєктів
+  # підказка: max (30 336 - 21 263 = 9 073; 30 845 - 21 784 = 9 061) 9 073 × 1,25 = 11 341,25 -> 11 342
+  # вихід: max (6 817; 7 460) 7 460 × 1,25 = 9 325
+  # calls: 1 — обидва живі виклики стадії були по одному, без повторного питання (до виміру було 2)
+  project_criteria_evaluation: {prompt_tokens: 11342, output_tokens: 9325, calls: 1, calibrated: true}
+  # калібрування за живим виміром 26.11 — дві подачі однієї роботи (≈ 75 тис. символів, `t-spare`), max × 1,25; переглянути після десяти справжніх перевірок проєктів
+  # підказка: max (33 475 - 21 263 = 12 212; 34 008 - 21 784 = 12 224) 12 224 × 1,25 = 15 280
+  # вихід: max (6 028; 8 685) 8 685 × 1,25 = 10 856,25 -> 10 857, з міркуванням моделі (воно оплачується; без нього 2 019 у подачі 2).
+  # Оцінка обрізає цей вихід стелею стадії 8 192 (`min(output_tokens, ceilings.output_tokens)`,
+  # cost_estimate/actions.py::llm_step): стеля рахує видимий вихід, а міркування оплачується понад неї.
+  project_review_explanation: {prompt_tokens: 15280, output_tokens: 10857, calls: 1, calibrated: true}
 
   # Stages of the path with the student's replies (task 12a, K4:
   # criteria_evaluation_with_replies, review_explanation_with_replies on the

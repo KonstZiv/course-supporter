@@ -58,6 +58,7 @@ from course_supporter.funds_port import (
     VersionWorkKind,
     build_funds_port,
 )
+from course_supporter.homework import path_config
 from course_supporter.homework.path_config import PathKey, SubmissionState
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.models.source import AssignmentType
@@ -772,6 +773,54 @@ class TestTheCeiling:
         assert charging.ceiling_units(Decimal("0.10")) == 90
         assert charging.reserve_request(Decimal(1), Decimal("0.10")) == 90
         assert charging.ceiling_units(Decimal(str(CEILING_USD))) == N
+
+
+class TestProjectReview:
+    """M-10 (2026-11-26): the project is out of test mode, as the shipped file
+    has it — a review of a project reserves, charges and releases like a
+    task's. The numbers are the live measurement of that day: E of a work of
+    76 245 characters on the first path (0.210761457 $, reserve 380 units) and
+    the fact 0.1905 $ (171 units)."""
+
+    async def test_a_project_reserves_charges_the_fact_and_releases_the_rest(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The file's own decision, not the fixture's "never in test mode".
+        monkeypatch.setattr(funds, "in_test_mode", path_config.in_test_mode)
+        assert path_config.in_test_mode(AssignmentType.PROJECT) is False
+        w = await make_world(session_factory, task_type="project")
+        await buy(session_factory, w.student, 500)
+        port = funds.LedgerFundsPort(session_factory)
+        context = SubmissionContext(
+            tenant_id=w.tenant_id,
+            student_id=w.student_id,
+            submission_id=w.submission_id,
+            path_key=PathKey(AssignmentType.PROJECT, SubmissionState.FIRST),
+            expected_usd=Decimal("0.210761457"),
+        )
+
+        answer = await port.check_and_reserve(context, 1.0)
+
+        assert answer.decision is FundsDecision.ALLOWED
+        (held,) = await reservations(session_factory, ActionKind.REVIEW, key_of(w))
+        assert held.units == 380
+        assert (await balance(session_factory, w.student)).available == 500 - 380
+
+        await call(
+            session_factory,
+            w.homework_job_id,
+            "0.1905",
+            action="project_criteria_evaluation",
+        )
+        await port.release_remainder(context, SubmissionOutcome.COMPLETED)
+
+        moved = await sums(session_factory, ActionKind.REVIEW, key_of(w))
+        assert moved[MovementKind.DEBIT.value] == 171
+        assert moved[MovementKind.RESERVE_RELEASE.value] == 380 - 171
+        after = await balance(session_factory, w.student)
+        assert (after.balance, after.available, after.difference) == (329, 329, 0)
 
 
 class TestPathTestMode:

@@ -36,6 +36,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
 from course_supporter.api.routes._author_shared import (
+    collect_documents_s3_keys,
     draft_refused,
     security_rejected,
     too_large_a_test,
@@ -1610,35 +1611,15 @@ async def delete_document(
         document_repo, node_repo, document_id, tenant.tenant_id
     )
 
-    # (2) Capture the S3 key before cascade scrub blanks ``source_url``.
-    # ``extract_key`` returns ``None`` for external URLs that don't
-    # belong to our bucket — those rows have no S3 cleanup work.
+    # (2) Capture all S3 keys (source_url, slide_keys, and project_bases
+    # archive_key/snapshot_key) before cascade scrub blanks ``source_url``
+    # and removes ``project_bases`` rows (DD-6-U).
     course_node_id = document.course_node_id
-    file_keys: list[str] = []
-    s3_key = s3.extract_key(document.source_url)
-    if s3_key is not None:
-        file_keys.append(s3_key)
-    # Persisted per-slide WebP renders (Phase 6 T3) are S3 objects distinct
-    # from source_url; gather them before the cascade scrub so they are
-    # scrubbed alongside the document. Already-S3 keys (stored verbatim by
-    # the ingest seam) — no extract_key round-trip needed.
-    if document.slide_keys:
-        file_keys.extend(document.slide_keys)
-    # Project base versions (Phase 6 KD18) store raw archives and normalized
-    # snapshots in S3; collect archive_key and snapshot_key before cascade-delete
-    # removes the project_bases rows (DD-6-U).
-    if document.task_type in (
-        AssignmentType.PROJECT,
-        AssignmentType.PROJECT.value,
-        "project",
-    ):
-        base_repo = ProjectBaseRepository(session)
-        bases = await base_repo.list_for_documents([document_id])
-        for base in bases:
-            if base.archive_key:
-                file_keys.append(base.archive_key)
-            if base.snapshot_key:
-                file_keys.append(base.snapshot_key)
+    file_keys = await collect_documents_s3_keys(
+        [document],
+        session=session,
+        s3=s3,
+    )
 
     # (3) Cascade soft-delete. Class-level ``__scrub_callable__``
     # dispatch (models-fix-3) clears KD3 fields on the AuthoredDocument

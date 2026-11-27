@@ -68,6 +68,9 @@ async def _run(*argv: str) -> str:
         ],
         ["void-test-batches"],
         ["void-test-batches", "--dry-run"],
+        ["set-partner-share", "--tenant", "t", "--percent", "12.5"],
+        ["creem-sync", "--from", "2026-11-01", "--to", "2026-11-30"],
+        ["creem-sync", "--from", "2026-11-01", "--to", "2026-11-30", "--dry-run"],
     ],
 )
 def test_every_change_needs_an_actor(argv: list[str]) -> None:

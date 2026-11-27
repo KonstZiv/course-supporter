@@ -164,6 +164,33 @@ task rows: reviews, units_per_review, students_money_minor and gift_units
 the report says how many reviews that was, until --include-test-students:
     costs --by author --include-test-students
 
+The partner's report (Б-3, operator 2026-11-27). INTERNAL: what of it a
+school is shown is the product owner's decision. The school's share rate is
+kept in its author settings — a percent with at most two decimals, 0 to 100,
+or none; audited as author_settings.update, the same rate again writes
+nothing:
+    set-partner-share --tenant "Python Academy" --percent 12.5 --actor kostiantyn
+    set-partner-share --tenant "Python Academy" --percent none --actor kostiantyn
+The tax, the refunded part and the fee of Creem's purchases go on their batches
+with the purchase's webhook (the tax) and by asking Creem's API for the paid
+batches created in a period — Creem's key from the application's settings
+(CREEM_API_KEY, CREEM_API_BASE). Creem's API gives no fee: it stays unknown.
+Each batch changed is audited (batch.provider_sync); a second run changes
+nothing; --dry-run asks the API and only counts:
+    creem-sync --from 2026-11-01 --to 2026-11-30 --actor kostiantyn [--dry-run]
+A month of the school (UTC, both edges inclusive), by course -> task and in
+total, each currency apart: reviews its students paid from their own accounts
+(service students left out), gross_minor (their money spent on those reviews,
+tax included — units bought and not used are not in it), tax_minor and
+fee_minor (each batch's in proportion to the units spent; a batch Creem has
+not told the tax of is counted "без даних Creem"; the fee Creem does not give:
+"комісія Creem: API не віддає"), net_minor = gross - tax - fee,
+model_cost_usd (what the models cost for these reviews), the share at the
+school's rate ("ставку не задано" without one), and the month's refunds to the
+school's students on a line apart. Read-only (``partner-report --help`` says
+what each field is):
+    partner-report --tenant "Python Academy" --month 2026-11 [--format text|csv|json]
+
 Exit status: 0 on success; 1 when the operation is refused (the message says
 why; nothing is written) or a periodic task failed or found its lock held;
 2 on a usage error.
@@ -174,20 +201,31 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import dataclasses
 import io
+import json
 import re
 import sys
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from typing import Any
 
 import structlog
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from course_supporter.billing import accounts, admin, audit, ledger, testmark
+from course_supporter.billing import (
+    accounts,
+    admin,
+    audit,
+    ledger,
+    partner_report,
+    provider_figures,
+    testmark,
+)
 from course_supporter.billing import costs as billing_costs
 from course_supporter.billing.errors import (
     BillingError,
@@ -196,6 +234,9 @@ from course_supporter.billing.errors import (
 )
 from course_supporter.billing.kinds import ActionKind, Benefit, MovementKind, RuleScope
 from course_supporter.billing.payments import invoice
+from course_supporter.billing.payments.creem import CREEM, CreemProvider
+from course_supporter.billing.payments.port import TransactionLookup
+from course_supporter.billing.payments.registry import PaymentConfigError, adapters
 from course_supporter.billing.periodic import BILLING_TASKS
 from course_supporter.config import get_settings
 from course_supporter.periodic.runner import TaskRun, run_task
@@ -257,6 +298,44 @@ def _yes_no(value: str) -> bool:
     return value == "yes"
 
 
+_MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _month(value: str) -> date:
+    """A strict YYYY-MM month: its first day."""
+    if _MONTH_RE.match(value) is None:
+        raise argparse.ArgumentTypeError(f"not a YYYY-MM month: {value!r}")
+    try:
+        return date.fromisoformat(f"{value}-01")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a YYYY-MM month: {value!r}") from exc
+
+
+def _percent(value: str) -> int | None:
+    """A percent with at most two decimals, in hundredths (bps); ``none`` — None.
+
+    The range (0 to 100) is the service's to refuse.
+    """
+    if value == "none":
+        return None
+    try:
+        percent = Decimal(value)
+    except InvalidOperation as exc:
+        raise argparse.ArgumentTypeError(f"not a percent: {value!r}") from exc
+    if not percent.is_finite() or percent != percent.quantize(Decimal("0.01")):
+        raise argparse.ArgumentTypeError(
+            f"a percent with at most two decimals, or none: {value!r}"
+        )
+    return int(percent * 100)
+
+
+def _rate(bps: int | None) -> str:
+    """Hundredths of a per cent as a person reads them: ``12.5 %``."""
+    if bps is None:
+        return partner_report.NO_RATE
+    return f"{Decimal(bps) / 100:f} %"
+
+
 # ── Output ─────────────────────────────────────────────────────────────
 
 
@@ -282,10 +361,12 @@ def _rule_line(rule: BillingPaymentRule) -> str:
 def _settings_line(view: admin.AuthorSettingsView) -> str:
     units = view.monthly_limit_units
     limit = f" ({units} units/month)" if units is not None else ""
+    share = "none" if view.partner_share_bps is None else _rate(view.partner_share_bps)
     return (
         f"author account {view.account_id or 'none yet'}  "
         f"benefit={view.benefit.value}{limit}  "
-        f"since={view.benefit_started_at}  credit_allowed={view.credit_allowed}"
+        f"since={view.benefit_started_at}  credit_allowed={view.credit_allowed}  "
+        f"partner_share={share}"
     )
 
 
@@ -396,6 +477,15 @@ async def set_credit(session: AsyncSession, args: argparse.Namespace) -> str:
     tenant_id = await resolve_tenant_id(session, args.tenant)
     view = await admin.update_author_settings(
         session, tenant_id, actor=args.actor, credit_allowed=args.allowed
+    )
+    return _settings_line(view)
+
+
+async def set_partner_share(session: AsyncSession, args: argparse.Namespace) -> str:
+    """Set or remove the school's share rate (the partner's report)."""
+    tenant_id = await resolve_tenant_id(session, args.tenant)
+    view = await admin.update_author_settings(
+        session, tenant_id, actor=args.actor, partner_share_bps=args.percent
     )
     return _settings_line(view)
 
@@ -1375,6 +1465,248 @@ async def costs_cmd(session: AsyncSession, args: argparse.Namespace) -> str:
     return _render_cost_table(report, tenant_label=tenant_label)
 
 
+def creem_lookup() -> TransactionLookup:
+    """Creem's adapter with the application's keys (a test replaces it)."""
+    settings = get_settings()
+    try:
+        provider = adapters(settings.environment)[CREEM](settings)
+    except PaymentConfigError as exc:
+        raise BillingInvalidError(f"creem-sync needs Creem's keys: {exc}") from exc
+    assert isinstance(provider, CreemProvider)
+    return provider
+
+
+async def creem_sync(session: AsyncSession, args: argparse.Namespace) -> str:
+    """Ask Creem's API for the tax, refunded part and fee of the period's purchases."""
+    if args.dry_run:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+    done = await provider_figures.sync_batches(
+        session,
+        creem_lookup(),
+        from_date=args.from_date,
+        to_date=args.to_date,
+        actor=args.actor,
+        dry_run=args.dry_run,
+        now=datetime.now(UTC),
+    )
+    lines = [
+        f"creem batches {args.from_date.isoformat()}..{args.to_date.isoformat()}: "
+        f"{done.batches}  {'would update' if done.dry_run else 'updated'}="
+        f"{done.updated}  unchanged={done.unchanged}  not_found={done.not_found}  "
+        f"other_currency={done.other_currency}  failed={done.failed}",
+        "fee: Creem's API does not give it (provider_fee_minor stays empty)",
+    ]
+    if done.failed:
+        lines.append("failed batches were left as they were: run it again")
+    if done.dry_run:
+        lines.append("dry run: nothing written")
+    return "\n".join(lines)
+
+
+def _money_notes(line: partner_report.MoneyLine) -> list[str]:
+    notes = [partner_report.fee_note(p) for p in line.fee_unknown]
+    notes += [partner_report.no_data_note(p, n) for p, n in line.without_provider_data]
+    return notes
+
+
+def _money_text(line: partner_report.MoneyLine, rate: int | None) -> str:
+    fee = "-" if line.fee_minor is None else str(line.fee_minor)
+    share = (
+        partner_report.NO_RATE
+        if line.partner_share_minor is None
+        else str(line.partner_share_minor)
+    )
+    text_ = (
+        f"{line.currency}: gross_minor={line.gross_minor}  "
+        f"tax_minor={line.tax_minor}  fee_minor={fee}  net_minor={line.net_minor}  "
+        f"share_rate={_rate(rate)}  partner_share_minor={share}"
+    )
+    notes = _money_notes(line)
+    return text_ + (f"  ({'; '.join(notes)})" if notes else "")
+
+
+def _figures_text(
+    figures: partner_report.PartnerFigures, rate: int | None, indent: str
+) -> list[str]:
+    lines = [
+        f"{indent}reviews={figures.reviews}  gift_units={figures.gift_units}  "
+        f"model_cost_usd={_fmt_usd(figures.model_cost_usd)}"
+        + (
+            f"  unknown_cost_calls={figures.unknown_cost_calls}"
+            if figures.unknown_cost_calls
+            else ""
+        )
+    ]
+    lines += [f"{indent}  {_money_text(m, rate)}" for m in figures.money]
+    return lines
+
+
+def _render_partner_text(report: partner_report.PartnerReport) -> str:
+    rate = report.share_bps
+    lines = [
+        f"partner report (internal) — {report.tenant_name} ({report.tenant_id})  "
+        f"{report.from_date.isoformat()}..{report.to_date.isoformat()} UTC",
+        f"share rate: {_rate(rate)}",
+        "base: the students' money spent on reviews in the month "
+        "(units bought and not used are not in it)",
+    ]
+    for course in report.courses:
+        lines.append(f"course {course.title!r} ({course.course_node_id})")
+        lines += _figures_text(course.figures, rate, "  ")
+        for task in course.tasks:
+            lines.append(f"  task {task.title!r} ({task.authored_document_id})")
+            lines += _figures_text(task.figures, rate, "    ")
+    if report.unlinked.reviews:
+        lines.append("without a course of the school")
+        lines += _figures_text(report.unlinked, rate, "  ")
+    lines.append("total")
+    lines += _figures_text(report.totals, rate, "  ")
+    if report.refunds:
+        lines += [
+            f"refunds to students in the month: {r.kind} {r.currency}  "
+            f"count={r.count}  units={r.units}  amount_minor={r.amount_minor}"
+            for r in report.refunds
+        ]
+    else:
+        lines.append("refunds to students in the month: none")
+    if report.excluded_test_reviews:
+        lines.append(
+            f"service students: {report.excluded_test_reviews} review(s) left out"
+        )
+    return "\n".join(lines)
+
+
+_PARTNER_CSV_FIELDS = (
+    "level",
+    "course_node_id",
+    "course_title",
+    "authored_document_id",
+    "task_title",
+    "currency",
+    "reviews",
+    "gift_units",
+    "model_cost_usd",
+    "unknown_cost_calls",
+    "gross_minor",
+    "tax_minor",
+    "fee_minor",
+    "net_minor",
+    "share_rate",
+    "partner_share_minor",
+    "notes",
+    "refund_kind",
+    "refund_count",
+    "refund_units",
+    "refund_amount_minor",
+)
+
+
+def _partner_csv_rows(
+    level: str,
+    figures: partner_report.PartnerFigures,
+    rate: int | None,
+    **where: str,
+) -> list[dict[str, str]]:
+    """One line per currency; the row's reviews and dollars on its first only."""
+    row = {
+        "level": level,
+        **where,
+        "reviews": str(figures.reviews),
+        "gift_units": str(figures.gift_units),
+        "model_cost_usd": _format_decimal_usd(figures.model_cost_usd),
+        "unknown_cost_calls": str(figures.unknown_cost_calls),
+    }
+    if not figures.money:
+        return [row]
+    lines: list[dict[str, str]] = []
+    for index, money in enumerate(figures.money):
+        line = dict(row) if index == 0 else {"level": level, **where}
+        line |= {
+            "currency": money.currency,
+            "gross_minor": str(money.gross_minor),
+            "tax_minor": str(money.tax_minor),
+            "fee_minor": "" if money.fee_minor is None else str(money.fee_minor),
+            "net_minor": str(money.net_minor),
+            "share_rate": _rate(rate),
+            "partner_share_minor": (
+                ""
+                if money.partner_share_minor is None
+                else str(money.partner_share_minor)
+            ),
+            "notes": "; ".join(_money_notes(money)),
+        }
+        lines.append(line)
+    return lines
+
+
+def _render_partner_csv(report: partner_report.PartnerReport) -> str:
+    rate = report.share_bps
+    rows: list[dict[str, str]] = []
+    for course in report.courses:
+        where = {
+            "course_node_id": str(course.course_node_id),
+            "course_title": course.title or "",
+        }
+        rows += _partner_csv_rows("course", course.figures, rate, **where)
+        for task in course.tasks:
+            rows += _partner_csv_rows(
+                "task",
+                task.figures,
+                rate,
+                **where,
+                authored_document_id=str(task.authored_document_id),
+                task_title=task.title or "",
+            )
+    if report.unlinked.reviews:
+        rows += _partner_csv_rows("unlinked", report.unlinked, rate)
+    rows += _partner_csv_rows("total", report.totals, rate)
+    rows += [
+        {
+            "level": "refund",
+            "currency": r.currency,
+            "refund_kind": r.kind,
+            "refund_count": str(r.count),
+            "refund_units": str(r.units),
+            "refund_amount_minor": str(r.amount_minor),
+        }
+        for r in report.refunds
+    ]
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=_PARTNER_CSV_FIELDS, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue().rstrip("\n")
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, uuid.UUID | date):
+        return str(value)
+    if isinstance(value, Decimal):
+        return _format_decimal_usd(value)
+    raise TypeError(f"{type(value).__name__} is not JSON")
+
+
+def _render_partner_json(report: partner_report.PartnerReport) -> str:
+    found = dataclasses.asdict(report)
+    found["share_rate"] = None if report.share_bps is None else _rate(report.share_bps)
+    found["internal"] = True
+    return json.dumps(found, ensure_ascii=False, indent=2, default=_json_value)
+
+
+async def partner_report_cmd(session: AsyncSession, args: argparse.Namespace) -> str:
+    """A school's month: its students' money for reviews, tax, fee, cost, share."""
+    await session.execute(text("SET TRANSACTION READ ONLY"))
+    tenant_id = await resolve_tenant_id(session, args.tenant)
+    report = await partner_report.partner_report(
+        session, tenant_id=tenant_id, month=args.month
+    )
+    if args.fmt == "csv":
+        return _render_partner_csv(report)
+    if args.fmt == "json":
+        return _render_partner_json(report)
+    return _render_partner_text(report)
+
+
 COMMANDS: dict[str, Handler] = {
     "show-account": show_account,
     "get-settings": get_settings_cmd,
@@ -1397,6 +1729,9 @@ COMMANDS: dict[str, Handler] = {
     "balance": balance,
     "statement": statement,
     "costs": costs_cmd,
+    "set-partner-share": set_partner_share,
+    "creem-sync": creem_sync,
+    "partner-report": partner_report_cmd,
 }
 
 # Commands that open their own transactions rather than run in the one of run().
@@ -1424,6 +1759,35 @@ Refunds (billing_refunds) are not subtracted from students_money_minor and are
 not counted in gift_units.
 Test students (students.is_test_student) are left out of these fields and of
 the students' units unless --include-test-students.
+"""
+
+
+_PARTNER_FIELDS_HELP = """\
+a school's month (UTC, both edges inclusive) of reviews in money — INTERNAL:
+what of it the school is shown is the product owner's decision. By course ->
+task and in total, each currency apart:
+
+  reviews              reviews the school's students paid from their own
+                       accounts (service students left out).
+  gross_minor          their money spent on those reviews, tax included: a
+                       debit from a paid batch is units * amount_paid_minor /
+                       batch units. Units bought and not used are not in it.
+  tax_minor            each batch's tax for the units spent from it: units /
+                       batch units * provider_tax_minor. A batch whose tax
+                       Creem has not told yet adds none: "без даних Creem"
+                       (creem-sync asks it).
+  fee_minor            the same of the provider's fee where known; Creem's API
+                       does not give it: "комісія Creem: API не віддає".
+  net_minor            gross_minor - tax_minor - fee_minor (the fee where
+                       known).
+  model_cost_usd       what the models cost for these reviews, USD.
+  share_rate           the school's rate (set-partner-share).
+  partner_share_minor  share_rate * net_minor; "ставку не задано" without one.
+  refunds              money given back to the school's students in the
+                       month (refunds approved, disputes lost), apart.
+
+In csv a row of two currencies has two lines; its reviews, gift_units and
+dollars are on the first only.
 """
 
 
@@ -1597,6 +1961,59 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.formatter_class = argparse.RawDescriptionHelpFormatter
     p.description = _COSTS_FIELDS_HELP
+
+    p = command(
+        "set-partner-share",
+        "set the school's share rate (partner report)",
+        changes=True,
+    )
+    p.add_argument("--tenant", required=True, help="tenant id or name")
+    p.add_argument(
+        "--percent",
+        required=True,
+        type=_percent,
+        help="0 to 100, at most two decimals (12.5), or none",
+    )
+
+    p = command(
+        "creem-sync",
+        "write Creem's tax and refunded part on the period's purchases",
+        changes=True,
+    )
+    p.add_argument(
+        "--from",
+        dest="from_date",
+        required=True,
+        type=_utc_date,
+        help="batches created from this UTC date YYYY-MM-DD, inclusive",
+    )
+    p.add_argument(
+        "--to",
+        dest="to_date",
+        required=True,
+        type=_utc_date,
+        help="to this UTC date YYYY-MM-DD, inclusive",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true", help="ask and count only; write nothing"
+    )
+
+    p = command(
+        "partner-report",
+        "a school's month of reviews in money (internal)",
+        changes=False,
+    )
+    p.add_argument("--tenant", required=True, help="tenant id or name")
+    p.add_argument("--month", required=True, type=_month, help="YYYY-MM, UTC")
+    p.add_argument(
+        "--format",
+        dest="fmt",
+        choices=("text", "csv", "json"),
+        default="text",
+        help="output format (default: text)",
+    )
+    p.formatter_class = argparse.RawDescriptionHelpFormatter
+    p.description = _PARTNER_FIELDS_HELP
 
     p = command("run-periodic", "run a periodic task by hand", changes=False)
     p.add_argument(

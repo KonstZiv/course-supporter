@@ -73,7 +73,8 @@ class ReviewDebit:
     """Debits of one review from one batch: its money, or its gift units.
 
     ``units`` — all the units debited (money or gift); ``student_id`` — the
-    student whose own account was debited.
+    student whose own account was debited; ``batch_id`` — the batch they were
+    taken from (the partner's report takes its tax and fee from it, Б-3).
     """
 
     tenant_id: uuid.UUID
@@ -83,6 +84,7 @@ class ReviewDebit:
     gift_units: int
     currency: str | None
     money: Fraction
+    batch_id: uuid.UUID
 
 
 class ReviewTally:
@@ -171,6 +173,7 @@ async def review_debits(
             BillingAccount.tenant_id,
             BillingAccount.student_id,
             BillingMovement.action_key,
+            BillingBatch.id,
             BillingBatch.source,
             BillingBatch.units,
             BillingBatch.amount_paid_minor,
@@ -206,9 +209,19 @@ async def review_debits(
         stmt = stmt.where(Student.is_test_student.is_not(True))
 
     found: list[ReviewDebit] = []
-    for t_id, s_id, key, source, batch_units, paid, currency, is_marked, units in (
-        await session.execute(stmt)
-    ).tuples():
+    rows = (await session.execute(stmt)).tuples()
+    for (
+        t_id,
+        s_id,
+        key,
+        b_id,
+        source,
+        batch_units,
+        paid,
+        currency,
+        is_marked,
+        units,
+    ) in rows:
         if t_id is None or key is None:
             continue
         free = (
@@ -230,6 +243,7 @@ async def review_debits(
                     if free or paid is None
                     else Fraction(int(units) * int(paid), int(batch_units))
                 ),
+                batch_id=b_id,
             )
         )
     return found

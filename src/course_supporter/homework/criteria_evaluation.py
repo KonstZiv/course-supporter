@@ -92,10 +92,14 @@ Repeating the task:
     ``..._reused`` (``call_id``, ``age_s``) and ``..._discarded`` (``reason``:
     ``unreadable``, ``rung_gone``, ``redis_error``).
 
-    What lies in Redis is the student's quotes and the model's words — for the
-    key's lifetime only (1980 s with the settings as they come). The student's
-    deletion (the command refuses while a submission is not finished) does not
-    meet it.
+    What lies in Redis under the key is the student's quotes and the model's
+    words. It lives up to 1980 s (with the settings as they come) from the
+    write in the first pass; a reuse does not extend it. After the last failed
+    pass the body closes the submission as ``FAILED``, which counts as
+    finished, so the student's deletion (the command refuses only while a
+    submission is not finished) may come before the lifetime ends: the key then
+    goes by itself when the lifetime passes. The key does not see a change of
+    the prompt's text under the same ``prompt_ref``.
 
 Replacing:
     The stage depends on :class:`CriteriaSource`, on the agent's two methods

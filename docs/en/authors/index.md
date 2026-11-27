@@ -15,7 +15,7 @@ last_updated: 2026-11-27
 
 This section is for course authors: how to prepare a course on the Course Supporter platform for students to work in, and what to do next.
 
-The author app is in Ukrainian for now. When this guide names a button or a screen, it gives the English name first and, in brackets, the Ukrainian one as you see it on the screen — for example, "Save (Зберегти)".
+The author app has an English version: switch it with the "English" button in the app header or on the sign-in page. When this guide names a button or a screen, it gives the English name first and, in brackets, the Ukrainian one — for example, "Save (Зберегти)" — so you can find it whichever language your app is in.
 
 ## What the platform does for you {#what}
 

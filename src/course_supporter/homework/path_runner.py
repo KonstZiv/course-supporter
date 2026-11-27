@@ -1159,6 +1159,12 @@ async def _after_delivery(
     """
     try:
         await builder.after_delivery(context)
+    except ValidationError as exc:
+        log.warning(
+            "path_after_delivery_failed",
+            error=type(exc).__name__,
+            problems=problems_without_values(exc),
+        )
     except Exception:
         log.warning("path_after_delivery_failed", exc_info=True)
 

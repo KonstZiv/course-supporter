@@ -20,6 +20,7 @@ from course_supporter.llm.ladder_config import load_ladder_config
 from course_supporter.llm.providers.deepseek import DeepSeekProvider
 from course_supporter.llm.providers.deepseek_thinking import DeepSeekThinkingProvider
 from course_supporter.llm.providers.gemini import GeminiProvider
+from course_supporter.llm.providers.gemini_decisions import GeminiDecisionsProvider
 from course_supporter.llm.stage_router import StageRouter
 from tests._helpers.registry import empty_registry
 
@@ -52,8 +53,15 @@ class TestCreateStageRouter:
         kwargs = router_cls.call_args.kwargs
         providers = kwargs["providers"]
         # DEEPSEEK_API_KEY feeds both DeepSeek pools (config.py), so one key
-        # registers the thinking-on sibling too.
-        assert set(providers) == {"gemini", "deepseek", "deepseek_thinking"}
+        # registers the thinking-on sibling too; GEMINI_API_KEY likewise feeds
+        # the decision models of the native endpoint.
+        assert set(providers) == {
+            "gemini",
+            "gemini_decisions",
+            "deepseek",
+            "deepseek_thinking",
+        }
+        assert isinstance(providers["gemini_decisions"], GeminiDecisionsProvider)
         assert isinstance(providers["gemini"], GeminiProvider)
         assert isinstance(providers["deepseek"], DeepSeekProvider)
         assert isinstance(providers["deepseek_thinking"], DeepSeekThinkingProvider)

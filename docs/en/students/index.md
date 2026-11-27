@@ -9,7 +9,7 @@ keywords:
   - test
   - review
   - replies
-last_updated: 2026-11-25
+last_updated: 2026-11-27
 ---
 
 # For students
@@ -66,7 +66,7 @@ If an attempt could not be checked, the portal tells you — send your answers a
 
 A package of units pays for the review of homework. You can buy it in the student portal, in the "Units" section: choose a package, confirm the terms before your first purchase and pay on the checkout page. A unit is not money and not a means of payment, but an amount of the platform's service. The "Units" page shows how many units are available, when some of them will expire soon and what has happened to them.
 
-Before you submit work, the portal shows the estimated cost of the review and how many units you have available. Tests do not use up units as long as something remains in your package; when there are no units at all, a test cannot be submitted — buy a package first. If you submit the same work again and ask for the review in the same language, and neither the assignment nor the Mentor has changed in the meantime, there is no new review: you get a copy of the previous review, and no units are used up. If you ask for the review in another language, or the Mentor has been updated in the meantime, the same work is reviewed again, as a new one, and units are used up. Reviewing projects does not use up units for now.
+Before you submit work, the portal shows the estimated cost of the review and how many units you have available. Tests do not use up units as long as something remains in your package; when there are no units at all, a test cannot be submitted — buy a package first. If you submit the same work again and ask for the review in the same language, and neither the assignment nor the Mentor has changed in the meantime, there is no new review: you get a copy of the previous review, and no units are used up. If you ask for the review in another language, or the Mentor has been updated in the meantime, the same work is reviewed again, as a new one, and units are used up. Reviewing a project uses up units too. A project is usually bigger than ordinary work, so its review costs more.
 
 If you do not have enough units, instead of the submit button the portal shows "Not enough units (Не вистачає юнітів)" and the link "Buy units (Купити юніти)". The chosen file stays on the page: after buying, go back to this tab — the portal notices by itself that you have enough units. If the work has already been accepted but its review has not started because of a shortage of units, it is marked "Paused (Призупинено)": after you buy a package the review continues by itself, and you do not have to submit the work again.
 

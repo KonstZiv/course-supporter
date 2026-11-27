@@ -11,6 +11,10 @@ the refusal of a draft that is not finished yet, with every unfinished place
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
 from fastapi import HTTPException
 
 from course_supporter.homework.reference_service import GenerationInProgressError
@@ -21,7 +25,58 @@ from course_supporter.homework.test_yaml import (
     DraftRefusedError,
     RefusalPlace,
 )
+from course_supporter.models.source import AssignmentType
 from course_supporter.security.exceptions import SecurityRejectedError
+from course_supporter.storage.project_base_repository import ProjectBaseRepository
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from course_supporter.storage.orm import AuthoredDocument
+    from course_supporter.storage.s3 import S3Client
+
+_PROJECT_TASK_TYPES = (
+    AssignmentType.PROJECT,
+    AssignmentType.PROJECT.value,
+    "project",
+)
+
+
+async def collect_documents_s3_keys(
+    documents: Sequence[AuthoredDocument],
+    *,
+    session: AsyncSession,
+    s3: S3Client,
+) -> list[str]:
+    """Collect deduplicated S3 object keys for documents before cascade scrub.
+
+    Gathers ``source_url`` keys, persisted ``slide_keys``, and ``project_bases``
+    ``archive_key`` / ``snapshot_key`` entries for project tasks before
+    cascade soft-delete scrubs ``source_url`` or removes ``project_bases`` rows.
+    """
+    file_keys: list[str] = []
+    project_doc_ids: list[uuid.UUID] = []
+
+    for doc in documents:
+        s3_key = s3.extract_key(doc.source_url)
+        if s3_key:
+            file_keys.append(s3_key)
+        if doc.slide_keys:
+            file_keys.extend(key for key in doc.slide_keys if key)
+        if doc.task_type in _PROJECT_TASK_TYPES:
+            project_doc_ids.append(doc.id)
+
+    if project_doc_ids:
+        bases = await ProjectBaseRepository(session).list_for_documents(
+            list(dict.fromkeys(project_doc_ids))
+        )
+        for base in bases:
+            if base.archive_key:
+                file_keys.append(base.archive_key)
+            if base.snapshot_key:
+                file_keys.append(base.snapshot_key)
+
+    return list(dict.fromkeys(file_keys))
 
 
 def generation_in_progress(exc: GenerationInProgressError) -> HTTPException:

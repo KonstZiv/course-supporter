@@ -29,7 +29,11 @@ What is recorded:
       adds ``evaluator_version`` when it reviews the work
       (:mod:`~course_supporter.homework.evaluator_version`); the dedup adds
       ``dedup_of`` and the source's ``evaluator_version`` when it repeats an
-      earlier attempt's review.
+      earlier attempt's review; the evaluation stage adds ``memory`` on a
+      repeated attempt of a text type when it decides whether to show the
+      earlier attempt
+      (:func:`~course_supporter.homework.criteria_evaluation._memory_shown`,
+      DD-SP-DP).
 
 Once:
     A continuation, a retry or a run re-entered after a crash opens the doors

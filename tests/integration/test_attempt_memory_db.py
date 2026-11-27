@@ -47,6 +47,7 @@ from course_supporter.homework.path_runner import read_text_work
 from course_supporter.homework.path_stages import (
     CRITERIA_EVALUATION,
     CRITERIA_EVALUATION_WITH_REPLIES,
+    PROJECT_CRITERIA_EVALUATION,
     REVIEW_EXPLANATION,
     StageContext,
     StageOutcome,
@@ -63,6 +64,7 @@ from course_supporter.storage.orm import (
     HomeworkSubmission,
     Job,
     Student,
+    SubmissionCriterionVerdict,
     Tenant,
 )
 from course_supporter.storage.student_repository import StudentRepository
@@ -434,6 +436,8 @@ class TestTheSecondAttemptIsEvaluatedWithTheFirstsMemory:
 
         first = await _submission(session_factory, first_id)
         assert (first.status, first.attempt_no) == ("delivered", 1)
+        assert first.attempt_receipt is not None
+        assert "memory" not in first.attempt_receipt
         # A first attempt: v2's request is v1's, byte for byte, no memory.
         (ref, variables), _ = router.evaluations()
         assert ref == "prompts/criteria_evaluation/v2.md"
@@ -445,6 +449,31 @@ class TestTheSecondAttemptIsEvaluatedWithTheFirstsMemory:
         second = await _submission(session_factory, second_id)
         assert (second.status, second.attempt_no) == ("delivered", 2)
         assert second.task_version == first.task_version
+        assert second.attempt_receipt is not None
+        assert second.attempt_receipt["attempt_no"] == 2
+        assert second.attempt_receipt["previous_submission_id"] == str(first_id)
+        assert second.attempt_receipt["fingerprint"] == second.fingerprint
+        assert second.attempt_receipt["evaluator_version"]
+        assert second.attempt_receipt["path"] == "new_path"
+        mark = second.attempt_receipt["memory"]
+        assert set(mark) == {
+            "shown",
+            "reason",
+            "earlier_submission_id",
+            "verdicts",
+            "diff_chars",
+        }
+        assert mark["shown"] is True
+        assert mark["reason"] is None
+        assert mark["earlier_submission_id"] == str(first_id)
+        assert isinstance(mark["verdicts"], int)
+        assert mark["verdicts"] == 4
+        assert isinstance(mark["diff_chars"], int)
+        assert mark["diff_chars"] > 0
+        mark_json = json.dumps(mark)
+        assert "solve" not in mark_json
+        assert "Doubles" not in mark_json
+        assert "Немає" not in mark_json
         # The doors read the earlier attempt's own file, after this one's.
         assert s3.downloaded == [
             "homework/1/answers.py",
@@ -487,7 +516,7 @@ class TestTheSecondAttemptIsEvaluatedWithTheFirstsMemory:
         world: dict[str, Any],
         tmp_path: Path,
     ) -> None:
-        router, _, _, _, logs = await _two_attempts(
+        router, first_id, second_id, _, logs = await _two_attempts(
             session_factory, world, tmp_path, _shipped()
         )
 
@@ -501,6 +530,18 @@ class TestTheSecondAttemptIsEvaluatedWithTheFirstsMemory:
         assert line["reason"] == "memory_over_growth"
         assert line["growth"] > 0.33
         assert "return n + n" not in repr(logs)
+        second = await _submission(session_factory, second_id)
+        assert second.attempt_receipt is not None
+        assert second.attempt_receipt["attempt_no"] == 2
+        assert second.attempt_receipt["previous_submission_id"] == str(first_id)
+        assert second.attempt_receipt["evaluator_version"]
+        assert second.attempt_receipt["memory"] == {
+            "shown": False,
+            "reason": line["reason"],
+            "earlier_submission_id": None,
+            "verdicts": None,
+            "diff_chars": None,
+        }
 
 
 async def _verdict_rows(
@@ -721,3 +762,163 @@ class TestTheStageWithRepliesShowsTheMemoryToo:
         [line] = [e for e in logs if e["event"] == "criteria_evaluation_memory_none"]
         assert line["reason"] == "memory_over_growth"
         assert "return fibonacci(n - 1)" not in repr(logs)
+
+
+# ── The receipt mark in PostgreSQL (DD-SP-DP) ────────────────────────────────
+
+
+def _baseline_receipt(previous_id: uuid.UUID | None) -> dict[str, Any]:
+    return {
+        "attempt_no": 2 if previous_id is not None else 1,
+        "previous_submission_id": None if previous_id is None else str(previous_id),
+        "task_version": "v1",
+        "task_version_changed": False,
+        "fingerprint": "f" * 64,
+        "path": "new_path",
+        "test_mode": True,
+        "evaluator_version": "ev1:0123456789abcdef",
+    }
+
+
+class TestAttemptReceiptMemoryMarkDb:
+    async def test_repeated_attempt_without_earlier_review_records_nothing_to_show(
+        self, db_session: AsyncSession, two_attempts: dict[str, Any]
+    ) -> None:
+        first: HomeworkSubmission = two_attempts["first"]
+        second: HomeworkSubmission = two_attempts["second"]
+        await db_session.execute(
+            delete(SubmissionCriterionVerdict).where(
+                SubmissionCriterionVerdict.submission_id == first.id
+            )
+        )
+        baseline = _baseline_receipt(first.id)
+        second.attempt_receipt = dict(baseline)
+        await db_session.flush()
+        router = _Router(
+            _verdicts(
+                _met("c1", "def fibonacci(n):"),
+                _met("c2", "return fibonacci(n - 1) + fibonacci(n - 2)"),
+            )
+        )
+
+        outcome = await _evaluate_with_replies(db_session, two_attempts, router)
+
+        assert outcome == StageOutcome.ok()
+        await db_session.refresh(second)
+        assert second.attempt_receipt == {
+            **baseline,
+            "memory": {
+                "shown": False,
+                "reason": "nothing_to_show",
+                "earlier_submission_id": None,
+                "verdicts": None,
+                "diff_chars": None,
+            },
+        }
+
+    @pytest.mark.parametrize(
+        ("stage_name", "task_type", "state"),
+        [
+            (CRITERIA_EVALUATION, AssignmentType.TASK, SubmissionState.FIRST),
+            (
+                PROJECT_CRITERIA_EVALUATION,
+                AssignmentType.PROJECT,
+                SubmissionState.REPEAT_WITHOUT_REPLIES,
+            ),
+        ],
+    )
+    async def test_first_attempt_and_project_stage_leave_receipt_without_memory(
+        self,
+        db_session: AsyncSession,
+        two_attempts: dict[str, Any],
+        stage_name: str,
+        task_type: AssignmentType,
+        state: SubmissionState,
+    ) -> None:
+        first: HomeworkSubmission = two_attempts["first"]
+        second: HomeworkSubmission = two_attempts["second"]
+        baseline = _baseline_receipt(
+            None if state is SubmissionState.FIRST else first.id
+        )
+        second.attempt_receipt = dict(baseline)
+        await db_session.flush()
+
+        reading = read_text_work(
+            filename="solution.py",
+            file_bytes=_REPLY_SECOND.encode(),
+            languages=["ukr"],
+            note_flags=(),
+        )
+        config = _raised()
+        router = _Router(
+            _verdicts(
+                _met("c1", "def fibonacci(n):"),
+                _met("c2", "return fibonacci(n - 1) + fibonacci(n - 2)"),
+            )
+        )
+        context = StageContext(
+            session=db_session,
+            router=router,  # type: ignore[arg-type]
+            submission=second,
+            submission_text=reading.text,
+            language="ukr",
+            path_key=PathKey(task_type, state),
+            stage_name=stage_name,
+            stage=config.stages[stage_name],
+            session_factory=None,  # type: ignore[arg-type]
+            door=reading,
+            work=reading.files,
+            config=config,
+            earlier_work=DoorsEarlierWork(two_attempts["s3"]),
+        )
+
+        outcome = await evaluate_criteria(
+            context,
+            execution=_execution(context),
+            criteria_source=_Criteria(two_attempts["in_force"]),
+            reply_source=_Replies(),
+        )
+
+        assert outcome == StageOutcome.ok()
+        await db_session.refresh(second)
+        assert second.attempt_receipt == baseline
+        assert "memory" not in (second.attempt_receipt or {})
+
+    async def test_store_attempt_memory_preserves_keys_overwrites_and_guards_null(
+        self, db_session: AsyncSession, two_attempts: dict[str, Any]
+    ) -> None:
+        first: HomeworkSubmission = two_attempts["first"]
+        second: HomeworkSubmission = two_attempts["second"]
+        repo = HomeworkRepository(db_session)
+
+        baseline = _baseline_receipt(first.id)
+        second.attempt_receipt = dict(baseline)
+        await db_session.flush()
+
+        first_mark: dict[str, Any] = {
+            "shown": False,
+            "reason": "nothing_to_show",
+            "earlier_submission_id": None,
+            "verdicts": None,
+            "diff_chars": None,
+        }
+        await repo.store_attempt_memory(second.id, memory=first_mark)
+        await db_session.refresh(second)
+        assert second.attempt_receipt == {**baseline, "memory": first_mark}
+
+        second_mark: dict[str, Any] = {
+            "shown": True,
+            "reason": None,
+            "earlier_submission_id": str(first.id),
+            "verdicts": 2,
+            "diff_chars": 42,
+        }
+        await repo.store_attempt_memory(second.id, memory=second_mark)
+        await db_session.refresh(second)
+        assert second.attempt_receipt == {**baseline, "memory": second_mark}
+
+        first.attempt_receipt = None
+        await db_session.flush()
+        await repo.store_attempt_memory(first.id, memory=first_mark)
+        await db_session.refresh(first)
+        assert first.attempt_receipt is None

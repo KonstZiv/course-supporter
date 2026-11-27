@@ -331,9 +331,9 @@ async def _memory_shown(
     difference or the memory is not shown is logged with the numbers and no
     text of the work.
 
-    Чи показано пам'ять і чому — пишеться також у квитанцію спроби
-    (``attempt_receipt["memory"]``, DD-SP-DP).
-    """  # noqa: RUF002
+    Whether the memory is shown, and why not, is also written into the attempt
+    receipt (``attempt_receipt["memory"]``, DD-SP-DP).
+    """
     if context.stage_name not in MEMORY_STAGES:
         return None
     if context.path_key.state is SubmissionState.FIRST:

@@ -1,6 +1,7 @@
 """Canonical Job type enum + application-level validation.
 
-Vision §3 KD13 fixes the universe of ``Job.job_type`` values to seven:
+Vision §3 KD13 fixed the universe of ``Job.job_type`` values at seven;
+it has grown since:
 
 * ``document_processing`` — pipeline of one ``AuthoredDocument``
   (stages: pass_1 → pass_2a → pass_2b → pass_2c).
@@ -20,10 +21,15 @@ Vision §3 KD13 fixes the universe of ``Job.job_type`` values to seven:
   task 06). Same subject as ``document_processing``: the job is
   enqueued for the TASK, before the reference version it produces
   exists.
+* ``criteria_composition`` — composition of a task's criteria list on the
+  author's request, before any student's submission (DD-SP-DR). Same subject
+  as ``document_processing``: the list is composed for the TASK's current
+  version, and ``uq_jobs_subject_in_flight`` keeps it to one at a time.
 
 The DB-level CHECK constraint ``ck_jobs_job_type`` (L1a, widened by
-n21_prep_jobtype for ``document_preparation`` and by task_reference_key
-for ``key_explanation``) enforces exactly this set
+n21_prep_jobtype for ``document_preparation``, by task_reference_key
+for ``key_explanation`` and by criteria_composition_jobtype for
+``criteria_composition``) enforces exactly this set
 at the storage layer. :func:`validate_job_type`
 is the application-level mirror: it gives a clean ``ValueError`` at the
 call site before the INSERT rather than an opaque ``IntegrityError`` from
@@ -63,6 +69,10 @@ class JobType(StrEnum):
     # in-flight idempotency index keys on the subject. Added to both DB CHECKs
     # by task_reference_key.
     KEY_EXPLANATION = "key_explanation"
+    # DD-SP-DR: the author's own request to compose a task's criteria list
+    # before the first submission does. Subject = the task (authored_document);
+    # added to both DB CHECKs by criteria_composition_jobtype.
+    CRITERIA_COMPOSITION = "criteria_composition"
 
 
 _CANONICAL_VALUES: frozenset[str] = frozenset(jt.value for jt in JobType)
@@ -84,6 +94,7 @@ JOB_SUBJECT_TYPE: dict[JobType, str | None] = {
     JobType.NODE_SUMMARY_REGENERATION: "course_node",
     JobType.BASE_NORMALIZE: "project_base",
     JobType.KEY_EXPLANATION: "authored_document",
+    JobType.CRITERIA_COMPOSITION: "authored_document",
     JobType.S3_CLEANUP: None,
 }
 

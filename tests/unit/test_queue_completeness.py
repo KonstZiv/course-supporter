@@ -41,6 +41,7 @@ _KNOWN_ENQUEUED = frozenset(
         "arq_regenerate_node_summary",
         "base_normalize_task",
         "arq_explain_key",
+        "arq_compose_criteria",
         "arq_prepare_document",
         "arq_send_email",
         "s3_cleanup_task",

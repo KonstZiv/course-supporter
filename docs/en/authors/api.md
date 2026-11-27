@@ -446,9 +446,9 @@ The server returns the `message` texts in Ukrainian; each is followed here by an
 
 While no work is waiting for the list (`awaiting_first_submission`), the `message` is:
 
-> Перелік критеріїв буде складено після першої подачі роботи студентом на перевірку, після цього його можна поправити.
+> Перелік критеріїв буде складено після першої подачі роботи студентом на перевірку, після цього його можна поправити. Ви можете скласти його й зараз, не чекаючи першої подачі.
 
-*In English: The list of criteria will be put together after a student first submits work for review; after that, it can be corrected.*
+*In English: The list of criteria will be put together after a student first submits work for review; after that, it can be corrected. You can put it together now, without waiting for the first submission.*
 
 While the system is putting it together (`composing`):
 

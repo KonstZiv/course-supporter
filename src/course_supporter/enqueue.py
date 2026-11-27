@@ -519,6 +519,74 @@ async def enqueue_key_explanation(
     return job
 
 
+async def enqueue_criteria_composition(
+    *,
+    redis: ArqRedis,
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    authored_document_id: uuid.UUID,
+) -> Job:
+    """Create the Job that composes a task's criteria list and enqueue it.
+
+    DD-SP-DR: the author asks for the list before any student's submission does.
+    Helper-owns-commit (QQ5, as the siblings above): the durable Job row is
+    committed BEFORE the ARQ dispatch, so a hot worker never reads a Job the
+    database has not seen.
+
+    The subject is the task (``authored_document``). That is what
+    ``uq_jobs_subject_in_flight`` then buys: while any job of the task is in
+    flight — a composition, its processing, a key's explanations — a second is
+    refused by the database. The caller reads the in-flight job first, to say
+    which; the index is the judge when two requests race.
+
+    The job carries the task's node as ``course_node_id``, as the task's own
+    processing job does, so the cost reports attribute the spend to its course.
+
+    Raises:
+        sqlalchemy.exc.IntegrityError: another job of this task is in flight.
+            The transaction is void by then; the caller rolls its session back
+            before using it again.
+
+    Returns:
+        The created Job — the author's request does not wait for the work.
+    """
+    log = structlog.get_logger().bind(authored_document_id=str(authored_document_id))
+    job_repo = JobRepository(session)
+    task_node_id = await session.scalar(
+        select(AuthoredDocument.course_node_id).where(
+            AuthoredDocument.id == authored_document_id
+        )
+    )
+    job = await job_repo.create(
+        tenant_id=tenant_id,
+        course_node_id=task_node_id,
+        job_type=JobType.CRITERIA_COMPOSITION,
+        input_params={"authored_document_id": str(authored_document_id)},
+        subject_type=JOB_SUBJECT_TYPE[JobType.CRITERIA_COMPOSITION],
+        subject_id=authored_document_id,
+    )
+    await session.commit()
+
+    # Named, not inherited (hot fix 5): the API's pool defaults to arq's own
+    # queue, but a lock reads the source rather than trust who built the pool.
+    arq_job = await redis.enqueue_job(
+        "arq_compose_criteria",
+        str(job.id),
+        str(authored_document_id),
+        _queue_name=default_queue_name,
+    )
+    if arq_job is not None:
+        await job_repo.set_arq_job_id(job.id, arq_job.job_id)
+        await session.commit()
+
+    log.info(
+        "criteria_composition_enqueued",
+        job_id=str(job.id),
+        arq_job_id=arq_job.job_id if arq_job else None,
+    )
+    return job
+
+
 async def enqueue_document_preparation(
     *,
     redis: ArqRedis,

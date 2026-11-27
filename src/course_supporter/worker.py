@@ -28,6 +28,7 @@ from course_supporter.config import get_settings
 from course_supporter.logging_config import configure_logging
 from course_supporter.periodic import registry as periodic
 from course_supporter.workers.base_normalize import base_normalize_task
+from course_supporter.workers.criteria_compose import arq_compose_criteria
 from course_supporter.workers.email_send import arq_send_email
 from course_supporter.workers.key_explain import arq_explain_key
 from course_supporter.workers.s3_cleanup import s3_cleanup_task
@@ -268,6 +269,7 @@ class WorkerSettings:
         arq_send_email,
         base_normalize_task,
         arq_explain_key,
+        arq_compose_criteria,
     ]
     # The system's one scheduler (``course_supporter.periodic``): the periodic
     # tasks live here, on the default queue, and nowhere else — the homework

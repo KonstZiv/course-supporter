@@ -104,7 +104,10 @@ def action_of_call(
     """
     if job_type == JobType.HOMEWORK_PROCESSING.value and subject_id is not None:
         return ActionRef(ActionKind.REVIEW, str(subject_id))
-    if job_type == JobType.KEY_EXPLANATION.value and subject_id is not None:
+    if (
+        job_type in (JobType.KEY_EXPLANATION.value, JobType.CRITERIA_COMPOSITION.value)
+        and subject_id is not None
+    ):
         return ActionRef(ActionKind.TASK_PREPARATION, str(subject_id))
     if job_type in PROCESSING_JOB_TYPES:
         return ActionRef(ActionKind.PROCESSING, str(job_id))

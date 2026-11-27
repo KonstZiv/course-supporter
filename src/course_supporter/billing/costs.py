@@ -464,7 +464,9 @@ def _spend_from_row(row: Row[Any]) -> SpendSummary:
 def _action_bucket_expr() -> ColumnElement[str]:
     is_task_prep = or_(
         ExternalServiceCall.action.in_(PREPARATION_STAGES),
-        Job.job_type == JobType.KEY_EXPLANATION.value,
+        Job.job_type.in_(
+            (JobType.KEY_EXPLANATION.value, JobType.CRITERIA_COMPOSITION.value)
+        ),
     )
     is_processing = Job.job_type.in_(PROCESSING_JOB_TYPES)
     is_review = or_(

@@ -70,6 +70,9 @@
 #   (+10% upcharge per https://docs.mistral.ai/inference/regional-inference,
 #   verified 2026-11-12). mistral-large-2512: 0.0005/0.0015 -> 0.00055/0.00165
 #   per 1k; mistral-small-latest: 0.00015/0.0006 -> 0.000165/0.00066 per 1k.
+# 2026-11-26 M-9 (catalog 2026-11-26.1): gemini-decision-1 added under the new
+#   provider gemini_decisions (Google's native decisions endpoint, task 12a, K3):
+#   $0.10 per 1M input tokens, output free. No other price changed.
 #
 # ── Capabilities (task 09a, 2026-10-01) ──
 # The former ``structured_output`` label is split in two wire facts:
@@ -94,8 +97,8 @@
 # a pricing rule or a tariff therefore means: give the catalog a new version,
 # and paste the fingerprint the loader's error message prints.
 catalog:
-  version: "2026-11-12.1"
-  pricing_sha256: "17bce17d645e8077e07149896542fa73a73365554dd2e3d8f11ad37b4b1c5332"
+  version: "2026-11-26.1"
+  pricing_sha256: "c6df30457e59dac155d991b5f0b7642a9da3b12ce48a7d1f8268aecfd8ec0ae0"
 
 # ── Time-of-day tariffs (BIL-C, decision 3) ──
 # A model names its tariff with ``tariff:``; its cost_per_1k_* are then the
@@ -333,6 +336,29 @@ providers:
         cost_per_1k_in: 0.0003
         cost_per_1k_out: 0.0025
         cost_per_1k_in_cached: 0.00003
+        price_effective_from: null
+        price_holds_to_input_tokens: null
+
+  # Decision models of Google's native REST endpoint (llm/providers/
+  # gemini_decisions.py): they answer fixed questions about an input instead of
+  # writing text. One model, called by the reply screen's topic stage
+  # (`reply_topic` in submission_paths.yaml).
+  gemini_decisions:
+    type: llm
+    models:
+      - id: gemini-decision-1
+        # Source: Google's pricing page, checked 2026-11-26 (report B2 of the
+        # native-endpoint measurement, sprint/tasks/mentor-rebuild/12-replies/
+        # decision-models/native-2026-11-26/B2-NATIVE-REPORT.md in the
+        # refactoring-vision repository): $0.10 per 1M input tokens, output
+        # free. The response reports tokens only (usage.total_input_tokens,
+        # total_output_tokens = 0), never a price. No capabilities: the model
+        # writes no text, so neither JSON mode nor a schema applies; context
+        # and output limits are not stated by the page and left empty.
+        unit_type: tokens
+        cost_per_1k_in: 0.0001
+        cost_per_1k_out: 0.0
+        cost_per_1k_in_cached: null
         price_effective_from: null
         price_holds_to_input_tokens: null
 

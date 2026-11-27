@@ -43,6 +43,7 @@ from course_supporter.api.schemas import (
 from course_supporter.auth.context import TenantContext
 from course_supporter.auth.registry import AuthScope
 from course_supporter.auth.scopes import require_scope
+from course_supporter.billing.quotes import UnitsRefusedError
 from course_supporter.enqueue import enqueue_criteria_composition
 from course_supporter.homework.criteria_edit_service import (
     ComposeAction,
@@ -189,10 +190,21 @@ async def compose_criteria(
       queued.
     * One is being composed already — by a submission, or by an earlier request
       of this one: **202** with the current reading (``status = "composing"``);
-      nothing is queued.
-    * Otherwise one composition is queued and the answer is **202** with
+      nothing is queued. A claim whose claimer has been silent so long that a
+      submission would take it over (``claim_is_abandoned``, the service's own
+      rule) is not "being composed": the request queues the work, which takes
+      the claim over by the same road a submission does.
+    * Otherwise, if the author can pay for it, one composition is queued and
+      the answer is **202** with
       ``status = "composing"``. It is truthful at once, not after the worker
       starts: the queued job is a row, and the reading counts it.
+    * The author's own action has a threshold (``charging.threshold_applies``,
+      ``own_action=True``): an author without credit whose available units are
+      below the price P gets **402** ``{"code": "insufficient_units",
+      "details": {"price_units", "available_units", "missing_units"}}`` — the
+      body of a submission's refusal — and nothing is queued. An author with
+      credit, or charging off, is not checked. The composition a student's
+      submission starts has no threshold, as before.
     * Another job of the task is in flight — its processing, a key's
       explanations: **409** ``GENERATION_IN_PROGRESS``, nothing queued; the
       request is not wrong, only early.
@@ -217,6 +229,10 @@ async def compose_criteria(
         return _response(ask.view)
     if ask.action is ComposeAction.TASK_BUSY:
         raise _task_busy(document_id)
+    try:
+        await service.require_units_to_compose(document_id)
+    except UnitsRefusedError as exc:
+        raise HTTPException(status_code=402, detail=exc.detail_body()) from exc
     try:
         await enqueue_criteria_composition(
             redis=arq,

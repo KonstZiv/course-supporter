@@ -517,7 +517,39 @@ curl -X DELETE https://api.pythoncourse.me/api/v1/documents/$TASK_ID/criteria/ov
 Work is again reviewed against the system's list. A reset edit, like every replaced one, stays in the
 system as a snapshot, but does not apply and is not shown in reading.
 
-All three requests respond with the same body as reading — so you can see what exactly applies now.
+All four requests respond with the same body as reading — so you can see what exactly applies now.
+
+### Put the list together now {#criteria-compose}
+
+Normally the list is put together after the first submission. You can do it earlier — before any
+student has submitted — and correct it afterwards:
+
+```bash
+curl -X POST https://api.pythoncourse.me/api/v1/documents/$TASK_ID/criteria/compose -H "X-API-Key: $PREP_KEY"
+```
+
+The request has no body and answers with the same body as reading. It is your own action, paid from
+your package as the explanations of a test are; nothing else is charged for it.
+
+- **200** — a list already applies; nothing is started.
+- **202** — the list is being put together (by a student's submission or by your earlier request), or
+  the work has just been started: `status` is `composing`. The request does not start a second piece
+  of work. A put-together that stopped moving — the attempt that began it is gone, and the system
+  would hand it to the next submission after five minutes of silence — does not hold the request
+  back: it starts the work, which takes that attempt over the same way.
+- **402** `insufficient_units` — you have no credit and fewer units available than the price. The
+  body is `{"code": "insufficient_units", "details": {"price_units": …, "available_units": …,
+  "missing_units": …}}`; nothing is started. With credit, nothing is checked.
+- **409** [`GENERATION_IN_PROGRESS`](#GENERATION_IN_PROGRESS) — another piece of work on this
+  assignment is running, for instance its processing. The text: «Завдання ще обробляється — спробуйте
+  скласти перелік, коли обробку буде завершено» (*The assignment is still being processed — try again
+  when processing has finished*). Nothing is started.
+- **422** `NOT_A_TEXT_TASK` and `TASK_NOT_READY` — as in the other requests; `TASK_NOT_READY` also
+  when the assignment has no processed text yet.
+
+How it ends is read by repeating the reading every few seconds: `ready` — there is a list;
+`not_composed` with a `reason_code` — it did not work out (for example `limit_reached`, if the
+system's limits or the money ceiling were met), and the `message` says what to do.
 
 ### When a request is refused {#criteria-refusals}
 

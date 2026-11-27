@@ -17,6 +17,7 @@ Interface:
     :meth:`CriteriaListService.get_or_compose` — for a review: the list in
     force, composed on a miss, or :class:`CriteriaUnavailable` with a reason.
     :func:`build_criteria_list_service` — the production wiring.
+    :func:`claim_is_abandoned` — the one rule for a claim whose claimer is gone.
     :func:`has_ready_summary` and :func:`recorded_stop` — two facts the
     author's reading of a task without a list states (task 09b): whether the
     task is processed, and how its last composition gave up.
@@ -75,6 +76,7 @@ from sqlalchemy import func, select
 
 from course_supporter.agents.criteria_decomposer import CriteriaDecomposerAgent
 from course_supporter.billing.charging import job_fact_usd
+from course_supporter.billing.estimates import criteria_decomposition_task_chars
 from course_supporter.billing.funds import (
     PreparationCharge,
     preparation_ended,
@@ -157,6 +159,23 @@ five in a row; a claimer that is gone (a deploy that recreated its worker, a
 crash, a cancelled job) misses all of them, and its task version waits five
 minutes for a new claimer instead of a job's timeout.
 """
+
+
+def claim_is_abandoned(
+    claimed_at: datetime,
+    now: datetime,
+    *,
+    abandoned_after: timedelta = CLAIM_SILENCE_LIMIT,
+) -> bool:
+    """Has a claim's claimer been silent so long that it counts as gone?
+
+    The one rule: a submission that finds or waits for a claim takes it over
+    when this says so (:meth:`CriteriaListService._wait`), and the author's
+    request to compose the list does not take a claim for a live one when it
+    says so (:meth:`CriteriaEditService.compose_asked`). ``now`` is the
+    database's clock, the one ``claimed_at`` is written by.
+    """
+    return now - claimed_at >= abandoned_after
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,7 +373,7 @@ def _is_current(
     )
 
 
-def _node_description(final: NodeSummaryFinal | None) -> str:
+def node_description_of(final: NodeSummaryFinal | None) -> str:
     """The description the review reads; an author's empty module has its own."""
     if final is None:
         return ""
@@ -592,7 +611,7 @@ class CriteriaListService:
     ) -> CriteriaInForce | CriteriaUnavailable:
         document = snapshot.document
         claim = _Claim(list_id, claimed_at)
-        node_description = _node_description(snapshot.node_final)
+        node_description = node_description_of(snapshot.node_final)
         node_concepts = _main_concepts(snapshot.node_final)
         root_concepts = _main_concepts(snapshot.root_final)
         stop = asyncio.Event()
@@ -612,9 +631,8 @@ class CriteriaListService:
                     prompt_hash=self._composer.prompt_hash(),
                 )
                 if self._shadow_estimate:
-                    task_chars = sum(
-                        len(part or "")
-                        for part in (title, description, text, node_description)
+                    task_chars = criteria_decomposition_task_chars(
+                        title, description, text, node_description
                     )
                     # Never raises; its own transaction (cost_estimate/shadow.py).
                     await shadow_task_preparation(
@@ -789,7 +807,9 @@ class CriteriaListService:
             if row.deleted_at is not None:
                 # Released for a newer version: this list is not coming.
                 return self._unavailable(document_id, UnavailableReason.WAIT_EXHAUSTED)
-            if now - row.claimed_at >= self._abandoned_after:
+            if claim_is_abandoned(
+                row.claimed_at, now, abandoned_after=self._abandoned_after
+            ):
                 claimed_at = await self._take_over(row, document_id)
                 if claimed_at is not None:
                     return await self._compose(snapshot, row.id, claimed_at)

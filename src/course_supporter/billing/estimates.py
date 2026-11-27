@@ -112,6 +112,23 @@ def key_explanation_task_chars(task_text: str, answers: object) -> int:
     return len(task_text) + len(json.dumps(answers, default=str))
 
 
+def criteria_decomposition_task_chars(
+    title: str | None,
+    description: str | None,
+    text: str | None,
+    node_description: str | None,
+) -> int:
+    """The size of what the decomposition of a task's criteria is shown, in characters.
+
+    One rule for the two places that price the work: the composition that
+    reserves E before its model call (``CriteriaListService``) and the route
+    that checks the author's threshold before asking for it
+    (``POST /documents/{document_id}/criteria/compose``) — so the price the
+    author is held to is the E the composition reserves.
+    """
+    return sum(len(part or "") for part in (title, description, text, node_description))
+
+
 def processing_e_usd(
     *, kind: str, factors: MaterialFactors, at: datetime | None = None
 ) -> Decimal | None:

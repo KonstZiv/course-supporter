@@ -56,6 +56,15 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
+from sqlalchemy import func, select
+
+from course_supporter.billing.charging import charging_possible
+from course_supporter.billing.estimates import (
+    criteria_decomposition_task_chars,
+    preparation_e_usd,
+)
+from course_supporter.billing.kinds import ActionKind
+from course_supporter.billing.quotes import author_quote, require_enough
 from course_supporter.concept_dedup import normalization_key
 from course_supporter.criteria_kinds import WeightCategory
 from course_supporter.criteria_list_state import CriteriaListState
@@ -73,9 +82,12 @@ from course_supporter.homework.criteria_form import (
 from course_supporter.homework.criteria_list_service import (
     CriteriaInForce,
     choose_in_force,
+    claim_is_abandoned,
     has_ready_summary,
+    node_description_of,
     recorded_stop,
 )
+from course_supporter.homework.task_context import load_task_context
 from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.llm.error_categories import LadderStop
 from course_supporter.models.source import AssignmentType
@@ -428,8 +440,12 @@ class CriteriaEditService:
         """What a request to compose the task's list must do now (DD-SP-DR).
 
         Reads, in this order, and writes nothing: a list in force — nothing to
-        do; a composition under way, a claim's or the request's own job —
-        nothing to add; another job of the task in flight — it cannot be
+        do; a composition under way — a live claim's or the request's own job —
+        nothing to add (a claim whose claimer has been silent so long that a
+        submission would take it over, :func:`claim_is_abandoned`, is not under
+        way: the work this request queues takes it over by the same road, and
+        that is how the author's request gets past a dead claim); another job
+        of the task in flight — it cannot be
         queued, the database allows one job per task; the task not processed —
         there is nothing to compose from; otherwise queue it.
 
@@ -442,7 +458,7 @@ class CriteriaEditService:
         view = await self._view(task)
         if view.in_force is not None:
             return ComposeAsk(ComposeAction.ALREADY_IN_FORCE, view)
-        if view.status is CriteriaStatus.COMPOSING:
+        if view.status is CriteriaStatus.COMPOSING and not await self._abandoned(task):
             return ComposeAsk(ComposeAction.UNDER_WAY, view)
         if await self._in_flight_job(task.document.id) is not None:
             return ComposeAsk(ComposeAction.TASK_BUSY, view)
@@ -453,6 +469,75 @@ class CriteriaEditService:
                 "so there is nothing to compose a list from",
             )
         return ComposeAsk(ComposeAction.QUEUE, view)
+
+    async def _abandoned(self, task: _Task) -> bool:
+        """Is the task version's pending claim one a submission would take over?
+
+        False while the request's own job is in flight — it is the one that
+        will take the claim over — and when the version has no pending claim.
+        """
+        document = task.document
+        if await self._composition_in_flight(document.id):
+            return False
+        attempt = await TaskCriteriaListRepository(
+            self._session
+        ).get_latest_for_version(
+            document.id,
+            source_content_hash=task.content_hash,
+            source_task_type=task.task_type,
+        )
+        if (
+            attempt is None
+            or attempt.deleted_at is not None
+            or attempt.state != CriteriaListState.PENDING
+        ):
+            return False
+        # The database's clock, the one ``claimed_at`` is written by.
+        now = (await self._session.execute(select(func.now()))).scalar_one()
+        return claim_is_abandoned(attempt.claimed_at, now)
+
+    async def require_units_to_compose(self, authored_document_id: uuid.UUID) -> None:
+        """The threshold of the author's own action, before the work is queued.
+
+        Composing from the author's button is the author's own action
+        (``charging.threshold_applies``, ``own_action=True``): an author
+        without credit starts it only when ``available >= P``, P the price of
+        the composition as the work will reserve it (same E, same characters:
+        :func:`criteria_decomposition_task_chars`). An author with credit is
+        never stopped; with charging off, nothing is checked. The work itself
+        is unchanged — a composition a submission starts has no threshold.
+
+        Raises:
+            UnitsRefusedError: the author cannot cover P (the route answers
+                **402** ``insufficient_units``, as a submission's refusal).
+        """
+        if not charging_possible():
+            return
+        document = await self._session.get(AuthoredDocument, authored_document_id)
+        if document is None:  # pragma: no cover — read just before
+            return
+        node = await self._session.get(CourseNode, document.course_node_id)
+        if node is None:  # pragma: no cover — a document always has its node
+            return
+        title, description, text = await load_task_context(
+            self._session, authored_document_id
+        )
+        final = await NodeSummaryFinalRepository(self._session).get_by_course_node_id(
+            document.course_node_id
+        )
+        quote = await author_quote(
+            self._session,
+            action_kind=ActionKind.TASK_PREPARATION,
+            tenant_id=node.tenant_id,
+            course_node_id=document.course_root_id,
+            e_usd=preparation_e_usd(
+                kind="criteria_decomposition",
+                task_chars=criteria_decomposition_task_chars(
+                    title, description, text, node_description_of(final)
+                ),
+            ),
+        )
+        require_enough(quote, "the criteria list cannot be composed")
 
     async def _require_text_task(self, authored_document_id: uuid.UUID) -> _Task:
         """The task, if it is a live text task that has a version."""

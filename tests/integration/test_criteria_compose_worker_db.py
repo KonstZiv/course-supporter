@@ -48,9 +48,12 @@ from course_supporter.homework.criteria_form import (
     CriterionDraft,
     compose_criteria,
 )
-from course_supporter.homework.criteria_list_service import CriteriaListService
+from course_supporter.homework.criteria_list_service import (
+    CriteriaInForce,
+    CriteriaListService,
+)
 from course_supporter.llm.error_categories import LadderExhaustedError, LadderStop
-from course_supporter.service_logging import get_current_job_id
+from course_supporter.service_logging import get_current_job_id, job_scope
 from course_supporter.storage.document_summary_repository import (
     DocumentSummaryRepository,
 )
@@ -426,3 +429,40 @@ class TestTheWork:
         assert done.status == "complete"
         assert (done.result_data or {})["state"] == "ready"
         assert await _moved(session_factory, world) == moved
+
+
+class TestNoThresholdOnTheWork:
+    """The threshold is the route's, the author's own action; the work has none."""
+
+    async def test_a_composition_a_submission_starts_goes_on_at_zero(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+    ) -> None:
+        """As before DD-SP-DR: the platform covers what the author's units cannot."""
+        composer = _PaidComposer(session_factory)
+        service = CriteriaListService(session_factory, composer, shadow_estimate=True)
+        # The seam sets the job in context for the work; a submission's job is
+        # the evaluation stage's, and a job row stands in for it here.
+        job = await _ask(session_factory, world)
+        with job_scope(job.id):
+            outcome = await service.get_or_compose(world["task"])
+
+        assert isinstance(outcome, CriteriaInForce)
+        assert composer.calls == 1
+        moved = await _moved(session_factory, world)
+        assert MovementKind.DEBIT.value not in moved
+        assert moved[MovementKind.PLATFORM_COVERED.value] == FACT_UNITS
+
+    async def test_the_work_itself_goes_on_at_zero(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        world: dict[str, Any],
+    ) -> None:
+        job = await _ask(session_factory, world)
+
+        done = await _run(session_factory, job, world, _PaidComposer(session_factory))
+
+        assert done.status == "complete"
+        moved = await _moved(session_factory, world)
+        assert moved[MovementKind.PLATFORM_COVERED.value] == FACT_UNITS

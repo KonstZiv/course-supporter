@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator, Callable, Iterator
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -37,6 +39,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from course_supporter.api.app import app
 from course_supporter.api.deps import get_arq_redis, get_current_tenant
 from course_supporter.auth.context import TenantContext
+from course_supporter.billing import admin, charging, ledger
+from course_supporter.billing.accounts import get_or_create_author_account
 from course_supporter.homework.criteria_edit_service import (
     AWAITING_FIRST_SUBMISSION_MESSAGE,
     CriteriaReasonCode,
@@ -46,7 +50,10 @@ from course_supporter.homework.criteria_form import (
     CriterionDraft,
     compose_criteria,
 )
-from course_supporter.homework.criteria_list_service import CriteriaListService
+from course_supporter.homework.criteria_list_service import (
+    CLAIM_SILENCE_LIMIT,
+    CriteriaListService,
+)
 from course_supporter.homework.path_config import (
     PathConfig,
     ServedBy,
@@ -74,6 +81,7 @@ from course_supporter.storage.task_criteria_list_repository import (
     TaskCriteriaListRepository,
 )
 from course_supporter.workers.criteria_compose import arq_compose_criteria
+from tests._helpers.billing_cleanup import drop_billing_of_tenant
 from tests._helpers.course_node_factory import make_root_course_node
 
 pytestmark = pytest.mark.requires_db
@@ -275,6 +283,9 @@ async def world(
                 HomeworkSubmission.tenant_id == ids["owner_id"]
             )
         )
+        await session.commit()
+    await drop_billing_of_tenant(session_factory, ids["owner_id"])
+    async with session_factory() as session:
         await session.execute(delete(Job).where(Job.tenant_id == ids["owner_id"]))
         # Nodes, tasks, their lists, edits and summaries go with the tenant.
         for tenant_id in (ids["owner_id"], ids["stranger_id"]):
@@ -1799,3 +1810,253 @@ class TestTheAuthorMayComposeNow:
         assert retry.status_code == 202
         assert retry.json()["status"] == "composing"
         assert len(await _composition_jobs(session_factory, world["text_task"])) == 2
+
+
+_PRICE_USD = Decimal("0.05")
+
+
+async def _author_account(
+    session_factory: async_sessionmaker[AsyncSession], world: dict[str, uuid.UUID]
+) -> uuid.UUID:
+    async with session_factory() as session:
+        account = await get_or_create_author_account(
+            session, tenant_id=world["owner_id"]
+        )
+        await session.commit()
+        return account.id
+
+
+async def _units(
+    session_factory: async_sessionmaker[AsyncSession],
+    account: uuid.UUID,
+    units: int,
+) -> None:
+    async with session_factory() as session:
+        await ledger.credit_purchase(
+            session,
+            account_id=account,
+            units=units,
+            amount_paid_minor=500,
+            currency="EUR",
+            provider="fake",
+        )
+        await session.commit()
+
+
+class TestTheAuthorsThreshold:
+    """Composing from the button is the author's own action: ``available >= P``."""
+
+    @pytest.fixture(autouse=True)
+    def _priced(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(charging, "charging_enabled", lambda settings=None: True)
+        monkeypatch.setattr(
+            "course_supporter.homework.criteria_edit_service.preparation_e_usd",
+            lambda **_: _PRICE_USD,
+        )
+
+    async def test_an_author_without_credit_and_without_enough_units_is_refused(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+    ) -> None:
+        await _processed(session_factory, world["text_task"])
+        price = charging.price_of(_PRICE_USD)
+        await _units(
+            session_factory, await _author_account(session_factory, world), price - 1
+        )
+        ac, _ = client
+
+        resp = await ac.post(_compose_path(world["text_task"]))
+
+        assert resp.status_code == 402, resp.text
+        assert resp.json()["detail"] == {
+            "code": "insufficient_units",
+            "details": {
+                "price_units": price,
+                "available_units": price - 1,
+                "missing_units": 1,
+            },
+        }
+        queue.enqueue_job.assert_not_awaited()
+        assert await _composition_jobs(session_factory, world["text_task"]) == []
+
+    async def test_an_author_with_enough_units_is_queued(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+    ) -> None:
+        await _processed(session_factory, world["text_task"])
+        await _units(
+            session_factory,
+            await _author_account(session_factory, world),
+            charging.price_of(_PRICE_USD),
+        )
+        ac, _ = client
+
+        resp = await ac.post(_compose_path(world["text_task"]))
+
+        assert resp.status_code == 202, resp.text
+        queue.enqueue_job.assert_awaited_once()
+
+    async def test_an_author_with_credit_is_queued_at_zero(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+    ) -> None:
+        await _processed(session_factory, world["text_task"])
+        async with session_factory() as session:
+            await admin.update_author_settings(
+                session, world["owner_id"], actor="test-admin", credit_allowed=True
+            )
+            await session.commit()
+        ac, _ = client
+
+        resp = await ac.post(_compose_path(world["text_task"]))
+
+        assert resp.status_code == 202, resp.text
+        queue.enqueue_job.assert_awaited_once()
+
+    async def test_with_charging_off_nothing_is_checked(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(charging, "charging_enabled", lambda settings=None: False)
+        await _processed(session_factory, world["text_task"])
+        ac, _ = client
+
+        resp = await ac.post(_compose_path(world["text_task"]))
+
+        assert resp.status_code == 202, resp.text
+        queue.enqueue_job.assert_awaited_once()
+
+    async def test_the_threshold_is_asked_only_where_a_job_would_be_queued(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A list in force is a 200 for an author with no units at all."""
+        await _compose(session_factory, world["text_task"])
+        ac, _ = client
+
+        resp = await ac.post(_compose_path(world["text_task"]))
+
+        assert resp.status_code == 200, resp.text
+
+
+_GONE = CLAIM_SILENCE_LIMIT + timedelta(minutes=1)
+_ALIVE = CLAIM_SILENCE_LIMIT - timedelta(minutes=1)
+
+
+async def _claim_silent_for(
+    session_factory: async_sessionmaker[AsyncSession],
+    task_id: uuid.UUID,
+    silence: timedelta,
+) -> None:
+    """A pending claim whose claimer last spoke ``silence`` ago."""
+    async with session_factory() as session:
+        # The version is the task's own hash, which processing set: a claim of
+        # any other is a stale one, and a stale claim is nobody's to wait for.
+        task = await session.get(AuthoredDocument, task_id)
+        assert task is not None
+        assert task.content_hash is not None
+        repo = TaskCriteriaListRepository(session)
+        row = await repo.claim(
+            authored_document_id=task_id,
+            source_content_hash=task.content_hash,
+            source_task_type="task",
+            form_version=2,
+        )
+        assert row is not None
+        assert await repo.take_over(
+            row.id,
+            seen_claimed_at=row.claimed_at,
+            now=datetime.now(UTC) - silence,
+        )
+        await session.commit()
+
+
+class TestAClaimWhoseClaimerIsGone:
+    """The one rule of ``claim_is_abandoned``: silent for the limit, a submission
+    takes it over — and the author's request does not take it for a live one."""
+
+    async def test_an_abandoned_claim_does_not_hold_the_button(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+    ) -> None:
+        await _processed(session_factory, world["text_task"])
+        await _claim_silent_for(
+            session_factory,
+            world["text_task"],
+            CLAIM_SILENCE_LIMIT + timedelta(minutes=1),
+        )
+        ac, _ = client
+
+        resp = await ac.post(_compose_path(world["text_task"]))
+
+        assert resp.status_code == 202, resp.text
+        queue.enqueue_job.assert_awaited_once()
+        assert len(await _composition_jobs(session_factory, world["text_task"])) == 1
+        # And a second press finds the work in flight, as for any request.
+        assert (await ac.post(_compose_path(world["text_task"]))).status_code == 202
+        queue.enqueue_job.assert_awaited_once()
+
+    async def test_the_work_takes_the_abandoned_claim_over_and_the_list_is_ready(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+    ) -> None:
+        await _processed(session_factory, world["text_task"])
+        await _claim_silent_for(
+            session_factory,
+            world["text_task"],
+            CLAIM_SILENCE_LIMIT + timedelta(minutes=1),
+        )
+        ac, _ = client
+        await ac.post(_compose_path(world["text_task"]))
+        composer = _Composer()
+
+        job = await _run_the_work(session_factory, queue, world["text_task"], composer)
+
+        assert composer.calls == 1
+        assert job.status == "complete"
+        body = (await ac.get(_read(world["text_task"]))).json()
+        assert body["status"] == "ready"
+        assert body["in_force"]["layer"] == "model"
+
+    async def test_a_live_claim_still_holds_the_button(
+        self,
+        client: tuple[AsyncClient, Callable[[TenantContext], None]],
+        world: dict[str, uuid.UUID],
+        session_factory: async_sessionmaker[AsyncSession],
+        queue: MagicMock,
+    ) -> None:
+        await _processed(session_factory, world["text_task"])
+        await _claim_silent_for(
+            session_factory,
+            world["text_task"],
+            CLAIM_SILENCE_LIMIT - timedelta(minutes=1),
+        )
+        ac, _ = client
+
+        resp = await ac.post(_compose_path(world["text_task"]))
+
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["status"] == "composing"
+        queue.enqueue_job.assert_not_awaited()
+        assert await _composition_jobs(session_factory, world["text_task"]) == []

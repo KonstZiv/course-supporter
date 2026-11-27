@@ -64,12 +64,14 @@ def _criterion(cid: str, weight: str, points: int = 0) -> Criterion:
     )
 
 
-# c1 "must" on its own, c2 "may" by two points, c3 "should" on its own: with
-# c2 alone unmet the work scores 83 and passes on any list (the pass rule of
-# 2026-11-12: 80 on the model's list, every "must" and 70 on the author's).
+# c1 "must" on its own, c2 "should" by two points, c3 "should" on its own: with
+# c2 alone unmet the work scores 71 (3 + 2 of 3 + 2 + 2) and does not pass on
+# any list (the pass rule of 2026-11-12: 80 on the model's list, every "must"
+# and 70 on the author's; no "must" of the author's own here, so 80). The
+# "may" a work lacks has its own class below (DD-SP-DQ).
 _CRITERIA = (
     _criterion("c1", "must"),
-    _criterion("c2", "may", points=2),
+    _criterion("c2", "should", points=2),
     _criterion("c3", "should"),
 )
 
@@ -126,7 +128,7 @@ def _rows(c1: str = "met", p2: str = "not_met") -> list[SubmissionCriterionVerdi
             lines=(1, 1) if c1 == "met" else None,
             missing=None if c1 == "met" else "Немає функції.",
         ),
-        _row("c2", c2, weight="may"),
+        _row("c2", c2, weight="should"),
         _row(
             "c2.p1",
             "met",
@@ -188,27 +190,30 @@ def _refusal(content: str, facts: ExplanationFacts) -> str:
 
 class TestTheFacts:
     def test_the_score_and_the_pass_are_the_evaluations_own(self) -> None:
-        """Weights 3 / 2 / 1: c1 and c3 met, c2 not — (3 + 2) of 6, rounded down."""
+        """Weights 3 / 2 / 2: c1 and c3 met, c2 not — (3 + 2) of 7, rounded down."""
         rows = _rows()
 
         for layer in CriteriaLayer:
             facts = _facts(rows, layer)
-            assert facts.passed is is_passed(rows, layer=layer, author_musts=()) is True
-            assert facts.score == score_percent(rows) == 83
+            assert (
+                facts.passed is is_passed(rows, layer=layer, author_musts=()) is False
+            )
+            assert facts.score == score_percent(rows) == 71
             assert facts.unmet == ("c2",)
 
     def test_the_pass_is_the_rule_of_the_lists_layer(self) -> None:
         """The pass rule of 2026-11-12, as the facts tell it to the model.
 
-        c1 (the "must") and c2 met, c3 not: (3 + 1) of 6 is 66 — below both
-        thresholds; the facts say what the rule says, on either list.
+        c1 (the "must") and c2 met, c3 not: (3 + 2) of 7 is 71 — below the
+        threshold of 80 that either list has here; the facts say what the rule
+        says, on either list.
         """
         rows = _rows(p2="met")
         rows[-1] = _row("c3", "not_met", weight="should", missing="Немає README.")
 
         for layer in CriteriaLayer:
             facts = _facts(rows, layer)
-            assert facts.score == 66
+            assert facts.score == 71
             assert (
                 facts.passed is is_passed(rows, layer=layer, author_musts=()) is False
             )
@@ -217,7 +222,7 @@ class TestTheFacts:
         facts = _facts(_rows(c1="not_met"))
 
         assert facts.passed is False
-        assert facts.score == 33
+        assert facts.score == 28
         assert facts.unmet == ("c1", "c2")
 
     def test_everything_met_leaves_nothing_unmet(self) -> None:
@@ -340,9 +345,9 @@ class TestThePassIsRepeated:
         assert feedback.startswith("passed must be false:")
 
     def test_not_passed_said_of_a_work_that_is_is_refused(self) -> None:
-        facts = _facts(_rows())
+        facts = _facts(_rows(p2="met"))
 
-        feedback = _refusal(_answer(passed=False, remarks=["c2"]), facts)
+        feedback = _refusal(_answer(passed=False, remarks=[]), facts)
 
         assert feedback.startswith("passed must be true:")
 
@@ -369,7 +374,7 @@ class TestEveryUnmetCriterionHasItsRemark:
         """``PRE-FLIGHT.md`` 9.7: every unmet criterion, whatever its weight."""
         facts = _facts(_rows())
 
-        feedback = _refusal(_answer(passed=True, remarks=[]), facts)
+        feedback = _refusal(_answer(passed=False, remarks=[]), facts)
 
         assert "missing ['c2']" in feedback
 
@@ -387,7 +392,7 @@ class TestEveryUnmetCriterionHasItsRemark:
     ) -> None:
         facts = _facts(_rows())
 
-        feedback = _refusal(_answer(passed=True, remarks=remarks), facts)
+        feedback = _refusal(_answer(passed=False, remarks=remarks), facts)
 
         assert fault in feedback
         assert "Give one remark for each of ['c2'] and no others." in feedback
@@ -400,11 +405,119 @@ class TestEveryUnmetCriterionHasItsRemark:
         assert answer.remarks == ()
 
 
+# c1 "must", c2 "should" by two points, c3 "may" on its own, c4 "may" by two
+# points: the "may" criteria a work can lack (DD-SP-DQ, 2026-11-27).
+_WITH_MAYS = (
+    _criterion("c1", "must"),
+    _criterion("c2", "should", points=2),
+    _criterion("c3", "may"),
+    _criterion("c4", "may", points=2),
+)
+
+
+def _may_rows(
+    *,
+    c2: str = "met",
+    c3: str = "not_met",
+    c4: str = "not_met",
+    unconfirmed: bool = False,
+) -> list[SubmissionCriterionVerdict]:
+    """Rows of ``_WITH_MAYS``: c1 met; c2, c3 and c4 as asked (c4 by its points)."""
+    missing = None if c2 == "met" else "Немає тесту."
+    return [
+        _row("c1", "met", weight="must", quote="def f():", quote_file="a.py"),
+        _row("c2", c2, weight="should", missing=missing),
+        _row("c2.p1", c2, missing=missing),
+        _row("c2.p2", c2, missing=missing),
+        _row(
+            "c3",
+            c3,
+            weight="may",
+            quote="x = 1" if c3 == "met" else None,
+            quote_file="a.py" if c3 == "met" else None,
+            missing=None if c3 == "met" else "Немає прикладу.",
+            quote_not_found=unconfirmed,
+        ),
+        _row("c4", c4, weight="may"),
+        _row("c4.p1", c4, missing=None if c4 == "met" else "Немає."),
+        _row("c4.p2", "met", quote="y = 2", quote_file="a.py"),
+    ]
+
+
+def _may_facts(**kept: Any) -> ExplanationFacts:
+    return explanation_facts(_WITH_MAYS, _may_rows(**kept), layer=CriteriaLayer.MODEL)
+
+
+class TestAMayTheWorkLacks:
+    """DD-SP-DQ (2026-11-27): a "may" the work does not have gets no remark.
+
+    The explanation is not told of it, the check refuses a remark on it as it
+    refuses one on a met criterion, and the row stays "not met".
+    """
+
+    def test_it_is_not_among_the_unmet(self) -> None:
+        facts = _may_facts()
+
+        assert facts.unmet == ()
+        assert [c.verdict for c in facts.criteria][2:] == [VerdictValue.NOT_MET] * 2
+
+    def test_an_unmet_should_beside_it_is_still_unmet(self) -> None:
+        assert _may_facts(c2="not_met").unmet == ("c2",)
+
+    def test_a_met_may_is_not_unmet_either(self) -> None:
+        assert _may_facts(c3="met", c4="met").unmet == ()
+
+    def test_an_unconfirmed_may_has_no_remark_either(self) -> None:
+        # Credited by the score, but its row reads "not met": no remark.
+        assert _may_facts(unconfirmed=True).unmet == ()
+
+    def test_the_request_is_not_told_of_it(self) -> None:
+        facts = _may_facts(c2="not_met")
+
+        assert [c.criterion.id for c in facts.told] == ["c1", "c2"]
+        # Every criterion stays in the facts: the row is the author's fact.
+        assert [c.criterion.id for c in facts.criteria] == ["c1", "c2", "c3", "c4"]
+
+    def test_a_met_may_is_shown(self) -> None:
+        facts = _may_facts(c3="met", c4="not_met")
+
+        assert [c.criterion.id for c in facts.told] == ["c1", "c2", "c3"]
+
+    def test_the_score_leaves_it_out(self) -> None:
+        # 3 + 2 of 3 + 2: both "may" criteria outside -> 100.
+        assert _may_facts().score == 100
+        # c2 not met: 3 of 3 + 2 -> 60; the "may" criteria stay outside.
+        assert _may_facts(c2="not_met").score == 60
+
+    def test_an_answer_without_a_remark_on_it_is_read(self) -> None:
+        facts = _may_facts(c2="not_met")
+
+        answer = read_explanation(_answer(passed=False, remarks=["c2"]), facts)
+
+        assert [r.id for r in answer.remarks] == ["c2"]
+
+    @pytest.mark.parametrize("cid", ["c3", "c4"])
+    def test_a_remark_on_it_is_refused_as_on_a_met_criterion(self, cid: str) -> None:
+        facts = _may_facts(c2="not_met")
+
+        feedback = _refusal(_answer(passed=False, remarks=["c2", cid]), facts)
+
+        assert f"unexpected ['{cid}']" in feedback
+        assert "Give one remark for each of ['c2'] and no others." in feedback
+
+    def test_a_remark_on_a_met_criterion_is_refused_by_the_same_check(self) -> None:
+        facts = _may_facts(c2="not_met")
+
+        feedback = _refusal(_answer(passed=False, remarks=["c2", "c1"]), facts)
+
+        assert "unexpected ['c1']" in feedback
+
+
 class TestTheTextsAreThere:
     @pytest.mark.parametrize("blank", ["", "  \n "])
     def test_an_empty_reason_or_remark_part_is_refused(self, blank: str) -> None:
         facts = _facts(_rows())
-        body = json.loads(_answer(passed=True, remarks=["c2"], why=blank))
+        body = json.loads(_answer(passed=False, remarks=["c2"], why=blank))
         body["remarks"][0]["todo"] = blank
 
         feedback = _refusal(json.dumps(body), facts)
@@ -414,7 +527,7 @@ class TestTheTextsAreThere:
     def test_no_word_of_the_mentors_own_is_a_null(self) -> None:
         facts = _facts(_rows())
 
-        answer = read_explanation(_answer(passed=True, remarks=["c2"]), facts)
+        answer = read_explanation(_answer(passed=False, remarks=["c2"]), facts)
 
         assert answer.mentor_voice is None
 
@@ -498,7 +611,7 @@ class TestTheLinks:
         facts = _facts(_rows())
 
         answer = read_explanation(
-            _answer(passed=True, remarks=["c2"], links={"c2": ["c9.l7"]}), facts
+            _answer(passed=False, remarks=["c2"], links={"c2": ["c9.l7"]}), facts
         )
 
         assert answer.remarks[0].links == ("c9.l7",)

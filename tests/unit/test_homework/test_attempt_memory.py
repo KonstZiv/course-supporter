@@ -750,7 +750,8 @@ class TestTheSetting:
         """A change of any of the three changes what a review says: the rules'
         number moves with it (``homework/criteria_verdicts.py``). 11 holds
         all three: it was never released before them (the operator,
-        2026-11-23, 21:42)."""
+        2026-11-23, 21:42). 12 (DD-SP-DQ, 2026-11-27) leaves them as they
+        are."""
         config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
         settings = config.attempt_memory
 
@@ -759,7 +760,7 @@ class TestTheSetting:
             settings.rewritten_share,
             settings.diff_context_lines,
             settings.max_growth,
-        ) == (11, 0.5, 1, 0.33)
+        ) == (12, 0.5, 1, 0.33)
 
 
 # ── One line of context ──

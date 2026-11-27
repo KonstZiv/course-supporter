@@ -52,6 +52,7 @@ from course_supporter.homework.criteria_verdicts import (
     PASS_THRESHOLD_AUTHOR_MUSTS,
     PASS_THRESHOLD_NO_AUTHOR_MUSTS,
     PassDecision,
+    is_optional_unmet,
     is_passed,
     pass_decision,
     score_percent,
@@ -164,7 +165,8 @@ def _explanation(
         remarks=tuple(
             CriterionRemark(id=row.item_id, what="Що.", why="Чому.", todo="Як.")
             for row in rows
-            if row.verdict == NOT_MET
+            # No remark on a "may" the work does not have (DD-SP-DQ).
+            if row.verdict == NOT_MET and not is_optional_unmet(row.weight, row.verdict)
         ),
         mentor_voice=None,
     )
@@ -206,10 +208,9 @@ def _verdict_section(markdown: str) -> list[str]:
 
 # Weights 3 / 2 / 1; each case below is counted by hand in its comment.
 
-# 7 of 10 -> 70: c1 "must" met, two "should" met, one "should" and one "may" not.
-_AUTHOR_70 = _rows(
-    (MUST, MET), (SHOULD, MET), (SHOULD, MET), (SHOULD, NOT_MET), (MAY, NOT_MET)
-)
+# 7 of 10 -> 70: c1 "must" met, two "should" met, a second "must" — not the
+# author's own — not met.
+_AUTHOR_70 = _rows((MUST, MET), (SHOULD, MET), (SHOULD, MET), (MUST, NOT_MET))
 # 9 of 13 -> 69: two "must" and a "should" and a "may" met, two "should" not.
 _AUTHOR_69 = _rows(
     (MUST, MET),
@@ -218,6 +219,14 @@ _AUTHOR_69 = _rows(
     (MAY, MET),
     (SHOULD, NOT_MET),
     (SHOULD, NOT_MET),
+)
+# 6 of 8 -> 75: a "must", a "should" and a "may" met, one "should" not.
+_MODEL_75 = _rows((MUST, MET), (SHOULD, MET), (MAY, MET), (SHOULD, NOT_MET))
+# 11 of 13 -> 84, and 78 (11 of 14) before DD-SP-DQ (2026-11-27): three "must"
+# and a "should" met, one "should" not met, and a "may" the work does not have —
+# outside the score now, so the work reaches 80 and is passed.
+_WORK_78_BEFORE = _rows(
+    *_many(3, MUST, MET), (SHOULD, MET), (SHOULD, NOT_MET), (MAY, NOT_MET)
 )
 # 57 of 60 -> 95: one "must" not met, everything else met.
 _ONE_MUST_UNMET_95 = _rows((MUST, NOT_MET), *_many(28, SHOULD, MET), (MAY, MET))
@@ -284,15 +293,15 @@ class TestLockV:
     """v: an unconfirmed "must" of the author's own does not fail the work."""
 
     def test_unconfirmed_and_seventy_or_more_passes(self) -> None:
-        # The "must" unconfirmed counts as met: 3 + 2 of 6 -> 83.
-        rows = _rows((MUST, "unconfirmed"), (SHOULD, MET), (MAY, NOT_MET))
-        assert score_percent(rows) == 83
+        # The "must" unconfirmed counts as met: 3 + 2 of 7 -> 71.
+        rows = _rows((MUST, "unconfirmed"), (SHOULD, MET), (SHOULD, NOT_MET))
+        assert score_percent(rows) == 71
 
         passed, rule, markdown = _reviewed(rows, AUTHOR, own={"c1"})
 
         assert passed is True
-        assert rule == PassRule(basis="author_musts_met", score=83, threshold=70)
-        assert _AUTHOR_MUSTS_MET.format(score=83, threshold=70) in markdown
+        assert rule == PassRule(basis="author_musts_met", score=71, threshold=70)
+        assert _AUTHOR_MUSTS_MET.format(score=71, threshold=70) in markdown
 
     def test_a_must_really_not_met_beside_it_still_fails(self) -> None:
         rows = _rows((MUST, "unconfirmed"), (MUST, NOT_MET), *_many(10, SHOULD, MET))
@@ -345,8 +354,8 @@ class TestLockG:
         [
             # 8 of 10 -> 80.
             (_rows(*_many(4, SHOULD, MET), (SHOULD, NOT_MET)), 80, True),
-            # 3 of 4 -> 75: would pass at 70, does not at 80.
-            (_rows((SHOULD, MET), (MAY, MET), (MAY, NOT_MET)), 75, False),
+            # 6 of 8 -> 75: would pass at 70, does not at 80.
+            (_MODEL_75, 75, False),
         ],
         ids=["80-passes", "75-does-not"],
     )
@@ -361,10 +370,54 @@ class TestLockG:
         assert phrase.format(score=score, threshold=80) in markdown
 
     def test_the_same_rows_on_the_models_list_read_alike(self) -> None:
-        rows = _rows((SHOULD, MET), (MAY, MET), (MAY, NOT_MET))
+        assert pass_decision(_MODEL_75, layer=AUTHOR, author_musts=()) == pass_decision(
+            _MODEL_75, layer=MODEL, author_musts=()
+        )
 
-        assert pass_decision(rows, layer=AUTHOR, author_musts=()) == pass_decision(
-            rows, layer=MODEL, author_musts=()
+
+class TestAMayTheWorkLacks:
+    """DD-SP-DQ (2026-11-27): a "may" the work does not have is no flaw.
+
+    It is in neither the numerator nor the denominator of the score, so the
+    pass reads the new score; the rule itself — thresholds, the author's own
+    "must" criteria — is as it was.
+    """
+
+    def test_the_work_that_scored_78_is_now_passed(self) -> None:
+        # Before: 100 * 11 // 14 = 78, below 80. Now the "may" is outside:
+        # 3 * 3 + 2 = 11 met of 3 * 3 + 2 + 2 = 13 -> 100 * 11 // 13 = 84.
+        assert score_percent(_WORK_78_BEFORE) == 84
+
+        decision = pass_decision(_WORK_78_BEFORE, layer=MODEL, author_musts=())
+
+        assert decision == PassDecision(True, "no_author_musts_passed", 84, 80)
+        assert is_passed(_WORK_78_BEFORE, layer=MODEL, author_musts=()) is True
+
+    def test_it_is_passed_in_the_review_too_without_a_remark_on_the_may(self) -> None:
+        passed, rule, _ = _reviewed(_WORK_78_BEFORE, MODEL)
+
+        assert passed is True
+        assert rule == PassRule(basis="no_author_musts_passed", score=84, threshold=80)
+
+    def test_a_second_unmet_should_still_fails(self) -> None:
+        # A "should" not met is a flaw: with one it is 11 of 13 = 84; with a second
+        # 9 of 13 -> 69 — the "may" outside changes neither number.
+        rows = _rows(
+            *_many(3, MUST, MET),
+            (SHOULD, NOT_MET),
+            (SHOULD, NOT_MET),
+            (MAY, NOT_MET),
+        )
+
+        assert score_percent(rows) == 100 * 9 // 13 == 69
+        assert is_passed(rows, layer=MODEL, author_musts=()) is False
+
+    def test_the_authors_own_must_is_as_it_was(self) -> None:
+        rows = _rows((MUST, NOT_MET), *_many(6, SHOULD, MET), (MAY, NOT_MET))
+
+        assert score_percent(rows) == 100 * 12 // 15 == 80
+        assert pass_decision(rows, layer=AUTHOR, author_musts={"c1"}) == PassDecision(
+            False, "author_musts_unmet", 80, 70
         )
 
 
@@ -377,8 +430,9 @@ _EVERY_CASE = [
     (_ONE_MUST_UNMET_95, set()),
     (_MUST_UNMET_82, set()),
     (_MUST_UNMET_79, {"c1"}),
-    (_rows((MUST, "unconfirmed"), (SHOULD, MET), (MAY, NOT_MET)), {"c1"}),
-    (_rows((SHOULD, MET), (MAY, MET), (MAY, NOT_MET)), set()),
+    (_rows((MUST, "unconfirmed"), (SHOULD, MET), (SHOULD, NOT_MET)), {"c1"}),
+    (_MODEL_75, set()),
+    (_WORK_78_BEFORE, set()),
 ]
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tempfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection
 from pathlib import Path, PurePosixPath
 from types import TracebackType
 from typing import Any
@@ -621,6 +621,51 @@ class S3Client:
                     }
                 )
         return objects
+
+    async def iter_object_pages(
+        self, *, skip_top_level: Collection[str] = ()
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Walk the whole bucket page by page, never entering the skipped prefixes.
+
+        The top level is listed with a delimiter first, so a skipped prefix
+        (``"homework/"``) is not even listed — only its name is seen. Objects
+        that sit at the root, with no ``/`` in the key, come first.
+
+        Args:
+            skip_top_level: Top-level prefixes to leave out, each with its
+                trailing ``/``.
+
+        Yields:
+            Non-empty pages of dicts with ``key``, ``size``, ``last_modified``.
+            No key is logged here.
+        """
+        if self._client is None:
+            msg = "S3Client not initialized. Use 'async with S3Client(...)'"
+            raise RuntimeError(msg)
+
+        def as_page(contents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                {
+                    "key": obj["Key"],
+                    "size": obj["Size"],
+                    "last_modified": obj["LastModified"],
+                }
+                for obj in contents
+            ]
+
+        paginator = self._client.get_paginator("list_objects_v2")
+        top_level: list[str] = []
+        async for page in paginator.paginate(Bucket=self._bucket, Delimiter="/"):
+            if root := as_page(page.get("Contents", [])):
+                yield root
+            top_level.extend(p["Prefix"] for p in page.get("CommonPrefixes", []))
+
+        for prefix in top_level:
+            if prefix in skip_top_level:
+                continue
+            async for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix):
+                if inner := as_page(page.get("Contents", [])):
+                    yield inner
 
     async def get_usage(self, prefix: str) -> tuple[int, int]:
         """Calculate total storage usage for a prefix.

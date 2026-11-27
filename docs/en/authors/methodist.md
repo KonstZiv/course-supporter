@@ -9,7 +9,7 @@ keywords:
   - Generate description
   - Approve
   - running again
-last_updated: 2026-11-23
+last_updated: 2026-11-27
 ---
 
 # Section descriptions: the Methodist
@@ -20,9 +20,13 @@ This page describes how everything works as of November 2026. The platform is de
 
 ## When and how to run it {#when}
 
-Run the Methodist when all materials, assignments and tests have been uploaded to the course and all materials are in the "Done (Готово)" state. The Methodist silently skips materials that are still being processed or have an error, and when they finish processing, the section description becomes outdated. The Methodist does not read tests at all. The Methodist's work also uses units from your package ([Costs and history](costs-history.md#what-you-pay)), so do not run it too early: to take changes into account, you will have to run it again, and that costs units too.
+Run the Methodist when all materials, assignments and tests have been uploaded to the course and all materials are in the "Done (Готово)" state. The Methodist silently skips materials that are still being processed or have an error, and when they finish processing, the section description becomes outdated. The Methodist does not read tests at all. The Methodist's work also uses units from your package ([Costs and history](costs-history.md#what-you-pay)), so do not run it too early: to take changes into account, you will have to run it again, and that costs units too. And run it before you add students: the Mentor reviews work submitted before the Methodist against the assignment text alone, without the requirements from your guide.
 
 Right-click the course card and choose "Generate description (Згенерувати опис)" (below the item's name it says "Layer 3 (Шар 3)"). Starting from the course card covers the whole course; starting from a section card — that section and everything below it.
+
+Before starting, the app opens the "Run the Methodist? (Запустити Методиста?)" window. It says what exactly the Methodist will describe — the chosen section and all its subsections whose description is out of date or not written yet — and roughly how much it will cost: "Estimated cost: about …" («Орієнтовна вартість: приблизно …»). Press "Run (Запустити)" to start, or "Cancel (Скасувати)". If all section descriptions here are already up to date, the window says so: "the Methodist has nothing to write, and no units are used" («Методистові нічого складати, юніти не списуються»). If you do not have enough units, the window shows how many you are short, and the "Run" button stays unavailable until you buy a package ([Costs and history](costs-history.md)).
+
+If units run out while the Methodist is already working, the run card shows "The section descriptions were not written: there were not enough units. After buying units, run the Methodist again." («Описи розділів не складено: на це не вистачило юнітів. Після купівлі юнітів запустіть Методиста ще раз.»)
 
 The order is simple: all materials and tests — before the first run of the Methodist, editing the descriptions — after it. Why it is so is explained in the section [Running the Methodist again](#rerun).
 
@@ -130,6 +134,8 @@ In a rewritten section:
 - your edits disappear — in their place is the Methodist's new text;
 - the approval is removed, and the description is a "Draft" again;
 - the previous version remains only for comparison; it cannot be restored.
+
+If students have already submitted work for an assignment of this section, the new description does not reach the review by itself: the assignment's list of criteria has already been put together. It is updated when the assignment itself changes; otherwise, correct the list on the "Criteria (Критерії)" screen ([Assignments](tasks.md#criteria)).
 
 The change goes upwards. If you added a material to a lesson, the descriptions of the lesson, the block above it and the whole course become outdated — and all three will be rewritten. Your edits in the lesson description do not get into the descriptions of the block and the course: those are written from what the Methodist wrote.
 

@@ -9,15 +9,16 @@ from sqlalchemy import delete, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from course_supporter.storage.orm import CourseNode, StudentEnrollment
+from course_supporter.storage.orm import CourseNode, EnrollmentEvent, StudentEnrollment
 
 
 class StudentEnrollmentRepository:
     """Repository for student↔course access grants.
 
-    Our side is the source of truth. ``bind`` creates a grant, ``unbind``
-    deletes the row (a grant, not history). Tenant isolation is enforced at
-    the API layer.
+    Our side is the source of truth. ``bind`` creates a grant together with
+    its ``EnrollmentEvent`` (the funnel's fact, Б-4); ``unbind`` deletes the
+    grant row (a grant, not history) and leaves the event. Tenant isolation
+    is enforced at the API layer.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -26,10 +27,18 @@ class StudentEnrollmentRepository:
     async def bind(
         self,
         *,
+        tenant_id: uuid.UUID,
         student_id: uuid.UUID,
         course_node_id: uuid.UUID,
+        source: str,
+        source_tag: str | None = None,
     ) -> StudentEnrollment:
-        """Create an enrollment.
+        """Create an enrollment and its event in the caller's transaction.
+
+        The one door for a new grant: an author's (``source='author'``) and a
+        self-enrollment (``'self'``, with the join link's ``source_tag``).
+        Both rows are flushed together, so a rollback — or a failed savepoint
+        around this call — leaves neither.
 
         Raises ``IntegrityError`` on a duplicate ``(student_id,
         course_node_id)`` — the route maps it to 409.
@@ -37,8 +46,18 @@ class StudentEnrollmentRepository:
         enrollment = StudentEnrollment(
             student_id=student_id,
             course_node_id=course_node_id,
+            source=source,
         )
         self._session.add(enrollment)
+        self._session.add(
+            EnrollmentEvent(
+                tenant_id=tenant_id,
+                course_node_id=course_node_id,
+                student_id=student_id,
+                source=source,
+                source_tag=source_tag,
+            )
+        )
         await self._session.flush()
         return enrollment
 

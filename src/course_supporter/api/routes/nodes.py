@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from course_supporter.api.deps import get_arq_redis, get_s3_client, get_session
+from course_supporter.api.routes._author_shared import collect_documents_s3_keys
 from course_supporter.api.schemas import (
     ChildNodeCreateRequest,
     NodeListResponse,
@@ -526,14 +527,15 @@ async def delete_node(
         node_id,
         tenant_id=tenant.tenant_id,
     )
-    file_keys: list[str] = []
-    for node in _flatten(subtree):
-        for doc in node.documents:
-            key = s3.extract_key(doc.source_url)
-            if key is not None:
-                file_keys.append(key)
-            if doc.slide_keys:
-                file_keys.extend(doc.slide_keys)
+    # Collect project base archive_key and snapshot_key alongside document keys
+    # so subtree deletion cleans up project base storage assets just like
+    # single-document deletion.
+    subtree_docs = [doc for node in _flatten(subtree) for doc in node.documents]
+    file_keys = await collect_documents_s3_keys(
+        subtree_docs,
+        session=session,
+        s3=s3,
+    )
 
     # (3) Cascade soft-delete. Class-level ``__scrub_callable__``
     # dispatch (models-fix-3) clears KD3 fields on root + every

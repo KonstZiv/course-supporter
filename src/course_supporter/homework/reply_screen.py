@@ -249,7 +249,9 @@ async def screen_replies(
     execution = reply_safety_execution(config)
     course = await course_context_of(session, submission)
     topics = (
-        classifier if classifier is not None else build_reply_topic_classifier(session)
+        classifier
+        if classifier is not None
+        else build_reply_topic_classifier(session, router=router, config=config)
     )
     log = logger.bind(submission_id=str(submission.id))
     judged = hostile = 0

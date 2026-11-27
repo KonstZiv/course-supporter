@@ -34,11 +34,13 @@ Deletion:
     needs them, and they name rows that no longer exist). ``anonymized_at``
     starts the retention period; destroying the account after it is BIL-B.
 
-    TO DO: wire both functions into the account-deletion flow when it
-    appears. Today the system has none — a tenant or a student is deleted by
-    hand — so the administrator runs ``scripts/billing_admin.py
-    anonymize-student`` / ``anonymize-tenant`` after the deletion. Nothing
-    calls them automatically, and nothing else closes an active account.
+    A student's account is deleted at the student's request by
+    ``scripts/student_admin.py delete`` (Б-2, ``student_deletion``), which
+    calls :func:`anonymize_student_accounts` in its own transaction. A tenant
+    has no deletion flow yet: after deleting one by hand the administrator
+    runs ``scripts/billing_admin.py anonymize-tenant``
+    (``anonymize-student`` stays for a student deleted by other means).
+    Nothing else closes an active account.
 """
 
 from __future__ import annotations
@@ -245,10 +247,10 @@ async def anonymize_student_accounts(
     """Close and anonymize the accounts of a DELETED student and end the
     active student rules for them (``scope = student``), in one transaction.
 
-    TO DO: call from the account-deletion flow when it appears (module
-    docstring). Refuses (:class:`BillingConflictError`) while the student
-    still exists and is not soft-deleted, so a live student's account is never
-    closed. Rules about other students and course rules stay active.
+    Called by the student deletion (``student_deletion.delete_student``,
+    module docstring). Refuses (:class:`BillingConflictError`) while the
+    student still exists and is not soft-deleted, so a live student's account
+    is never closed. Rules about other students and course rules stay active.
     Idempotent: a second call finds nothing to change and writes nothing.
     """
     actor = audit.require_actor(actor)

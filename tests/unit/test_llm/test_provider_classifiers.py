@@ -190,6 +190,12 @@ class TestGeminiClassifier:
                 ErrorCategory.SEMANTIC,
             ),
             (_genai_client_error(401, "auth"), ErrorCategory.SEMANTIC),
+            # The client's own timeout, as google-genai 1.62.0 raises it:
+            # the builtin on the aiohttp path, httpx's on the fallback.
+            (TimeoutError(), ErrorCategory.INFRASTRUCTURE),
+            (httpx.ReadTimeout("slow"), ErrorCategory.INFRASTRUCTURE),
+            # Other transport errors are not decided here.
+            (httpx.ConnectError("down"), ErrorCategory.SEMANTIC),
         ],
     )
     def test_known_exceptions(
@@ -383,9 +389,21 @@ class TestIsTimeout:
     ) -> None:
         assert _openai_compat_provider().is_timeout(factory()) is expected
 
-    def test_gemini_keeps_the_default(self) -> None:
-        provider = _gemini_provider()
-
-        assert provider.is_timeout(_genai_server_error(503)) is False
-        assert provider.is_timeout(_genai_server_error(504)) is False
-        assert provider.is_timeout(TimeoutError()) is False
+    @pytest.mark.parametrize(
+        ("factory", "expected"),
+        [
+            # google-genai 1.62.0, probed 2026-11-26 against a server that never
+            # answers: the async client rides aiohttp and the timeout arrives as
+            # the builtin TimeoutError; without aiohttp the SDK falls back to
+            # httpx and it arrives as httpx.ReadTimeout.
+            (_builtin_timeout_error, True),
+            (_httpx_read_timeout, True),
+            (lambda: _genai_client_error(408, "timeout"), False),
+            (lambda: _genai_client_error(429, "quota"), False),
+            (lambda: _genai_server_error(503), False),
+            (lambda: _genai_server_error(504), False),
+            (lambda: ValueError("nope"), False),
+        ],
+    )
+    def test_gemini(self, factory: Callable[[], Exception], expected: bool) -> None:
+        assert _gemini_provider().is_timeout(factory()) is expected

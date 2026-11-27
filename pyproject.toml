@@ -149,6 +149,8 @@ ignore = [
 "tests/integration/test_enrollment_events_db.py" = ["RUF002", "RUF003"]
 "tests/integration/test_promotion_funnel_db.py" = ["RUF002", "RUF003"]
 "tests/integration/test_promotion_funnel_migration_db.py" = ["RUF002", "S603"]
+# Б-2: the locks of the student deletion are lettered (а)-(є) in Ukrainian.
+"tests/integration/test_student_deletion_db.py" = ["RUF002", "RUF003"]
 "tests/unit/test_review_unchanged_note.py" = ["RUF002"]
 "tests/unit/security/test_regex_patterns.py" = ["RUF002"]
 "tests/unit/test_linguistics.py" = ["RUF003"]

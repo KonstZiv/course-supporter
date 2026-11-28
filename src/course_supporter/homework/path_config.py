@@ -63,7 +63,7 @@ Interface:
     path has paths, a type in test mode is on the new path and is not
     ``test`` (task 10, K6: test mode means not charging, and a test is never
     charged for), a type taking replies is on the new path, is not ``test``
-    and has the model stage the reply screen runs (task 12a, K3), no stage
+    and has the model stages the reply screen runs (task 12a, K3), no stage
     takes the reply screen's name in the register, a ``test`` path lists no
     stage, pins stay under their stage's output ceiling, rungs are admissible
     against the model registry and carry what the stage requires —
@@ -135,6 +135,23 @@ REPLY_SAFETY_ACTION: Final = "reply_safety"
 Its own name, not ``safety``: the register keys a call's cost on it, so the
 price of screening replies stays visible apart from the price of screening
 the work. No stage may take it (:func:`validate_path_config`).
+"""
+
+REPLY_TOPIC_STAGE: Final = "reply_topic"
+"""The model stage the reply screen's topic question runs (task 12a, K3).
+
+Defined in the file, listed by no path: the screen runs it under
+:data:`REPLY_TOPIC_ACTION`, and every type that takes replies needs it
+(:func:`validate_path_config`).
+"""
+
+REPLY_TOPIC_ACTION: Final = "reply_topic"
+"""The name the topic question's calls are recorded under in the call register.
+
+Its own name, apart from ``reply_safety``, so the price of the topics stays
+visible apart from the price of the safety check. It is also the name of the
+stage itself, which is why no path may list that stage: its cost would be
+summed with the screen's (:func:`validate_path_config`).
 """
 
 
@@ -426,10 +443,12 @@ def validate_path_config(
     * a type taking replies (task 12a, K3) is served by the new path — the
       reply screen stands in its doors and the replies' state on its paths —
       and is not ``test``, whose review has no remark a reply could name; and
-      the file defines :data:`REPLY_SCREEN_STAGE` as a model stage, the check
-      the screen runs;
+      the file defines :data:`REPLY_SCREEN_STAGE` and :data:`REPLY_TOPIC_STAGE`
+      as model stages, the two questions the screen asks;
     * no stage is named :data:`REPLY_SAFETY_ACTION`, the reply screen's name
-      in the register, for the reason a ladder stage's name is refused;
+      in the register, for the reason a ladder stage's name is refused; and no
+      path lists :data:`REPLY_TOPIC_STAGE`, which carries the name its calls
+      are recorded under: listed, its cost would be summed with the screen's;
     * a ``test`` path lists no stage — a test makes no model call;
     * every stage name in a path is defined, and appears once in that path.
 
@@ -531,6 +550,12 @@ def validate_path_config(
             for stage_name in stage_names:
                 if stage_name not in config.stages:
                     errors.append(f"Path '{key}' lists undefined stage '{stage_name}'")
+                if stage_name == REPLY_TOPIC_STAGE:
+                    errors.append(
+                        f"Path '{key}' lists stage '{stage_name}': the reply "
+                        f"screen runs it under that same name in the register, "
+                        f"and its cost would be summed with the path's"
+                    )
                 if stage_name in seen:
                     errors.append(
                         f"Path '{key}' lists stage '{stage_name}' more than once"
@@ -553,8 +578,9 @@ def _reply_errors(
     they make is a key of its paths, so a type on today's Mentor would take
     replies that nothing ever screens or answers. A test's review has no
     remark with an id a reply could name. And the screen runs
-    :data:`REPLY_SCREEN_STAGE`'s prompt and ladder: without that model stage
-    the first reply would stop a submission instead of the boot.
+    :data:`REPLY_SCREEN_STAGE`'s prompt and ladder, and the topic question
+    :data:`REPLY_TOPIC_STAGE`'s: without either model stage the first reply
+    would stop a submission instead of the boot.
     """
     errors: list[str] = []
     if declared.served_by is not ServedBy.NEW_PATH:
@@ -573,6 +599,12 @@ def _reply_errors(
             f"Task type '{task_type.value}' takes replies, but no model stage "
             f"'{REPLY_SCREEN_STAGE}' is defined: the reply screen runs its "
             f"prompt and ladder"
+        )
+    if not isinstance(config.stages.get(REPLY_TOPIC_STAGE), ModelStage):
+        errors.append(
+            f"Task type '{task_type.value}' takes replies, but no model stage "
+            f"'{REPLY_TOPIC_STAGE}' is defined: the reply screen asks whether a "
+            f"reply is about the work with its prompt and ladder"
         )
     return errors
 

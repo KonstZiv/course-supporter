@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal, Self
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     field_validator,
@@ -43,6 +44,10 @@ from course_supporter.language import (
 from course_supporter.models.review_structure import ReplyKind, ReviewStructureV1
 from course_supporter.models.source import AssignmentType, MaterialRole, SourceType
 from course_supporter.normalizer import Manifest
+from course_supporter.open_courses.source_tag import (
+    SOURCE_TAG_PATTERN,
+    parse_source_tag,
+)
 from course_supporter.remark_kinds import CommentAuthor, CommentKind
 from course_supporter.storage.course_node_repository import SummaryStatus
 
@@ -1989,6 +1994,18 @@ TermsTextSha256 = Annotated[
         description="SHA-256 (lowercase hex) of the terms text shown.",
     ),
 ]
+#: The join link's campaign tag (``?src=``, Б-4). Never a 422: a value that
+#: breaks the rule is kept as null (``open_courses/source_tag.py``).
+SourceTag = Annotated[
+    Annotated[str, Field(max_length=40, pattern=SOURCE_TAG_PATTERN)] | None,
+    BeforeValidator(parse_source_tag),
+    Field(
+        description="Campaign tag of the join link (its src parameter): "
+        "a-z, 0-9, '-', '_', 1-40 characters. Optional; a value that breaks "
+        "the rule does not refuse the request — it is stored as null.",
+        examples=["fb-dec-ads"],
+    ),
+]
 
 
 class EnrollmentLinkResponse(BaseModel):
@@ -2043,6 +2060,7 @@ class JoinSignupRequest(BaseModel):
     adult: AdultMark
     terms_version: TermsVersion
     text_sha256: TermsTextSha256
+    source_tag: SourceTag = None
 
     @field_validator("interface_language")
     @classmethod
@@ -2095,6 +2113,7 @@ class PortalCourseJoinRequest(BaseModel):
     adult: AdultMark
     terms_version: TermsVersion
     text_sha256: TermsTextSha256
+    source_tag: SourceTag = None
 
 
 class PortalCourseJoinResponse(BaseModel):
@@ -3102,6 +3121,155 @@ class AuthorSubmissionFileLink(BaseModel):
     expires_at: datetime = Field(description="When the link stops working.")
 
 
+# ── The author's overview of a course's homework (M-10) ─────────────────────
+
+
+class CourseHomeworkTaskRef(BaseModel):
+    """A task of the course as the author sees it in the panel."""
+
+    task_id: uuid.UUID = Field(description="The task (the authored document).")
+    title: str = Field(description="The task's name, as the author's tree shows it.")
+    task_type: Literal["test", "short_task", "task", "project"] = Field(
+        description="What kind of work is expected."
+    )
+    node_id: uuid.UUID = Field(description="The course node the task hangs on.")
+    node_title: str = Field(description="That node's name.")
+
+
+class CourseHomeworkCriterion(BaseModel):
+    """One criterion of the list in force that students most often miss."""
+
+    criterion_id: str = Field(description="The criterion's id within its list.")
+    text: str = Field(description="The criterion as the list words it.")
+    weight: Literal["must", "should"] = Field(
+        description="Its weight; a 'may' is never listed."
+    )
+    not_met_students: int = Field(
+        description="Students whose LAST attempt did not meet it."
+    )
+    judged_students: int = Field(
+        description="Students whose last attempt was judged against this list "
+        "(the base of the share): an attempt judged against an earlier list, "
+        "and an attempt a test or an old review left without verdicts, is not "
+        "among them."
+    )
+    share: float = Field(
+        description="not_met_students / judged_students, 0..1, two decimals."
+    )
+
+
+class CourseHomeworkAttemptsToPass(BaseModel):
+    """The number of the first passed attempt, over the students who passed."""
+
+    median: float = Field(description="Median, e.g. 2 or 2.5.")
+    mean: float = Field(description="Mean, two decimals.")
+
+
+class CourseHomeworkTaskSummary(CourseHomeworkTaskRef):
+    """Results of the course's students on one task."""
+
+    students_submitted: int = Field(
+        description="Students with at least one attempt (a submission that got a "
+        "review)."
+    )
+    submissions: int = Field(description="Attempts of all those students.")
+    pass_share: float | None = Field(
+        description="Share of those students who have a passed attempt, 0..1, "
+        "two decimals; null when nobody submitted."
+    )
+    average_score: float | None = Field(
+        description="Mean of each student's best score, two decimals; null when "
+        "no attempt has a score."
+    )
+    attempts_to_pass: CourseHomeworkAttemptsToPass | None = Field(
+        description="Median and mean of the number of the first passed attempt; "
+        "null when nobody passed."
+    )
+    hardest_criteria: list[CourseHomeworkCriterion] = Field(
+        description="Up to three 'must' and 'should' criteria of the list in "
+        "force that students most often miss in their last attempt, the most "
+        "missed first; empty for a test, for a task with no list in force and "
+        "when nothing is missed."
+    )
+
+
+class CourseHomeworkSummary(BaseModel):
+    """GET /nodes/{course_id}/homework/summary: the course's results by task."""
+
+    course_id: uuid.UUID = Field(description="The course (its root node).")
+    course_title: str = Field(description="The course's name.")
+    include_test_students: bool = Field(
+        description="Whether service students are counted (the request's flag)."
+    )
+    excluded_test_students: int = Field(
+        description="Service students with an attempt in the course who are left "
+        "out of these numbers; 0 when they are included."
+    )
+    tasks: list[CourseHomeworkTaskSummary] = Field(
+        description="Every task of the course where a work is expected, in the "
+        "course's order."
+    )
+
+
+class CourseHomeworkStudent(BaseModel):
+    """A row of the table: the identity the student roster shows."""
+
+    student_id: uuid.UUID = Field(description="The student.")
+    display_name: str | None = Field(description="Display name, if any.")
+    login: str | None = Field(description="Portal login, null without a credential.")
+
+
+class CourseHomeworkCell(BaseModel):
+    """One student's standing on one task."""
+
+    state: Literal["not_submitted", "in_review", "passed", "not_passed"] = Field(
+        description="passed — a passed attempt exists; else in_review — a "
+        "submission is in the work (held ones too); else not_passed — attempts "
+        "and none passed; else not_submitted."
+    )
+    best_score: int | None = Field(
+        description="The best score of the student's attempts; null without one."
+    )
+    attempts: int = Field(description="Attempts of the student at the task.")
+    last_submitted_at: datetime | None = Field(
+        description="When the student last submitted the task (an attempt or a "
+        "submission in the work); null when never."
+    )
+
+
+class CourseHomeworkStudentRow(CourseHomeworkStudent):
+    """A student and their cell on every task of the course."""
+
+    cells: dict[uuid.UUID, CourseHomeworkCell] = Field(
+        description="Cells keyed by task_id; every task of the response's "
+        "`tasks` has one."
+    )
+
+
+class CourseHomeworkTable(BaseModel):
+    """GET /nodes/{course_id}/homework/students: students by tasks."""
+
+    course_id: uuid.UUID = Field(description="The course (its root node).")
+    course_title: str = Field(description="The course's name.")
+    include_test_students: bool = Field(
+        description="Whether service students are rows (the request's flag)."
+    )
+    excluded_test_students: int = Field(
+        description="Service students who would be rows and are left out; 0 when "
+        "they are included."
+    )
+    tasks: list[CourseHomeworkTaskRef] = Field(
+        description="The columns: the same tasks, in the same order, as the summary."
+    )
+    students: list[CourseHomeworkStudentRow] = Field(
+        description="The page of rows: students enrolled in the course and those "
+        "who submitted without enrolling, by name."
+    )
+    total: int = Field(description="Rows of the table, all pages.")
+    limit: int = Field(description="Page size that was applied.")
+    offset: int = Field(description="Rows skipped before this page.")
+
+
 class PortalBaseDownload(BaseModel):
     """Presigned download of a project task's active base ORIGINAL (KD18 P5).
 
@@ -3565,6 +3733,81 @@ class BillingSpendingResponse(BaseModel):
     courses: list[BillingSpendingCourse]
     unlinked: BillingSpendingUnits = Field(
         description="Actions that lead to no course (a deleted row): kept, not lost."
+    )
+
+
+class BillingMoneyAmount(BaseModel):
+    """Money in one currency, in minor units of it (cents)."""
+
+    currency: str = Field(description="ISO 4217 code of the batch's currency.")
+    amount_minor: int = Field(description="Whole minor units, rounded once, half up.")
+
+
+class BillingMoneyFigures(BaseModel):
+    """What students paid for some reviews from their own accounts."""
+
+    reviews: int = Field(description="Different reviews with a debit in the period.")
+    units: int = Field(
+        description="Units debited from the students' accounts for them: the "
+        "units of paid batches and `gift_units` together."
+    )
+    money: list[BillingMoneyAmount] = Field(
+        description="The students' money by the price of the batch each debit "
+        "was taken from, per currency (sorted by code); refunds are not "
+        "subtracted."
+    )
+    gift_units: int = Field(
+        description="Units taken from batches without money (a gift, or a "
+        "marked test purchase): not in `money`."
+    )
+
+
+class BillingMoneyStudent(BillingMoneyFigures):
+    """A student of a course: what they paid for reviews of it."""
+
+    student_id: uuid.UUID
+    display_name: str | None = Field(
+        description="The student's name; null for a deleted student."
+    )
+    deleted: bool = Field(description="The student has been deleted.")
+
+
+class BillingMoneyCourse(BillingMoneyFigures):
+    """A course: what its students paid for reviews, and each of them."""
+
+    course_node_id: uuid.UUID
+    title: str | None
+    students: list[BillingMoneyStudent] = Field(
+        description="Students with reviews in the period, by units, the biggest first."
+    )
+
+
+class BillingMoneyTotals(BillingMoneyFigures):
+    """All the tenant's students' money in the period."""
+
+    excluded_test_reviews: int = Field(
+        description="Reviews of service students, left out of everything else."
+    )
+
+
+class BillingStudentsMoneyResponse(BaseModel):
+    """GET /billing/students-money: what students paid for reviews, by course.
+
+    Only reviews a student paid from their own account; a review the author
+    pays for under a rule is not here. Service students are left out.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_date: date = Field(alias="from", description="The first day, UTC.")
+    to_date: date = Field(alias="to", description="The last day, UTC (included).")
+    totals: BillingMoneyTotals
+    courses: list[BillingMoneyCourse] = Field(
+        description="Courses with reviews in the period, by units, the biggest first."
+    )
+    unlinked: BillingMoneyFigures = Field(
+        description="Reviews that lead to no course of the author (a deleted "
+        "row): in the totals, in no course, kept not lost."
     )
 
 

@@ -10,7 +10,7 @@ keywords:
   - starter archive
   - list of criteria
   - methodological guide
-last_updated: 2026-11-25
+last_updated: 2026-11-27
 ---
 
 # Assignments
@@ -60,7 +60,7 @@ A section has one description, so all assignments of a section — for example, 
 
 A project is an assignment in which the student submits an archive with a whole project. You can attach a **starter archive** to a project — the starting project the student begins work from. Then the Mentor sees what exactly the student changed and added. A project without a starter archive is also possible — then all of the student's work counts as new.
 
-Reviewing projects does not use up any units for now: neither from the student's package nor from yours.
+A project review is paid for in units, just like reviews of other work: from the student's package, or from yours if you pay for this student's reviews ([Costs and history](costs-history.md)).
 
 In the section panel, below the project row, there is "No starter archive attached." («Базовий архів не прикріплено.») and the "Attach starter archive (Прикріпити базовий архів)" button. A `.zip`, `.tar.gz`, `.tgz` or `.gz` archive of up to 100 MB will do.
 
@@ -74,7 +74,7 @@ A new version does not cancel the previous ones: work that students have already
 
 Important: if a starter archive is attached but none of its versions is in the "Done" state yet — preparation is still going on or an error occurred — students will not be able to submit the project. Upload a version that processes successfully.
 
-If the starter archive could not be prepared, the app shows the cause as a technical line in English — as of October 2026, this is how it is. Check that it really is a `.zip`, `.tar.gz`, `.tgz` or `.gz` archive, that it is not damaged and that it is no larger than 200 MB unpacked; create the archive again and press "Again". If that does not help, send this line to the platform administrator. An archive larger than 100 MB is rejected by the app straight away, in Ukrainian: "The archive is too large — the limit is 100 MB." («Архів завеликий — ліміт 100 МБ.»)
+If the starter archive could not be prepared, the app shows the cause as a technical line in English — as of October 2026, this is how it is. Check that it really is a `.zip`, `.tar.gz`, `.tgz` or `.gz` archive, that it is not damaged and that it is no larger than 200 MB unpacked; create the archive again and press "Again". If that does not help, send this line to the platform administrator. An archive larger than 100 MB is rejected by the app straight away: "The archive is too large — the limit is 100 MB." («Архів завеликий — ліміт 100 МБ.»)
 
 ## The assignment's list of criteria {#criteria}
 

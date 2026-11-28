@@ -172,7 +172,8 @@ def _settle(
 
 
 # Case A: c1 met (3); c2 not met — one of its two points is not (0); c3 met
-# (2); c4 not met (0); c5 met — all three points are (2).
+# (2); c4 not met — a "may" the work lacks, outside the score; c5 met — all
+# three points are (2).
 _CASE_A = _answer(
     _met("c1", "def fibonacci(n):"),
     _met("c2.p1", "return fibonacci(n - 1)"),
@@ -184,7 +185,8 @@ _CASE_A = _answer(
     _met("c5.p3", "def fibonacci(n):"),
 )
 
-# Case B: both "must" met (3 + 3), nothing else — c5 lost one point.
+# Case B: both "must" met (3 + 3), nothing else — c5 lost one point; c4, a
+# "may" not met, is outside the score.
 _CASE_B = _answer(
     _met("c1", "def fibonacci(n):"),
     _met("c2.p1", "return fibonacci(n - 1)"),
@@ -233,12 +235,14 @@ class TestScore:
     """Lock 1: the score is the share of weights, counted by hand."""
 
     def test_case_a(self) -> None:
-        # 3 + 2 + 2 = 7 of 11 -> 700 // 11 = 63 (63.6: to the nearest, 64).
-        assert score_percent(_records(_CASE_A)) == 63
+        # 3 + 2 + 2 = 7 of 3 + 3 + 2 + 2 = 10 (c4, a "may" not met, is not in
+        # the sum) -> 70. Before DD-SP-DQ (2026-11-27): 7 of 11 -> 63.
+        assert score_percent(_records(_CASE_A)) == 70
 
     def test_case_b(self) -> None:
-        # 3 + 3 = 6 of 11 -> 600 // 11 = 54 (54.5: to the nearest, 55).
-        assert score_percent(_records(_CASE_B)) == 54
+        # 3 + 3 = 6 of 10 (c4 is not in the sum) -> 60. Before DD-SP-DQ: 6 of
+        # 11 -> 54.
+        assert score_percent(_records(_CASE_B)) == 60
 
     def test_case_c(self) -> None:
         # 3 + 2 + 1 + 2 = 8 of 11 -> 800 // 11 = 72 (72.7: to the nearest, 73).
@@ -263,6 +267,114 @@ class TestScore:
         records = settle_verdicts(criteria, answer, None, work=_WORK, earlier={})
         assert score_percent(records) == 0
 
+    def test_a_may_not_met_is_outside_the_denominator(self) -> None:
+        # DD-SP-DQ (2026-11-27): 3 (c1) + 2 (c2) of 5 -> 100, not 5 of 6 -> 83.
+        criteria = _in_force(
+            _criterion("c1", "must"),
+            _criterion("c2", "should"),
+            _criterion("c3", "may"),
+        )
+        answer = _answer(
+            _met("c1", "def fibonacci(n):"),
+            _met("c2", "return fibonacci(n - 1)"),
+            _not_met("c3"),
+        )
+        records = settle_verdicts(criteria, answer, None, work=_WORK, earlier={})
+        assert {r.item_id: r.verdict for r in records}["c3"] == NOT_MET
+        assert score_percent(records) == 100
+
+    def test_a_may_met_is_in_the_numerator_and_the_denominator(self) -> None:
+        # 3 (c1, met) + 1 (c3, met) of 3 + 2 + 1 = 6 -> 66: the "should" not
+        # met still costs, and the "may" met is a plus, in both sums.
+        criteria = _in_force(
+            _criterion("c1", "must"),
+            _criterion("c2", "should"),
+            _criterion("c3", "may"),
+        )
+        answer = _answer(
+            _met("c1", "def fibonacci(n):"),
+            _not_met("c2"),
+            _met("c3", "assert fibonacci(10) == 55"),
+        )
+        records = settle_verdicts(criteria, answer, None, work=_WORK, earlier={})
+        assert score_percent(records) == 66
+
+    def test_a_may_met_beside_a_may_not_met_counts_only_the_met_one(self) -> None:
+        # 3 + 1 of 3 + 2 + 1 = 6 (the second "may" is outside) -> 100 * 4 // 6.
+        criteria = _in_force(
+            _criterion("c1", "must"),
+            _criterion("c2", "should"),
+            _criterion("c3", "may"),
+            _criterion("c4", "may"),
+        )
+        answer = _answer(
+            _met("c1", "def fibonacci(n):"),
+            _not_met("c2"),
+            _met("c3", "assert fibonacci(10) == 55"),
+            _not_met("c4"),
+        )
+        records = settle_verdicts(criteria, answer, None, work=_WORK, earlier={})
+        assert score_percent(records) == 66
+
+    def test_an_unconfirmed_may_is_credited_as_before(self) -> None:
+        # The model said "met" and no line bore it out: unconfirmed, credited
+        # (is_credited) — in the numerator and the denominator, as it was.
+        # 3 (c1) + 1 (c3, unconfirmed) of 3 + 2 + 1 = 6 -> 66.
+        criteria = _in_force(
+            _criterion("c1", "must"),
+            _criterion("c2", "should"),
+            _criterion("c3", "may"),
+        )
+        first = _answer(
+            _met("c1", "def fibonacci(n):"),
+            _not_met("c2"),
+            _met("c3", _SHORT),
+        )
+        repeat = _answer(_not_met("c3", "The quote is too short."))
+        records = settle_verdicts(criteria, first, repeat, work=_WORK, earlier={})
+        settled = {r.item_id: r for r in records}
+        assert (settled["c3"].verdict, settled["c3"].quote_not_found) == (NOT_MET, True)
+        assert score_percent(records) == 66
+
+    def test_nothing_but_a_may_not_met_has_nothing_to_divide_by(self) -> None:
+        # Everything required is done, for nothing is required: 100.
+        criteria = _in_force(_criterion("c1", "may"), _criterion("c2", "may"))
+        answer = _answer(_not_met("c1"), _not_met("c2"))
+        records = settle_verdicts(criteria, answer, None, work=_WORK, earlier={})
+        assert score_percent(records) == 100
+
+    def test_a_must_met_beside_a_may_not_met_is_100(self) -> None:
+        # The doctest's case, through the rows: [must met, may not_met].
+        criteria = _in_force(_criterion("c1", "must"), _criterion("c2", "may"))
+        answer = _answer(_met("c1", "def fibonacci(n):"), _not_met("c2"))
+        records = settle_verdicts(criteria, answer, None, work=_WORK, earlier={})
+        assert score_percent(records) == 100
+
+    def test_the_rows_of_a_may_not_met_are_stored_as_they_were(self) -> None:
+        # The author's screen shows the fact: the row stays "not met".
+        criteria = _in_force(_criterion("c1", "must"), _criterion("c2", "may"))
+        answer = _answer(_met("c1", "def fibonacci(n):"), _not_met("c2"))
+        records = settle_verdicts(criteria, answer, None, work=_WORK, earlier={})
+        row = {r.item_id: r for r in records}["c2"]
+        assert (row.verdict, row.weight, row.quote_not_found) == (
+            NOT_MET,
+            WeightCategory.MAY,
+            False,
+        )
+
+    def test_a_may_by_points_not_met_is_outside_too(self) -> None:
+        criteria = _in_force(
+            _criterion("c1", "must"), _criterion("c2", "may", points=2)
+        )
+        answer = _answer(
+            _met("c1", "def fibonacci(n):"),
+            _met("c2.p1", "return fibonacci(n - 1)"),
+            _not_met("c2.p2"),
+        )
+        records = settle_verdicts(criteria, answer, None, work=_WORK, earlier={})
+        assert {r.item_id: r.verdict for r in records}["c2"] == NOT_MET
+        assert score_percent(records) == 100
+
     def test_points_count_only_through_their_criterion(self) -> None:
         # c2 has one of two points met and counts 0, not half of 3.
         records = _records(_CASE_A)
@@ -273,7 +385,7 @@ class TestScore:
             "c2.p1": MET,
             "c2.p2": NOT_MET,
         }
-        assert score_percent(records) == 63
+        assert score_percent(records) == 70
 
     def test_stored_rows_give_the_score_the_records_gave(self) -> None:
         # The review's builder recounts from stored rows, whose words are
@@ -287,7 +399,7 @@ class TestScore:
             )
             for record in _records(_CASE_A)
         ]
-        assert score_percent(rows) == 63
+        assert score_percent(rows) == 70
         assert is_passed(rows, layer=AUTHOR, author_musts=_own_musts(rows)) is False
 
     def test_no_criterion_has_no_score(self) -> None:
@@ -310,10 +422,10 @@ class TestPassed:
 
     def test_every_must_met_does_not_pass_below_the_threshold(self) -> None:
         records = _records(_CASE_B)
-        assert score_percent(records) == 54
+        assert score_percent(records) == 60
         assert pass_decision(
             records, layer=AUTHOR, author_musts=_own_musts(records)
-        ) == PassDecision(False, "author_musts_below_threshold", 54, 70)
+        ) == PassDecision(False, "author_musts_below_threshold", 60, 70)
 
     def test_one_must_not_met_fails_with_everything_else_met(self) -> None:
         records = _records(_CASE_C)

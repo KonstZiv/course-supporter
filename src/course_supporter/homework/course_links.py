@@ -641,6 +641,8 @@ async def look_up_course_links(
         )
         raise ValueError(msg)
     criteria = await read_judged_list(session, submission, rows)
+    # The criteria the student is told of: without a "may" the work does not
+    # have, which gets no remark and so no place of the course (DD-SP-DQ).
     unmet = set(explanation_facts(criteria, rows, layer=judged_layer(rows)).unmet)
     failed = [
         FailedCriterion(id=c.id, text=c.text, concepts=tuple(c.concepts))

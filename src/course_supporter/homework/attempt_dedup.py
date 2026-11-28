@@ -104,6 +104,33 @@ What the submission gets:
     ``safety_result``: the work is the same, so the student sees the same files
     named as not read; nothing of the source's safety verdict is copied.
 
+The course links of the copy (task 10, K6; the debt DD-SP-DE):
+    The links to places of the course (``Remark.read``, a
+    :class:`~course_supporter.models.review_structure.Reference` with a
+    ``segment_id``) are in the copy as they were checked when the source was
+    assembled. Between that and the copy the course may have changed — a
+    fragment deleted, a material hidden or reprocessed — and a link to a place
+    the student cannot open is worse than none. So, before the copy is stored,
+    one read asks which of those places are candidates now
+    (``DocumentSegmentRepository.still_candidates`` with the submission's
+    ``course_node_id`` as the course root — the read
+    :func:`~course_supporter.homework.course_link_delivery.settle_course_links`
+    makes at its step 3), over the remarks of every section that has any
+    (``fixed``, ``new_remarks``, ``open``, ``broken``), and a link whose place
+    is no candidate is taken out of its remark's ``read``. A link with no
+    ``segment_id`` (an outside address, ``url``) is not touched; the order of
+    the rest is kept. There is no replacement: the copy gives the places of
+    its source or none — it has no verdict rows of its own and no search row
+    to look again by, and a new place would be another review. The copy stays
+    free and out of the register (no model, no ``course_link_stale`` row);
+    instead one log line, ``attempt_review_repeated_links_dropped``, names the
+    number of links taken out and the ``item_id`` of the remarks that lost
+    one — no titles, no texts. Nothing taken out, no line. A review with no
+    course link costs no query. The text of a remark (``why``, ``todo``) may
+    name a place in words; it is not mended, as on the ordinary path (the
+    module ``course_link_delivery``). The source review is not changed — the
+    copy is built from new remark objects, in the database and in memory.
+
 Once:
     The copy and the receipt are flushed into the body's transaction, which
     commits them with ``reviewing``. A run re-entered after that commit — the
@@ -185,9 +212,15 @@ from course_supporter.models.review_schema import (
     REVIEW_SCHEMA_VERSION,
     review_schema_version,
 )
-from course_supporter.models.review_structure import ReviewStructureV1
+from course_supporter.models.review_structure import (
+    Remark,
+    ReviewStructureV1,
+)
 from course_supporter.models.source import AssignmentType
 from course_supporter.models.stored_read import read_stored
+from course_supporter.storage.document_segment_repository import (
+    DocumentSegmentRepository,
+)
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import AuthoredDocument, HomeworkSubmission
 
@@ -206,6 +239,10 @@ logger = structlog.get_logger(__name__)
 
 DEDUP_RECEIPT_KEY: Final = "dedup_of"
 """The receipt's key for the number of the attempt whose review was repeated."""
+
+_REMARK_SECTIONS: Final = ("fixed", "new_remarks", "open", "broken")
+"""The sections of a review that hold remarks, and so course links
+(``Remark.read``)."""
 
 _JUDGED_AGAINST_A_LIST: Final = frozenset(
     {
@@ -299,6 +336,9 @@ async def repeat_unchanged_review(
     review = source.review.model_copy(
         update={"unchanged_from_attempt": source.attempt_no, "replies": []}
     )
+    review, dropped = await _without_dead_course_links(
+        session, review, submission_id=submission_id
+    )
     hw_repo = HomeworkRepository(session)
     await hw_repo.store_review_result(
         submission_id,
@@ -321,6 +361,14 @@ async def repeat_unchanged_review(
             raise ValueError(msg)
         await answer_without_the_model(
             session, submission, source.replies, language=review.language
+        )
+    if dropped.count:
+        logger.info(
+            "attempt_review_repeated_links_dropped",
+            submission_id=str(submission_id),
+            dedup_of=source.attempt_no,
+            dropped=dropped.count,
+            item_ids=list(dropped.item_ids),
         )
     logger.info(
         "attempt_review_repeated",
@@ -496,6 +544,81 @@ async def _find(
         door_reading=_door_reading_of(source.safety_result),
         replies=tuple(replies),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _DroppedLinks:
+    """What the check of a copy's course links took out: the log's two facts."""
+
+    count: int = 0
+    item_ids: tuple[str, ...] = ()
+
+
+async def _without_dead_course_links(
+    session: AsyncSession,
+    review: ReviewStructureV1,
+    *,
+    submission_id: uuid.UUID,
+) -> tuple[ReviewStructureV1, _DroppedLinks]:
+    """``review`` without the course links whose place is no candidate now.
+
+    The rule is the module's (the course links of the copy). One read of
+    ``still_candidates`` for all the places of the review — none, and no query
+    at all, when the review has no course link. ``review`` itself is not
+    changed: a remark that loses a link is replaced by a copy of it, the rest
+    stay as they are. A ``segment_id`` that is no identifier is no candidate.
+    """
+    places = {
+        reference.segment_id
+        for section in _REMARK_SECTIONS
+        for remark in getattr(review, section)
+        for reference in remark.read
+        if reference.segment_id is not None
+    }
+    if not places:
+        return review, _DroppedLinks()
+    identifiers = {place: _as_uuid(place) for place in places}
+    course_root_id = await session.scalar(
+        select(HomeworkSubmission.course_node_id).where(
+            HomeworkSubmission.id == submission_id
+        )
+    )
+    live = (
+        await DocumentSegmentRepository(session).still_candidates(
+            course_root_id=course_root_id,
+            segment_ids={found for found in identifiers.values() if found is not None},
+        )
+        if course_root_id is not None
+        else set()
+    )
+    candidates = {place for place, found in identifiers.items() if found in live}
+
+    count = 0
+    item_ids: list[str] = []
+    update: dict[str, list[Remark]] = {}
+    for section in _REMARK_SECTIONS:
+        remarks: list[Remark] = []
+        for remark in getattr(review, section):
+            kept = [
+                reference
+                for reference in remark.read
+                if reference.segment_id is None or reference.segment_id in candidates
+            ]
+            if len(kept) != len(remark.read):
+                count += len(remark.read) - len(kept)
+                if remark.item_id is not None:
+                    item_ids.append(remark.item_id)
+                remark = remark.model_copy(update={"read": kept})
+            remarks.append(remark)
+        update[section] = remarks
+    return review.model_copy(update=update), _DroppedLinks(count, tuple(item_ids))
+
+
+def _as_uuid(raw: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return None
 
 
 def _door_reading_of(safety_result: object) -> dict[str, Any]:

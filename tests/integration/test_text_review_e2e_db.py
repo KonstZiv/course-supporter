@@ -173,12 +173,19 @@ def _criterion(cid: str, weight: str, points: int = 0) -> Criterion:
     )
 
 
-# Weights 3 / 2 / 1; c2 is checked by two mandatory points.
+# Weights 3 / 2 / 2; c2 is checked by two mandatory points. Every criterion can
+# have a remark: c3 was a "may" until DD-SP-DQ (2026-11-27), when a "may" the
+# work lacks stopped having one — its walk is ``_MAY_CRITERIA`` below.
 _CRITERIA = (
     _criterion("c1", "must"),
     _criterion("c2", "should", 2),
-    _criterion("c3", "may"),
+    _criterion("c3", "should"),
 )
+
+# The same list with c3 a "may" the work lacks (DD-SP-DQ, 2026-11-27): "not
+# met" in the rows, outside the score, without a remark or a place of the
+# course.
+_MAY_CRITERIA = (*_CRITERIA[:2], _criterion("c3", "may"))
 
 
 def _verdict(
@@ -208,8 +215,9 @@ _SECOND_EVALUATION = _evaluation(
     _verdict("c3", "not_met", missing="Немає докстрінга."),
 )
 
-# 50 on the model's list: below the threshold of 80 (the pass rule of
-# 2026-11-12), so the code's pass — which the explanation repeats — is false.
+# 42 on the model's list (3 of 3 + 2 + 2): below the threshold of 80 (the pass
+# rule of 2026-11-12), so the code's pass — which the explanation repeats — is
+# false.
 _WHY = "Робота не зарахована: функція solve є, але бракує перевірок і докстрінга."
 _VOICE = "Назва функції говорить сама за себе."
 
@@ -232,6 +240,18 @@ _EXPLANATION = json.dumps(
         "passed": False,
         "why": _WHY,
         "remarks": [_remark("c3"), _remark("c2")],
+        "mentor_voice": _VOICE,
+    },
+    ensure_ascii=False,
+)
+
+# The one remark of ``_MAY_CRITERIA``'s walk: c2's — c3, a "may" the work lacks,
+# gets none.
+_MAY_EXPLANATION = json.dumps(
+    {
+        "passed": False,
+        "why": _WHY,
+        "remarks": [_remark("c2")],
         "mentor_voice": _VOICE,
     },
     ensure_ascii=False,
@@ -430,6 +450,24 @@ async def world(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncGenerator[dict[str, Any]]:
     """A ``task`` with a ready model list, and one student; no submission yet."""
+    async for ids in _seeded_world(session_factory, _CRITERIA):
+        yield ids
+
+
+@pytest.fixture()
+async def may_world(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[dict[str, Any]]:
+    """``world`` with c3 a "may" the work lacks (DD-SP-DQ, ``_MAY_CRITERIA``)."""
+    async for ids in _seeded_world(session_factory, _MAY_CRITERIA):
+        yield ids
+
+
+async def _seeded_world(
+    session_factory: async_sessionmaker[AsyncSession],
+    criteria: tuple[Criterion, ...],
+) -> AsyncGenerator[dict[str, Any]]:
+    """The world of a ``task`` whose ready model list is ``criteria``."""
     async with session_factory() as session:
         tenant = Tenant(name=f"text-e2e-{uuid.uuid4().hex[:8]}")
         session.add(tenant)
@@ -460,7 +498,7 @@ async def world(
         assert await lists.mark_ready(
             claimed.id,
             claimed_at=claimed.claimed_at,
-            criteria=criteria_to_document(_CRITERIA),
+            criteria=criteria_to_document(criteria),
             contradictions=[],
             concepts_in_input=False,
             dropped_concept_count=0,
@@ -477,7 +515,7 @@ async def world(
             "doc_id": doc.id,
             "student_id": student.id,
             "in_force": CriteriaInForce(
-                criteria=_CRITERIA, layer=CriteriaLayer.MODEL, source_id=claimed.id
+                criteria=criteria, layer=CriteriaLayer.MODEL, source_id=claimed.id
             ),
             "submissions": [],
         }
@@ -812,10 +850,10 @@ class TestAFirstSubmissionIsReviewedFromItsVerdicts:
         assert rows["c2"]["model_verdict"] is None  # derived from its points
         assert not any(row["safeguard_fired"] for row in rows.values())
 
-        # ── The score by hand: c1 (3) of c1 + c2 + c3 (3 + 2 + 1) = 50 % ──
+        # ── The score by hand: c1 (3) of c1 + c2 + c3 (3 + 2 + 2) = 42 % ──
         submission = await _submission(session_factory, submission_id)
         assert submission.status == "delivered"
-        assert submission.score == 50
+        assert submission.score == 42
 
         # ── The structure: the code's pass, the model's words, heaviest first ──
         structure = ReviewStructureV1.model_validate(submission.review_result)
@@ -824,7 +862,7 @@ class TestAFirstSubmissionIsReviewedFromItsVerdicts:
         assert structure.verdict.passed is False
         assert structure.verdict.why == _WHY
         assert structure.verdict.rule == PassRule(
-            basis="no_author_musts_failed", score=50, threshold=80
+            basis="no_author_musts_failed", score=42, threshold=80
         )
         assert structure.new_remarks == [
             Remark(
@@ -841,7 +879,7 @@ class TestAFirstSubmissionIsReviewedFromItsVerdicts:
         # ── What leaves the service: the webhook and the portal agree ──
         [payload] = _reviewed(webhook)
         assert payload.structure == structure
-        assert payload.review.score == 50
+        assert payload.review.score == 42
         assert payload.review.passed is False
         assert payload.review.correctness == "partially_correct"
         assert payload.review.review_text == submission.review_markdown
@@ -851,6 +889,125 @@ class TestAFirstSubmissionIsReviewedFromItsVerdicts:
 
         # ── After delivery: two criteria not met, neither linked (K6) ──
         assert await _metrics(session_factory, submission_id) == [(0.0, None)]
+
+
+class TestAMayTheWorkLacksGetsNoRemark:
+    """DD-SP-DQ (2026-11-27), through the body: no remark, no place, a new score.
+
+    The list is ``_MAY_CRITERIA``: c3 is a "may" and the work lacks it. Its row
+    stays "not met" — the author's screen shows the fact — but the score does
+    not count it, the explanation is not told of it, the course is not
+    searched for it, and the saved review has no remark on it.
+    """
+
+    async def test_rows_score_request_remarks_and_the_search(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        may_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        router = _RouterDouble(session_factory)
+        router.content[REVIEW_EXPLANATION] = _MAY_EXPLANATION
+        webhook = _webhook()
+        submission_id, job_id = await _submit(session_factory, may_world)
+
+        await _run(
+            session_factory,
+            router,
+            _ListSource(may_world["in_force"]),
+            webhook,
+            tmp_path,
+            submission_id=submission_id,
+            job_id=job_id,
+        )
+
+        assert router.calls == [
+            SAFETY,
+            ATTEMPT_CLASSIFIER,
+            CRITERIA_EVALUATION,
+            REVIEW_EXPLANATION,
+        ]
+        # ── The rows are what they were: c3 is "not met" ──
+        rows = await _rows(session_factory, submission_id)
+        assert {item: row["verdict"] for item, row in rows.items()} == {
+            "c1": "met",
+            "c2": "not_met",
+            "c2.p1": "met",
+            "c2.p2": "not_met",
+            "c3": "not_met",
+        }
+        assert rows["c3"]["weight"] == "may"
+
+        # ── The explanation is not told of c3, nor of a place for it ──
+        shown = router.rendered[REVIEW_EXPLANATION]
+        assert [c["id"] for c in shown["criteria"]] == ["c1", "c2"]
+        assert [c["criterion"] for c in shown["course_links"]] == ["c2"]
+        async with session_factory() as session:
+            found = await SubmissionVerdictRepository(session).get_candidates(
+                tenant_id=may_world["tenant_id"], submission_id=submission_id
+            )
+        assert found is not None
+        assert found.body == {
+            "criteria": [{"item_id": "c2", "candidates": []}],
+            "settled": [{"item_id": "c2", "candidates": []}],
+        }
+
+        # ── The score by hand: c1 (3) of c1 + c2 (3 + 2) = 60 %, c3 outside.
+        # Counted with it, 3 of 3 + 2 + 1, it was 50 % ──
+        submission = await _submission(session_factory, submission_id)
+        assert submission.status == "delivered"
+        assert submission.score == 60
+        assert shown["result"]["score"] == 60
+
+        # ── The saved review: the one remark is c2's ──
+        structure = ReviewStructureV1.model_validate(submission.review_result)
+        assert structure.verdict is not None
+        assert structure.verdict.rule == PassRule(
+            basis="no_author_musts_failed", score=60, threshold=80
+        )
+        assert structure.new_remarks == [
+            Remark(
+                what=_remark("c2")["what"],
+                why=_remark("c2")["why"],
+                todo=_remark("c2")["todo"],
+                item_id="c2",
+            )
+        ]
+        assert structure.open == structure.broken == structure.fixed == []
+        assert submission.review_markdown == assemble_review(structure)
+        [payload] = _reviewed(webhook)
+        assert payload.review.score == 60
+
+        # ── After delivery: one criterion not met — c3 is none — not linked ──
+        assert await _metrics(session_factory, submission_id) == [(0.0, None)]
+
+    async def test_a_remark_on_it_is_refused_as_any_unexpected_one(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        may_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        router = _RouterDouble(session_factory)
+        router.content[REVIEW_EXPLANATION] = _EXPLANATION  # remarks on c3 and c2
+        submission_id, job_id = await _submit(session_factory, may_world)
+
+        await _run(
+            session_factory,
+            router,
+            _ListSource(may_world["in_force"]),
+            _webhook(),
+            tmp_path,
+            submission_id=submission_id,
+            job_id=job_id,
+        )
+
+        # The stage's own check ran on the answer, and refused it as
+        # unexpected: the double does not retry, as the router would.
+        submission = await _submission(session_factory, submission_id)
+        assert submission.status == "failed"
+        assert submission.review_result is None
+        rows = await _rows(session_factory, submission_id)
+        assert rows["c3"]["verdict"] == "not_met"
 
 
 class TestTheSameMachineInputGivesTheSameReview:
@@ -901,7 +1058,7 @@ class TestTheSameMachineInputGivesTheSameReview:
             second.review_result,
             second.review_markdown,
         )
-        assert first.score == 50
+        assert first.score == 42
 
 
 class TestASecondSubmissionKeepsWhatTheFirstEarned:
@@ -952,21 +1109,23 @@ class TestASecondSubmissionKeepsWhatTheFirstEarned:
 
         second = await _submission(session_factory, second_id)
         assert second.status == "delivered"
-        assert second.score == 50
+        assert second.score == 42
         structure = ReviewStructureV1.model_validate(second.review_result)
         assert structure.verdict is not None
         assert structure.verdict.passed is False
         [payload] = _reviewed(webhook)
-        assert payload.review.score == 50
+        assert payload.review.score == 42
 
 
-# Task 12a, K2: five criteria, weights 3 / 2 / 2 / 1 / 1 — of 9.
+# Task 12a, K2: five criteria, weights 3 / 2 / 2 / 2 / 2 — of 11. Every one
+# can have a remark: a "may" the work lacks has none (DD-SP-DQ), and this walk
+# follows the states of the remarks.
 _FIVE = (
     _criterion("c1", "must"),
     _criterion("c2", "should"),
     _criterion("c3", "should"),
-    _criterion("c4", "may"),
-    _criterion("c5", "may"),
+    _criterion("c4", "should"),
+    _criterion("c5", "should"),
 )
 
 # The second attempt's work: a docstring now (c3), the doubling by addition —
@@ -1061,7 +1220,7 @@ class TestASecondAttemptSaysWhatWasFixedAndWhatBroke:
         router = _RouterDouble(session_factory)
         source = _ListSource(task["in_force"])
 
-        # ── Attempt 1: c1, c2, c5 met — (3 + 2 + 1) of 9 = 66 % ──
+        # ── Attempt 1: c1, c2, c5 met — (3 + 2 + 2) of 11 = 63 % ──
         router.content[CRITERIA_EVALUATION] = _evaluation(
             _verdict("c1", "met", quote="def solve(n):"),
             _verdict("c2", "met", quote="return n * 2"),
@@ -1090,13 +1249,13 @@ class TestASecondAttemptSaysWhatWasFixedAndWhatBroke:
         )
 
         first = await _submission(session_factory, first_id)
-        assert (first.status, first.score, first.attempt_no) == ("delivered", 66, 1)
+        assert (first.status, first.score, first.attempt_no) == ("delivered", 63, 1)
         # A first attempt: nothing to compare with, every remark new.
         before = ReviewStructureV1.model_validate(first.review_result)
         assert before.new_remarks == [_shown(_said("c3", 1)), _shown(_said("c4", 1))]
         assert before.fixed == before.open == before.broken == []
 
-        # ── Attempt 2: c1, c2, c3 met — (3 + 2 + 2) of 9 = 77 % ──
+        # ── Attempt 2: c1, c2, c3 met — (3 + 2 + 2) of 11 = 63 % ──
         router.content[CRITERIA_EVALUATION] = _evaluation(
             _verdict("c1", "met", quote="def solve(n):"),
             _verdict("c2", "met", quote="return n + n"),
@@ -1127,7 +1286,7 @@ class TestASecondAttemptSaysWhatWasFixedAndWhatBroke:
         )
 
         second = await _submission(session_factory, second_id)
-        assert (second.status, second.score, second.attempt_no) == ("delivered", 77, 2)
+        assert (second.status, second.score, second.attempt_no) == ("delivered", 63, 2)
         assert second.task_version == first.task_version
         # The safeguard did not keep c5: its line is not in the work. The
         # stage wrote each row's state with it; the review is laid out by them.
@@ -1241,9 +1400,9 @@ class TestASubmissionWithoutAListWaitsForOne:
         ]
         reviewed = await _submission(session_factory, submission_id)
         assert reviewed.status == "delivered"
-        assert reviewed.score == 50
+        assert reviewed.score == 42
         [payload] = _reviewed(webhook)
-        assert payload.review.score == 50
+        assert payload.review.score == 42
         async with session_factory() as session:
             explanations = (
                 await session.execute(
@@ -1514,7 +1673,8 @@ class TestTheShippedFileServesTextTasksOnTheNewPathOutOfTestMode:
     test mode, so whether a review is charged for is the billing switches'
     decision (``BILLING_CHARGING_ENABLED`` / ``BILLING_CHARGING_MARKED``), not
     the file's. ``test`` is as it was; ``project`` moved onto the new path in
-    test mode in project chain K8 — served by it, not charged for."""
+    test mode in project chain K8 and out of it in M-10 (2026-11-26): served
+    by it, charged for like the text types."""
 
     def test_the_file_serves_text_types_on_the_new_path_out_of_test_mode(
         self,
@@ -1529,7 +1689,7 @@ class TestTheShippedFileServesTextTasksOnTheNewPathOutOfTestMode:
         assert shipped.task_types[AssignmentType.PROJECT].served_by is (
             ServedBy.NEW_PATH
         )
-        assert in_test_mode(AssignmentType.PROJECT, shipped) is True
+        assert in_test_mode(AssignmentType.PROJECT, shipped) is False
 
     async def test_the_new_path_takes_a_task(
         self,

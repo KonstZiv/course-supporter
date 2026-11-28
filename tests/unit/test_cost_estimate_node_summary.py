@@ -352,14 +352,15 @@ def test_every_model_stage_of_the_configuration_has_review_settings(
 def test_the_project_path_after_its_switch_is_priced(
     paths: PathConfig, settings: EstimateSettings, catalog: Catalog
 ) -> None:
-    """The stages `project` will run (task chain K4), 10 000 characters of work.
+    """The stages `project` runs (task chain K4, calibrated in M-10), 10 000
+    characters of work.
 
-    project_criteria_evaluation: qwen3.7-max, 5 990 + 2 857 = 8 847 in,
-        8 548 out, 2 calls
-        (8 847 x 0.00165 + 8 548 x 0.004951) / 1000 x 2 = 0.113837396
-    project_review_explanation: qwen3.7-max, 10 813 + 2 857 = 13 670 in,
+    project_criteria_evaluation: qwen3.7-max, 11 342 + 2 857 = 14 199 in,
+        9 325 out, 1 call
+        (14 199 x 0.00165 + 9 325 x 0.004951) / 1000 = 0.069596425
+    project_review_explanation: qwen3.7-max, 15 280 + 2 857 = 18 137 in,
         8 192 out (the rung's pin)
-        (13 670 x 0.00165 + 8 192 x 0.004951) / 1000 = 0.063114092
+        (18 137 x 0.00165 + 8 192 x 0.004951) / 1000 = 0.070484642
     """
     priced = model_stages(paths)
     estimate = estimate_review(
@@ -373,12 +374,12 @@ def test_the_project_path_after_its_switch_is_priced(
     assert [
         (s.step, s.model, s.tokens_in, s.tokens_out, s.calls) for s in estimate.steps
     ] == [
-        ("project_criteria_evaluation", "qwen3.7-max", 8_847, 8_548, Decimal(2)),
-        ("project_review_explanation", "qwen3.7-max", 13_670, 8_192, Decimal(1)),
+        ("project_criteria_evaluation", "qwen3.7-max", 14_199, 9_325, Decimal(1)),
+        ("project_review_explanation", "qwen3.7-max", 18_137, 8_192, Decimal(1)),
     ]
-    assert estimate.steps[0].cost_usd == Decimal("0.113837396")
-    assert estimate.steps[1].cost_usd == Decimal("0.063114092")
-    assert estimate.uncalibrated  # no live data on this path yet
+    assert estimate.steps[0].cost_usd == Decimal("0.069596425")
+    assert estimate.steps[1].cost_usd == Decimal("0.070484642")
+    assert not estimate.uncalibrated  # the live measurement of 2026-11-26
 
 
 def test_the_prompt_sizes_in_the_settings_are_the_files(

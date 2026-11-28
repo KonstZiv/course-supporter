@@ -107,9 +107,12 @@ class TestTheFieldsAreTheCodes:
 # ── The project's request, byte for byte ──
 
 # sha256 of the project's rendered request (system, NUL, user) on the input
-# below, taken on main (e80f772) before task 13.
+# below, taken on main (e80f772) before task 13; re-taken on purpose by
+# DD-SP-DQ (2026-11-27): the input's c3 is a "may" the work does not have, so
+# the request no longer lists it among the criteria nor among the places of
+# the course — nothing else in it moved.
 _PROJECT_REQUEST_DIGEST = (
-    "0f1b353857f07ba9799914f080e85006bbba6b0d6c921bb9646982ed2c3cee4a"
+    "7c1b53bc27aa7b4942517e5e64f24d73a365b1c81c8c7a9acfcb706530bd5227"
 )
 
 

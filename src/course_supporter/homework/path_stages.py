@@ -66,12 +66,12 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import structlog
 
 from course_supporter.homework.path_checkpoint import FreezeReason
-from course_supporter.homework.path_config import ModelStage
+from course_supporter.homework.path_config import REPLY_TOPIC_STAGE, ModelStage
 from course_supporter.llm.ladder_config import LadderEntry, StageConfig
 from course_supporter.llm.stage_router import StageExecution
 from course_supporter.models.source import AssignmentType
@@ -224,14 +224,30 @@ def get_stage_executor(name: str) -> StageExecutor:
     return _EXECUTORS[name]
 
 
+_RUN_BY_THE_REPLY_SCREEN: Final = frozenset({REPLY_TOPIC_STAGE})
+"""Stages the file defines that no path lists and the reply screen runs itself.
+
+A path walks its stages through an executor; the screen asks the topic
+question directly (``homework/reply_topic.py``) and the boot refuses a path
+that lists the stage (``validate_path_config``), so an executor would never
+be called.
+"""
+
+
 def missing_stage_executors(stage_names: Collection[str]) -> list[str]:
     """Stage names the configuration lists that nobody can run, sorted.
 
-    Empty means every described stage has an executor. The startup check turns a
-    non-empty answer into a refusal to boot: a stage discovered at submission
-    time would fail one student's work for a mistake made in a file.
+    Empty means every described stage has an executor, but for the stages the
+    reply screen runs itself (:data:`_RUN_BY_THE_REPLY_SCREEN`). The startup
+    check turns a non-empty answer into a refusal to boot: a stage discovered
+    at submission time would fail one student's work for a mistake made in a
+    file.
     """
-    return sorted(name for name in set(stage_names) if name not in _EXECUTORS)
+    return sorted(
+        name
+        for name in set(stage_names)
+        if name not in _EXECUTORS and name not in _RUN_BY_THE_REPLY_SCREEN
+    )
 
 
 def validate_stage_executors(stage_names: Collection[str]) -> None:

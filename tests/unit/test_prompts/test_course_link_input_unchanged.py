@@ -56,9 +56,13 @@ from tests.unit.test_prompts.test_text_stage_inputs_unchanged import (
 # purpose — only its system message differs; and the stage's since prompt v4
 # (task 13, 2026-11-23), re-taken on purpose — its request shows the limit of
 # examples.
-_V2_REQUEST_DIGEST = "5a4cd716953e209ef28bbcf5f007a7ee63964f25adcb1c33b1aea199c5503d75"
-_V3_REQUEST_DIGEST = "b2126cfdd9e494b7141e3c8919cb28644eac48e73bf501a6729e80eeccdc3c22"
-_REQUEST_DIGEST = "4072be62bac73ec3abf4a64f9f2a1550cd3aee7a02ece68fbe842b97e41800c3"
+#
+# All three re-taken on purpose by DD-SP-DQ (2026-11-27): the shared input's c3
+# is a "may" the work does not have, so the request no longer lists it among
+# the criteria nor among the places of the course — nothing else in it moved.
+_V2_REQUEST_DIGEST = "4383360f5b17c5b94e40a3e14434e644741374ab7ce506f34ab88043f94a4087"
+_V3_REQUEST_DIGEST = "965399c2d2f5f5f6b2dbfc6474880e3dce02e9f0811a67340d6d3bddb966a608"
+_REQUEST_DIGEST = "4f8ba0a5fb7565ef97d3c749dc8744f7db924ab9e3929629318609bdd5c01961"
 
 
 def _place(title: str, paragraph: int, confidence: float) -> LinkCandidate:

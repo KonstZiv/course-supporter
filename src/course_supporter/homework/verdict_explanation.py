@@ -37,9 +37,13 @@ The check (``PRE-FLIGHT.md`` 9.7, the check of facts; ``TASK.md`` lock 7):
   that is not — or the other way round — is refused: the verdict's ``why``
   is written around that word, so a wrong one there is a wrong text.
 * There is exactly one remark on every criterion that is not met, of any
-  weight, and none on a criterion that is met or on a mandatory point: an
-  unmet "must" left without a remark is the defect the lock names, and a
-  remark on a met criterion tells the student to fix what is fine.
+  weight but one, and none on a criterion that is met or on a mandatory
+  point: an unmet "must" left without a remark is the defect the lock names,
+  and a remark on a met criterion tells the student to fix what is fine. The
+  weight left out is "may": a "may" the work does not have is no flaw
+  (DD-SP-DQ, 2026-11-27), so it is not in :attr:`ExplanationFacts.unmet`, the
+  request does not show it (:attr:`ExplanationFacts.told`), and a remark on it
+  is refused as any remark on a criterion that is not to be remarked on.
 * The texts the review prints are not empty.
 
 What the check cannot see is a claim inside the free text — "your work is
@@ -97,6 +101,7 @@ from course_supporter.criteria_kinds import (
 from course_supporter.homework.criteria_form import CheckMethod, Criterion, author_musts
 from course_supporter.homework.criteria_verdicts import (
     QuotePlace,
+    is_optional_unmet,
     is_passed,
     score_percent,
 )
@@ -211,6 +216,17 @@ class CriterionFacts:
     judged: JudgedItem | None
     points: tuple[JudgedItem, ...]
 
+    @property
+    def is_unmet(self) -> bool:
+        """Not met, and a flaw: the criteria a remark is written for.
+
+        Not a "may" the work lacks (:func:`is_optional_unmet`): the assignment
+        invites it, and missing it is no flaw (DD-SP-DQ, 2026-11-27).
+        """
+        return self.verdict is VerdictValue.NOT_MET and not is_optional_unmet(
+            self.criterion.weight, self.verdict
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class ExplanationFacts:
@@ -229,11 +245,29 @@ class ExplanationFacts:
 
     @property
     def unmet(self) -> tuple[str, ...]:
-        """The criteria that are not met, in the list's order."""
+        """The criteria that are not met, in the list's order, without a "may".
+
+        What the student is told of: one remark each, one search for places of
+        the course each. A "may" the work does not have is not here
+        (:func:`~course_supporter.homework.criteria_verdicts.is_optional_unmet`).
+        Its verdict row stays "not met"; only what is written for the student
+        leaves it out (DD-SP-DQ, 2026-11-27).
+        """
+        return tuple(facts.criterion.id for facts in self.criteria if facts.is_unmet)
+
+    @property
+    def told(self) -> tuple[CriterionFacts, ...]:
+        """The criteria the explanation's request shows, in the list's order.
+
+        Every criterion but a "may" the work does not have: the request's rule
+        is a remark on each criterion shown as not met, so a criterion that
+        gets no remark is not shown as one — nor at all. The score and the pass
+        in the same request already leave it out.
+        """
         return tuple(
-            facts.criterion.id
+            facts
             for facts in self.criteria
-            if facts.verdict is VerdictValue.NOT_MET
+            if not is_optional_unmet(facts.criterion.weight, facts.verdict)
         )
 
 

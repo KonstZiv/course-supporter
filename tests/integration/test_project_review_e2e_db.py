@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import io
 import json
+import sys
 import uuid
 import zipfile
 from collections.abc import AsyncGenerator, Callable
@@ -206,13 +207,22 @@ def _criterion(
     )
 
 
-# Weights 3 / 2 / 1. c2 is checked by two points: reading the lines and
-# printing the statistics. c3 names a concept the course teaches.
+# Weights 3 / 2 / 2. c2 is checked by two points: reading the lines and
+# printing the statistics. c3 names a concept the course teaches; it was a
+# "may" until DD-SP-DQ (2026-11-27), when a "may" the work lacks stopped having
+# a remark, a place and a link — its walk is ``_MAY_CRITERIA`` below.
 # The author's edit: c1 a "must" the author made mandatory themselves
 # (``must_by_author``, 2026-11-17).
 _CRITERIA = (
     _criterion("c1", "must").model_copy(update={"must_by_author": True}),
     _criterion("c2", "should", points=2).model_copy(update={"must_by_author": False}),
+    _criterion("c3", "should", concepts=("empty-input",)).model_copy(
+        update={"must_by_author": False}
+    ),
+)
+# The same list with c3 a "may" the work lacks (DD-SP-DQ, 2026-11-27).
+_MAY_CRITERIA = (
+    *_CRITERIA[:2],
     _criterion("c3", "may", concepts=("empty-input",)).model_copy(
         update={"must_by_author": False}
     ),
@@ -896,18 +906,18 @@ class TestAFirstSubmissionOfAProject:
         outcome = await walk.run(PROJECT)
 
         submission = outcome.submission
-        # The score by hand: c1 (3) of c1 + c2 + c3 (3 + 2 + 1) = 50 %.
-        assert submission.score == 50
+        # The score by hand: c1 (3) of c1 + c2 + c3 (3 + 2 + 2) = 42 %.
+        assert submission.score == 42
         structure = outcome.structure
         assert structure.language == "ukr"
         assert structure.unchanged_from_attempt is None
         assert structure.verdict is not None
         assert structure.verdict.passed is False
         assert structure.verdict.why == _WHY
-        # The author's list: its own "must" is met, and 50 is under the
+        # The author's list: its own "must" is met, and 42 is under the
         # author's threshold of 70 (the pass rule of 2026-11-12 and 2026-11-17).
         assert structure.verdict.rule == PassRule(
-            basis="author_musts_below_threshold", score=50, threshold=70
+            basis="author_musts_below_threshold", score=42, threshold=70
         )
         # The remarks, heaviest first; the place of the problem above its
         # remark when the student's own line is where it stands.
@@ -937,7 +947,7 @@ class TestAFirstSubmissionOfAProject:
         assert receipt is not None
         assert receipt["fingerprint"] == submission.fingerprint
         assert receipt["path"] == ServedBy.NEW_PATH.value
-        assert receipt["test_mode"] is True
+        assert receipt["test_mode"] is False
         assert DEDUP_RECEIPT_KEY not in receipt
         # The evaluator that wrote the review is the project's, not the text
         # types' (their stages are others').
@@ -956,7 +966,7 @@ class TestAFirstSubmissionOfAProject:
         )
         [payload] = outcome.reviewed
         assert payload.structure == outcome.structure
-        assert payload.review.score == 50
+        assert payload.review.score == 42
         assert payload.review.passed is False
         assert payload.review.review_text == outcome.submission.review_markdown
         assert outcome.deliveries == 1
@@ -996,6 +1006,77 @@ class TestAFirstSubmissionOfAProject:
         ]
 
 
+_MAY_EXPLANATION = json.dumps(
+    {
+        "passed": False,
+        "why": _WHY,
+        "remarks": [json.loads(_EXPLANATION)["remarks"][1]],
+        "mentor_voice": None,
+    },
+    ensure_ascii=False,
+)
+
+
+@pytest.fixture()
+def may_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The walk's list with c3 a "may", and the one remark it gets (c2's).
+
+    Set before ``world`` builds the list, which reads the module's name.
+    """
+    monkeypatch.setattr(sys.modules[__name__], "_CRITERIA", _MAY_CRITERIA)
+    monkeypatch.setattr(sys.modules[__name__], "_EXPLANATION", _MAY_EXPLANATION)
+
+
+class TestAMayTheWorkLacksInAProject:
+    """DD-SP-DQ (2026-11-27), through the project's path: no remark, no place.
+
+    c3 is a "may" the project lacks, and the model even gives the line of the
+    student's file where its problem stands. The row keeps that line — the
+    author's screen shows the fact — but the review has no remark on c3, so no
+    place and no link, and the score does not count it.
+    """
+
+    async def test_the_review_has_no_remark_place_or_link_for_it(
+        self,
+        may_lists: None,
+        session_factory: async_sessionmaker[AsyncSession],
+        s3_client: S3Client,
+        world: dict[str, Any],
+    ) -> None:
+        walk = _Walk(session_factory, s3_client, world)
+
+        outcome = await walk.run(PROJECT)
+
+        # ── The explanation is not shown c3 or a place of the course for it ──
+        [request] = walk.router.asked(PROJECT_REVIEW_EXPLANATION)
+        assert [c["id"] for c in request.variables["criteria"]] == ["c1", "c2"]
+        assert [c["criterion"] for c in request.variables["course_links"]] == ["c2"]
+
+        # ── The rows are what they were: c3 "not met", with its line ──
+        rows = await _rows(session_factory, outcome.submission.id)
+        assert rows["c3"].verdict == VerdictValue.NOT_MET
+        assert (rows["c3"].quote_file, rows["c3"].quote_line_start) == ("stats.py", 3)
+
+        # ── The score: c1 (3) of c1 + c2 (3 + 2) = 60 %, c3 outside ──
+        submission = outcome.submission
+        assert submission.status == "delivered"
+        assert submission.score == 60
+        structure = outcome.structure
+        assert structure.verdict is not None
+        assert structure.verdict.rule == PassRule(
+            basis="author_musts_below_threshold", score=60, threshold=70
+        )
+
+        # ── The saved review: c2's remark alone, and no place at all ──
+        [c2_remark] = structure.new_remarks
+        assert c2_remark.item_id == "c2"
+        assert c2_remark.position is None
+        markdown = submission.review_markdown or ""
+        assert markdown == assemble_review(structure)
+        assert "*файл " not in markdown
+        assert "c3" not in markdown
+
+
 class TestTheSameWorkAgain:
     """Run 2: the same archive by the same student — the review is given again."""
 
@@ -1029,7 +1110,7 @@ class TestTheSameWorkAgain:
         assert second.structure == first.structure.model_copy(
             update={"unchanged_from_attempt": 1}
         )
-        assert second.submission.score == first.submission.score == 50
+        assert second.submission.score == first.submission.score == 42
         assert second.submission.review_markdown == assemble_review(second.structure)
         assert second.submission.review_markdown != first.submission.review_markdown
         receipt = second.submission.attempt_receipt
@@ -1049,7 +1130,7 @@ class TestTheSameWorkAgain:
         assert second.submission.status == "delivered"
         [payload] = second.reviewed
         assert payload.structure == second.structure
-        assert payload.review.score == 50
+        assert payload.review.score == 42
 
 
 class TestTheSameWorkAgainstAnEditedList:
@@ -1139,7 +1220,7 @@ class TestAChangedWorkAgain:
         )
         # A full review, written again: not a copy, with its own rows.
         assert second.structure.unchanged_from_attempt is None
-        assert submission.score == 50
+        assert submission.score == 42
         assert set(await _rows(session_factory, submission.id)) == {
             "c1",
             "c2",
@@ -1161,13 +1242,13 @@ class TestAChangedWorkAgain:
 class TestTheConfigurationOfTheWalk:
     """What the runs above stand on: the shipped file, as the body reads it."""
 
-    def test_the_project_is_on_the_new_path_in_test_mode(self) -> None:
+    def test_the_project_is_on_the_new_path_out_of_test_mode(self) -> None:
         shipped = _shipped()
 
         assert shipped.task_types[AssignmentType.PROJECT].served_by is (
             ServedBy.NEW_PATH
         )
-        assert in_test_mode(AssignmentType.PROJECT, shipped) is True
+        assert in_test_mode(AssignmentType.PROJECT, shipped) is False
 
     def test_the_attempt_classifier_asks_on_the_first_submission_alone(
         self,

@@ -38,6 +38,11 @@ PROVIDER_CONFIGS: dict[str, ProviderFactoryConfig] = {
     "gemini": ProviderFactoryConfig(
         get_default_model=lambda s: s.gemini_default_model,
     ),
+    # Decision models over Google's native REST endpoint: the same
+    # GEMINI_API_KEY pool as ``gemini``, its own provider and default model.
+    "gemini_decisions": ProviderFactoryConfig(
+        get_default_model=lambda s: s.gemini_decisions_default_model,
+    ),
     "anthropic": ProviderFactoryConfig(
         get_default_model=lambda s: s.anthropic_default_model,
     ),

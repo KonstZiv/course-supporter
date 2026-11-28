@@ -1710,7 +1710,7 @@ def _money_notes(line: partner_report.MoneyLine) -> list[str]:
     return notes
 
 
-def _money_text(line: partner_report.MoneyLine, rate: int | None) -> str:
+def _partner_money_text(line: partner_report.MoneyLine, rate: int | None) -> str:
     fee = "-" if line.fee_minor is None else str(line.fee_minor)
     share = (
         partner_report.NO_RATE
@@ -1738,7 +1738,7 @@ def _figures_text(
             else ""
         )
     ]
-    lines += [f"{indent}  {_money_text(m, rate)}" for m in figures.money]
+    lines += [f"{indent}  {_partner_money_text(m, rate)}" for m in figures.money]
     return lines
 
 

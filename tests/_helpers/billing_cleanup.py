@@ -18,6 +18,7 @@ from course_supporter.storage.orm import (
     BillingAuditEntry,
     BillingAuthorSettings,
     BillingBatch,
+    BillingBatchProviderFigures,
     BillingConsent,
     BillingDifference,
     BillingMovement,
@@ -68,6 +69,11 @@ async def drop_billing_of_tenant(
         )
         await session.execute(
             delete(BillingTestBatch).where(BillingTestBatch.batch_id.in_(batches))
+        )
+        await session.execute(
+            delete(BillingBatchProviderFigures).where(
+                BillingBatchProviderFigures.batch_id.in_(batches)
+            )
         )
         for table in (
             BillingMovement,

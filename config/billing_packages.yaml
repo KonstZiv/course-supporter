@@ -82,3 +82,21 @@ providers_live:
     units-1500-v1: prod_6JbFesPKLrkcURhHH8F3sk
     units-5000-v1: prod_5t0ORZST2Hw4ZqW8hV5qC7
     units-10000-v1: prod_1TE2jSDw0OcglA1TY0TC1O
+
+# A provider's fee by its tariff (Б-5, рішення власника продукту 2026-11-27):
+# API Creem комісії не віддає — звіт партнера рахує її за тарифом:
+# round_half_up(amount_paid_minor × percent / 100) + fixed_minor[валюта]
+# (відсоток — від суми з податком, фіксована частина — один раз на оплату).
+# Валюта без фіксованої частини (null або немає) — комісія не рахується
+# («тариф для <валюта> не задано»). Комісія з API посередника, коли буде,
+# має перевагу (billing_batch_provider_figures.fee_minor). Shape:
+# src/course_supporter/billing/payments/catalog.py (FeeTariff).
+provider_fees:
+  creem:
+    # джерело: https://creem.io/pricing — 3.9% + 40¢ per transaction; перевірено 2026-11-27
+    percent: 3.9
+    fixed_minor:
+      # джерело: https://creem.io/pricing — 3.9% + 40¢ per transaction; перевірено 2026-11-27
+      USD: 40
+      # не задано: підтвердити в кабінеті / договорі Creem
+      EUR: null

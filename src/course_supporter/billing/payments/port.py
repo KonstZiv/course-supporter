@@ -44,6 +44,16 @@ The port (:class:`PaymentProvider`, a structural ``Protocol``):
       its refunds are made in its dashboard, and the journal follows them by
       the webhook (:func:`~course_supporter.billing.refunds.refund_at_provider`).
 
+The provider's figures of a purchase (Б-3, :class:`TransactionLookup`, apart
+from the port: only an adapter whose provider has the API answers it):
+
+    * :meth:`~TransactionLookup.transaction_figures` — the provider's
+      transaction id of a purchase (the batch's ``provider_transaction_id``)
+      becomes :class:`TransactionFigures`: the tax inside the amount paid,
+      the provider's fee, the refunded part, in the currency of the payment;
+      a figure the provider does not give is None, never guessed. None when
+      the provider knows no such transaction.
+
 Normalized events:
     :class:`PurchaseCompleted`, :class:`RefundApproved`,
     :class:`RefundRejected`, :class:`Chargeback`, :class:`Unknown` — the
@@ -52,8 +62,10 @@ Normalized events:
     transaction of several lines), the adapter gives each its own id (say,
     the event's id and the line's). Amounts are minor units (cents) of an
     ISO 4217 currency; ``amount_paid_minor`` of a purchase is what the payer
-    paid, tax included. Ids are 1 to 64 characters; an event that breaks a
-    rule of its shape is :class:`InvalidWebhookError`.
+    paid, tax included, ``tax_minor`` and ``fee_minor`` the tax inside it and
+    the provider's fee when the event carries them (None otherwise, Б-3).
+    Ids are 1 to 64 characters; an event that breaks a rule of its shape is
+    :class:`InvalidWebhookError`.
 
 Personal data:
     None crosses the port. A provider knows the payer's e-mail, name and
@@ -230,6 +242,11 @@ class PurchaseCompleted:
     currency: str
     transaction_id: str
     line_id: str
+    tax_minor: int | None = None
+    """The tax inside ``amount_paid_minor``, in ``currency``, when the event
+    carries it (Б-3)."""
+    fee_minor: int | None = None
+    """The provider's fee, in ``currency``, when the event carries it (Б-3)."""
 
     def __post_init__(self) -> None:
         _check_common(self.event_id, self.provider_type, self.occurred_at)
@@ -237,6 +254,8 @@ class PurchaseCompleted:
         _check_id(self.transaction_id, "a transaction id")
         _check_id(self.line_id, "a line id")
         _check_money(self.amount_paid_minor, self.currency)
+        _check_money(self.tax_minor, None)
+        _check_money(self.fee_minor, None)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -327,6 +346,50 @@ ProviderEvent = (
     PurchaseCompleted | RefundApproved | RefundRejected | Chargeback | Unknown
 )
 """A normalized event, as :meth:`PaymentProvider.parse_webhook` returns it."""
+
+
+# ── The provider's figures of a purchase (Б-3) ─────────────────────────
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TransactionFigures:
+    """What the provider says of one purchase's money, now (module docstring).
+
+    Minor units of ``currency`` — the currency the payment was taken in; None —
+    the provider does not give that figure.
+    """
+
+    currency: str
+    tax_minor: int | None
+    fee_minor: int | None
+    refunded_minor: int | None
+
+    def __post_init__(self) -> None:
+        if _CURRENCY.fullmatch(self.currency) is None:
+            raise PaymentProviderError(f"{self.currency!r} is not an ISO 4217 code")
+        for figure in (self.tax_minor, self.fee_minor, self.refunded_minor):
+            if figure is not None and figure < 0:
+                raise PaymentProviderError("a figure of a payment cannot be negative")
+
+
+class TransactionLookup(Protocol):
+    """An adapter that reads a purchase's figures from its provider's API."""
+
+    @property
+    def name(self) -> str:
+        """The adapter's name, as the batches spell their provider."""
+        ...
+
+    async def transaction_figures(
+        self, transaction_id: str
+    ) -> TransactionFigures | None:
+        """The figures of the purchase; None when the provider knows none.
+
+        Raises:
+            PaymentProviderError: the provider's API failed, refused, or gave
+                an answer that names no single purchase.
+        """
+        ...
 
 
 # ── The port ───────────────────────────────────────────────────────────

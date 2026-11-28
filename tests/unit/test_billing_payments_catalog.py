@@ -2,11 +2,13 @@
 
 The shipped file loads and sells the four packages of the pricing page; the
 shape of a package is locked field by field; a file that breaks a rule is
-refused when it is read.
+refused when it is read. Creem's fee tariff (``provider_fees``, Б-5) is as the
+product owner set it on 2026-11-27, its sources beside the numbers.
 """
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ from pydantic import ValidationError
 from course_supporter.billing.payments.catalog import (
     REQUIRED_CURRENCY,
     Catalog,
+    FeeTariff,
     Package,
     get_catalog,
     load_catalog,
@@ -160,7 +163,13 @@ def test_the_shape_is_locked() -> None:
         "active",
         "tax_mode",
     }
-    assert set(Catalog.model_fields) == {"packages", "providers", "providers_live"}
+    assert set(Catalog.model_fields) == {
+        "packages",
+        "providers",
+        "providers_live",
+        "provider_fees",  # Б-5: the providers' fee tariffs
+    }
+    assert set(FeeTariff.model_fields) == {"percent", "fixed_minor"}
 
 
 def test_lookups(tmp_path: Path) -> None:
@@ -277,3 +286,77 @@ def test_get_catalog_reads_the_setting_and_caches(tmp_path: Path) -> None:
     assert get_catalog(custom).package("custom") is not None
     assert get_catalog().package("custom") is not None  # cached
     assert get_catalog(SHIPPED).package("custom") is None  # reread
+
+
+# ── The providers' fee tariffs (Б-5) ───────────────────────────────────
+
+
+class TestShippedFeeTariff:
+    def test_creem_is_39_percent_and_40_cents_eur_not_set(self) -> None:
+        creem = load_catalog(SHIPPED).provider_fees["creem"]
+        assert creem.percent == Decimal("3.9")
+        assert creem.fixed_minor == {"USD": 40, "EUR": None}
+
+    def test_each_number_names_its_source_and_date(self) -> None:
+        """The product owner's rule: no number without its source."""
+        text = SHIPPED.read_text(encoding="utf-8")
+        source = (
+            "# джерело: https://creem.io/pricing — 3.9% + 40¢ per transaction; "
+            "перевірено 2026-11-27"
+        )
+        lines = text.splitlines()
+        for number in ("    percent: 3.9", "      USD: 40"):
+            at = lines.index(number)
+            assert lines[at - 1].strip() == source, number
+        at = lines.index("      EUR: null")
+        assert lines[at - 1].strip() == (
+            "# не задано: підтвердити в кабінеті / договорі Creem"
+        )
+
+
+class TestFeeTariff:
+    @pytest.mark.parametrize(
+        ("paid", "fee"),
+        [
+            (1000, 39 + 40),  # 39.0
+            (1500, 59 + 40),  # 58.5: half up, not to even
+            (2000, 78 + 40),  # 78.0
+            (1210, 47 + 40),  # 47.19
+            (0, 40),
+        ],
+    )
+    def test_the_formula(self, paid: int, fee: int) -> None:
+        tariff = FeeTariff(percent=Decimal("3.9"), fixed_minor={"USD": 40})
+        assert tariff.fee_minor(paid, "USD") == fee
+
+    def test_a_currency_without_a_fixed_part_has_no_fee(self) -> None:
+        tariff = FeeTariff(percent=Decimal("3.9"), fixed_minor={"USD": 40, "EUR": None})
+        assert tariff.fee_minor(1000, "EUR") is None
+        assert tariff.fee_minor(1000, "GBP") is None
+
+    @pytest.mark.parametrize(
+        ("tariff", "error"),
+        [
+            ({"percent": -1, "fixed_minor": {}}, "greater than or equal to 0"),
+            ({"percent": 101, "fixed_minor": {}}, "less than or equal to 100"),
+            ({"percent": "3.905", "fixed_minor": {}}, "2 decimal places"),
+            ({"percent": 3.9, "fixed_minor": {"usd": 40}}, "ISO 4217"),
+            ({"percent": 3.9, "fixed_minor": {"USD": -1}}, "cannot be negative"),
+            ({"percent": 3.9, "fixed_minor": {"USD": 0.4}}, "valid integer"),
+            ({"percent": 3.9, "fixed": {"USD": 40}}, "Extra inputs"),
+        ],
+    )
+    def test_a_bad_tariff_is_refused(
+        self, tmp_path: Path, tariff: dict[str, Any], error: str
+    ) -> None:
+        data = {"packages": [_package()], "provider_fees": {"creem": tariff}}
+        with pytest.raises(ValidationError, match=error):
+            load_catalog(_write(tmp_path, data))
+
+    def test_a_tariff_names_a_provider(self, tmp_path: Path) -> None:
+        data = {
+            "packages": [_package()],
+            "provider_fees": {"Creem": {"percent": 3.9}},
+        }
+        with pytest.raises(ValidationError, match="not a provider's name"):
+            load_catalog(_write(tmp_path, data))

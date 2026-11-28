@@ -26,7 +26,7 @@ from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
-from course_supporter.billing import ledger, testmark
+from course_supporter.billing import ledger, provider_figures, testmark
 from course_supporter.billing.accounts import (
     anonymize_student_accounts,
     anonymize_tenant_accounts,
@@ -58,6 +58,7 @@ from course_supporter.storage.orm import (
     BillingAuditEntry,
     BillingAuthorSettings,
     BillingBatch,
+    BillingBatchProviderFigures,
     BillingCheckout,
     BillingConsent,
     BillingDifference,
@@ -99,6 +100,15 @@ def key() -> str:
 async def _add(session: AsyncSession, row: Any) -> None:
     session.add(row)
     await session.flush()
+
+
+async def _figures(session: AsyncSession, batch_id: uuid.UUID, at: datetime) -> None:
+    """The provider's tax of a purchase, as its webhook writes it."""
+    batch = await session.get(BillingBatch, batch_id)
+    assert batch is not None
+    assert await provider_figures.record_from_purchase(
+        session, batch=batch, tax_minor=100, fee_minor=None, now=at
+    )
 
 
 # ── The scene: committed data, wiped after the test ────────────────────
@@ -264,6 +274,18 @@ class Scene:
                 )
                 or 0
             )
+            out["billing_batch_provider_figures"] = int(
+                await s.scalar(
+                    select(func.count())
+                    .select_from(BillingBatchProviderFigures)
+                    .join(
+                        BillingBatch,
+                        BillingBatch.id == BillingBatchProviderFigures.batch_id,
+                    )
+                    .where(BillingBatch.account_id == account_id)
+                )
+                or 0
+            )
             return out
 
         return await self.do(count)
@@ -306,6 +328,11 @@ class Scene:
             )
             await s.execute(
                 delete(BillingTestBatch).where(BillingTestBatch.batch_id.in_(batch_ids))
+            )
+            await s.execute(
+                delete(BillingBatchProviderFigures).where(
+                    BillingBatchProviderFigures.batch_id.in_(batch_ids)
+                )
             )
             for model, column in ACCOUNT_ROWS:
                 if model is BillingPaymentRule:
@@ -597,6 +624,7 @@ ALL_GONE = {
     "billing_accounts": 0,
     "billing_audit_log": 0,
     "billing_test_batches": 0,
+    "billing_batch_provider_figures": 0,
 }
 
 
@@ -615,6 +643,9 @@ class TestPurge:
             lambda s: testmark.mark(
                 s, batch_id=batch, origin=MarkOrigin.CREDIT, now=before
             )
+        )
+        await scene.do(  # the provider's figures of the purchase (Б-3)
+            lambda s: _figures(s, batch, before)
         )
         await scene.do(  # the checkout the purchase answered
             lambda s: _add(
@@ -673,6 +704,7 @@ class TestPurge:
             "billing_batches",
             "billing_consents",
             "billing_test_batches",
+            "billing_batch_provider_figures",
         ):
             assert rows[table], table  # the scene holds every kind of row
         assert rows["billing_audit_log"] == 2  # account.create, account.anonymize

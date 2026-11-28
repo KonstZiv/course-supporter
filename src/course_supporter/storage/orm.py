@@ -4930,6 +4930,8 @@ class BillingAuthorSettings(Base):
     rather than columns of ``billing_accounts``: the settings belong to author
     accounts only, so on the accounts table they would be empty on every
     student account. The arithmetic of the limit is not here (BIL-B / BIL-E).
+    ``partner_share_bps`` — the school's share in the partner's report (Б-3):
+    a figure of a report, read by nothing that charges or pays.
     """
 
     __tablename__ = "billing_author_settings"
@@ -4949,6 +4951,10 @@ class BillingAuthorSettings(Base):
         CheckConstraint(
             "(benefit = 'none') = (benefit_started_at IS NULL)",
             name="ck_billing_author_settings_benefit_started",
+        ),
+        CheckConstraint(
+            "partner_share_bps IS NULL OR partner_share_bps BETWEEN 0 AND 10000",
+            name="ck_billing_author_settings_partner_share",
         ),
         {
             "comment": "Benefit and credit of an author account, set by the "
@@ -4980,6 +4986,12 @@ class BillingAuthorSettings(Base):
         default=False,
         server_default=text("false"),
         comment="May the account go below zero.",
+    )
+    partner_share_bps: Mapped[int | None] = mapped_column(
+        Integer,
+        comment="The school's share of the net money its students spent on "
+        "reviews, in basis points (0-10000 = 0-100 %), for the partner's report "
+        "(Б-3); NULL = no rate set. Paid out nowhere by the platform.",
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -5075,7 +5087,7 @@ class BillingAuditEntry(Base):
         "payment_rule.end, account.anonymize, account.test_purchase, "
         "batch.admin_credit, batch.invoice_credit, dispute.lost, dispute.won, "
         "refund.order_hold, refund.order_release, batch.test_void, "
-        "account.create.",
+        "account.create, batch.provider_sync.",
     )
     entity: Mapped[str] = mapped_column(
         String(32),
@@ -5143,7 +5155,9 @@ class BillingBatch(Base):
     or by a contract invoice (B2B) — or a credit by the administrator. Valid
     six calendar months from its creation (``expires_at``); units are taken
     from the batch that expires first. Insert-only: what is left of it is the
-    journal's business (``billing.ledger``), never a column.
+    journal's business (``billing.ledger``), never a column. What the provider
+    says of a purchase's money is a table of its own
+    (:class:`BillingBatchProviderFigures`).
     """
 
     __tablename__ = "billing_batches"
@@ -5295,6 +5309,65 @@ class BillingTestBatch(Base):
         comment="credit (marked with the credit: the provider was in its test "
         "mode) | backfill (a Creem purchase marked by the migration that "
         "brought the marks).",
+    )
+
+
+class BillingBatchProviderFigures(Base):
+    """What the payment provider says of a purchase's money (Б-3).
+
+    The tax inside ``amount_paid_minor``, the provider's fee and the part it
+    refunded, all in the batch's currency; None — not known. A table of its
+    own, not columns of the batch: the batch stays insert-only, its trigger as
+    it is (``billing_batches_insert_only``), while these figures arrive after
+    the batch and change. One row per batch, upserted by ``batch_id``
+    (``billing.provider_figures``): by the purchase's webhook and by
+    ``billing_admin creem-sync``. Only a purchase has a row (the code's rule:
+    a check could not see the batch). DELETE only by the five-year
+    destruction, with the batch.
+    """
+
+    __tablename__ = "billing_batch_provider_figures"
+    __table_args__ = (
+        CheckConstraint(
+            "(tax_minor IS NULL OR tax_minor >= 0) "
+            "AND (fee_minor IS NULL OR fee_minor >= 0) "
+            "AND (refunded_minor IS NULL OR refunded_minor >= 0)",
+            name="ck_billing_batch_provider_figures_not_negative",
+        ),
+        {
+            "comment": "What the payment provider says of a purchase's money "
+            "(Б-3): tax, fee, refunded part, in the batch's currency. Upserted by "
+            "batch_id; billing_batches stays insert-only."
+        },
+    )
+
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_batches.id"),
+        primary_key=True,
+        comment="The purchase's batch; one row per batch.",
+    )
+    tax_minor: Mapped[int | None] = mapped_column(
+        BigInteger,
+        comment="The tax the provider collected (inside the batch's "
+        "amount_paid_minor), in minor units of the batch's currency; NULL = not "
+        "known yet.",
+    )
+    fee_minor: Mapped[int | None] = mapped_column(
+        BigInteger,
+        comment="The provider's fee as its API or event gives it, in minor units "
+        "of the batch's currency; NULL = not given (Creem's API gives none: the "
+        "partner's report counts it by the tariff).",
+    )
+    refunded_minor: Mapped[int | None] = mapped_column(
+        BigInteger,
+        comment="What the provider says it refunded of the payment, in minor "
+        "units of the batch's currency, as of synced_at; NULL = not known. The "
+        "journal's refunds are billing_refunds.",
+    )
+    synced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        comment="When the figures were last written (the purchase's webhook, or "
+        "billing_admin creem-sync).",
     )
 
 

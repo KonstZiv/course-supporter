@@ -22,13 +22,24 @@ mode (operator 2026-11-18). A checkout in live mode reads ``providers_live``
 only: a package without an id there is not sold in live mode (Creem: 503),
 never through its test id.
 
+A provider's fee by its tariff (``provider_fees``, Б-5, product owner
+2026-11-27): Creem's API does not give its fee, so the partner's report
+(:mod:`~course_supporter.billing.partner_report`) counts it — ``percent`` of
+the amount paid (tax included) plus ``fixed_minor`` of the payment's currency,
+once per payment (:meth:`FeeTariff.fee_minor`). A currency without a fixed
+part (null or absent) has no tariff: no fee is counted. Nothing that charges,
+credits or refunds reads it.
+
 The shape is checked when the file is read, as for the other config files;
 a broken catalog fails the first request that needs it, not the boot.
 """
 
 from __future__ import annotations
 
+import math
 import re
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 from typing import Final, Literal, Self
 
@@ -86,6 +97,37 @@ class Package(_Frozen):
         return value
 
 
+class FeeTariff(_Frozen):
+    """A provider's fee by its tariff (module docstring)."""
+
+    percent: Decimal = Field(ge=0, le=100, decimal_places=2)
+    """Of the amount paid, tax included."""
+    fixed_minor: dict[str, StrictInt | None] = Field(default_factory=dict)
+    """Currency (ISO 4217) → the fixed part in its minor units, once per
+    payment; null — not set: no tariff in that currency."""
+
+    @field_validator("fixed_minor")
+    @classmethod
+    def _fixed(cls, value: dict[str, int | None]) -> dict[str, int | None]:
+        for currency, amount in value.items():
+            if _CURRENCY.fullmatch(currency) is None:
+                msg = f"{currency!r} is not an ISO 4217 code"
+                raise ValueError(msg)
+            if amount is not None and amount < 0:
+                msg = f"a fixed fee in {currency} cannot be negative"
+                raise ValueError(msg)
+        return value
+
+    def fee_minor(self, amount_paid_minor: int, currency: str) -> int | None:
+        """``round_half_up(amount_paid_minor x percent / 100) + fixed_minor``;
+        None when the currency's fixed part is not set."""
+        fixed = self.fixed_minor.get(currency)
+        if fixed is None:
+            return None
+        share = Fraction(amount_paid_minor) * Fraction(self.percent) / 100
+        return math.floor(share + Fraction(1, 2)) + fixed
+
+
 class Catalog(_Frozen):
     """Top-level shape of ``config/billing_packages.yaml``."""
 
@@ -95,6 +137,8 @@ class Catalog(_Frozen):
     mode."""
     providers_live: dict[str, dict[str, str]] = Field(default_factory=dict)
     """The same, in the provider's live mode (module docstring)."""
+    provider_fees: dict[str, FeeTariff] = Field(default_factory=dict)
+    """Provider's name → its fee by the tariff (module docstring)."""
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
@@ -103,6 +147,10 @@ class Catalog(_Frozen):
         if repeated:
             msg = f"package ids repeat: {repeated}"
             raise ValueError(msg)
+        for provider in self.provider_fees:
+            if PROVIDER_NAME.fullmatch(provider) is None:
+                msg = f"{provider!r} is not a provider's name (provider_fees)"
+                raise ValueError(msg)
         tables = {"providers": self.providers, "providers_live": self.providers_live}
         for table, sections in tables.items():
             for provider, items in sections.items():

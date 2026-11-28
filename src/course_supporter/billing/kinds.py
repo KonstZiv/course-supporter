@@ -139,6 +139,11 @@ class AuditAction(StrEnum):
     """The free units of a batch marked as a test purchase taken out of it
     (BIL-TESTMARK, ``scripts/billing_admin.py void-test-batches``)."""
 
+    BATCH_PROVIDER_SYNC = "batch.provider_sync"
+    """The provider's figures of a purchase (tax, fee, refunded) written from
+    its API by the administrator (Б-3, ``scripts/billing_admin.py
+    creem-sync``)."""
+
 
 # ── The journal of units (BIL-B) ──
 

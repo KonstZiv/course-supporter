@@ -399,7 +399,8 @@ Each criterion carries:
 ### How passing is decided {#criteria-pass}
 
 The work's score is the share of the weights of the criteria met (`must` — 3, `should` — 2, `may` —
-1), as a percentage, rounded down. Only a criterion you marked as mandatory yourself
+1), as a percentage, rounded down. An unmet `may` criterion is left out of the calculation: it does not
+lower the score and gives no remark in the review; a met `may` counts like the others. Only a criterion you marked as mandatory yourself
 (`must_by_author: true`) is mandatory for passing. Whether the work is passed:
 
 - **your list** (you saved an edit, see [Correct the list](#criteria-edit)) and it has at least one

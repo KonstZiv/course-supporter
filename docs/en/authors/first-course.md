@@ -48,7 +48,7 @@ Press "Create (Створити)" — the app opens the new course straight away
 
 ## Course language {#language}
 
-In the course language, the platform writes section descriptions, explanations for tests and the list of criteria the Mentor uses to review assignments. The Mentor writes the review in the language the student chooses; if the student has not chosen one, in the course language. Choose the language you teach in. Language names in the list are in English: Ukrainian is "Ukrainian".
+In the course language, the platform writes section descriptions, explanations for tests and the list of criteria the Mentor uses to review assignments. The Mentor writes the review in the language the student chooses; if the student has not chosen one, in the course language. Choose the language you teach in.
 
 It is better to choose the course language correctly right away. You can change it later — with the pencil button next to the language name on the course page — but the platform does not translate anything when you do. Materials already processed and finished section descriptions stay in the previous language, and published tests will have to be published again. Only materials uploaded after the change get the new language. When changing it, do not choose "Auto-detect (Автовизначення)" in the language list: a course needs a specific language, and such a choice will not be saved — as of October 2026, the app does not warn you about this.
 

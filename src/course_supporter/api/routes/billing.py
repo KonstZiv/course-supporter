@@ -43,6 +43,16 @@ Routes
   (:mod:`course_supporter.billing.spending`); the current UTC month by
   default, both days included; ``invalid_period`` 422 when ``from`` is after
   ``to``. Never a dollar.
+- ``GET /billing/students-money?from=YYYY-MM-DD&to=YYYY-MM-DD`` — what the
+  author's students paid for reviews from their own accounts, by course and
+  student, the biggest first by units
+  (:mod:`course_supporter.billing.students_money`); the period as in
+  ``spending`` (``invalid_period`` 422). ``totals`` (``reviews``, ``units``,
+  ``money`` per currency, ``gift_units``, ``excluded_test_reviews`` of service
+  students), ``courses`` with their ``students`` (``display_name`` null and
+  ``deleted`` true for a deleted student) and ``unlinked`` (reviews that lead
+  to no course of the author). Reviews the author pays for under a rule are
+  not here. The money is the students', never the platform's dollars.
 
 Every refusal of a route but the webhook carries its reason code
 (``_billing_shared``).
@@ -88,6 +98,11 @@ from course_supporter.api.schemas import (
     BillingCheckoutStateResponse,
     BillingConsentRequest,
     BillingConsentResponse,
+    BillingMoneyAmount,
+    BillingMoneyCourse,
+    BillingMoneyFigures,
+    BillingMoneyStudent,
+    BillingMoneyTotals,
     BillingPackagesResponse,
     BillingSpendingCourse,
     BillingSpendingPeriod,
@@ -95,6 +110,7 @@ from course_supporter.api.schemas import (
     BillingSpendingTask,
     BillingSpendingUnits,
     BillingStatementResponse,
+    BillingStudentsMoneyResponse,
     BillingTermsResponse,
 )
 from course_supporter.auth.context import TenantContext
@@ -122,6 +138,7 @@ from course_supporter.billing.payments.webhooks import (
 )
 from course_supporter.billing.spending import Spending, author_spending
 from course_supporter.billing.statement import MAX_LIMIT
+from course_supporter.billing.students_money import MoneyFigures, students_money
 from course_supporter.config import get_settings
 
 router = APIRouter(tags=["billing"])
@@ -417,4 +434,74 @@ async def get_author_spending(
             for course in found.courses
         ],
         unlinked=_units(found.unlinked),
+    )
+
+
+def _money(figures: MoneyFigures) -> list[BillingMoneyAmount]:
+    return [
+        BillingMoneyAmount(currency=currency, amount_minor=amount)
+        for currency, amount in figures.money_minor
+    ]
+
+
+@router.get("/billing/students-money", responses=responses(Refusal.INVALID_PERIOD))
+async def get_author_students_money(
+    tenant: PrepDep,
+    session: SessionDep,
+    from_date: Annotated[
+        date | None,
+        Query(alias="from", description="The first day, UTC (default: the 1st)."),
+    ] = None,
+    to_date: Annotated[
+        date | None,
+        Query(alias="to", description="The last day, UTC, included (default: today)."),
+    ] = None,
+) -> BillingStudentsMoneyResponse:
+    """What the author's students paid for reviews, by course and student."""
+    default_from, default_to = default_month_bounds()
+    start, end = from_date or default_from, to_date or default_to
+    if start > end:
+        raise refusal(Refusal.INVALID_PERIOD, "The period starts after it ends.")
+    found = await students_money(
+        session, tenant_id=tenant.tenant_id, from_date=start, to_date=end
+    )
+    return BillingStudentsMoneyResponse(
+        from_date=found.from_date,
+        to_date=found.to_date,
+        totals=BillingMoneyTotals(
+            reviews=found.totals.reviews,
+            units=found.totals.units,
+            money=_money(found.totals),
+            gift_units=found.totals.gift_units,
+            excluded_test_reviews=found.excluded_test_reviews,
+        ),
+        courses=[
+            BillingMoneyCourse(
+                course_node_id=course.course_node_id,
+                title=course.title,
+                reviews=course.figures.reviews,
+                units=course.figures.units,
+                money=_money(course.figures),
+                gift_units=course.figures.gift_units,
+                students=[
+                    BillingMoneyStudent(
+                        student_id=student.student_id,
+                        display_name=student.display_name,
+                        deleted=student.deleted,
+                        reviews=student.figures.reviews,
+                        units=student.figures.units,
+                        money=_money(student.figures),
+                        gift_units=student.figures.gift_units,
+                    )
+                    for student in course.students
+                ],
+            )
+            for course in found.courses
+        ],
+        unlinked=BillingMoneyFigures(
+            reviews=found.unlinked.reviews,
+            units=found.unlinked.units,
+            money=_money(found.unlinked),
+            gift_units=found.unlinked.gift_units,
+        ),
     )

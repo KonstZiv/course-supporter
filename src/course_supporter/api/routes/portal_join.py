@@ -249,6 +249,7 @@ async def post_signup(
         interface_language=body.interface_language,
         terms_version=body.terms_version,
         text_sha256=body.text_sha256,
+        source_tag=body.source_tag,
     )
     try:
         signup, raw_token = await create_signup(
@@ -463,6 +464,7 @@ async def post_course_join(
             current_version=current,
             text_sha256=body.text_sha256,
             now=datetime.now(UTC),
+            source_tag=body.source_tag,
         )
     except EmailConfirmationRequiredError as exc:
         await session.rollback()

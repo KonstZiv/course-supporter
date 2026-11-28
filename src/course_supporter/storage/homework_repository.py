@@ -461,6 +461,34 @@ class HomeworkRepository:
         await self._session.execute(stmt)
         await self._session.flush()
 
+    async def store_attempt_memory(
+        self, submission_id: uuid.UUID, *, memory: dict[str, Any]
+    ) -> None:
+        """Record whether the evaluation saw the earlier attempt (DD-SP-DP).
+
+        Merges ``{"memory": memory}`` into ``attempt_receipt`` when a receipt
+        exists (``attempt_receipt IS NOT NULL``); leaves the row untouched
+        otherwise. No status transition.
+        """
+        stmt = (
+            update(HomeworkSubmission)
+            .where(
+                HomeworkSubmission.id == submission_id,
+                HomeworkSubmission.attempt_receipt.is_not(None),
+            )
+            .values(
+                attempt_receipt=HomeworkSubmission.attempt_receipt.op("||")(
+                    bindparam(
+                        "memory_entry",
+                        {"memory": memory},
+                        type_=JSONB,
+                    )
+                )
+            )
+        )
+        await self._session.execute(stmt)
+        await self._session.flush()
+
     async def store_attempt(
         self,
         submission_id: uuid.UUID,

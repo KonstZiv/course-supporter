@@ -38,6 +38,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from arq.connections import ArqRedis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from structlog.testing import capture_logs
 
@@ -71,6 +72,7 @@ from course_supporter.homework.criteria_verdicts import (
     score_percent,
 )
 from course_supporter.homework.doors import DoorReading
+from course_supporter.homework.first_answer_store import first_answer_ttl_s
 from course_supporter.homework.judged_list import judged_layer
 from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_config import (
@@ -201,7 +203,7 @@ class _Router:
 
     def __init__(
         self,
-        *contents: str,
+        *contents: str | Exception,
         by: tuple[str, str] | None = None,
         call_ids: tuple[uuid.UUID, ...] = (),
     ) -> None:
@@ -236,6 +238,8 @@ class _Router:
             }
         )
         content = self._contents.pop(0)
+        if isinstance(content, Exception):
+            raise content
         if response_validator is not None:
             response_validator(content)
         provider, model = self._by or (stage.ladder[0].provider, stage.ladder[0].model)
@@ -1580,3 +1584,357 @@ class TestATaskWithoutABase:
         )
         rows = await _rows(db_session, submission)
         assert not any(row.quote_from_base or row.retried for row in rows.values())
+
+
+# ── The first answer, kept while the task is retried (DD-SP-DG) ─────────────
+
+_RESUME_PATH = "course_supporter.homework.criteria_evaluation.resume_awaiting_criteria"
+_KEY_PATTERN = "cs:first_answer:*"
+_MARKER = "SECRET-MARKER-2e7f"
+# c1's quote is not in the work: the first answer has one item to ask again.
+_FIRST_WITH_A_BAD_QUOTE = _answer(
+    _met("c1", "def fib(n): pass"),
+    _met("c2.p1", _P1_QUOTE),
+    _not_met("c2.p2"),
+)
+_REPEAT_MENDED = _answer(_met("c1", _C1_QUOTE))
+
+
+def _exhausted() -> LadderExhaustedError:
+    return LadderExhaustedError(
+        CRITERIA_EVALUATION,
+        [("dashscope", "qwen3.7-max", "a bad minute")],
+        stop=LadderStop.EXHAUSTED,
+    )
+
+
+class _FlakyRedis:
+    """A queue that holds values in a dict and fails the operations it is told to."""
+
+    def __init__(self, *, failing: frozenset[str] = frozenset()) -> None:
+        self.values: dict[str, str] = {}
+        self._failing = failing
+
+    def _maybe_fail(self, operation: str) -> None:
+        if operation in self._failing:
+            raise ConnectionError(f"{_MARKER}: the queue is away")
+
+    async def get(self, key: str) -> str | None:
+        self._maybe_fail("get")
+        return self.values.get(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self._maybe_fail("set")
+        self.values[key] = value
+
+    async def delete(self, key: str) -> None:
+        self._maybe_fail("delete")
+        self.values.pop(key, None)
+
+
+def _first_answer_events(logs: list[Any]) -> list[dict[str, Any]]:
+    return [
+        e for e in logs if e["event"].startswith("criteria_evaluation_first_answer")
+    ]
+
+
+class TestTheFirstAnswerIsKeptForARetry:
+    """DD-SP-DG: a pass that fails the repeat leaves the paid answer to the next."""
+
+    @staticmethod
+    async def _pass(
+        session: AsyncSession,
+        submission: HomeworkSubmission,
+        router: _Router,
+        arq: Any,
+        *,
+        source: _Source | None = None,
+        submission_text: str = _WORK,
+        work: tuple[WorkFile, ...] = _FILES,
+    ) -> StageOutcome:
+        @asynccontextmanager
+        async def own_session() -> AsyncIterator[AsyncSession]:
+            yield session
+
+        context = replace(
+            _context(
+                session, router, submission, work=work, submission_text=submission_text
+            ),
+            arq=arq,
+            session_factory=cast("async_sessionmaker[AsyncSession]", own_session),
+        )
+        with patch(_RESUME_PATH, new=AsyncMock(return_value=0)):
+            return await evaluate_criteria(
+                context,
+                execution=_execution(context),
+                criteria_source=source or _Source(_in_force()),
+            )
+
+    @staticmethod
+    async def _calls(
+        session: AsyncSession, submission: HomeworkSubmission, count: int
+    ) -> tuple[uuid.UUID, ...]:
+        return await TestTheTracesOfTheCalls._calls(session, submission, count)
+
+    @staticmethod
+    async def _the_key(arq: ArqRedis) -> str:
+        (key,) = [k.decode() for k in await arq.keys(_KEY_PATTERN)]
+        return str(key)
+
+    @pytest.mark.requires_redis
+    async def test_pass_one_keeps_the_answer_and_the_exhausted_repeat_goes_on(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        arq_redis: ArqRedis,
+    ) -> None:
+        (first_call,) = await self._calls(db_session, submission, 1)
+        router = _Router(_FIRST_WITH_A_BAD_QUOTE, _exhausted(), call_ids=(first_call,))
+
+        with capture_logs() as logs, pytest.raises(LadderExhaustedError):
+            await self._pass(db_session, submission, router, arq_redis)
+
+        key = await self._the_key(arq_redis)
+        assert key.startswith(f"cs:first_answer:{submission.id}:{CRITERIA_EVALUATION}:")
+        ttl = await arq_redis.ttl(key)
+        assert 0 < ttl <= first_answer_ttl_s()
+        stored = json.loads(await arq_redis.get(key) or "")
+        assert stored["call_id"] == str(first_call)
+        assert (stored["provider"], stored["model"]) == ("dashscope", "qwen3.7-max")
+        assert [v["id"] for v in stored["answer"]["verdicts"]] == [
+            "c1",
+            "c2.p1",
+            "c2.p2",
+        ]
+        assert await _rows(db_session, submission) == {}
+        (kept,) = _first_answer_events(logs)
+        assert kept["event"] == "criteria_evaluation_first_answer_kept"
+        assert kept["call_id"] == str(first_call)
+
+    @pytest.mark.requires_redis
+    async def test_pass_two_begins_at_the_repeat_and_clears_the_key(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        arq_redis: ArqRedis,
+    ) -> None:
+        first_call, repeat_call = await self._calls(db_session, submission, 2)
+        first_pass = _Router(
+            _FIRST_WITH_A_BAD_QUOTE, _exhausted(), call_ids=(first_call,)
+        )
+        with pytest.raises(LadderExhaustedError):
+            await self._pass(db_session, submission, first_pass, arq_redis)
+        # The second pass is not given a first answer: it would fail the test.
+        second_pass = _Router(_REPEAT_MENDED, call_ids=(repeat_call,))
+
+        with capture_logs() as logs:
+            outcome = await self._pass(db_session, submission, second_pass, arq_redis)
+
+        assert outcome == StageOutcome.ok()
+        (again,) = second_pass.requests
+        assert again["render"]["items"] == ["c1"]
+        # The repeat was shown the answer of pass one, quote and all.
+        (note,) = again["render"]["repeat"]
+        assert note["your_answer"]["quote"] == "def fib(n): pass"
+        assert again["ladder"] == [("dashscope", "qwen3.7-max")]
+        rows = await _rows(db_session, submission)
+        assert rows["c1"].answered_by_call_id == repeat_call
+        assert rows["c1"].retried is True
+        for item in ("c2.p1", "c2.p2"):
+            assert rows[item].answered_by_call_id == first_call
+        assert await arq_redis.keys(_KEY_PATTERN) == []
+        (reused,) = _first_answer_events(logs)
+        assert reused["event"] == "criteria_evaluation_first_answer_reused"
+        assert reused["call_id"] == str(first_call)
+        assert isinstance(reused["age_s"], int)
+        assert reused["age_s"] >= 0
+
+    @pytest.mark.requires_redis
+    async def test_a_retry_that_fails_again_leaves_the_key_to_its_lifetime(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        arq_redis: ArqRedis,
+    ) -> None:
+        (first_call,) = await self._calls(db_session, submission, 1)
+        first_pass = _Router(
+            _FIRST_WITH_A_BAD_QUOTE, _exhausted(), call_ids=(first_call,)
+        )
+        with pytest.raises(LadderExhaustedError):
+            await self._pass(db_session, submission, first_pass, arq_redis)
+        key = await self._the_key(arq_redis)
+        second_pass = _Router(_exhausted())
+
+        with pytest.raises(LadderExhaustedError):
+            await self._pass(db_session, submission, second_pass, arq_redis)
+
+        # Pass two asked only the repeat, and left the key as it found it.
+        assert len(second_pass.requests) == 1
+        assert await self._the_key(arq_redis) == key
+        assert await arq_redis.ttl(key) > 0
+
+    @pytest.mark.requires_redis
+    @pytest.mark.parametrize("what", ["criteria", "work"])
+    async def test_a_changed_input_asks_the_first_request_again(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        arq_redis: ArqRedis,
+        what: str,
+    ) -> None:
+        (first_call,) = await self._calls(db_session, submission, 1)
+        first_pass = _Router(
+            _FIRST_WITH_A_BAD_QUOTE, _exhausted(), call_ids=(first_call,)
+        )
+        with pytest.raises(LadderExhaustedError):
+            await self._pass(db_session, submission, first_pass, arq_redis)
+        old_key = await self._the_key(arq_redis)
+        changed: dict[str, Any] = {}
+        if what == "criteria":
+            more = CriteriaInForce(
+                criteria=(*_CRITERIA, _criterion("c3", "may")),
+                layer=CriteriaLayer.MODEL,
+                source_id=_LIST_ID,
+            )
+            changed["source"] = _Source(more)
+            first_again = _answer(
+                _met("c1", _C1_QUOTE),
+                _met("c2.p1", _P1_QUOTE),
+                _not_met("c2.p2"),
+                _not_met("c3"),
+            )
+        else:
+            text = _WORK + "# a new line\n"
+            changed["submission_text"] = text
+            changed["work"] = (WorkFile("solution.py", text, True),)
+            first_again = _ALL_STAND
+        second_pass = _Router(first_again)
+
+        with capture_logs() as logs:
+            outcome = await self._pass(
+                db_session, submission, second_pass, arq_redis, **changed
+            )
+
+        assert outcome == StageOutcome.ok()
+        (request,) = second_pass.requests
+        assert request["render"]["items"][:3] == ["c1", "c2.p1", "c2.p2"]
+        assert _first_answer_events(logs) == []
+        # The old answer is not touched: its lifetime takes it.
+        assert await self._the_key(arq_redis) == old_key
+
+    @pytest.mark.requires_redis
+    async def test_nothing_to_ask_again_puts_nothing_in_redis(
+        self,
+        db_session: AsyncSession,
+        submission: HomeworkSubmission,
+        arq_redis: ArqRedis,
+    ) -> None:
+        router = _Router(_ALL_STAND)
+
+        with capture_logs() as logs:
+            outcome = await self._pass(db_session, submission, router, arq_redis)
+
+        assert outcome == StageOutcome.ok()
+        assert await arq_redis.keys("*") == []
+        assert _first_answer_events(logs) == []
+
+    async def test_without_a_queue_the_stage_goes_as_it_went(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        first_pass = _Router(_FIRST_WITH_A_BAD_QUOTE, _exhausted())
+        with capture_logs() as logs, pytest.raises(LadderExhaustedError):
+            await self._pass(db_session, submission, first_pass, None)
+        second_pass = _Router(_FIRST_WITH_A_BAD_QUOTE, _REPEAT_MENDED)
+
+        outcome = await self._pass(db_session, submission, second_pass, None)
+
+        assert outcome == StageOutcome.ok()
+        # Both requests were asked: nothing was kept, nothing said about it.
+        assert len(second_pass.requests) == 2
+        assert _first_answer_events(logs) == []
+
+    @pytest.mark.parametrize("failing", ["get", "set", "delete"])
+    async def test_a_queue_that_fails_costs_the_stage_nothing(
+        self, db_session: AsyncSession, submission: HomeworkSubmission, failing: str
+    ) -> None:
+        queue = _FlakyRedis(failing=frozenset({failing}))
+        router = _Router(_FIRST_WITH_A_BAD_QUOTE, _REPEAT_MENDED)
+
+        with capture_logs() as logs:
+            outcome = await self._pass(db_session, submission, router, queue)
+
+        assert outcome == StageOutcome.ok()
+        assert len(router.requests) == 2
+        assert set(await _rows(db_session, submission)) == {
+            "c1",
+            "c2",
+            "c2.p1",
+            "c2.p2",
+        }
+        discarded = [
+            e
+            for e in _first_answer_events(logs)
+            if e["event"] == "criteria_evaluation_first_answer_discarded"
+        ]
+        assert [(e["reason"], e["operation"]) for e in discarded] == [
+            ("redis_error", failing)
+        ]
+        assert all(e["log_level"] == "warning" for e in discarded)
+        assert _MARKER not in repr(logs)
+
+    @pytest.mark.parametrize(
+        "junk",
+        [
+            pytest.param(f"not json {_MARKER}", id="not-json"),
+            pytest.param(json.dumps({"answer": 5, "note": _MARKER}), id="wrong-shape"),
+            pytest.param(json.dumps([_MARKER]), id="not-a-mapping"),
+            pytest.param(json.dumps(_MARKER), id="a-string"),
+        ],
+    )
+    async def test_an_unreadable_value_is_discarded_and_never_logged(
+        self, db_session: AsyncSession, submission: HomeworkSubmission, junk: str
+    ) -> None:
+        queue = _FlakyRedis()
+        first_pass = _Router(_FIRST_WITH_A_BAD_QUOTE, _exhausted())
+        with pytest.raises(LadderExhaustedError):
+            await self._pass(db_session, submission, first_pass, queue)
+        (key,) = queue.values
+        queue.values[key] = junk
+        second_pass = _Router(_FIRST_WITH_A_BAD_QUOTE, _REPEAT_MENDED)
+
+        with capture_logs() as logs:
+            outcome = await self._pass(db_session, submission, second_pass, queue)
+
+        assert outcome == StageOutcome.ok()
+        assert len(second_pass.requests) == 2
+        # The answer is refused, asked for anew, and kept anew for the repeat.
+        event, kept = _first_answer_events(logs)
+        assert event["event"] == "criteria_evaluation_first_answer_discarded"
+        assert event["reason"] == "unreadable"
+        assert kept["event"] == "criteria_evaluation_first_answer_kept"
+        assert _MARKER not in repr(logs)
+        # What stood under the key is taken away with the rows written.
+        assert queue.values == {}
+
+    async def test_a_rung_gone_from_the_ladder_discards_the_answer(
+        self, db_session: AsyncSession, submission: HomeworkSubmission
+    ) -> None:
+        queue = _FlakyRedis()
+        first_pass = _Router(_FIRST_WITH_A_BAD_QUOTE, _exhausted())
+        with pytest.raises(LadderExhaustedError):
+            await self._pass(db_session, submission, first_pass, queue)
+        (key,) = queue.values
+        stored = json.loads(queue.values[key])
+        stored["provider"] = "a_provider_the_ladder_dropped"
+        queue.values[key] = json.dumps(stored)
+        second_pass = _Router(_FIRST_WITH_A_BAD_QUOTE, _REPEAT_MENDED)
+
+        with capture_logs() as logs:
+            outcome = await self._pass(db_session, submission, second_pass, queue)
+
+        assert outcome == StageOutcome.ok()
+        assert len(second_pass.requests) == 2
+        event, kept = _first_answer_events(logs)
+        assert event["event"] == "criteria_evaluation_first_answer_discarded"
+        assert event["reason"] == "rung_gone"
+        assert kept["event"] == "criteria_evaluation_first_answer_kept"

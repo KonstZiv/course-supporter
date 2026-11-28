@@ -8,14 +8,14 @@ keywords:
   - author's path
   - Methodist
   - Mentor
-last_updated: 2026-11-24
+last_updated: 2026-11-27
 ---
 
 # For authors
 
 This section is for course authors: how to prepare a course on the Course Supporter platform for students to work in, and what to do next.
 
-The author app is in Ukrainian for now. When this guide names a button or a screen, it gives the English name first and, in brackets, the Ukrainian one as you see it on the screen — for example, "Save (Зберегти)".
+The author app has an English version: switch it with the "English" button in the app header or on the sign-in page. When this guide names a button or a screen, it gives the English name first and, in brackets, the Ukrainian one — for example, "Save (Зберегти)" — so you can find it whichever language your app is in.
 
 ## What the platform does for you {#what}
 
@@ -38,10 +38,8 @@ Which assistant reads what and how the platform processes materials — on the p
 5. Add assignments and tests: [Assignments](tasks.md), [Tests](tests.md).
 6. When everything is uploaded, run the Methodist for the whole course — [Section descriptions: the Methodist](methodist.md#when).
 7. Review the section descriptions, correct what is needed and approve them — [same page](methodist.md#edit).
-8. Add students and enrol them in the course.
+8. Add students and enrol them in the course — [Students and enrolment](students.md).
 9. Keep an eye on your units and costs — the "Units (Юніти)" and "Costs (Витрати)" pages in the app; details — [Costs and history](costs-history.md).
-
-The page about step 8 is in preparation.
 
 Two rules of order will save you time and money.
 
@@ -58,8 +56,10 @@ Two rules of order will save you time and money.
 - [Assignments](tasks.md) — assignment types, how your requirements reach the Mentor, the project and the starter archive, the list of criteria.
 - [Tests](tests.md) — the test editor, checking by the model, the pass mark, publishing, a test from a file.
 - [Section descriptions: the Methodist](methodist.md) — when to run the Methodist, what a section description contains, how to edit and approve it, what happens when it runs again.
+- [Students and enrolment](students.md) — enrolment by link, the "Students" page, adding a student by hand.
+- [Students' work and reviews](student-work.md) — all of a student's submissions, the review and the criteria breakdown.
 - [Costs and history](costs-history.md) — what an author pays for, the package and units, buying a package, what happens when units run short, where costs are shown, the materials history.
 - [If something goes wrong](troubleshooting.md) — what to do when you cannot sign in, upload a material, publish a test or run the Methodist; how to write to the platform administrator.
 - [Tests and criteria via the API](api.md) — a reference for school platforms that prepare a course with requests, without the author app.
 
-In preparation: "Materials with code", "Students", "Guide to screens and names".
+In preparation: "Materials with code", "Guide to screens and names".

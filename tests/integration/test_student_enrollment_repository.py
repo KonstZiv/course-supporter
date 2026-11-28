@@ -39,7 +39,10 @@ class TestBind:
         student = await _make_student(db_session, seed_tenant, "ext-bind")
         repo = StudentEnrollmentRepository(db_session)
         enrollment = await repo.bind(
-            student_id=student.id, course_node_id=seed_root_node.id
+            tenant_id=student.tenant_id,
+            student_id=student.id,
+            course_node_id=seed_root_node.id,
+            source="author",
         )
         assert enrollment.id is not None
 
@@ -55,10 +58,20 @@ class TestBind:
     ) -> None:
         student = await _make_student(db_session, seed_tenant, "ext-dupbind")
         repo = StudentEnrollmentRepository(db_session)
-        await repo.bind(student_id=student.id, course_node_id=seed_root_node.id)
+        await repo.bind(
+            tenant_id=student.tenant_id,
+            student_id=student.id,
+            course_node_id=seed_root_node.id,
+            source="author",
+        )
         with pytest.raises(IntegrityError):
             async with db_session.begin_nested():
-                await repo.bind(student_id=student.id, course_node_id=seed_root_node.id)
+                await repo.bind(
+                    tenant_id=student.tenant_id,
+                    student_id=student.id,
+                    course_node_id=seed_root_node.id,
+                    source="author",
+                )
 
 
 class TestUnbind:
@@ -70,7 +83,12 @@ class TestUnbind:
     ) -> None:
         student = await _make_student(db_session, seed_tenant, "ext-unbind")
         repo = StudentEnrollmentRepository(db_session)
-        await repo.bind(student_id=student.id, course_node_id=seed_root_node.id)
+        await repo.bind(
+            tenant_id=student.tenant_id,
+            student_id=student.id,
+            course_node_id=seed_root_node.id,
+            source="author",
+        )
 
         deleted = await repo.unbind(
             student_id=student.id, course_node_id=seed_root_node.id
@@ -102,7 +120,12 @@ class TestIsEnrolled:
         """is_enrolled is True after a bind (Phase 6 T2 submission gate)."""
         student = await _make_student(db_session, seed_tenant, "ext-enr-true")
         repo = StudentEnrollmentRepository(db_session)
-        await repo.bind(student_id=student.id, course_node_id=seed_root_node.id)
+        await repo.bind(
+            tenant_id=student.tenant_id,
+            student_id=student.id,
+            course_node_id=seed_root_node.id,
+            source="author",
+        )
         assert await repo.is_enrolled(student.id, seed_root_node.id) is True
 
     async def test_not_enrolled_false(
@@ -125,7 +148,12 @@ class TestIsEnrolled:
         """is_enrolled flips back to False after unbind (revoke course access)."""
         student = await _make_student(db_session, seed_tenant, "ext-enr-unbind")
         repo = StudentEnrollmentRepository(db_session)
-        await repo.bind(student_id=student.id, course_node_id=seed_root_node.id)
+        await repo.bind(
+            tenant_id=student.tenant_id,
+            student_id=student.id,
+            course_node_id=seed_root_node.id,
+            source="author",
+        )
         await repo.unbind(student_id=student.id, course_node_id=seed_root_node.id)
         assert await repo.is_enrolled(student.id, seed_root_node.id) is False
 
@@ -155,8 +183,18 @@ class TestListEnrolledCourses:
         db_session.add_all([first, second])
         await db_session.flush()
         repo = StudentEnrollmentRepository(db_session)
-        await repo.bind(student_id=student.id, course_node_id=first.id)
-        await repo.bind(student_id=student.id, course_node_id=second.id)
+        await repo.bind(
+            tenant_id=student.tenant_id,
+            student_id=student.id,
+            course_node_id=first.id,
+            source="author",
+        )
+        await repo.bind(
+            tenant_id=student.tenant_id,
+            student_id=student.id,
+            course_node_id=second.id,
+            source="author",
+        )
 
         courses = await repo.list_enrolled_courses(student.id)
         assert {(c.id, c.title) for c in courses} == {
@@ -176,8 +214,18 @@ class TestListEnrolledCourses:
         db_session.add_all([active, gone])
         await db_session.flush()
         repo = StudentEnrollmentRepository(db_session)
-        await repo.bind(student_id=student.id, course_node_id=active.id)
-        await repo.bind(student_id=student.id, course_node_id=gone.id)
+        await repo.bind(
+            tenant_id=student.tenant_id,
+            student_id=student.id,
+            course_node_id=active.id,
+            source="author",
+        )
+        await repo.bind(
+            tenant_id=student.tenant_id,
+            student_id=student.id,
+            course_node_id=gone.id,
+            source="author",
+        )
         gone.deleted_at = datetime.now(UTC)
         await db_session.flush()
 

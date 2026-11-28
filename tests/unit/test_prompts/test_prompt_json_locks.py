@@ -573,7 +573,7 @@ def _hostile_criteria() -> tuple[Criterion, ...]:
                 "id": "c2",
                 "text": hostile,
                 "evidence": hostile,
-                "weight": "may",
+                "weight": "should",
                 "check_method": "mandatory_points",
                 "soft_descent": False,
                 "concepts": [],

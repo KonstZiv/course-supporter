@@ -22,10 +22,14 @@ nav:
       - Assignments: authors/tasks.md
       - Tests: authors/tests.md
       - "Section descriptions: the Methodist": authors/methodist.md
+      - Students and enrolment: authors/students.md
+      - "Students' work and reviews": authors/student-work.md
       - Costs and history: authors/costs-history.md
       - If something goes wrong: authors/troubleshooting.md
       - Tests and criteria via the API: authors/api.md
-  - For students: students/index.md
+  - For students:
+      - Overview: students/index.md
+      - Joining a course and signing in: students/join.md
   - Error codes: errors/index.md
   - API: api/index.md
 

@@ -13,7 +13,9 @@ keywords:
   - criteria
   - text assignment
   - refusal codes
-last_updated: 2026-11-24
+  - course results
+  - students and tasks
+last_updated: 2026-11-27
 ---
 
 # Tests and criteria via the API
@@ -397,7 +399,8 @@ Each criterion carries:
 ### How passing is decided {#criteria-pass}
 
 The work's score is the share of the weights of the criteria met (`must` — 3, `should` — 2, `may` —
-1), as a percentage, rounded down. Only a criterion you marked as mandatory yourself
+1), as a percentage, rounded down. An unmet `may` criterion is left out of the calculation: it does not
+lower the score and gives no remark in the review; a met `may` counts like the others. Only a criterion you marked as mandatory yourself
 (`must_by_author: true`) is mandatory for passing. Whether the work is passed:
 
 - **your list** (you saved an edit, see [Correct the list](#criteria-edit)) and it has at least one
@@ -533,3 +536,25 @@ A refusal carries the reason code and an explanation in the `detail` field:
 | `CHECK_METHOD_NOT_ADMITTED` {#CHECK_METHOD_NOT_ADMITTED} | 422 | the check method is not for this assignment type: `code_test` — only in a project | choose `model_verdict` or `mandatory_points` |
 | `UNKNOWN_CONCEPT` {#UNKNOWN_CONCEPT} | 422 | a concept that is not in the `concepts` of reading | choose a concept from `concepts` or remove it |
 | `MUST_BY_AUTHOR_WITHOUT_MUST` {#MUST_BY_AUTHOR_WITHOUT_MUST} | 422 | `must_by_author: true` in a criterion whose weight is not `must` | set the criterion's weight to `must` or remove `must_by_author` |
+
+## Course results by task and by student {#homework-overview}
+
+Two read-only calls give a school an overview of how the whole course is going. The key needs the
+`prep` scope, and `{course_id}` is the course, that is, its root node (as in the course enrollment
+link).
+
+- `GET /api/v1/nodes/{course_id}/homework/summary` — for each task of the course where a piece of
+  work is expected, in the course's order: how many students submitted, what share of them passed,
+  the mean best score, the attempt on which they pass, and up to three criteria of the list (`must`
+  and `should`; a `may` is not a fault) that students most often miss in their last attempt.
+- `GET /api/v1/nodes/{course_id}/homework/students?limit=&offset=` — the "students and tasks"
+  table: a row per student (by name), a cell per task with the state `not_submitted`,
+  `in_review`, `passed` or `not_passed`, the best score, the number of attempts and the time of the
+  last submission.
+
+Only work that has already been reviewed is counted, and only students who have not been deleted. The
+platform's service students are left out by default: the `include_test_students=true` parameter adds
+them, and the response says how many were left out (`excluded_test_students`). "Passed" and the
+score are the same as the student sees in their own account. The responses contain no texts of work,
+reviews or quotes. A course that is someone else's, deleted or unknown gives 404 with the text
+`Course not found.`.

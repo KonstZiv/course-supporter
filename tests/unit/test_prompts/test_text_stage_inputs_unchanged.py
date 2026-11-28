@@ -80,7 +80,11 @@ _STAGE_DIGESTS = {
         "84d198df8f758e473c789c0b4cd5bd20738549a0933dccb06126e9ab16bb23b8"
     ),
 }
-# sha256 of the rendered request (system, NUL, user), taken on main.
+# sha256 of the rendered request (system, NUL, user), taken on main; the three
+# of review_explanation re-taken on purpose by DD-SP-DQ (2026-11-27): the
+# input's c3 is a "may" the work does not have, so the request no longer lists
+# it among the criteria nor among the places of the course — nothing else in it
+# moved (the score stays 50).
 _REQUEST_DIGESTS = {
     "criteria_evaluation/first": (
         "58ccd2462213953777a7eb8aa3600a005c3b598b02dfff5bdd1afcfd50aa8e6b"
@@ -94,23 +98,24 @@ _REQUEST_DIGESTS = {
         "3571fba975df211f67de7283a2704d1efc9c8349c130d7c35969bfddc2c7872b"
     ),
     "review_explanation/v2": (
-        "f75759c0158b63f2dc1740d80d72ecb7bdfb686eb6e2125bf1d254c639ef21fb"
+        "449b6ce433eb80f82a43f1fa95fbf5e7bf5ec64f77c8862301242517e67e9fc3"
     ),
     # The stage's prompt from 2026-11-13: v3, rendered from the input it was
     # calibrated on — without the fields of task 13.
     "review_explanation/v3": (
-        "7345e8917587671afc1672a3a4f9d4fded18f766c91b4d68430c7ac52305ad7e"
+        "30afcd3f0ade9bbdd748222baf882c7f844f64a99aa83ccc8486699d17bd18cd"
     ),
     # The stage's prompt since task 13 (2026-11-23): v4, rendered from the
     # input the stage builds — with the limit of examples.
     "review_explanation/v4": (
-        "1bd27fafc044d73b6390fde0214f2fe6e018ee53aef724964ed93fd1ad9dee4d"
+        "2aa2896603c9b0857c3caa7cde413393107472582512c1528777a9f733269132"
     ),
 }
 # sha256 of the explanation's rendered USER message alone, taken on main from
 # v2's request: v3 changes the system message and nothing the user one holds.
+# Re-taken on purpose by DD-SP-DQ (2026-11-27), as the digests above.
 _EXPLANATION_USER_DIGEST = (
-    "917cf8669ec2709ef4d1c745cdcfcde85fd226d9f4e8180793a851c3608f6c59"
+    "731ddcff019fdd0466ae40bd71b35526efad3e3d5fd8ce1983ff8e4295874d12"
 )
 
 _WORK = (

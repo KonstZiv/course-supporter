@@ -393,6 +393,42 @@ class TestTheRequest:
                     assert "place" not in item
 
 
+class TestAMayTheWorkLacksIsNotShown:
+    """DD-SP-DQ (2026-11-27): the request does not show a "may" not met.
+
+    The prompt's rule is a remark on every criterion shown as not met, so a
+    criterion that gets none is not shown — and its places of the course are
+    not looked for nor listed. The prompt itself is unchanged. ``_FACTS`` has
+    c3, a "may" met: a plus, shown.
+    """
+
+    _LACKED = CriterionFacts(
+        _criterion("c4", "may"),
+        VerdictValue.NOT_MET,
+        JudgedItem(id="c4", verdict=VerdictValue.NOT_MET, missing="Немає."),
+        (),
+    )
+
+    def _with_lacked(self) -> ExplanationInput:
+        facts = replace(_FACTS, criteria=(*_FACTS.criteria, self._LACKED))
+        return replace(_SHOWN, facts=facts)
+
+    def test_it_is_not_among_the_criteria_and_not_among_the_places(self) -> None:
+        context = render_context(self._with_lacked())
+
+        assert [c["id"] for c in context["criteria"]] == ["c1", "c2", "c3"]
+        assert [c["criterion"] for c in context["course_links"]] == ["c1", "c2"]
+
+    def test_a_met_may_is_shown_as_a_plus(self) -> None:
+        context = render_context(self._with_lacked())
+
+        c3 = next(c for c in context["criteria"] if c["id"] == "c3")
+        assert (c3["weight"], c3["verdict"]) == ("may", "met")
+
+    def test_the_request_is_what_it_was_without_a_may_not_met(self) -> None:
+        assert render_context(self._with_lacked()) == render_context(_SHOWN)
+
+
 class TestTheCheckHolds:
     """Lock 7 at the agent: the validator the router runs is the check."""
 

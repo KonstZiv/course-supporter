@@ -69,6 +69,38 @@ Failure:
     for the student. An answer cut off at the output ceiling under the schema
     stops the ladder the same way (task 09a), and nothing is written.
 
+Repeating the task:
+    A ladder that gives no answer to the SECOND request makes the body retry
+    the whole task (``path_runner._stage_produced_nothing``, ``arq.Retry``),
+    and its checkpoint says only "the stage is not done". The first answer,
+    paid for, would be asked for again. So when there are items to ask again,
+    the stage keeps the first answer in Redis (``StageContext.arq``) before the
+    second request, and the next pass of the same task — same input, same
+    stage — begins at the second request: ``agent.evaluate`` is not called,
+    the kept answer is the first, and ``first_call_id`` of the rows is the
+    kept ``call_id``, the register row of the answer that was paid for. The
+    key is deleted once the verdict rows are written; a retry that fails
+    leaves it to its lifetime. The key, the value and the lifetime are in
+    :mod:`course_supporter.homework.first_answer_store`.
+
+    The kept answer is refused, and asked for anew, when it is unreadable or
+    when the rung that gave it is no longer on the stage's ladder (the second
+    request goes to that rung). No queue, or an error of Redis on a read, a
+    write or a delete: the stage goes as it went without all this, and the log
+    gets one warning line with a code and no value. The log lines
+    (identifiers, codes and numbers only): ``criteria_evaluation_first_answer_kept``,
+    ``..._reused`` (``call_id``, ``age_s``) and ``..._discarded`` (``reason``:
+    ``unreadable``, ``rung_gone``, ``redis_error``).
+
+    What lies in Redis under the key is the student's quotes and the model's
+    words. It lives up to 1980 s (with the settings as they come) from the
+    write in the first pass; a reuse does not extend it. After the last failed
+    pass the body closes the submission as ``FAILED``, which counts as
+    finished, so the student's deletion (the command refuses only while a
+    submission is not finished) may come before the lifetime ends: the key then
+    goes by itself when the lifetime passes. The key does not see a change of
+    the prompt's text under the same ``prompt_ref``.
+
 Replacing:
     The stage depends on :class:`CriteriaSource`, on the agent's two methods
     (:class:`~course_supporter.agents.criteria_evaluator.CriteriaEvaluatorAgent`),
@@ -106,6 +138,10 @@ from course_supporter.homework.criteria_verdicts import (
 )
 from course_supporter.homework.doors import DoorReading
 from course_supporter.homework.earlier_review import fit_memory, read_attempt_memory
+from course_supporter.homework.first_answer_store import (
+    FirstAnswerStore,
+    first_answer_key,
+)
 from course_supporter.homework.mentor_context import mark_authors_lines
 from course_supporter.homework.path_checkpoint import FreezeReason
 from course_supporter.homework.path_config import (
@@ -233,11 +269,21 @@ async def evaluate_criteria(
     shown = replace(shown, memory=await _memory_shown(context, listed, shown, log=log))
     agent = CriteriaEvaluatorAgent(context.router)
 
-    first = await agent.evaluate(shown, execution=execution)
+    # The first answer of an earlier pass of this very task, when the second
+    # request failed it (module: "Repeating the task").
+    store = _first_answer_store(context, shown, execution, log=log)
+    reused = await _reused_first_answer(store, execution, log=log)
+    first = (
+        reused
+        if reused is not None
+        else await agent.evaluate(shown, execution=execution)
+    )
     again: Evaluated | None = None
     repeat: EvaluationAnswer | None = None
     to_repeat = items_to_ask_again(first.answer, work)
     if to_repeat:
+        if store is not None and reused is None:
+            await store.keep(first, items=len(to_repeat))
         log.info(
             "criteria_evaluation_asking_again",
             items={item.id: item.reason.value for item in to_repeat},
@@ -279,8 +325,47 @@ async def evaluate_criteria(
         criteria_source_id=listed.source_id,
         records=records,
     )
+    if store is not None and (to_repeat or store.found):
+        await store.forget()
     _log_settled(log, records, first)
     return StageOutcome.ok()
+
+
+def _first_answer_store(
+    context: StageContext,
+    shown: EvaluationInput,
+    execution: StageExecution,
+    *,
+    log: Any,
+) -> FirstAnswerStore | None:
+    """Where the first answer is kept; ``None`` where no queue is at hand."""
+    if context.arq is None:
+        return None
+    key = first_answer_key(context.submission.id, context.stage_name, shown, execution)
+    return FirstAnswerStore(context.arq, key, log=log)
+
+
+async def _reused_first_answer(
+    store: FirstAnswerStore | None, execution: StageExecution, *, log: Any
+) -> Evaluated | None:
+    """The first answer an earlier pass paid for, when it can still be used.
+
+    ``None`` — none kept, or one that is refused: unreadable, or given by a
+    rung the stage's ladder no longer has (the second request goes to that
+    rung, :func:`_on_the_rung`). The stage then asks the first request itself.
+    """
+    if store is None:
+        return None
+    recalled = await store.recall()
+    if recalled is None:
+        return None
+    try:
+        _on_the_rung(execution, recalled.evaluated)
+    except RuntimeError:
+        store.discard("rung_gone")
+        return None
+    store.reused(recalled)
+    return recalled.evaluated
 
 
 async def _replies_shown(

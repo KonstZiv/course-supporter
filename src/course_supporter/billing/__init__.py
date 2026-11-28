@@ -46,6 +46,11 @@ Upkeep on the clock (BIL-B part 2):
     :mod:`.retention` — the records of an account destroyed five years after
     its owner's anonymization.
 
+Measurement (Б-4):
+    :mod:`.promotion` — the tenant's promotion path; :mod:`.funnel` — the
+    funnel of enrollment events (``enrollment_events``): enrolled → first
+    submission → first purchase → repeat purchase, with the money.
+
 Storage:
     ``billing_*`` tables (``storage.orm.Billing*``). None has a foreign key to a
     table outside billing, so deleting a tenant or a student never reaches a

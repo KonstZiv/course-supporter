@@ -23,16 +23,27 @@ What is counted (one month, UTC, both edges inclusive, as in :mod:`.spending`):
       bought and not used are not in it. Units of batches without money are
       ``gift_units``.
     * ``tax_minor`` — each batch's tax in proportion to the units spent from
-      it: ``units / batch.units * provider_tax_minor``. A batch without the
-      provider's tax (not synced yet: ``creem-sync``) adds none and is counted
-      in :attr:`MoneyLine.without_provider_data`; no tax is guessed.
-    * ``fee_minor`` — the same of ``provider_fee_minor``, where known. Creem's
-      API does not give its fee: :attr:`MoneyLine.fee_unknown` names the
-      provider (:func:`fee_note`: «комісія Creem: API не віддає»); None when
-      no batch of the line has it.
+      it: ``units / batch.units * tax_minor`` of the provider's figures
+      (``billing_batch_provider_figures``, :mod:`.provider_figures`). A batch
+      without the provider's tax (not synced yet: ``creem-sync``) adds none
+      and is counted in :attr:`MoneyLine.without_provider_data`; no tax is
+      guessed.
+    * ``fee_minor`` — the same of each batch's fee (Б-5, product owner
+      2026-11-27): the provider's, where its API or event gave it
+      (``fee_minor`` of its figures) — it has precedence; else the provider's
+      tariff (``provider_fees`` of ``config/billing_packages.yaml``,
+      :meth:`~.payments.catalog.FeeTariff.fee_minor`: ``round_half_up(
+      amount_paid_minor x percent / 100) + fixed_minor`` of the batch's
+      currency, once per batch — Creem's API gives no fee), named in
+      :attr:`MoneyLine.fee_by_tariff` (:func:`tariff_note`: «комісія Creem —
+      розрахунково за тарифом»). A batch with neither — the tariff has no
+      fixed part in its currency, or the provider no tariff — adds none and
+      names its provider in :attr:`MoneyLine.fee_unknown` (:func:`fee_note`:
+      «комісія Creem: тариф для EUR не задано»); None when no batch of the
+      line has a fee.
     * ``net_minor`` = gross - tax - fee (the fee where known) — so before the
-      fee nobody gives and before the tax of batches without the provider's
-      data: the line's marks say which.
+      fee of a currency without a tariff and before the tax of batches
+      without the provider's data: the line's marks say which.
     * ``model_cost_usd`` — what the models cost for these same reviews, in
       dollars, as the cost report counts a review (:mod:`.costs`: paid calls
       of the review's jobs, the preparation stages left out), whenever the
@@ -80,6 +91,7 @@ from course_supporter.billing.links import (
     ActionRef,
     link_actions,
 )
+from course_supporter.billing.payments.catalog import FeeTariff, get_catalog
 from course_supporter.billing.review_money import (
     ReviewDebit,
     excluded_test_reviews,
@@ -90,6 +102,7 @@ from course_supporter.jobs.job_type import JobType
 from course_supporter.storage.orm import (
     BillingAccount,
     BillingBatch,
+    BillingBatchProviderFigures,
     BillingRefund,
     CourseNode,
     ExternalServiceCall,
@@ -100,6 +113,8 @@ from course_supporter.storage.orm import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 BPS: Final = 10_000
@@ -109,8 +124,6 @@ NO_RATE: Final = "ставку не задано"
 """What the report says instead of a share when the school has no rate."""
 
 _PROVIDER_NAMES: Final = {"creem": "Creem"}
-_FEE_NOT_GIVEN: Final = frozenset({"creem"})
-"""Providers whose API does not give their fee (``billing.payments.creem``)."""
 
 
 def provider_label(provider: str) -> str:
@@ -118,11 +131,14 @@ def provider_label(provider: str) -> str:
     return _PROVIDER_NAMES.get(provider, provider)
 
 
-def fee_note(provider: str) -> str:
-    """Why a provider's fee is not in the net."""
-    if provider in _FEE_NOT_GIVEN:
-        return f"комісія {provider_label(provider)}: API не віддає"
-    return f"комісія {provider_label(provider)}: невідома"
+def tariff_note(provider: str) -> str:
+    """The provider's fee in the net is counted by its tariff, not given."""
+    return f"комісія {provider_label(provider)} — розрахунково за тарифом"
+
+
+def fee_note(provider: str, currency: str) -> str:
+    """Why a provider's fee is not in the net: no tariff in the currency."""
+    return f"комісія {provider_label(provider)}: тариф для {currency} не задано"
 
 
 def no_data_note(provider: str, batches: int) -> str:
@@ -151,14 +167,18 @@ class MoneyLine:
     gross_minor: int
     tax_minor: int
     fee_minor: int | None
-    """None — no batch of the line has the provider's fee."""
+    """None — no batch of the line has a fee (given, or by a tariff)."""
     net_minor: int
     partner_share_minor: int | None
     """None — the school has no rate (:data:`NO_RATE`)."""
     without_provider_data: tuple[tuple[str, int], ...]
     """``(provider, batches)`` whose tax the provider has not told yet."""
     fee_unknown: tuple[str, ...]
-    """Providers of batches in the line whose fee is not known."""
+    """Providers of batches in the line whose fee is not known: not given,
+    and no tariff in the line's currency (:func:`fee_note`)."""
+    fee_by_tariff: tuple[str, ...]
+    """Providers whose fee in the line is counted by their tariff
+    (:func:`tariff_note`)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +248,8 @@ class _Batch:
     units: int
     tax_minor: int | None
     fee_minor: int | None
+    """The provider's, or by its tariff (``fee_by_tariff``); None — neither."""
+    fee_by_tariff: bool = False
 
 
 @dataclass(slots=True)
@@ -239,6 +261,7 @@ class _Money:
     fee: Fraction = Fraction(0)
     fee_known: bool = False
     fee_unknown: set[str] = field(default_factory=set)
+    fee_by_tariff: set[str] = field(default_factory=set)
     no_data: dict[str, set[uuid.UUID]] = field(default_factory=lambda: defaultdict(set))
 
     def add(self, debit: ReviewDebit, batch: _Batch) -> None:
@@ -254,6 +277,8 @@ class _Money:
         else:
             self.fee += part * batch.fee_minor
             self.fee_known = True
+            if batch.fee_by_tariff:
+                self.fee_by_tariff.add(batch.provider)
 
     def line(self, currency: str, share_bps: int | None) -> MoneyLine:
         gross, tax = _half_up(self.gross), _half_up(self.tax)
@@ -272,6 +297,7 @@ class _Money:
                 (provider, len(ids)) for provider, ids in sorted(self.no_data.items())
             ),
             fee_unknown=tuple(sorted(self.fee_unknown)),
+            fee_by_tariff=tuple(sorted(self.fee_by_tariff)),
         )
 
 
@@ -319,8 +345,24 @@ class _Tally:
 # ── Reads ──────────────────────────────────────────────────────────────
 
 
+def _fee(
+    given: int | None,
+    tariff: FeeTariff | None,
+    amount_paid_minor: int | None,
+    currency: str | None,
+) -> tuple[int | None, bool]:
+    """A batch's fee and whether it is the tariff's: the provider's has
+    precedence (module docstring)."""
+    if given is not None:
+        return given, False
+    if tariff is None or amount_paid_minor is None or currency is None:
+        return None, False
+    by_tariff = tariff.fee_minor(amount_paid_minor, currency)
+    return by_tariff, by_tariff is not None
+
+
 async def _batches(
-    session: AsyncSession, ids: set[uuid.UUID]
+    session: AsyncSession, ids: set[uuid.UUID], tariffs: Mapping[str, FeeTariff]
 ) -> dict[uuid.UUID, _Batch]:
     if not ids:
         return {}
@@ -329,14 +371,23 @@ async def _batches(
             BillingBatch.id,
             BillingBatch.provider,
             BillingBatch.units,
-            BillingBatch.provider_tax_minor,
-            BillingBatch.provider_fee_minor,
-        ).where(BillingBatch.id.in_(ids))
+            BillingBatch.amount_paid_minor,
+            BillingBatch.currency,
+            BillingBatchProviderFigures.tax_minor,
+            BillingBatchProviderFigures.fee_minor,
+        )
+        .outerjoin(
+            BillingBatchProviderFigures,
+            BillingBatchProviderFigures.batch_id == BillingBatch.id,
+        )
+        .where(BillingBatch.id.in_(ids))
     )
-    return {
-        batch_id: _Batch(provider or "", units, tax, fee)
-        for batch_id, provider, units, tax, fee in rows.tuples()
-    }
+    found: dict[uuid.UUID, _Batch] = {}
+    for batch_id, provider, units, paid, currency, tax, given in rows.tuples():
+        name = provider or ""
+        fee, by_tariff = _fee(given, tariffs.get(name), paid, currency)
+        found[batch_id] = _Batch(name, units, tax, fee, by_tariff)
+    return found
 
 
 def _uuid(value: str) -> uuid.UUID | None:
@@ -430,13 +481,21 @@ async def _refunds(
 
 
 async def partner_report(
-    session: AsyncSession, *, tenant_id: uuid.UUID, month: date
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    month: date,
+    fee_tariffs: Mapping[str, FeeTariff] | None = None,
 ) -> PartnerReport:
     """The partner's report of the school for the month of ``month``.
+
+    ``fee_tariffs`` — the providers' fee tariffs by provider; None: the
+    catalog's (``provider_fees``, module docstring).
 
     Raises:
         BillingNotFoundError: no such live tenant.
     """
+    tariffs = get_catalog().provider_fees if fee_tariffs is None else fee_tariffs
     settings = await get_author_settings(session, tenant_id)
     tenant = await session.get(Tenant, tenant_id)
     assert tenant is not None  # get_author_settings found it live
@@ -452,7 +511,7 @@ async def partner_report(
         include_test_students=False,
     )
     batches = await _batches(
-        session, {d.batch_id for d in debits if d.currency is not None}
+        session, {d.batch_id for d in debits if d.currency is not None}, tariffs
     )
     costs = await _model_costs(session, tenant_id, {d.action_key for d in debits})
     links = await link_actions(

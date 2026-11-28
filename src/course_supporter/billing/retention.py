@@ -10,7 +10,8 @@ Purpose:
 
 What goes, for one account:
     its movements, refunds, reservations, differences, checkouts, the marks
-    of its test purchases (``billing_test_batches``), batches, consents,
+    of its test purchases (``billing_test_batches``), the provider's figures
+    of its purchases (``billing_batch_provider_figures``), batches, consents,
     author settings, the payment rules it is the payer of, the webhook events
     of payment providers that name it (``billing_provider_events.account_id``),
     and the audit entries about it, its batches, its refunds or those rules —
@@ -64,6 +65,7 @@ from course_supporter.storage.orm import (
     BillingAuditEntry,
     BillingAuthorSettings,
     BillingBatch,
+    BillingBatchProviderFigures,
     BillingCheckout,
     BillingConsent,
     BillingDifference,
@@ -178,7 +180,8 @@ async def _delete_own_rows(
         ).scalars()
     )
     # Children before parents: movements point at batches, differences,
-    # refunds, rules and accounts; refunds, checkouts and marks at batches.
+    # refunds, rules and accounts; refunds, checkouts, marks and the
+    # provider's figures at batches.
     steps = (
         (BillingMovement, BillingMovement.account_id == account_id),
         (BillingRefund, BillingRefund.account_id == account_id),
@@ -186,6 +189,10 @@ async def _delete_own_rows(
         (BillingDifference, BillingDifference.account_id == account_id),
         (BillingCheckout, BillingCheckout.account_id == account_id),
         (BillingTestBatch, BillingTestBatch.batch_id.in_(batch_ids)),
+        (
+            BillingBatchProviderFigures,
+            BillingBatchProviderFigures.batch_id.in_(batch_ids),
+        ),
         (BillingBatch, BillingBatch.account_id == account_id),
         (BillingConsent, BillingConsent.account_id == account_id),
         (BillingAuthorSettings, BillingAuthorSettings.account_id == account_id),

@@ -27,7 +27,7 @@ BIL-E2, BIL-TESTMARK; рішення оператора — у docstring кож�
 | `testmark.py` | Позначка тестових купівель і зняття їхніх вільних юнітів (BIL-TESTMARK) |
 | `promotion.py` | Позначка шляху просування орендаря (`tenants.promotion_path`, Б-4) |
 | `funnel.py` | Воронка «записався → перша здача → перша купівля → повторна» з грошима (Б-4) |
-| `provider_figures.py` | Податок, комісія й повернене посередника на партії купівлі: з вебхука і з `creem-sync` (Б-3) |
+| `provider_figures.py` | Податок, комісія й повернене посередника для партії купівлі — окрема таблиця `billing_batch_provider_figures`: з вебхука і з `creem-sync` (Б-3) |
 | `partner_report.py` | Звіт партнера: гроші студентів школи за перевірки, податок, комісія, собівартість, частка школи (Б-3) |
 
 ## Правила списання (`charging.py`)
@@ -498,14 +498,17 @@ uv run python scripts/billing_admin.py creem-sync --from YYYY-MM-DD --to YYYY-MM
 uv run python scripts/billing_admin.py partner-report --tenant <id|назва> --month YYYY-MM [--format text|csv|json]
 ```
 
-**Що посередник каже про гроші купівлі** (`provider_figures.py`). У `billing_batches` — чотири
-колонки, усі nullable, у валюті партії: `provider_tax_minor` (податок усередині `amount_paid_minor`),
-`provider_fee_minor` (комісія посередника), `provider_refunded_minor` (скільки, за посередником,
-повернуто з оплати на момент синхронізації; повернення журналу — `billing_refunds`) і
-`provider_synced_at`. Партія лишається insert-only: тригер `billing_batches_insert_only` (тепер на
-власній функції `billing_batches_refuse_update`) пропускає UPDATE, лише коли він змінює ці чотири
-колонки й нічого більше. Записують двоє, за одним правилом — дане посередником замінює збережене,
-`null` збереженого не стирає, без змін нічого не пишеться (і `provider_synced_at` теж):
+**Що посередник каже про гроші купівлі** (`provider_figures.py`) — окрема таблиця
+`billing_batch_provider_figures`, рядок на партію купівлі (`batch_id` — первинний ключ і зовнішній на
+партію), у валюті партії: `tax_minor` (податок усередині `amount_paid_minor`), `fee_minor` (комісія
+посередника, як її дає його API чи подія), `refunded_minor` (скільки, за посередником, повернуто з
+оплати на момент синхронізації; повернення журналу — `billing_refunds`), усі три nullable, і
+`synced_at`. Сама партія **не змінюється**: `billing_batches` — insert-only, тригер
+`billing_batches_insert_only` на спільній функції `billing_refuse_update` відмовляє будь-якому UPDATE
+(рішення сесії білінгу, Б-5 27.11: захист партії не послаблюється). Записують двоє, одним upsert за
+`batch_id` і за одним правилом — дане посередником замінює збережене, `null` збереженого не стирає
+(`COALESCE` і в SQL, тож два записувачі разом не затирають одне одного), без змін нічого не пишеться
+(і `synced_at` теж); рядок лише в купівлі (перевіряє код — перевірка таблиці партії не бачить):
 
 * вебхук купівлі — Creem у `checkout.completed` несе `order.tax_amount`: він іде на партію разом із
   зарахуванням (якщо платника не списали в іншій валюті, `order.fx_currency`, — тоді податок у тій
@@ -515,16 +518,21 @@ uv run python scripts/billing_admin.py partner-report --tenant <id|назва> -
   замовлення Creem, не транзакції). З транзакції, що взяла гроші (`paid`, `refunded`, `partialRefund`,
   `chargedBack`), — `tax_amount` і `refunded_amount`; валюта не та, що в партії, — не пишеться
   (`other_currency`); збій API — партія лишається як була (`failed`), повтор питає її знов. Кожна
-  змінена партія — запис аудиту `batch.provider_sync` (до / після: чотири колонки). `--dry-run` питає
+  змінена партія — запис аудиту `batch.provider_sync` (до / після: чотири колонки рядка). `--dry-run` питає
   API й лише рахує (транзакція READ ONLY). Ключ — `CREEM_API_KEY` / `CREEM_API_BASE` з налаштувань
   застосунку.
 
 **Комісія Creem.** Ні транзакція (`TransactionEntity`), ні замовлення, ні вебхук Creem комісії не
 мають (звірено з довідником API 27.11: https://docs.creem.io/api-reference/endpoint/get-transactions,
 …/get-transaction); лише статистика кабінету дає дохід «після комісій» за період, не по транзакції.
-Тож для Creem `provider_fee_minor` лишається `null`, а звіт пише «комісія Creem: API не віддає».
-Жодного вигаданого відсотка. Порт (`payments.port.TransactionLookup`) комісію переносить — для
-посередника, що її дає.
+Тож для Creem `fee_minor` лишається `null`, а звіт рахує комісію **за тарифом** (Б-5, рішення власника
+продукту 27.11): розділ `provider_fees` у `config/billing_packages.yaml` — `percent` і `fixed_minor`
+за валютою, біля кожного числа джерело й дата. Комісія партії =
+`round_half_up(amount_paid_minor × percent / 100) + fixed_minor[валюта]` — відсоток від суми з
+податком, фіксована частина один раз на оплату (`payments.catalog.FeeTariff.fee_minor`). Валюта без
+фіксованої частини (`null` чи немає) — комісія не рахується. Комісія, яку дав API чи подія
+посередника (`fee_minor` таблиці вище), має перевагу над розрахунковою. Порт
+(`payments.port.TransactionLookup`) комісію переносить — для посередника, що її дає.
 
 **Ставка частки школи** — `billing_author_settings.partner_share_bps`, nullable, 0–10000 (соті частки
 відсотка; перевірка в базі). `set-partner-share --percent` — від 0 до 100, не більше двох знаків після
@@ -541,12 +549,13 @@ uv run python scripts/billing_admin.py partner-report --tenant <id|назва> -
   `units × amount_paid_minor ÷ batch.units`. **База частки — лише витрачене: невикористані юніти в неї
   не входять.** Юніти партій без грошей — `gift_units`;
 * `tax_minor` — податок кожної партії пропорційно витраченим з неї юнітам:
-  `units ÷ batch.units × provider_tax_minor`. Партія без податку від посередника нічого не додає й
+  `units ÷ batch.units × tax_minor` (з таблиці посередника). Партія без податку від посередника нічого не додає й
   рахується в позначці «без даних Creem: N парт.» — податок не вигадується (спершу `creem-sync`);
-* `fee_minor` — так само з `provider_fee_minor`, де відомо; невідомо — `-` і позначка «комісія Creem:
-  API не віддає»;
-* `net_minor` = `gross_minor` − `tax_minor` − `fee_minor` (комісія — лише відома), тобто до комісії,
-  якої ніхто не дає, і до податку партій без даних — позначки рядка кажуть, чого саме;
+* `fee_minor` — так само з комісії партії: дана посередником, а без неї — за тарифом, з позначкою
+  «комісія Creem — розрахунково за тарифом»; валюта без тарифу — нічого не додає, позначка «комісія
+  Creem: тариф для EUR не задано»; жодної комісії в рядку — `-`;
+* `net_minor` = `gross_minor` − `tax_minor` − `fee_minor` (комісія — лише відома), тобто до комісії
+  валюти без тарифу і до податку партій без даних — позначки рядка кажуть, чого саме;
 * `model_cost_usd` — собівартість моделей **цих самих перевірок** у доларах (як рахує `costs`: платні
   виклики завдань перевірки, без етапів підготовки), коли б виклики не були; виклики з невідомою ціною —
   `unknown_cost_calls`;

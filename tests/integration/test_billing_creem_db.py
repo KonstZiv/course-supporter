@@ -57,6 +57,7 @@ from course_supporter.storage.orm import (
     BillingAccount,
     BillingAuditEntry,
     BillingBatch,
+    BillingBatchProviderFigures,
     BillingCheckout,
     BillingConsent,
     BillingDifference,
@@ -298,11 +299,13 @@ async def world(
                 )
             )
         )
+        batches = select(BillingBatch.id).where(BillingBatch.account_id.in_(accounts))
         await session.execute(
-            delete(BillingTestBatch).where(
-                BillingTestBatch.batch_id.in_(
-                    select(BillingBatch.id).where(BillingBatch.account_id.in_(accounts))
-                )
+            delete(BillingTestBatch).where(BillingTestBatch.batch_id.in_(batches))
+        )
+        await session.execute(  # the tax the purchase's event carried (Б-3)
+            delete(BillingBatchProviderFigures).where(
+                BillingBatchProviderFigures.batch_id.in_(batches)
             )
         )
         for model, column in (

@@ -2,21 +2,27 @@
 
 The locks are named by the letters of the task, transliterated in the test
 names (``test_a_…``, ``test_b_…``, ``test_v_…``, ``test_g_…``, ``test_gg_…``,
-``test_d_…``, ``test_e_…``):
+``test_d_…``, ``test_e_…``, ``test_ye_…``, ``test_zh_…``):
 
 (а) the purchase's webhook and ``creem-sync`` write the tax, the refunded part
-    and the fee — Creem's API replaced by an ``httpx.MockTransport``; the fee by
-    the fake provider, since Creem gives none; a repeat changes nothing;
-    ``--dry-run`` writes nothing;
-(б) Creem's API without a fee: ``provider_fee_minor`` stays empty and the
-    report says «комісія Creem: API не віддає»;
+    and the fee (``billing_batch_provider_figures``) — Creem's API replaced by
+    an ``httpx.MockTransport``; the fee by the fake provider, since Creem gives
+    none; a repeat changes nothing; ``--dry-run`` writes nothing;
+(б) Creem's API without a fee: the figures' ``fee_minor`` stays empty; in a
+    currency Creem's tariff has no fixed part for (EUR) the report says
+    «комісія Creem: тариф для EUR не задано»;
 (в) the tax in proportion to the units spent, from two batches of different
     price and tax; a batch without Creem's data is counted «без даних Creem»;
 (г) the rate: set, changed, removed, refused out of range; audited; the share
     is rate x net; without a rate, no sum;
 (ґ) service students left out; another school never in; two currencies apart;
 (д) the month's refunds on a line apart; the month's edges;
-(е) the migration down and up; one head.
+(е) the migration down and up; one head;
+(є) the batch stays insert-only, as in main: an UPDATE of any of its columns,
+    the amount among them, is refused by the trigger; the provider's figures
+    are upserted beside it, allowed and idempotent (Б-5);
+(ж) Creem's fee by its tariff (Б-5): two USD batches — the formula; an EUR
+    batch — «тариф для EUR не задано»; a fee from the API has precedence.
 
 The journal is written by the ledger itself at fixed instants, so the periods
 are exact whatever day the test runs on; batches are taken in the order they
@@ -37,6 +43,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -46,7 +53,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from scripts import billing_admin
-from sqlalchemy import create_engine, delete, inspect, select, text
+from sqlalchemy import create_engine, delete, func, inspect, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -57,7 +64,12 @@ from course_supporter.billing.accounts import (
 )
 from course_supporter.billing.errors import BillingInvalidError
 from course_supporter.billing.kinds import ActionKind, AuditAction, PayerSource
-from course_supporter.billing.payments.catalog import Catalog, Package
+from course_supporter.billing.payments.catalog import (
+    Catalog,
+    Package,
+    get_catalog,
+    load_catalog,
+)
 from course_supporter.billing.payments.creem import (
     CREEM,
     SIGNATURE_HEADER,
@@ -75,6 +87,7 @@ from course_supporter.storage.orm import (
     BillingAuditEntry,
     BillingAuthorSettings,
     BillingBatch,
+    BillingBatchProviderFigures,
     BillingProviderEvent,
     CourseNode,
     ExternalServiceCall,
@@ -107,12 +120,8 @@ CATALOG = Catalog(
     ),
     providers={CREEM: {"starter": "prod_starter_test"}},
 )
-FIGURES = {
-    "provider_tax_minor",
-    "provider_fee_minor",
-    "provider_refunded_minor",
-    "provider_synced_at",
-}
+SHIPPED_TARIFFS = load_catalog(Path("config/billing_packages.yaml")).provider_fees
+"""The fee tariffs as shipped (``provider_fees``): Creem 3.9 % + USD 40, EUR not set."""
 
 
 # ── A school ────────────────────────────────────────────────────────────
@@ -247,10 +256,12 @@ async def _buy(
     currency: str = "EUR",
     at: datetime,
     tax: int | None = None,
+    fee: int | None = None,
     provider: str = CREEM,
     order: str | None = None,
 ) -> uuid.UUID:
-    """A purchase of the student's; ``tax`` — what the provider told of it."""
+    """A purchase of the student's; ``tax``, ``fee`` — what the provider told
+    of it."""
     order = order or _order()
     async with factory() as session:
         credit = await ledger.credit_purchase(
@@ -264,9 +275,9 @@ async def _buy(
             provider_line_id=order,
             now=at,
         )
-        if tax is not None:
+        if tax is not None or fee is not None:
             await provider_figures.record_from_purchase(
-                session, batch=credit.batch, tax_minor=tax, fee_minor=None, now=at
+                session, batch=credit.batch, tax_minor=tax, fee_minor=fee, now=at
             )
         await session.commit()
         return credit.batch.id
@@ -353,11 +364,18 @@ async def _calls(
         await session.commit()
 
 
-async def _batch(factory: Factory, batch_id: uuid.UUID) -> BillingBatch:
+async def _figures(
+    factory: Factory, batch_id: uuid.UUID
+) -> provider_figures.Kept | None:
+    """The batch's row of the provider's figures; None — no row."""
     async with factory() as session:
-        found = await session.get(BillingBatch, batch_id)
-        assert found is not None
-        return found
+        return (await provider_figures.kept_figures(session, {batch_id})).get(batch_id)
+
+
+def _three(kept: provider_figures.Kept | None) -> tuple[int | None, ...]:
+    assert kept is not None
+    figures = kept.figures
+    return (figures.tax_minor, figures.fee_minor, figures.refunded_minor)
 
 
 async def _audit(
@@ -386,9 +404,13 @@ async def _cli(factory: Factory, *argv: str) -> str:
 
 
 async def _report(factory: Factory, school: School) -> partner_report.PartnerReport:
+    """October's report, with the fee tariffs as shipped."""
     async with factory() as session:
         return await partner_report.partner_report(
-            session, tenant_id=school.tenant_id, month=OCTOBER
+            session,
+            tenant_id=school.tenant_id,
+            month=OCTOBER,
+            fee_tariffs=SHIPPED_TARIFFS,
         )
 
 
@@ -530,12 +552,9 @@ class TestFiguresOfAPurchase:
                         )
                     ).scalar_one()
                 assert batch.amount_paid_minor == 1210
-                assert (
-                    batch.provider_tax_minor,
-                    batch.provider_fee_minor,
-                    batch.provider_refunded_minor,
-                ) == (210, None, None)
-                assert batch.provider_synced_at == SEP_1
+                kept = await _figures(session_factory, batch.id)
+                assert _three(kept) == (210, None, None)
+                assert kept is not None and kept.synced_at == SEP_1
         finally:
             async with session_factory() as session:
                 await session.execute(
@@ -587,7 +606,7 @@ class TestFiguresOfAPurchase:
                         )
                     )
                 ).scalar_one()
-            assert (batch.provider_tax_minor, batch.provider_fee_minor) == (200, 65)
+            assert _three(await _figures(session_factory, batch.id)) == (200, 65, None)
         finally:
             async with session_factory() as session:
                 await session.execute(
@@ -631,24 +650,17 @@ class TestFiguresOfAPurchase:
         with patch.object(billing_admin, "creem_lookup", api.provider):
             dry = await _cli(session_factory, *sync, "--actor", "k", "--dry-run")
             assert "would update=1" in dry and "dry run: nothing written" in dry
-            assert (await _batch(session_factory, batch_id)).provider_synced_at is None
+            assert await _figures(session_factory, batch_id) is None
 
             out = await _cli(session_factory, *sync, "--actor", "kostiantyn")
             assert "updated=1  unchanged=0" in out
             assert "does not give it" in out
-            synced = await _batch(session_factory, batch_id)
-            assert (
-                synced.provider_tax_minor,
-                synced.provider_fee_minor,
-                synced.provider_refunded_minor,
-            ) == (210, None, 400)
-            assert synced.provider_synced_at is not None
+            synced = await _figures(session_factory, batch_id)
+            assert _three(synced) == (210, None, 400)
 
             again = await _cli(session_factory, *sync, "--actor", "kostiantyn")
             assert "updated=0  unchanged=1" in again
-            assert (
-                await _batch(session_factory, batch_id)
-            ).provider_synced_at == synced.provider_synced_at
+            assert await _figures(session_factory, batch_id) == synced
         assert api.asked == [order, order, order]  # the other day's batch: never
 
         [entry] = await _audit(
@@ -656,10 +668,17 @@ class TestFiguresOfAPurchase:
         )
         assert entry.actor == "kostiantyn" and entry.entity == "batch"
         assert entry.before is not None and entry.after is not None
-        assert entry.before["provider_tax_minor"] is None
-        assert entry.after["provider_tax_minor"] == 210
-        assert entry.after["provider_refunded_minor"] == 400
-        assert entry.after["provider_fee_minor"] is None
+        assert entry.before == {
+            "tax_minor": None,
+            "fee_minor": None,
+            "refunded_minor": None,
+            "synced_at": None,
+        }
+        assert entry.after["tax_minor"] == 210
+        assert entry.after["refunded_minor"] == 400
+        assert entry.after["fee_minor"] is None
+        assert synced is not None
+        assert entry.after["synced_at"] == synced.synced_at.isoformat()
 
     async def test_a_the_fee_is_synced_where_the_provider_gives_it(
         self, session_factory: Factory, schools: list[School]
@@ -707,42 +726,140 @@ class TestFiguresOfAPurchase:
             )
             await session.commit()
         assert (done.batches, done.updated, done.other_currency) == (2, 1, 1)
-        written = await _batch(session_factory, euro_batch)
-        assert (written.provider_tax_minor, written.provider_fee_minor) == (200, 61)
-        untouched = await _batch(session_factory, dollar_batch)
-        assert untouched.provider_tax_minor is None
-        assert untouched.provider_synced_at is None
+        assert _three(await _figures(session_factory, euro_batch)) == (200, 61, 0)
+        assert await _figures(session_factory, dollar_batch) is None
 
-    async def test_a_the_batch_lets_only_the_providers_figures_change(
+
+# ── The batch stays insert-only; the figures are upserted beside it ──
+
+
+class TestBatchStaysInsertOnly:
+    async def test_ye_an_update_of_any_column_of_the_batch_is_refused(
         self, session_factory: Factory, schools: list[School]
     ) -> None:
-        """``billing_batches`` stays insert-only but for the four figures."""
+        """Every column of ``billing_batches``, the amount among them, even
+        set to itself: the trigger refuses, as in main; the batch is as it was."""
+        school = await _school(session_factory, schools, ["Python"], {"ann": False})
+        batch_id = await _buy(
+            session_factory, school, "ann", units=100, paid=1210, tax=210, at=SEP_1
+        )
+        async with session_factory() as session:
+            before = (
+                await session.execute(
+                    text("SELECT to_jsonb(b) FROM billing_batches b WHERE id = :b"),
+                    {"b": batch_id},
+                )
+            ).scalar_one()
+            columns = sorted(before)
+            assert "amount_paid_minor" in columns
+            assert not {c for c in columns if c.startswith("provider_")} - {
+                "provider",
+                "provider_transaction_id",
+                "provider_line_id",
+            }  # no column of the provider's figures on the batch
+            for refused in [
+                "amount_paid_minor = amount_paid_minor + 1",
+                *(f"{column} = {column}" for column in columns),
+            ]:
+                with pytest.raises(DBAPIError, match="insert-only: UPDATE refused"):
+                    async with session.begin_nested():
+                        await session.execute(
+                            text(f"UPDATE billing_batches SET {refused} WHERE id = :b"),  # noqa: S608 — names from the table itself
+                            {"b": batch_id},
+                        )
+            after = (
+                await session.execute(
+                    text("SELECT to_jsonb(b) FROM billing_batches b WHERE id = :b"),
+                    {"b": batch_id},
+                )
+            ).scalar_one()
+        assert after == before
+
+    async def test_ye_the_figures_upsert_is_allowed_and_idempotent(
+        self, session_factory: Factory, schools: list[School]
+    ) -> None:
+        """The figures' row: inserted, merged (a None keeps the kept figure),
+        the same figures again write nothing (``synced_at`` stays); the batch
+        never changes."""
+        school = await _school(session_factory, schools, ["Python"], {"ann": False})
+        batch_id = await _buy(
+            session_factory, school, "ann", units=100, paid=1210, at=SEP_1
+        )
+
+        async def record(tax: int | None, fee: int | None, at: datetime) -> bool:
+            async with session_factory() as session:
+                batch = await session.get(BillingBatch, batch_id)
+                assert batch is not None
+                done = await provider_figures.record_from_purchase(
+                    session, batch=batch, tax_minor=tax, fee_minor=fee, now=at
+                )
+                await session.commit()
+                return done
+
+        assert await _figures(session_factory, batch_id) is None
+        assert await record(None, None, SEP_1) is False  # nothing given: no row
+        assert await _figures(session_factory, batch_id) is None
+
+        assert await record(210, None, SEP_1) is True
+        first = await _figures(session_factory, batch_id)
+        assert _three(first) == (210, None, None)
+        assert first is not None and first.synced_at == SEP_1
+
+        for _ in range(2):  # the same again, or only a None: nothing written
+            assert await record(210, None, SEP_2) is False
+            assert await record(None, None, SEP_2) is False
+        assert await _figures(session_factory, batch_id) == first
+
+        assert await record(None, 61, SEP_3) is True  # a None keeps the tax
+        merged = await _figures(session_factory, batch_id)
+        assert _three(merged) == (210, 61, None)
+        assert merged is not None and merged.synced_at == SEP_3
+
+        async with session_factory() as session:  # the upsert itself, in SQL
+            for _ in range(2):
+                await session.execute(
+                    text(
+                        "INSERT INTO billing_batch_provider_figures "
+                        "(batch_id, tax_minor, fee_minor, refunded_minor, synced_at) "
+                        "VALUES (:b, 300, NULL, 0, now()) "
+                        "ON CONFLICT (batch_id) DO UPDATE SET "
+                        "tax_minor = EXCLUDED.tax_minor, "
+                        "refunded_minor = EXCLUDED.refunded_minor, "
+                        "synced_at = EXCLUDED.synced_at"
+                    ),
+                    {"b": batch_id},
+                )
+            await session.commit()
+        assert _three(await _figures(session_factory, batch_id)) == (300, 61, 0)
+        async with session_factory() as session:
+            rows = await session.scalar(
+                select(func.count())
+                .select_from(BillingBatchProviderFigures)
+                .where(BillingBatchProviderFigures.batch_id == batch_id)
+            )
+            batch = await session.get(BillingBatch, batch_id)
+        assert rows == 1
+        assert batch is not None and batch.amount_paid_minor == 1210
+
+    async def test_ye_a_figure_is_never_negative(
+        self, session_factory: Factory, schools: list[School]
+    ) -> None:
         school = await _school(session_factory, schools, ["Python"], {"ann": False})
         batch_id = await _buy(
             session_factory, school, "ann", units=100, paid=1210, at=SEP_1
         )
         async with session_factory() as session:
-            for refused in (
-                "amount_paid_minor = 1",
-                "units = units + 1",
-                "provider_tax_minor = 5, currency = 'USD'",
-                "id = id",
-            ):
-                with pytest.raises(DBAPIError, match="insert-only"):
+            for column in ("tax_minor", "fee_minor", "refunded_minor"):
+                with pytest.raises(DBAPIError, match="not_negative"):
                     async with session.begin_nested():
                         await session.execute(
-                            text(f"UPDATE billing_batches SET {refused} WHERE id = :b"),  # noqa: S608
+                            text(
+                                "INSERT INTO billing_batch_provider_figures "  # noqa: S608 — names from the test
+                                f"(batch_id, {column}, synced_at) "
+                                "VALUES (:b, -1, now())"
+                            ),
                             {"b": batch_id},
                         )
-            await session.execute(
-                text(
-                    "UPDATE billing_batches SET provider_tax_minor = 5, "
-                    "provider_synced_at = now() WHERE id = :b"
-                ),
-                {"b": batch_id},
-            )
-            await session.commit()
-        assert (await _batch(session_factory, batch_id)).provider_tax_minor == 5
 
 
 # ── The tax in proportion; Creem gives no fee ───────────────────
@@ -826,13 +943,16 @@ class TestTaxInProportion:
     async def test_b_creem_gives_no_fee_and_the_report_says_so(
         self, session_factory: Factory, schools: list[School]
     ) -> None:
-        """No batch has a fee: ``fee_minor`` None, net = gross - tax, the
-        line names Creem; the text says «комісія Creem: API не віддає»."""
+        """Creem's API gives no fee (the figures' ``fee_minor`` is empty) and
+        its tariff has no fixed part in EUR: ``fee_minor`` None, net = gross -
+        tax, the line names Creem; the text says «комісія Creem: тариф для EUR
+        не задано»."""
         school = await _two_batches_world(session_factory, schools)
         report = await _report(session_factory, school)
         total = _line(report.totals)
         assert total.fee_minor is None
         assert total.fee_unknown == ("creem",)
+        assert total.fee_by_tariff == ()
         assert total.net_minor == total.gross_minor - total.tax_minor
 
         out = await _cli(
@@ -843,9 +963,164 @@ class TestTaxInProportion:
             "--month",
             "2026-10",
         )
-        assert "комісія Creem: API не віддає" in out
+        assert "комісія Creem: тариф для EUR не задано" in out
+        assert "розрахунково за тарифом" not in out
         assert "без даних Creem: 1 парт." in out
         assert "fee_minor=-" in out
+
+
+# ── Creem's fee by its tariff (Б-5) ──────────────────────────────────
+
+
+class TestCreemFeeByTariff:
+    async def test_zh_the_fee_is_the_tariffs_where_set_the_apis_first(
+        self, session_factory: Factory, schools: list[School]
+    ) -> None:
+        """Creem as shipped: 3.9 % of the amount paid (tax included), rounded
+        half up, + USD 40 once per batch; EUR not set.
+
+        Ann's two USD batches by the tariff — A: 1500 x 3.9 % = 58.5 → 59
+        + 40 = 99; B: 2000 x 3.9 % = 78 + 40 = 118. Python spends A 100 of 100
+        and B 50 of 200: fee 99 + 118/4 = 128.5 → 129. Bob's EUR batch: no
+        fee, «тариф для EUR не задано». Cat's USD batch has a fee from the
+        API (77; the tariff would give 79): Rust spends half — 38.5 → 39, the
+        API's, not the tariff's."""
+        school = await _school(
+            session_factory,
+            schools,
+            ["Data", "Python", "Rust"],
+            {"ann": False, "bob": False, "cat": False},
+        )
+        for who, units, paid, tax, fee, at in (
+            ("ann", 100, 1500, 250, None, SEP_1),  # A
+            ("ann", 200, 2000, 300, None, SEP_2),  # B
+            ("cat", 100, 1000, 100, 77, SEP_1),  # D: the API's fee
+        ):
+            await _buy(
+                session_factory,
+                school,
+                who,
+                units=units,
+                paid=paid,
+                tax=tax,
+                fee=fee,
+                currency="USD",
+                at=at,
+            )
+        await _buy(  # C, in EUR
+            session_factory, school, "bob", units=100, paid=1000, tax=200, at=SEP_1
+        )
+        await _review(session_factory, school, "ann", "Python", 100)  # A 100
+        await _review(session_factory, school, "ann", "Python", 50)  # B 50
+        await _review(session_factory, school, "bob", "Data", 40)  # C 40
+        await _review(session_factory, school, "cat", "Rust", 50)  # D 50
+
+        creem = SHIPPED_TARIFFS[CREEM]
+        assert creem.percent == Decimal("3.9")
+        assert creem.fixed_minor == {"USD": 40, "EUR": None}
+
+        report = await _report(session_factory, school)
+
+        python = _line(_course(report, "Python").figures, "USD")
+        assert (
+            python.gross_minor,
+            python.tax_minor,
+            python.fee_minor,
+            python.net_minor,
+        ) == (2000, 325, 129, 1546)
+        assert python.fee_by_tariff == ("creem",)
+        assert python.fee_unknown == ()
+
+        data = _line(_course(report, "Data").figures, "EUR")
+        assert (data.gross_minor, data.tax_minor, data.fee_minor, data.net_minor) == (
+            400,
+            80,
+            None,
+            320,
+        )
+        assert data.fee_unknown == ("creem",)
+        assert data.fee_by_tariff == ()
+
+        rust = _line(_course(report, "Rust").figures, "USD")
+        assert (rust.gross_minor, rust.tax_minor, rust.fee_minor, rust.net_minor) == (
+            500,
+            50,
+            39,
+            411,
+        )
+        assert rust.fee_by_tariff == ()  # the API's fee has precedence
+        assert rust.fee_unknown == ()
+
+        dollars = _line(report.totals, "USD")
+        assert (dollars.gross_minor, dollars.tax_minor, dollars.fee_minor) == (
+            2500,
+            375,
+            167,  # 128.5 + 38.5, rounded once
+        )
+        assert dollars.net_minor == 2500 - 375 - 167
+        assert dollars.fee_by_tariff == ("creem",)
+        assert _line(report.totals, "EUR").fee_unknown == ("creem",)
+
+        get_catalog(Path("config/billing_packages.yaml"))  # the CLI's: as shipped
+        out = await _cli(
+            session_factory,
+            "partner-report",
+            "--tenant",
+            school.name,
+            "--month",
+            "2026-10",
+        )
+        assert "комісія Creem — розрахунково за тарифом" in out
+        assert "комісія Creem: тариф для EUR не задано" in out
+        rows = list(
+            csv.DictReader(
+                io.StringIO(
+                    await _cli(
+                        session_factory,
+                        "partner-report",
+                        "--tenant",
+                        school.name,
+                        "--month",
+                        "2026-10",
+                        "--format",
+                        "csv",
+                    )
+                )
+            )
+        )
+        [rust_row] = [
+            r for r in rows if r["level"] == "course" and r["course_title"] == "Rust"
+        ]
+        assert (rust_row["fee_minor"], rust_row["notes"]) == ("39", "")
+
+    async def test_zh_a_report_without_tariffs_counts_no_fee(
+        self, session_factory: Factory, schools: list[School]
+    ) -> None:
+        """No tariff given: a USD batch has no fee either — the tariff is
+        what counts it, nothing else."""
+        school = await _school(session_factory, schools, ["Python"], {"ann": False})
+        await _buy(
+            session_factory,
+            school,
+            "ann",
+            units=100,
+            paid=1500,
+            tax=250,
+            currency="USD",
+            at=SEP_1,
+        )
+        await _review(session_factory, school, "ann", "Python", 100)
+        async with session_factory() as session:
+            report = await partner_report.partner_report(
+                session, tenant_id=school.tenant_id, month=OCTOBER, fee_tariffs={}
+            )
+        line = _line(report.totals, "USD")
+        assert (line.fee_minor, line.fee_unknown, line.fee_by_tariff) == (
+            None,
+            ("creem",),
+            (),
+        )
+        assert line.net_minor == 1500 - 250
 
 
 # ── The rate ────────────────────────────────────────────────────────
@@ -1159,31 +1434,57 @@ class TestMonth:
 
 
 def test_e_the_migration_goes_down_and_up_on_one_head() -> None:
-    """Down to the revision below: the figures and the rate gone, the
-    batches' trigger on the shared function; up again: back."""
+    """One head, over ``b4_promotion_funnel``. Down to it: the figures' table
+    and the rate gone; up again: back. ``billing_batches`` is the same at both
+    ends — its columns, and its trigger on the shared function."""
     cfg = Config("alembic.ini")
-    assert len(ScriptDirectory.from_config(cfg).get_heads()) == 1
+    script = ScriptDirectory.from_config(cfg)
+    assert script.get_heads() == ["b3_partner_report"]
+    revision = script.get_revision("b3_partner_report")
+    assert revision is not None and revision.down_revision == "b4_promotion_funnel"
     engine = create_engine(get_settings().database_url)
     function = text(
         "SELECT p.proname FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid "
         "WHERE t.tgname = 'billing_batches_insert_only'"
     )
 
+    def tables() -> set[str]:
+        with engine.connect() as conn:
+            return set(inspect(conn).get_table_names())
+
     def columns(table: str) -> set[str]:
         with engine.connect() as conn:
             return {c["name"] for c in inspect(conn).get_columns(table)}
 
+    def trigger() -> str | None:
+        with engine.connect() as conn:
+            found = conn.scalar(function)
+        return None if found is None else str(found)
+
+    figures = "billing_batch_provider_figures"
     try:
-        command.downgrade(cfg, "v1_author_interface_language")
-        assert not columns("billing_batches") & FIGURES
+        batches = columns("billing_batches")
+        assert figures in tables()
+        assert columns(figures) == {
+            "batch_id",
+            "tax_minor",
+            "fee_minor",
+            "refunded_minor",
+            "synced_at",
+        }
+        assert trigger() == "billing_refuse_update"
+
+        command.downgrade(cfg, "b4_promotion_funnel")
+        assert figures not in tables()
         assert "partner_share_bps" not in columns("billing_author_settings")
-        with engine.connect() as conn:
-            assert conn.scalar(function) == "billing_refuse_update"
+        assert columns("billing_batches") == batches
+        assert trigger() == "billing_refuse_update"
+
         command.upgrade(cfg, "head")
-        assert columns("billing_batches") >= FIGURES
+        assert figures in tables()
         assert "partner_share_bps" in columns("billing_author_settings")
-        with engine.connect() as conn:
-            assert conn.scalar(function) == "billing_batches_refuse_update"
+        assert columns("billing_batches") == batches
+        assert trigger() == "billing_refuse_update"
     finally:
         command.upgrade(cfg, "head")
         engine.dispose()

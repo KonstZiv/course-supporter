@@ -191,20 +191,25 @@ or none; audited as author_settings.update, the same rate again writes
 nothing:
     set-partner-share --tenant "Python Academy" --percent 12.5 --actor kostiantyn
     set-partner-share --tenant "Python Academy" --percent none --actor kostiantyn
-The tax, the refunded part and the fee of Creem's purchases go on their batches
-with the purchase's webhook (the tax) and by asking Creem's API for the paid
-batches created in a period — Creem's key from the application's settings
-(CREEM_API_KEY, CREEM_API_BASE). Creem's API gives no fee: it stays unknown.
-Each batch changed is audited (batch.provider_sync); a second run changes
-nothing; --dry-run asks the API and only counts:
+The tax, the refunded part and the fee of Creem's purchases are kept beside
+their batches (billing_batch_provider_figures; the batch itself stays
+insert-only), written with the purchase's webhook (the tax) and by asking
+Creem's API for the paid batches created in a period — Creem's key from the
+application's settings (CREEM_API_KEY, CREEM_API_BASE). Creem's API gives no
+fee: it stays empty, and the report counts it by Creem's tariff
+(provider_fees in config/billing_packages.yaml). Each batch changed is audited
+(batch.provider_sync); a second run changes nothing; --dry-run asks the API and
+only counts:
     creem-sync --from 2026-11-01 --to 2026-11-30 --actor kostiantyn [--dry-run]
 A month of the school (UTC, both edges inclusive), by course -> task and in
 total, each currency apart: reviews its students paid from their own accounts
 (service students left out), gross_minor (their money spent on those reviews,
 tax included — units bought and not used are not in it), tax_minor and
 fee_minor (each batch's in proportion to the units spent; a batch Creem has
-not told the tax of is counted "без даних Creem"; the fee Creem does not give:
-"комісія Creem: API не віддає"), net_minor = gross - tax - fee,
+not told the tax of is counted "без даних Creem"; the fee Creem does not give
+is counted by its tariff, "комісія Creem — розрахунково за тарифом", and not
+at all in a currency the tariff has no fixed part for, "комісія Creem: тариф
+для EUR не задано"), net_minor = gross - tax - fee,
 model_cost_usd (what the models cost for these reviews), the share at the
 school's rate ("ставку не задано" without one), and the month's refunds to the
 school's students on a line apart. Read-only (``partner-report --help`` says
@@ -1695,7 +1700,8 @@ async def creem_sync(session: AsyncSession, args: argparse.Namespace) -> str:
         f"{done.batches}  {'would update' if done.dry_run else 'updated'}="
         f"{done.updated}  unchanged={done.unchanged}  not_found={done.not_found}  "
         f"other_currency={done.other_currency}  failed={done.failed}",
-        "fee: Creem's API does not give it (provider_fee_minor stays empty)",
+        "fee: Creem's API does not give it (fee_minor stays empty; the "
+        "partner's report counts it by Creem's tariff)",
     ]
     if done.failed:
         lines.append("failed batches were left as they were: run it again")
@@ -1705,7 +1711,8 @@ async def creem_sync(session: AsyncSession, args: argparse.Namespace) -> str:
 
 
 def _money_notes(line: partner_report.MoneyLine) -> list[str]:
-    notes = [partner_report.fee_note(p) for p in line.fee_unknown]
+    notes = [partner_report.tariff_note(p) for p in line.fee_by_tariff]
+    notes += [partner_report.fee_note(p, line.currency) for p in line.fee_unknown]
     notes += [partner_report.no_data_note(p, n) for p, n in line.without_provider_data]
     return notes
 
@@ -2004,11 +2011,18 @@ task and in total, each currency apart:
                        debit from a paid batch is units * amount_paid_minor /
                        batch units. Units bought and not used are not in it.
   tax_minor            each batch's tax for the units spent from it: units /
-                       batch units * provider_tax_minor. A batch whose tax
-                       Creem has not told yet adds none: "без даних Creem"
+                       batch units * the provider's tax_minor. A batch whose
+                       tax Creem has not told yet adds none: "без даних Creem"
                        (creem-sync asks it).
-  fee_minor            the same of the provider's fee where known; Creem's API
-                       does not give it: "комісія Creem: API не віддає".
+  fee_minor            the same of each batch's fee: the provider's where its
+                       API gave it (it has precedence), else by the
+                       provider's tariff (provider_fees in
+                       config/billing_packages.yaml): round_half_up(
+                       amount_paid_minor * percent / 100) + the fixed part of
+                       the batch's currency — "комісія Creem — розрахунково
+                       за тарифом" (Creem's API gives no fee). A currency
+                       the tariff has no fixed part for adds none: "комісія
+                       Creem: тариф для EUR не задано".
   net_minor            gross_minor - tax_minor - fee_minor (the fee where
                        known).
   model_cost_usd       what the models cost for these reviews, USD.

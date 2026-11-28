@@ -5155,11 +5155,9 @@ class BillingBatch(Base):
     or by a contract invoice (B2B) — or a credit by the administrator. Valid
     six calendar months from its creation (``expires_at``); units are taken
     from the batch that expires first. Insert-only: what is left of it is the
-    journal's business (``billing.ledger``), never a column. The one exception
-    is what the provider says of the purchase's money (``provider_*_minor``,
-    ``provider_synced_at``, Б-3): written with the credit when the webhook
-    carries it and by ``billing_admin creem-sync``; the trigger
-    ``billing_batches_insert_only`` refuses any other UPDATE.
+    journal's business (``billing.ledger``), never a column. What the provider
+    says of a purchase's money is a table of its own
+    (:class:`BillingBatchProviderFigures`).
     """
 
     __tablename__ = "billing_batches"
@@ -5199,18 +5197,6 @@ class BillingBatch(Base):
         CheckConstraint(
             "(provider_transaction_id IS NULL) = (provider_line_id IS NULL)",
             name="ck_billing_batches_provider_ids",
-        ),
-        CheckConstraint(
-            "(provider_tax_minor IS NULL OR provider_tax_minor >= 0) "
-            "AND (provider_fee_minor IS NULL OR provider_fee_minor >= 0) "
-            "AND (provider_refunded_minor IS NULL OR provider_refunded_minor >= 0)",
-            name="ck_billing_batches_provider_figures_not_negative",
-        ),
-        CheckConstraint(
-            "source = 'purchase' OR (provider_tax_minor IS NULL "
-            "AND provider_fee_minor IS NULL AND provider_refunded_minor IS NULL "
-            "AND provider_synced_at IS NULL)",
-            name="ck_billing_batches_provider_figures_purchase",
         ),
         Index(
             "uq_billing_batches_provider_line",
@@ -5279,28 +5265,6 @@ class BillingBatch(Base):
     actor: Mapped[str | None] = mapped_column(
         String(200), comment="Admin credit: who granted them (--actor)."
     )
-    provider_tax_minor: Mapped[int | None] = mapped_column(
-        BigInteger,
-        comment="Purchase: the tax the provider collected (inside "
-        "amount_paid_minor), in minor units of currency; NULL = not known yet "
-        "(Б-3).",
-    )
-    provider_fee_minor: Mapped[int | None] = mapped_column(
-        BigInteger,
-        comment="Purchase: the provider's fee, in minor units of currency; NULL = "
-        "not known (Creem's API does not give it, Б-3).",
-    )
-    provider_refunded_minor: Mapped[int | None] = mapped_column(
-        BigInteger,
-        comment="Purchase: what the provider says it refunded of the payment, in "
-        "minor units of currency, as of provider_synced_at; NULL = not known "
-        "(Б-3). The journal's refunds are billing_refunds.",
-    )
-    provider_synced_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        comment="Purchase: when the provider's figures were last written (the "
-        "webhook of the purchase, or billing_admin creem-sync); NULL = never.",
-    )
 
 
 class BillingTestBatch(Base):
@@ -5345,6 +5309,65 @@ class BillingTestBatch(Base):
         comment="credit (marked with the credit: the provider was in its test "
         "mode) | backfill (a Creem purchase marked by the migration that "
         "brought the marks).",
+    )
+
+
+class BillingBatchProviderFigures(Base):
+    """What the payment provider says of a purchase's money (Б-3).
+
+    The tax inside ``amount_paid_minor``, the provider's fee and the part it
+    refunded, all in the batch's currency; None — not known. A table of its
+    own, not columns of the batch: the batch stays insert-only, its trigger as
+    it is (``billing_batches_insert_only``), while these figures arrive after
+    the batch and change. One row per batch, upserted by ``batch_id``
+    (``billing.provider_figures``): by the purchase's webhook and by
+    ``billing_admin creem-sync``. Only a purchase has a row (the code's rule:
+    a check could not see the batch). DELETE only by the five-year
+    destruction, with the batch.
+    """
+
+    __tablename__ = "billing_batch_provider_figures"
+    __table_args__ = (
+        CheckConstraint(
+            "(tax_minor IS NULL OR tax_minor >= 0) "
+            "AND (fee_minor IS NULL OR fee_minor >= 0) "
+            "AND (refunded_minor IS NULL OR refunded_minor >= 0)",
+            name="ck_billing_batch_provider_figures_not_negative",
+        ),
+        {
+            "comment": "What the payment provider says of a purchase's money "
+            "(Б-3): tax, fee, refunded part, in the batch's currency. Upserted by "
+            "batch_id; billing_batches stays insert-only."
+        },
+    )
+
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("billing_batches.id"),
+        primary_key=True,
+        comment="The purchase's batch; one row per batch.",
+    )
+    tax_minor: Mapped[int | None] = mapped_column(
+        BigInteger,
+        comment="The tax the provider collected (inside the batch's "
+        "amount_paid_minor), in minor units of the batch's currency; NULL = not "
+        "known yet.",
+    )
+    fee_minor: Mapped[int | None] = mapped_column(
+        BigInteger,
+        comment="The provider's fee as its API or event gives it, in minor units "
+        "of the batch's currency; NULL = not given (Creem's API gives none: the "
+        "partner's report counts it by the tariff).",
+    )
+    refunded_minor: Mapped[int | None] = mapped_column(
+        BigInteger,
+        comment="What the provider says it refunded of the payment, in minor "
+        "units of the batch's currency, as of synced_at; NULL = not known. The "
+        "journal's refunds are billing_refunds.",
+    )
+    synced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        comment="When the figures were last written (the purchase's webhook, or "
+        "billing_admin creem-sync).",
     )
 
 

@@ -4,10 +4,10 @@ Purpose:
     The partner's report (:mod:`.partner_report`) takes the tax and the
     provider's fee out of what the students paid. The journal knows what was
     paid (``billing_batches.amount_paid_minor``, tax included); the provider
-    knows the rest. Four columns of the purchase's batch keep it, in the
-    batch's currency: ``provider_tax_minor``, ``provider_fee_minor``,
-    ``provider_refunded_minor`` and ``provider_synced_at`` (the batch is
-    otherwise insert-only; its trigger lets these four through).
+    knows the rest. A table of its own keeps it, one row per purchase batch
+    (``billing_batch_provider_figures``, in the batch's currency):
+    ``tax_minor``, ``fee_minor``, ``refunded_minor`` and ``synced_at``. The
+    batch itself stays insert-only — its trigger refuses every UPDATE (Б-5).
 
 Two writers, one rule (:func:`_merged`):
     * the purchase's webhook — :func:`record_from_purchase`, in the
@@ -16,17 +16,21 @@ Two writers, one rule (:func:`_merged`):
     * :func:`sync_batches` — ``scripts/billing_admin.py creem-sync``: the paid
       batches of one provider created in a period, each asked of the
       provider's API (:class:`~.payments.port.TransactionLookup`). Each batch
-      that changes is audited (``batch.provider_sync``, before/after: the four
-      columns) with the administrator's actor.
+      that changes is audited (``batch.provider_sync``, before/after: the
+      row's four columns) with the administrator's actor.
 
     A figure the provider gives replaces the one kept; a figure it does not
     give (None) leaves the kept one — never a guess. When nothing changes
-    nothing is written, ``provider_synced_at`` included: a second run changes
-    nothing. Figures in another currency than the batch's are not written
+    nothing is written, ``synced_at`` included: a second run changes nothing.
+    The write is one upsert by ``batch_id`` (:func:`_upsert`) that applies the
+    same rule in SQL (``COALESCE``), so two writers at once keep each other's
+    figures. Figures in another currency than the batch's are not written
     (:attr:`SyncRun.other_currency`).
 
-A paid batch is a purchase not marked as a test one (``billing_test_batches``)
-— the batches whose money the reports count (:mod:`.review_money`).
+Only a purchase has a row: the writers check the batch (a check of the table
+could not see it). A paid batch is a purchase not marked as a test one
+(``billing_test_batches``) — the batches whose money the reports count
+(:mod:`.review_money`).
 
 Read by the partner's report only; nothing that charges, reserves or refunds
 reads it.
@@ -34,12 +38,14 @@ reads it.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import structlog
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, or_, select
+from sqlalchemy.dialects.postgresql import insert
 
 from course_supporter.billing import audit
 from course_supporter.billing.costs import utc_bounds
@@ -50,12 +56,19 @@ from course_supporter.billing.payments.port import (
     TransactionFigures,
     TransactionLookup,
 )
-from course_supporter.storage.orm import BillingBatch, BillingTestBatch
+from course_supporter.storage.orm import (
+    BillingBatch,
+    BillingBatchProviderFigures,
+    BillingTestBatch,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 log = structlog.get_logger()
+
+_TABLE: Final = BillingBatchProviderFigures.__table__
+_FIGURE_COLUMNS: Final = ("tax_minor", "fee_minor", "refunded_minor")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,14 +79,13 @@ class Figures:
     fee_minor: int | None = None
     refunded_minor: int | None = None
 
-    @classmethod
-    def of(cls, batch: BillingBatch) -> Figures:
-        """The figures the batch keeps."""
-        return cls(
-            tax_minor=batch.provider_tax_minor,
-            fee_minor=batch.provider_fee_minor,
-            refunded_minor=batch.provider_refunded_minor,
-        )
+
+@dataclass(frozen=True, slots=True)
+class Kept:
+    """A batch's row: its figures and when they were written."""
+
+    figures: Figures
+    synced_at: datetime
 
 
 def _merged(kept: Figures, given: Figures) -> Figures:
@@ -89,27 +101,80 @@ def _merged(kept: Figures, given: Figures) -> Figures:
     )
 
 
-def figures_snapshot(batch: BillingBatch) -> dict[str, Any]:
-    """The four columns, for the audit entry of a sync."""
-    synced = batch.provider_synced_at
+def snapshot(kept: Kept | None) -> dict[str, Any]:
+    """The row's four columns, for the audit entry of a sync."""
+    figures = kept.figures if kept is not None else Figures()
     return {
-        "provider_tax_minor": batch.provider_tax_minor,
-        "provider_fee_minor": batch.provider_fee_minor,
-        "provider_refunded_minor": batch.provider_refunded_minor,
-        "provider_synced_at": synced.isoformat() if synced is not None else None,
+        "tax_minor": figures.tax_minor,
+        "fee_minor": figures.fee_minor,
+        "refunded_minor": figures.refunded_minor,
+        "synced_at": kept.synced_at.isoformat() if kept is not None else None,
     }
 
 
-def _write(batch: BillingBatch, figures: Figures, now: datetime) -> bool:
-    """Put the merged figures on the batch; False when nothing would change."""
-    merged = _merged(Figures.of(batch), figures)
-    if merged == Figures.of(batch):
-        return False
-    batch.provider_tax_minor = merged.tax_minor
-    batch.provider_fee_minor = merged.fee_minor
-    batch.provider_refunded_minor = merged.refunded_minor
-    batch.provider_synced_at = now
-    return True
+async def kept_figures(
+    session: AsyncSession, batch_ids: set[uuid.UUID]
+) -> dict[uuid.UUID, Kept]:
+    """The rows of these batches, by batch id; a batch without one is absent."""
+    if not batch_ids:
+        return {}
+    rows = await session.execute(
+        select(
+            BillingBatchProviderFigures.batch_id,
+            BillingBatchProviderFigures.tax_minor,
+            BillingBatchProviderFigures.fee_minor,
+            BillingBatchProviderFigures.refunded_minor,
+            BillingBatchProviderFigures.synced_at,
+        ).where(BillingBatchProviderFigures.batch_id.in_(batch_ids))
+    )
+    return {
+        batch_id: Kept(Figures(tax, fee, refunded), synced)
+        for batch_id, tax, fee, refunded, synced in rows.tuples()
+    }
+
+
+async def _upsert(
+    session: AsyncSession, batch_id: uuid.UUID, given: Figures, now: datetime
+) -> Kept | None:
+    """Insert the batch's row, or merge ``given`` into it (:func:`_merged`, in
+    SQL); the row as written, or None when it would not change."""
+    row_of = insert(BillingBatchProviderFigures).values(
+        batch_id=batch_id,
+        tax_minor=given.tax_minor,
+        fee_minor=given.fee_minor,
+        refunded_minor=given.refunded_minor,
+        synced_at=now,
+    )
+    merged = {
+        name: func.coalesce(row_of.excluded[name], _TABLE.c[name])
+        for name in _FIGURE_COLUMNS
+    }
+    upsert = row_of.on_conflict_do_update(
+        index_elements=[_TABLE.c.batch_id],
+        set_={**merged, "synced_at": row_of.excluded.synced_at},
+        where=or_(
+            *(value.is_distinct_from(_TABLE.c[name]) for name, value in merged.items())
+        ),
+    ).returning(*(_TABLE.c[name] for name in _FIGURE_COLUMNS), _TABLE.c.synced_at)
+    row = (await session.execute(upsert)).tuples().one_or_none()
+    if row is None:
+        return None
+    tax, fee, refunded, synced = row
+    return Kept(Figures(tax, fee, refunded), synced)
+
+
+async def _write(
+    session: AsyncSession,
+    batch_id: uuid.UUID,
+    kept: Kept | None,
+    given: Figures,
+    now: datetime,
+) -> Kept | None:
+    """Upsert when the merge changes the kept figures; None — no change."""
+    current = kept.figures if kept is not None else Figures()
+    if _merged(current, given) == current:
+        return None
+    return await _upsert(session, batch_id, given, now)
 
 
 async def record_from_purchase(
@@ -122,15 +187,14 @@ async def record_from_purchase(
 ) -> bool:
     """The figures a purchase's event carries, on its batch (module docstring).
 
-    Flushes; the caller (the webhook's transaction) commits. False when the
-    event carries none, or the batch has them already.
+    The caller (the webhook's transaction) commits. False when the batch is
+    not a purchase, the event carries none, or the batch has them already.
     """
     if batch.source != BatchSource.PURCHASE.value:
         return False
-    changed = _write(batch, Figures(tax_minor=tax_minor, fee_minor=fee_minor), now)
-    if changed:
-        await session.flush()
-    return changed
+    given = Figures(tax_minor=tax_minor, fee_minor=fee_minor)
+    kept = (await kept_figures(session, {batch.id})).get(batch.id)
+    return await _write(session, batch.id, kept, given, now) is not None
 
 
 # ── creem-sync ─────────────────────────────────────────────────────────
@@ -207,6 +271,7 @@ async def sync_batches(
             )
         ).scalars()
     )
+    kept = await kept_figures(session, {batch.id for batch in batches})
     updated = unchanged = not_found = other_currency = failed = 0
     for batch in batches:
         transaction_id = batch.provider_transaction_id
@@ -236,7 +301,13 @@ async def sync_batches(
             )
             continue
         if not await _apply(
-            session, batch, found, actor=actor, dry_run=dry_run, now=now
+            session,
+            batch.id,
+            kept.get(batch.id),
+            found,
+            actor=actor,
+            dry_run=dry_run,
+            now=now,
         ):
             unchanged += 1
             continue
@@ -254,32 +325,33 @@ async def sync_batches(
 
 async def _apply(
     session: AsyncSession,
-    batch: BillingBatch,
+    batch_id: uuid.UUID,
+    kept: Kept | None,
     found: TransactionFigures,
     *,
     actor: str,
     dry_run: bool,
     now: datetime,
 ) -> bool:
-    """Write the provider's figures on the batch, audited; False — no change."""
+    """Write the provider's figures of the batch, audited; False — no change."""
     given = Figures(
         tax_minor=found.tax_minor,
         fee_minor=found.fee_minor,
         refunded_minor=found.refunded_minor,
     )
     if dry_run:
-        return _merged(Figures.of(batch), given) != Figures.of(batch)
-    before = figures_snapshot(batch)
-    if not _write(batch, given, now):
+        current = kept.figures if kept is not None else Figures()
+        return _merged(current, given) != current
+    written = await _write(session, batch_id, kept, given, now)
+    if written is None:
         return False
-    await session.flush()
     await audit.record(
         session,
         actor=actor,
         action=AuditAction.BATCH_PROVIDER_SYNC,
         entity="batch",
-        entity_id=batch.id,
-        before=before,
-        after=figures_snapshot(batch),
+        entity_id=batch_id,
+        before=snapshot(kept),
+        after=snapshot(written),
     )
     return True

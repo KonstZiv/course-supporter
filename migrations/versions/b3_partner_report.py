@@ -1,43 +1,40 @@
 """Б-3: the provider's figures of a purchase, and the school's share rate.
 
 Revision ID: b3_partner_report
-Revises: v1_author_interface_language
+Revises: b4_promotion_funnel
 Create Date: 2026-11-27
 
 The partner's report (operator 2026-11-27) shows a school what its students
 spent on reviews, the tax and the provider's fee in it, and the school's share
 at the rate kept in its settings.
 
-``billing_batches`` gains four nullable columns, all in the batch's currency:
+``billing_batch_provider_figures`` — a new table, one row per purchase batch
+(``batch_id``: the primary key and a foreign key to ``billing_batches``, no ON
+DELETE action, as the other billing keys), in the batch's currency:
 
-* ``provider_tax_minor`` — the tax the provider collected, inside
-  ``amount_paid_minor``;
-* ``provider_fee_minor`` — the provider's fee (Creem's API does not give it:
-  it stays NULL for Creem);
-* ``provider_refunded_minor`` — what the provider says it refunded of the
-  payment, as of the sync;
-* ``provider_synced_at`` — when those figures were last written.
+* ``tax_minor`` — the tax the provider collected, inside ``amount_paid_minor``;
+* ``fee_minor`` — the provider's fee as its API or event gives it (Creem's
+  gives none: the report counts it by the tariff);
+* ``refunded_minor`` — what the provider says it refunded of the payment;
+* ``synced_at`` — when the row was last written.
 
-They are written with the credit when the purchase's webhook carries them,
-and by ``scripts/billing_admin.py creem-sync``. ``billing_batches`` is
-insert-only (BIL-B, the trigger ``billing_batches_insert_only`` on the shared
-function ``billing_refuse_update``). The trigger is re-pointed at a function
-of its own, ``billing_batches_refuse_update``: it lets an UPDATE through only
-when it changes one of those four columns and nothing else — every other
-column, now and added later, stays as inserted. ``billing_movements`` and the
-other insert-only tables keep the shared function. Two checks: the figures are
-never negative, and only a purchase has them.
+The three figures are nullable (not known); a check keeps them not negative.
+The row is upserted by ``batch_id`` — by the purchase's webhook and by
+``scripts/billing_admin.py creem-sync``. ``billing_batches`` is NOT changed:
+no column, and its trigger ``billing_batches_insert_only`` stays on the shared
+function ``billing_refuse_update`` (BIL-B) — every UPDATE of a batch refused
+(decision of the billing session, Б-5 2026-11-27: the batch's guard is not
+weakened).
 
 ``billing_author_settings`` gains ``partner_share_bps`` — nullable, 0 to 10000
 (hundredths of a per cent); NULL means no rate. The comment of
 ``billing_audit_log.action`` gains ``batch.provider_sync``.
 
-Column comments are copied from the ORM (``storage.orm``). Hand-written;
-``--autogenerate`` is not used on this database (``DD-L4-A``). The upgrade
-rewrites no row. The downgrade drops the columns — the provider's figures
-(written again by ``creem-sync``) and the rates (set again by
-``set-partner-share``) are lost — and gives the trigger back the shared
-function.
+Column and table comments are copied from the ORM (``storage.orm``).
+Hand-written; ``--autogenerate`` is not used on this database (``DD-L4-A``).
+The upgrade rewrites no row. The downgrade drops the table and the column —
+the provider's figures (written again by ``creem-sync``) and the rates (set
+again by ``set-partner-share``) are lost.
 """
 
 from collections.abc import Sequence
@@ -46,37 +43,35 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b3_partner_report"
-down_revision: str | Sequence[str] | None = "v1_author_interface_language"
+down_revision: str | Sequence[str] | None = "b4_promotion_funnel"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-_TRIGGER = "billing_batches_insert_only"  # bilb_unit_ledger
-_SHARED_FUNCTION = "billing_refuse_update"  # bila_billing_accounts
-_BATCH_FUNCTION = "billing_batches_refuse_update"
+_FIGURES = "billing_batch_provider_figures"
 
-_FIGURES = (
-    "provider_tax_minor",
-    "provider_fee_minor",
-    "provider_refunded_minor",
-    "provider_synced_at",
+_TABLE_COMMENT = (
+    "What the payment provider says of a purchase's money (Б-3): tax, fee, "
+    "refunded part, in the batch's currency. Upserted by batch_id; "
+    "billing_batches stays insert-only."
 )
-
+_BATCH = "The purchase's batch; one row per batch."
 _TAX = (
-    "Purchase: the tax the provider collected (inside amount_paid_minor), in "
-    "minor units of currency; NULL = not known yet (Б-3)."
+    "The tax the provider collected (inside the batch's amount_paid_minor), in "
+    "minor units of the batch's currency; NULL = not known yet."
 )
 _FEE = (
-    "Purchase: the provider's fee, in minor units of currency; NULL = not "
-    "known (Creem's API does not give it, Б-3)."
+    "The provider's fee as its API or event gives it, in minor units of the "
+    "batch's currency; NULL = not given (Creem's API gives none: the partner's "
+    "report counts it by the tariff)."
 )
 _REFUNDED = (
-    "Purchase: what the provider says it refunded of the payment, in minor "
-    "units of currency, as of provider_synced_at; NULL = not known (Б-3). The "
-    "journal's refunds are billing_refunds."
+    "What the provider says it refunded of the payment, in minor units of the "
+    "batch's currency, as of synced_at; NULL = not known. The journal's refunds "
+    "are billing_refunds."
 )
 _SYNCED = (
-    "Purchase: when the provider's figures were last written (the webhook of "
-    "the purchase, or billing_admin creem-sync); NULL = never."
+    "When the figures were last written (the purchase's webhook, or "
+    "billing_admin creem-sync)."
 )
 _SHARE = (
     "The school's share of the net money its students spent on reviews, in "
@@ -99,31 +94,6 @@ _ACTION_NEW = (
     "account.create, batch.provider_sync."
 )
 
-# The names in the function's body are the constants above, never input.
-_FIGURES_ARRAY = "ARRAY[" + ", ".join(f"'{c}'" for c in _FIGURES) + "]"
-_BATCH_FUNCTION_SQL = f"""
-CREATE FUNCTION {_BATCH_FUNCTION}()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF to_jsonb(NEW) = to_jsonb(OLD)
-       OR (to_jsonb(NEW) - {_FIGURES_ARRAY})
-          IS DISTINCT FROM (to_jsonb(OLD) - {_FIGURES_ARRAY}) THEN
-        RAISE EXCEPTION '%.% is insert-only: UPDATE refused (only the provider''s figures may change)',
-            TG_TABLE_SCHEMA, TG_TABLE_NAME;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-"""
-
-
-def _point_trigger_at(function: str) -> None:
-    op.execute(f"DROP TRIGGER {_TRIGGER} ON billing_batches")
-    op.execute(
-        f"CREATE TRIGGER {_TRIGGER} BEFORE UPDATE ON billing_batches "
-        f"FOR EACH ROW EXECUTE FUNCTION {function}();"
-    )
-
 
 def _action_comment(comment: str, existing: str) -> None:
     op.alter_column(
@@ -137,41 +107,30 @@ def _action_comment(comment: str, existing: str) -> None:
 
 
 def upgrade() -> None:
-    """Add the provider's figures and the share rate; narrow the batches' guard."""
-    for name, comment in (
-        ("provider_tax_minor", _TAX),
-        ("provider_fee_minor", _FEE),
-        ("provider_refunded_minor", _REFUNDED),
-    ):
-        op.add_column(
-            "billing_batches",
-            sa.Column(name, sa.BigInteger(), nullable=True, comment=comment),
-        )
-    op.add_column(
-        "billing_batches",
+    """The provider's figures table and the share rate; batches untouched."""
+    op.create_table(
+        _FIGURES,
         sa.Column(
-            "provider_synced_at",
-            sa.DateTime(timezone=True),
-            nullable=True,
-            comment=_SYNCED,
+            "batch_id",
+            sa.Uuid(),
+            sa.ForeignKey("billing_batches.id"),
+            primary_key=True,
+            comment=_BATCH,
         ),
+        sa.Column("tax_minor", sa.BigInteger(), nullable=True, comment=_TAX),
+        sa.Column("fee_minor", sa.BigInteger(), nullable=True, comment=_FEE),
+        sa.Column("refunded_minor", sa.BigInteger(), nullable=True, comment=_REFUNDED),
+        sa.Column(
+            "synced_at", sa.DateTime(timezone=True), nullable=False, comment=_SYNCED
+        ),
+        sa.CheckConstraint(
+            "(tax_minor IS NULL OR tax_minor >= 0) "
+            "AND (fee_minor IS NULL OR fee_minor >= 0) "
+            "AND (refunded_minor IS NULL OR refunded_minor >= 0)",
+            name="ck_billing_batch_provider_figures_not_negative",
+        ),
+        comment=_TABLE_COMMENT,
     )
-    op.create_check_constraint(
-        "ck_billing_batches_provider_figures_not_negative",
-        "billing_batches",
-        "(provider_tax_minor IS NULL OR provider_tax_minor >= 0) "
-        "AND (provider_fee_minor IS NULL OR provider_fee_minor >= 0) "
-        "AND (provider_refunded_minor IS NULL OR provider_refunded_minor >= 0)",
-    )
-    op.create_check_constraint(
-        "ck_billing_batches_provider_figures_purchase",
-        "billing_batches",
-        "source = 'purchase' OR (provider_tax_minor IS NULL "
-        "AND provider_fee_minor IS NULL AND provider_refunded_minor IS NULL "
-        "AND provider_synced_at IS NULL)",
-    )
-    op.execute(_BATCH_FUNCTION_SQL)
-    _point_trigger_at(_BATCH_FUNCTION)
 
     op.add_column(
         "billing_author_settings",
@@ -186,7 +145,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Drop them (lossy: module docstring); the guard is the shared one again."""
+    """Drop them (lossy: module docstring)."""
     _action_comment(_ACTION_OLD, _ACTION_NEW)
     op.drop_constraint(
         "ck_billing_author_settings_partner_share",
@@ -194,13 +153,4 @@ def downgrade() -> None:
         type_="check",
     )
     op.drop_column("billing_author_settings", "partner_share_bps")
-
-    _point_trigger_at(_SHARED_FUNCTION)
-    op.execute(f"DROP FUNCTION {_BATCH_FUNCTION}()")
-    for name in (
-        "ck_billing_batches_provider_figures_purchase",
-        "ck_billing_batches_provider_figures_not_negative",
-    ):
-        op.drop_constraint(name, "billing_batches", type_="check")
-    for column in reversed(_FIGURES):
-        op.drop_column("billing_batches", column)
+    op.drop_table(_FIGURES)

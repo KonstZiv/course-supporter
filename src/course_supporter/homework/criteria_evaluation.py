@@ -161,6 +161,7 @@ from course_supporter.homework.student_replies import replies_for_evaluation
 from course_supporter.homework.task_context import load_task_context
 from course_supporter.homework.text_budget import project_path_budget_chars
 from course_supporter.language import display_name
+from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import AuthoredDocument, CourseNode
 from course_supporter.storage.submission_verdict_repository import (
     SubmissionVerdictRepository,
@@ -414,6 +415,9 @@ async def _memory_shown(
     (:func:`~course_supporter.homework.earlier_review.fit_memory`); why the
     difference or the memory is not shown is logged with the numbers and no
     text of the work.
+
+    Whether the memory is shown, and why not, is also written into the attempt
+    receipt (``attempt_receipt["memory"]``, DD-SP-DP).
     """
     if context.stage_name not in MEMORY_STAGES:
         return None
@@ -440,6 +444,7 @@ async def _memory_shown(
     )
     if read is None:
         log.info("criteria_evaluation_memory_none", reason=None)
+        await _store_memory_mark(context, reason="nothing_to_show")
         return None
     stage = context.stage
     if not isinstance(stage, ModelStage):  # pragma: no cover - a model stage
@@ -461,6 +466,7 @@ async def _memory_shown(
             growth=round(fitted.growth, 4),
             max_growth=settings.max_growth,
         )
+        await _store_memory_mark(context, reason=fitted.reason)
         return None
     log.info(
         "criteria_evaluation_memory_shown",
@@ -480,7 +486,33 @@ async def _memory_shown(
         rewritten=memory.rewritten,
         earlier_work_unavailable=memory.earlier_work_unavailable,
     )
+    await _store_memory_mark(context, reason=fitted.reason, memory=memory)
     return memory
+
+
+async def _store_memory_mark(
+    context: StageContext,
+    *,
+    reason: str | None,
+    memory: AttemptMemory | None = None,
+) -> None:
+    """Write the codes-and-numbers memory mark into ``attempt_receipt``."""
+    mark: dict[str, Any] = {
+        "shown": memory is not None,
+        "reason": reason,
+        "earlier_submission_id": (
+            None if memory is None else str(memory.earlier_submission_id)
+        ),
+        "verdicts": (
+            None if memory is None or memory.verdicts is None else len(memory.verdicts)
+        ),
+        "diff_chars": (
+            None if memory is None or memory.diff is None else len(memory.diff)
+        ),
+    }
+    await HomeworkRepository(context.session).store_attempt_memory(
+        context.submission.id, memory=mark
+    )
 
 
 def _marked(context: StageContext) -> str:

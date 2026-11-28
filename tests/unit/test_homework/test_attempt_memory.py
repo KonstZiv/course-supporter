@@ -36,10 +36,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import structlog
+from sqlalchemy.dialects import postgresql
 from structlog.testing import capture_logs
 
 from course_supporter.agents import criteria_evaluator
@@ -73,6 +74,7 @@ from course_supporter.homework.path_stages import (
 )
 from course_supporter.llm.prompt_loader_md import load_prompt
 from course_supporter.models.source import AssignmentType
+from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.submission_verdict_repository import EarlierAttempt
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -460,14 +462,28 @@ def _criterion(cid: str) -> Criterion:
 _LISTED = CriteriaInForce(criteria=(_criterion("c1"),), layer=_LAYER, source_id=_LIST)
 
 
-def _context(stage_name: str, state: SubmissionState, task_type: str) -> StageContext:
+def _context(
+    stage_name: str,
+    state: SubmissionState,
+    task_type: str,
+    *,
+    session: Any | None = None,
+    submission_id: uuid.UUID | None = None,
+) -> StageContext:
     config = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
-    # A session that is never to be touched: the stage decides before it reads.
-    session = MagicMock(side_effect=AssertionError("the session was used"))
+    # A session that is never to be touched by default: early exits decide
+    # before touching the database.
+    if session is None:
+        session = MagicMock(side_effect=AssertionError("the session was used"))
+    submission = SimpleNamespace(
+        id=submission_id or uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        task_version="v1",
+    )
     return StageContext(
         session=session,
         router=MagicMock(),
-        submission=MagicMock(),
+        submission=submission,  # type: ignore[arg-type]
         submission_text=_AFTER,
         language="ukr",
         path_key=PathKey(AssignmentType(task_type), state),
@@ -549,7 +565,7 @@ class TestTheStageShowsAMemoryOnARepeatedTextAttemptAlone:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.chdir(_REPO_ROOT)  # the prompt resolves as the router's
-        context = _context(stage_name, state, "task")
+        context = _context(stage_name, state, "task", session=AsyncMock())
 
         assert (
             await criteria_evaluation._memory_shown(
@@ -924,7 +940,7 @@ class TestBothStagesApplyTheCeiling:
             if stage_name == CRITERIA_EVALUATION_WITH_REPLIES
             else SubmissionState.REPEAT_WITHOUT_REPLIES
         )
-        context = _context(stage_name, state, "task")
+        context = _context(stage_name, state, "task", session=AsyncMock())
         with capture_logs() as logs:
             shown = await criteria_evaluation._memory_shown(
                 context,
@@ -1006,3 +1022,208 @@ class TestBothStagesApplyTheCeiling:
         assert line["reason"] == MEMORY_OVER_GROWTH
         assert line["growth"] > 0.33
         assert _QUOTE_MARKER not in repr(logs)
+
+
+# ── The receipt mark (DD-SP-DP) ──
+
+_MARK_KEYS = frozenset(
+    {"shown", "reason", "earlier_submission_id", "verdicts", "diff_chars"}
+)
+
+
+class TestTheMemoryReceiptMark:
+    @pytest.fixture(autouse=True)
+    def _at_the_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(_REPO_ROOT)
+
+    def _spy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> list[tuple[uuid.UUID, dict[str, Any]]]:
+        recorded: list[tuple[uuid.UUID, dict[str, Any]]] = []
+
+        async def _store(
+            repo: HomeworkRepository,
+            submission_id: uuid.UUID,
+            *,
+            memory: dict[str, Any],
+        ) -> None:
+            recorded.append((submission_id, memory))
+
+        monkeypatch.setattr(HomeworkRepository, "store_attempt_memory", _store)
+        return recorded
+
+    async def test_memory_shown_writes_mark_with_counts_and_no_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded = self._spy(monkeypatch)
+        memory = replace(
+            _MEMORY,
+            diff=(
+                "--- previous\n+++ current\n@@ -1 +1 @@\n"
+                f"-{_DIFF_MARKER}\n+{'x' * 20}\n"
+            ),
+        )
+
+        async def _found(*args: Any, **kwargs: Any) -> AttemptMemory:
+            return memory
+
+        monkeypatch.setattr(criteria_evaluation, "read_attempt_memory", _found)
+        submission_id = uuid.uuid4()
+        context = _context(
+            CRITERIA_EVALUATION,
+            SubmissionState.REPEAT_WITHOUT_REPLIES,
+            "task",
+            session=AsyncMock(),
+            submission_id=submission_id,
+        )
+
+        shown = await criteria_evaluation._memory_shown(
+            context, _LISTED, _LARGE, log=structlog.get_logger("test")
+        )
+
+        assert shown is memory
+        assert len(recorded) == 1
+        written_id, mark = recorded[0]
+        assert written_id == submission_id
+        assert frozenset(mark) == _MARK_KEYS
+        assert mark == {
+            "shown": True,
+            "reason": None,
+            "earlier_submission_id": str(_EARLIER),
+            "verdicts": len(memory.verdicts or ()),
+            "diff_chars": len(memory.diff or ""),
+        }
+        assert _DIFF_MARKER not in repr(mark)
+        assert _QUOTE_MARKER not in repr(mark)
+
+    async def test_memory_over_growth_writes_false_with_log_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded = self._spy(monkeypatch)
+        many = tuple(
+            PreviousVerdict(
+                f"c{n}", VerdictValue.MET, f"{_QUOTE_MARKER} {'q' * 180}", None, False
+            )
+            for n in range(200)
+        )
+        memory = replace(_WITH_DIFF, verdicts=many)
+
+        async def _found(*args: Any, **kwargs: Any) -> AttemptMemory:
+            return memory
+
+        monkeypatch.setattr(criteria_evaluation, "read_attempt_memory", _found)
+        context = _context(
+            CRITERIA_EVALUATION_WITH_REPLIES,
+            SubmissionState.REPEAT_WITH_REPLIES,
+            "task",
+            session=AsyncMock(),
+        )
+
+        with capture_logs() as logs:
+            shown = await criteria_evaluation._memory_shown(
+                context,
+                _LISTED,
+                _shown_for(CRITERIA_EVALUATION_WITH_REPLIES),
+                log=structlog.get_logger("test"),
+            )
+
+        assert shown is None
+        [line] = [e for e in logs if e["event"] == "criteria_evaluation_memory_none"]
+        assert len(recorded) == 1
+        _, mark = recorded[0]
+        assert frozenset(mark) == _MARK_KEYS
+        assert mark == {
+            "shown": False,
+            "reason": line["reason"],
+            "earlier_submission_id": None,
+            "verdicts": None,
+            "diff_chars": None,
+        }
+        assert mark["reason"] == MEMORY_OVER_GROWTH
+
+    async def test_nothing_to_show_writes_false_with_nothing_to_show_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded = self._spy(monkeypatch)
+
+        async def _missing(*args: Any, **kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr(criteria_evaluation, "read_attempt_memory", _missing)
+        context = _context(
+            CRITERIA_EVALUATION,
+            SubmissionState.REPEAT_WITHOUT_REPLIES,
+            "task",
+            session=AsyncMock(),
+        )
+
+        with capture_logs() as logs:
+            shown = await criteria_evaluation._memory_shown(
+                context, _LISTED, _LARGE, log=structlog.get_logger("test")
+            )
+
+        assert shown is None
+        assert [e["event"] for e in logs] == ["criteria_evaluation_memory_none"]
+        assert len(recorded) == 1
+        _, mark = recorded[0]
+        assert frozenset(mark) == _MARK_KEYS
+        assert mark == {
+            "shown": False,
+            "reason": "nothing_to_show",
+            "earlier_submission_id": None,
+            "verdicts": None,
+            "diff_chars": None,
+        }
+
+    @pytest.mark.parametrize(
+        ("stage_name", "state", "task_type"),
+        [
+            (CRITERIA_EVALUATION, SubmissionState.FIRST, "task"),
+            (
+                PROJECT_CRITERIA_EVALUATION,
+                SubmissionState.REPEAT_WITHOUT_REPLIES,
+                "project",
+            ),
+        ],
+    )
+    async def test_early_exits_do_not_write_memory_mark(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        stage_name: str,
+        state: SubmissionState,
+        task_type: str,
+    ) -> None:
+        recorded = self._spy(monkeypatch)
+        context = _context(stage_name, state, task_type)
+
+        shown = await criteria_evaluation._memory_shown(
+            context, _LISTED, _LARGE, log=MagicMock()
+        )
+
+        assert shown is None
+        assert recorded == []
+
+    async def test_store_attempt_memory_merges_into_existing_receipt(self) -> None:
+        executed: list[Any] = []
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=executed.append)
+        submission_id = uuid.uuid4()
+        mark = {
+            "shown": True,
+            "reason": None,
+            "earlier_submission_id": str(_EARLIER),
+            "verdicts": 2,
+            "diff_chars": 15,
+        }
+
+        await HomeworkRepository(session).store_attempt_memory(
+            submission_id, memory=mark
+        )
+
+        assert len(executed) == 1
+        compiled = executed[0].compile(dialect=postgresql.dialect())
+        sql = str(compiled)
+        assert "attempt_receipt ||" in sql
+        assert "attempt_receipt IS NOT NULL" in sql
+        assert compiled.params["memory_entry"] == {"memory": mark}
+        session.flush.assert_awaited_once()

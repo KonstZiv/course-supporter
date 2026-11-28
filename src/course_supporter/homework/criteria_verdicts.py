@@ -30,7 +30,9 @@ Interface:
     the pass with the branch of the rule that decided it, for the review's
     phrase; :data:`PASS_THRESHOLD_AUTHOR_MUSTS`,
     :data:`PASS_THRESHOLD_NO_AUTHOR_MUSTS` — its two thresholds;
-    :func:`is_credited` — whether the score counts a row as met.
+    :func:`is_credited` — whether the score counts a row as met;
+    :func:`is_optional_unmet` — a "may" the work lacks, outside the score and
+    the remarks.
     :func:`credited_items`, :func:`remark_states` — where the remark on each
     item stands since the student's earlier attempt (task 12a), in the words
     of :class:`~course_supporter.remark_kinds.RemarkState`;
@@ -70,7 +72,17 @@ The rules (``PRE-PLAN.md`` decisions 2, 3, 4, 7, 11; ``PRE-FLIGHT.md`` 9.4,
   unconfirmed.
 * The score is the share of the weights of the met criteria (3 / 2 / 1) in
   the sum of all weights, in whole percent, rounded DOWN — 100 only when
-  everything is met or unconfirmed.
+  everything required is met or unconfirmed. A "may" — "a plus the assignment
+  invites; missing it is not a flaw" — that the work does not have (not
+  credited, :func:`is_credited`) stands in NEITHER the numerator NOR the
+  denominator (the operator's decision of 2026-11-27, DD-SP-DQ): it does not
+  lower the score. A "may" met or unconfirmed stands in both, a plus. A list
+  with nothing but "may" criteria the work lacks scores 100: all that is
+  required — nothing — is done. The same "may" gets no remark in the review
+  (:func:`is_optional_unmet`; ``verdict_explanation``, ``course_links``,
+  ``text_result``). Its verdict row stays "not met": the author's screen shows
+  the fact as before, and only what is counted and written for the student
+  changes.
 * The pass (the product owner's decisions of 2026-11-12 and 2026-11-17)
   depends on whose list the rows were judged against and on the "must"
   criteria the author made mandatory themselves (``must_by_author``,
@@ -193,7 +205,9 @@ quote that is a whole line of the work is found (:meth:`SubmittedWork.find`).
 # межі прикладів рахує код (задача 13, сторона пояснення, 2026-11-23)
 # оцінка повторної спроби бачить різницю з попередньою спробою
 # та попередні вердикти (задача 13, K4, 2026-11-23)
-VERDICT_RULES_VERSION: Final[int] = 11
+# невиконаний «may» не входить у знаменник бала й не дає зауваження  # noqa: RUF003
+# (рішення оператора 2026-11-27, DD-SP-DQ)
+VERDICT_RULES_VERSION: Final[int] = 12
 """The version of the code that shapes a review's content (task 13).
 
 Raise it on ANY change of code that changes what a review says: the verdicts
@@ -238,7 +252,14 @@ under the ceiling ``attempt_memory.max_growth`` of the request's growth
 (``earlier_review.fit_memory``; the operator's decision of 2026-11-23,
 21:42, inside 11, never released before it). A change of any of the three
 settings raises this number too. The safeguard and every rule above are
-unchanged. It enters
+unchanged; 12 — a "may" the work does not have no longer lowers the score and
+gets no remark (the operator's decision of 2026-11-27, DD-SP-DQ):
+:func:`score_percent` leaves it out of the numerator and the denominator, the
+explanation's facts do not list it as unmet and the request does not show it
+(``verdict_explanation``), the search for course links does not look for it
+(``course_links``), and the builder keeps no place of a problem for it and
+does not count it in the review's authenticity (``text_result``); a work
+handed in again unchanged is reviewed anew, not given a copy. It enters
 the evaluator's
 version (:func:`~course_supporter.homework.evaluator_version.evaluator_version`):
 prompts and models the version sees itself, the code only through this number,
@@ -1115,6 +1136,10 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
     portal reads 100 as "correct". Points do not count on their own — their
     criterion does.
 
+    A "may" the work does not have — not credited — is in neither the
+    numerator nor the denominator (DD-SP-DQ, 2026-11-27); a "may" that is met
+    or unconfirmed is in both, a plus. Nothing but such "may" criteria: 100.
+
     Raises:
         ValueError: There is no criterion among ``items``, or one has no
             weight.
@@ -1128,18 +1153,44 @@ def score_percent(items: Iterable[ScoredItem]) -> int:
     ...      criterion("may", "met")]
     ... )
     66
+    >>> score_percent([criterion("must", "met"), criterion("may", "not_met")])
+    100
     """
     met = total = 0
+    counted = 0
     for outcome in _criteria_outcomes(items):
+        counted += 1
+        # A "may" the work does not have is outside the score: the assignment
+        # invites it, and missing it is no flaw (DD-SP-DQ, 2026-11-27). Met or
+        # unconfirmed it is credited — a plus, in the numerator and the
+        # denominator alike.
+        if outcome.weight is WeightCategory.MAY and not outcome.credited:
+            continue
         number = WEIGHT_NUMBERS[outcome.weight]
         total += number
         # Met or unconfirmed: the rule and its reason are is_credited's.
         if outcome.credited:
             met += number
-    if total == 0:
+    if counted == 0:
         msg = "verdicts without a criterion have no score"
         raise ValueError(msg)
-    return (100 * met) // total
+    # Nothing but "may" criteria the work lacks: everything required is done,
+    # for nothing is required.
+    return 100 if total == 0 else (100 * met) // total
+
+
+def is_optional_unmet(weight: str | None, verdict: str) -> bool:
+    """Whether a criterion is a "may" the work does not have: no flaw.
+
+    The weight and the verdict as a row stores them, or as the facts of the
+    explanation hold them. Such a criterion is outside the score
+    (:func:`score_percent`) and gets no remark: the explanation is not told of
+    it, the search for places of the course does not look for it, and no place
+    of a problem is kept for it. Its verdict row stays "not met"
+    (``DD-SP-DQ``, 2026-11-27). An unconfirmed "may" reads "not met" too, so it
+    is left out of the remarks as well, though the score still credits it.
+    """
+    return weight == WeightCategory.MAY and verdict == VerdictValue.NOT_MET
 
 
 # The product owner's decision of 2026-11-12: the pass of a work judged by a

@@ -74,7 +74,7 @@ A new version does not cancel the previous ones: work that students have already
 
 Important: if a starter archive is attached but none of its versions is in the "Done" state yet — preparation is still going on or an error occurred — students will not be able to submit the project. Upload a version that processes successfully.
 
-If the starter archive could not be prepared, the app shows the cause as a technical line in English — as of October 2026, this is how it is. Check that it really is a `.zip`, `.tar.gz`, `.tgz` or `.gz` archive, that it is not damaged and that it is no larger than 200 MB unpacked; create the archive again and press "Again". If that does not help, send this line to the platform administrator. An archive larger than 100 MB is rejected by the app straight away, in Ukrainian: "The archive is too large — the limit is 100 MB." («Архів завеликий — ліміт 100 МБ.»)
+If the starter archive could not be prepared, the app shows the cause as a technical line in English — as of October 2026, this is how it is. Check that it really is a `.zip`, `.tar.gz`, `.tgz` or `.gz` archive, that it is not damaged and that it is no larger than 200 MB unpacked; create the archive again and press "Again". If that does not help, send this line to the platform administrator. An archive larger than 100 MB is rejected by the app straight away: "The archive is too large — the limit is 100 MB." («Архів завеликий — ліміт 100 МБ.»)
 
 ## The assignment's list of criteria {#criteria}
 

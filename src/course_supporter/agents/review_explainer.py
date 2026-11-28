@@ -278,7 +278,7 @@ def render_context(shown: ExplanationInput) -> dict[str, Any]:
         "result": _result_for_prompt(shown),
         "criteria": [
             _criterion_for_prompt(c, shown.previous_remarks.get(c.criterion.id))
-            for c in shown.facts.criteria
+            for c in shown.facts.told
         ],
         "submission_text": shown.submission_text,
         "language": shown.language,

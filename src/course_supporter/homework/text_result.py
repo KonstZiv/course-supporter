@@ -43,7 +43,8 @@ What is the code's and what is the model's (``PRE-PLAN.md`` decisions 2, 3, 5):
 After delivery (task 10, K6):
     The review's authenticity goes to the call register
     (:func:`~course_supporter.service_logging.record_review_metrics`): the
-    share of the criteria not met whose remark gives at least one course
+    share of the criteria not met — a "may" the work does not have is not
+    one (DD-SP-DQ, 2026-11-27) — whose remark gives at least one course
     link. A review with every criterion met makes no claim to support and
     leaves no row. Completeness is not measured on this path (``None``):
     the explanation's check already refuses an answer without a remark on
@@ -60,7 +61,8 @@ The place of a remark (project chain K5):
     the place stays the phrasebook's, ``position.file``. A text type's rows
     keep no place, so its review is what it was. :func:`problem_positions`
     is the rule; a project's builder -- this one, since chain K6 -- takes it
-    as it is.
+    as it is. A "may" the work does not have has no remark, so no place
+    (DD-SP-DQ, 2026-11-27).
 
 The order of the remarks:
     By their criterion's weight — "must" first, then "should", then "may" —
@@ -138,6 +140,7 @@ from course_supporter.homework.course_links import FoundCourseLinks
 from course_supporter.homework.criteria_form import WEIGHT_NUMBERS, Criterion
 from course_supporter.homework.criteria_verdicts import (
     ScoredItem,
+    is_optional_unmet,
     pass_decision,
 )
 from course_supporter.homework.earlier_review import read_earlier_review
@@ -201,6 +204,7 @@ __all__ = [
     "link_authenticity",
     "problem_positions",
     "replies_answered",
+    "unmet_criteria",
 ]
 
 
@@ -269,12 +273,23 @@ def problem_positions(rows: Iterable[ReviewedItem]) -> dict[str, Position]:
     >>> problem_positions(rows)["c2"].value
     'app.py:12-14'
     """
+    rows = list(rows)
+    # A "may" the work does not have gets no remark, so no place for it
+    # (DD-SP-DQ, 2026-11-27). Its points carry no weight: by their criterion.
+    optional = {
+        row.item_id
+        for row in rows
+        if row.item_kind == VerdictItemKind.CRITERION
+        and is_optional_unmet(row.weight, row.verdict)
+    }
     positions: dict[str, Position] = {}
     for row in rows:
         if row.verdict != VerdictValue.NOT_MET or row.quote_file is None:
             continue
         # ``c3`` for the criterion itself, ``c3.p2`` for one of its points.
         criterion_id = row.item_id.partition(".")[0]
+        if criterion_id in optional:
+            continue
         if criterion_id not in positions:
             positions[criterion_id] = Position(kind="file", value=_place_of(row))
     return positions
@@ -516,6 +531,34 @@ async def _fixed_words(
     )
 
 
+def unmet_criteria(rows: Iterable[ScoredItem]) -> list[str]:
+    """The ids of the criteria the review remarks on, in the rows' order.
+
+    The criteria "not met" — unconfirmed ones included — but a "may" the work
+    does not have: it gets no remark, so no link, and is no claim a link could
+    support (DD-SP-DQ, 2026-11-27).
+
+    >>> from course_supporter.criteria_kinds import VerdictItemKind as Kind
+    >>> from course_supporter.storage.submission_verdict_repository import (
+    ...     VerdictRecord,
+    ... )
+    >>> rows = [
+    ...     VerdictRecord("c1", Kind.CRITERION, "must", "not_met", None),
+    ...     VerdictRecord("c2", Kind.CRITERION, "may", "not_met", None),
+    ...     VerdictRecord("c3", Kind.CRITERION, "should", "met", "met"),
+    ... ]
+    >>> unmet_criteria(rows)
+    ['c1']
+    """
+    return [
+        row.item_id
+        for row in rows
+        if row.item_kind == VerdictItemKind.CRITERION
+        and row.verdict == VerdictValue.NOT_MET
+        and not is_optional_unmet(row.weight, row.verdict)
+    ]
+
+
 def link_authenticity(
     unmet: Sequence[str], links: Mapping[str, Sequence[object]]
 ) -> float | None:
@@ -622,12 +665,7 @@ class TextResultBuilder:
         rows = await stored.list_for_submission(
             tenant_id=submission.tenant_id, submission_id=submission.id
         )
-        unmet = [
-            row.item_id
-            for row in rows
-            if row.item_kind == VerdictItemKind.CRITERION
-            and row.verdict == VerdictValue.NOT_MET
-        ]
+        unmet = unmet_criteria(rows)
         if not unmet:
             return
         kept = await stored.get_candidates(

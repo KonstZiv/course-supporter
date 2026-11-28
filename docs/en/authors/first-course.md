@@ -9,24 +9,26 @@ keywords:
   - My courses
   - new course
   - course language
-last_updated: 2026-11-22
+last_updated: 2026-11-27
 ---
 
 # Signing in and your first course
 
 ## Signing in {#login}
 
-The Course Supporter author app works in the browser, at `panel.pythoncourse.me`. On the "Sign in (Вхід)" page, paste your access key into the "API key (API ключ)" field and press "Connect (Підключитися)".
+The Course Supporter author app works in the browser, at `panel.pythoncourse.me`. On the "Sign in for course authors (Вхід для авторів курсів)" page, paste your access key into the "Access key (Ключ доступу)" field and press "Sign in (Увійти)".
 
-<!-- frame 1: the "Sign in (Вхід)" page — an empty "API key (API ключ)" field, the "Connect (Підключитися)" button -->
+<!-- frame 1: the "Sign in for course authors (Вхід для авторів курсів)" page — an empty "Access key (Ключ доступу)" field, the "Sign in (Увійти)" button -->
 
 The key is issued by the Course Supporter platform administrator; you cannot register by yourself. How to contact them — on the [home page](../index.md#authors). The key is stored in your browser until you press "Sign out (Вийти)". In another browser or on another computer, you have to enter it again.
 
 Important: the key opens all your courses, together with the methodological materials and the correct answers of the tests. If you work at a school where several people have keys, each of them sees all the school's courses. Do not give the key to students, and make sure it does not end up in a screenshot.
 
-If you see "Invalid API key. Check it and try again." («Невірний API ключ. Перевірте та спробуйте ще раз.»), check that the key was copied in full. If it was, the key may have been revoked or may have expired: contact the platform administrator.
+If you see "This access key does not work…" («Цей ключ доступу не підходить…»), check that the key was copied in full. If it was, the key may have been revoked or may have expired: write to the platform administrator — the "Write to the platform administrator (Написати адміністраторові платформи)" link is on the same page. If the app says it is installing an update to the service, your key is fine: wait up to 10 minutes and try again.
 
 One more case worth knowing about. If the key stops working after you have already signed in, the "My courses (Мої курси)" page shows "No courses yet (Ще немає курсів)" — as if you had no courses — and other pages show "API error 401". Your courses have not gone anywhere. Press "Sign out" and sign in again; if that does not help, write to the platform administrator. As of October 2026, the app does not explain this by itself.
+
+The language of the app's pages — Ukrainian or English — is switched with the "Українська" and "English" buttons at the top of the sign-in page and in the app header. A choice made in the app header is saved in your account: after you sign in on another computer or in another browser, the app opens in the language you chose. The app's language does not change the course language — more on that below.
 
 ## "My courses" and a new course {#courses}
 

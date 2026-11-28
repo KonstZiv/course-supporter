@@ -58,10 +58,15 @@ def test_the_evaluator_is_where_it_was() -> None:
     repeated attempt sees the difference from the earlier attempt and its
     earlier verdicts — the version ``ev1:b7d174917a859921`` ->
     ``ev1:f260114be44c51bd``.
+
+    Moved on purpose by DD-SP-DQ (the operator's decision of 2026-11-27), rules
+    11 -> 12: a "may" the work does not have no longer lowers the score and
+    gets no remark — the version ``ev1:f260114be44c51bd`` ->
+    ``ev1:3c4b6b79794ffb49``; no prompt moved.
     """
     shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
     for task_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
         version = evaluator_version(task_type, shipped, prompt_base_path=_REPO_ROOT)
-        assert version == "ev1:f260114be44c51bd", task_type
-    assert criteria_verdicts.VERDICT_RULES_VERSION == 11
+        assert version == "ev1:3c4b6b79794ffb49", task_type
+    assert criteria_verdicts.VERDICT_RULES_VERSION == 12

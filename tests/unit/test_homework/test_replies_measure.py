@@ -81,7 +81,7 @@ def _criterion(cid: str, weight: str) -> Criterion:
 _CRITERIA = (
     _criterion("c1", "must"),
     _criterion("c2", "should"),
-    _criterion("c3", "may"),
+    _criterion("c3", "should"),
 )
 
 
@@ -119,7 +119,7 @@ def _records() -> tuple[dict[str, Any], dict[str, Any]]:
         [
             _Row("c1", "must", "met"),
             _Row("c2", "should", "not_met"),
-            _Row("c3", "may", "not_met"),
+            _Row("c3", "should", "not_met"),
         ],
         layer=CriteriaLayer.MODEL,
     )

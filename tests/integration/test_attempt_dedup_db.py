@@ -48,6 +48,13 @@ locks are ``tests/unit/test_homework/test_attempt_dedup_language.py``:
   Ukrainian, English, Ukrainian — the third is given the first;
 * a submission whose language no source gives has nothing to compare: no copy.
 
+The course links of a copy (debt DD-SP-DE), ``TestCourseLinksOfTheCopy`` at the
+end of the file: a copy gives the places of its source that are still
+candidates, or none — a fragment deleted and a material hidden since the review
+was built are taken out of the remarks' ``read``, an outside link stays, the
+rest keeps its order; the copy stays free and off the register; one log line
+says how many were taken out; the source review is not changed.
+
 The doubles are the ones the walks of the new path already use
 (``test_text_review_e2e_db``, ``test_attempt_ledger_db``, ``test_one_door_db``):
 no model is called. Run with ``--run-db --run-redis``.
@@ -57,8 +64,10 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import AsyncGenerator, Iterator, MutableMapping
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -72,7 +81,7 @@ from course_supporter.api.routes._portal_shared import curated_not_opened
 from course_supporter.api.tasks import arq_process_homework
 from course_supporter.criteria_kinds import CriteriaLayer
 from course_supporter.funds_port import SubmissionOutcome
-from course_supporter.homework import criteria_verdicts
+from course_supporter.homework import attempt_dedup, criteria_verdicts
 from course_supporter.homework.attempt_dedup import DEDUP_RECEIPT_KEY
 from course_supporter.homework.criteria_form import Criterion, criteria_to_document
 from course_supporter.homework.criteria_list_service import CriteriaInForce
@@ -92,13 +101,22 @@ from course_supporter.homework.test_doors import stored_answers
 from course_supporter.llm.providers import PROVIDER_REGISTRY
 from course_supporter.models import review_structure
 from course_supporter.models.review_schema import REVIEW_SCHEMA_VERSION
-from course_supporter.models.review_structure import ReviewStructureV1, Verdict
+from course_supporter.models.review_structure import (
+    Reference,
+    ReviewStructureV1,
+    Verdict,
+)
 from course_supporter.models.source import AssignmentType
 from course_supporter.phrasebook import phrases_for
+from course_supporter.storage.document_segment_repository import (
+    DocumentSegmentRepository,
+)
 from course_supporter.storage.homework_repository import HomeworkRepository
 from course_supporter.storage.orm import (
     ActionCostEstimate,
     AuthoredDocument,
+    DocumentSegment,
+    DocumentSummary,
     ExternalServiceCall,
     HomeworkSubmission,
     Job,
@@ -1862,3 +1880,423 @@ class TestLanguageLockEndToEnd:
         assert "attempt_dedup_language_unknown" in {entry["event"] for entry in logs}
         assert calls == _ORDINARY_REVIEW
         _assert_reviewed_anew(again)
+
+
+# ── The course links of a copy (debt DD-SP-DE) ──────────────────────────────
+
+_OUTSIDE_URL = "https://docs.python.org/3/library/functions.html"
+_LIVE_TITLE = "Живий матеріал курсу"
+_DELETED_TITLE = "Видалений фрагмент курсу"
+_HIDDEN_TITLE = "Прихований матеріал курсу"
+_OUTSIDE_TITLE = "Документація Python"
+
+
+@dataclass(frozen=True, slots=True)
+class _Places:
+    """Three fragments of the world's course: one a candidate, two not."""
+
+    live: uuid.UUID
+    deleted: uuid.UUID
+    hidden: uuid.UUID
+
+
+async def _seed_places(
+    session_factory: async_sessionmaker[AsyncSession], world: dict[str, Any]
+) -> _Places:
+    """A live fragment, a deleted one, and one of a material hidden from students."""
+    ids: dict[str, uuid.UUID] = {}
+    async with session_factory() as session:
+        for name, role, segment_deleted in (
+            ("live", "educational", False),
+            ("deleted", "educational", True),
+            ("hidden", "methodological", False),
+        ):
+            document = AuthoredDocument(
+                course_node_id=world["node_id"],
+                course_root_id=world["node_id"],
+                source_type="text",
+                source_url=f"https://example.com/{name}-{uuid.uuid4().hex}",
+                material_role=role,
+            )
+            session.add(document)
+            await session.flush()
+            summary = DocumentSummary(
+                authored_document_id=document.id,
+                course_root_id=world["node_id"],
+                title=f"Summary of {name}",
+                status="ready",
+            )
+            session.add(summary)
+            await session.flush()
+            segment = DocumentSegment(
+                document_summary_id=summary.id,
+                course_root_id=world["node_id"],
+                order=0,
+                start_pos=0,
+                end_pos=12,
+                content="segment body",
+                content_char_count=12,
+                main_concepts=[],
+                secondary_concepts=[],
+                deleted_at=datetime.now(UTC) if segment_deleted else None,
+            )
+            session.add(segment)
+            await session.flush()
+            ids[name] = segment.id
+        await session.commit()
+    return _Places(**ids)
+
+
+def _course_link(title: str, segment_id: uuid.UUID) -> Reference:
+    return Reference(title=title, segment_id=str(segment_id), excerpt="A few words")
+
+
+async def _give_the_source_links(
+    session_factory: async_sessionmaker[AsyncSession],
+    source: HomeworkSubmission,
+    *,
+    new_remarks: list[Reference],
+    open_remarks: list[Reference] | None = None,
+) -> HomeworkSubmission:
+    """Hang ``read`` on the source's remarks, as the explanation stage would have.
+
+    The first remark of ``new_remarks`` gets ``new_remarks``; with
+    ``open_remarks`` a copy of it joins ``open`` carrying those. The review's
+    markdown is assembled again, so the source stays what the assembler writes.
+    """
+    assert source.review_result is not None
+    review = ReviewStructureV1.model_validate(source.review_result)
+    assert len(review.new_remarks) >= 2
+    review.new_remarks[0].read = list(new_remarks)
+    if open_remarks is not None:
+        review.open = [review.new_remarks[1].model_copy(update={"read": open_remarks})]
+    async with session_factory() as session:
+        await session.execute(
+            update(HomeworkSubmission)
+            .where(HomeworkSubmission.id == source.id)
+            .values(
+                review_result=review.model_dump(mode="json"),
+                review_markdown=assemble_review(review),
+            )
+        )
+        await session.commit()
+    return await _row(session_factory, source.id)
+
+
+async def _copy_of(
+    session_factory: async_sessionmaker[AsyncSession],
+    world: dict[str, Any],
+    tmp_path: Path,
+) -> HomeworkSubmission:
+    """The same work again: a copy, no model asked, nothing paid."""
+    port = _PortDouble()
+    router = _NoModelRouter()
+    second_id = await _walk(
+        session_factory,
+        world,
+        _UTF8_LF,
+        tmp_path,
+        router=router,
+        source=_ListSource(world["in_force"]),
+        port=port,
+    )
+    assert router.calls == []
+    assert (port.reserved, port.accounted, port.released) == ([], [], [])
+    second = await _row(session_factory, second_id)
+    assert second.status == "delivered"
+    assert second.attempt_receipt is not None
+    assert second.attempt_receipt[DEDUP_RECEIPT_KEY] == 1
+    return second
+
+
+def _links_of(
+    review_result: dict[str, Any] | None, section: str, index: int = 0
+) -> Any:
+    assert review_result is not None
+    return ReviewStructureV1.model_validate(review_result).model_dump(mode="json")[
+        section
+    ][index]["read"]
+
+
+def _dropped_lines(logs: list[MutableMapping[str, Any]]) -> list[Any]:
+    return [
+        line
+        for line in logs
+        if line["event"] == "attempt_review_repeated_links_dropped"
+    ]
+
+
+class TestCourseLinksOfTheCopy:
+    """The copy gives the places of its source that are candidates now, or none."""
+
+    async def test_a_fragment_deleted_or_hidden_is_taken_out_and_the_rest_kept(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        places = await _seed_places(session_factory, task_world)
+        first = await _first_review(session_factory, task_world, tmp_path)
+        outside = Reference(title=_OUTSIDE_TITLE, url=_OUTSIDE_URL)
+        source = await _give_the_source_links(
+            session_factory,
+            first,
+            new_remarks=[
+                _course_link(_HIDDEN_TITLE, places.hidden),
+                _course_link(_LIVE_TITLE, places.live),
+                outside,
+                _course_link(_DELETED_TITLE, places.deleted),
+            ],
+            # Another section: a remark the copy also carries.
+            open_remarks=[_course_link(_DELETED_TITLE, places.deleted)],
+        )
+
+        second = await _copy_of(session_factory, task_world, tmp_path)
+
+        # Only the live place and the outside address remain, in the source's order.
+        kept = _links_of(second.review_result, "new_remarks")
+        assert [(r["title"], r["segment_id"], r["url"]) for r in kept] == [
+            (_LIVE_TITLE, str(places.live), None),
+            (_OUTSIDE_TITLE, None, _OUTSIDE_URL),
+        ]
+        assert _links_of(second.review_result, "open") == []
+        # The text the student reads names none of the places taken out.
+        assert second.review_markdown is not None
+        assert _LIVE_TITLE in second.review_markdown
+        assert _OUTSIDE_TITLE in second.review_markdown
+        assert _DELETED_TITLE not in second.review_markdown
+        assert _HIDDEN_TITLE not in second.review_markdown
+        # The markdown is the assembler's of the stored structure, as for any copy.
+        structure = ReviewStructureV1.model_validate(second.review_result)
+        assert second.review_markdown == assemble_review(structure)
+        assert structure.unchanged_from_attempt == 1
+        # Nothing else of the review is touched: field for field the source's.
+        assert source.review_result is not None
+        assert second.review_result is not None
+        assert {
+            key: value
+            for key, value in second.review_result.items()
+            if key not in {"new_remarks", "open"}
+        } == {
+            **{
+                key: value
+                for key, value in source.review_result.items()
+                if key not in {"new_remarks", "open"}
+            },
+            "unchanged_from_attempt": 1,
+        }
+
+    async def test_all_fragments_alive_the_copy_is_what_it_was_before_the_check(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        places = await _seed_places(session_factory, task_world)
+        first = await _first_review(session_factory, task_world, tmp_path)
+        source = await _give_the_source_links(
+            session_factory,
+            first,
+            new_remarks=[
+                _course_link(_LIVE_TITLE, places.live),
+                Reference(title=_OUTSIDE_TITLE, url=_OUTSIDE_URL),
+            ],
+        )
+        assert source.review_result is not None
+
+        with capture_logs() as logs:
+            second = await _copy_of(session_factory, task_world, tmp_path)
+
+        assert second.review_result == {
+            **source.review_result,
+            "unchanged_from_attempt": 1,
+        }
+        assert second.review_markdown == assemble_review(
+            ReviewStructureV1.model_validate(second.review_result)
+        )
+        assert second.score == source.score
+        # Nothing taken out: no line.
+        assert _dropped_lines(logs) == []
+
+    async def test_the_source_review_is_not_changed(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """Neither in the database nor in memory (the source the lookup read)."""
+        places = await _seed_places(session_factory, task_world)
+        first = await _first_review(session_factory, task_world, tmp_path)
+        source = await _give_the_source_links(
+            session_factory,
+            first,
+            new_remarks=[
+                _course_link(_DELETED_TITLE, places.deleted),
+                _course_link(_LIVE_TITLE, places.live),
+            ],
+        )
+        as_stored = ReviewStructureV1.model_validate(source.review_result)
+
+        # The source as the body's lookup read it, kept as it leaves the lookup.
+        looked_up: list[attempt_dedup.UnchangedAttempt | None] = []
+        real_find = attempt_dedup._find
+
+        async def recording(*args: Any, **kwargs: Any) -> Any:
+            found = await real_find(*args, **kwargs)
+            looked_up.append(found)
+            return found
+
+        with patch.object(attempt_dedup, "_find", new=recording):
+            second = await _copy_of(session_factory, task_world, tmp_path)
+
+        assert len(_links_of(second.review_result, "new_remarks")) == 1  # one dropped
+        # ── In memory: the review the lookup returned still has both links ──
+        [found] = looked_up
+        assert found is not None
+        assert found.review == as_stored
+        assert [r.segment_id for r in found.review.new_remarks[0].read] == [
+            str(places.deleted),
+            str(places.live),
+        ]
+        # ── In the database: the source row, key for key ──
+        after = await _row(session_factory, source.id)
+        assert after.review_result == source.review_result
+        assert after.review_markdown == source.review_markdown
+        assert after.score == source.score
+
+    async def test_a_copy_with_dead_links_is_still_free_and_off_the_register(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        places = await _seed_places(session_factory, task_world)
+        first = await _first_review(session_factory, task_world, tmp_path)
+        await _give_the_source_links(
+            session_factory,
+            first,
+            new_remarks=[
+                _course_link(_DELETED_TITLE, places.deleted),
+                _course_link(_HIDDEN_TITLE, places.hidden),
+            ],
+        )
+        register_before = await _register_rows(session_factory)
+
+        with _providers_watched() as providers:
+            second = await _copy_of(session_factory, task_world, tmp_path)
+
+        assert not any(mock.await_count for mock in providers)
+        assert await _register_rows(session_factory) == register_before
+        assert await _rows_of_jobs(session_factory, second.id) == 0
+        async with session_factory() as session:
+            stale = await session.scalar(
+                select(func.count())
+                .select_from(ExternalServiceCall)
+                .where(ExternalServiceCall.action == "course_link_stale")
+            )
+            estimates = await session.scalar(
+                select(func.count())
+                .select_from(ActionCostEstimate)
+                .where(ActionCostEstimate.submission_id == second.id)
+            )
+        assert stale == 0
+        assert estimates == 0
+        assert await _verdict_rows(session_factory, second.id) == []
+
+    async def test_the_line_names_the_count_and_the_items_and_no_text(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        places = await _seed_places(session_factory, task_world)
+        first = await _first_review(session_factory, task_world, tmp_path)
+        source = await _give_the_source_links(
+            session_factory,
+            first,
+            new_remarks=[
+                _course_link(_DELETED_TITLE, places.deleted),
+                _course_link(_LIVE_TITLE, places.live),
+                _course_link(_HIDDEN_TITLE, places.hidden),
+            ],
+            open_remarks=[_course_link(_DELETED_TITLE, places.deleted)],
+        )
+        review = ReviewStructureV1.model_validate(source.review_result)
+        first_item, second_item = review.new_remarks[0].item_id, review.open[0].item_id
+        assert first_item is not None and second_item is not None
+
+        with capture_logs() as logs:
+            second = await _copy_of(session_factory, task_world, tmp_path)
+
+        [line] = _dropped_lines(logs)
+        assert line["dropped"] == 3
+        assert line["item_ids"] == [first_item, second_item]
+        assert line["submission_id"] == str(second.id)
+        assert line["dedup_of"] == 1
+        # The titles and the text of the review are not in the line.
+        rendered = json.dumps(line, ensure_ascii=False, default=str)
+        for title in (_DELETED_TITLE, _HIDDEN_TITLE, _LIVE_TITLE):
+            assert title not in rendered
+        for remark in review.new_remarks:
+            assert remark.what not in rendered
+
+    async def test_a_review_without_course_links_asks_nothing(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        await _first_review(session_factory, task_world, tmp_path)
+        original = DocumentSegmentRepository.still_candidates
+
+        with (
+            patch.object(
+                DocumentSegmentRepository,
+                "still_candidates",
+                autospec=True,
+                side_effect=original,
+            ) as asked,
+            capture_logs() as logs,
+        ):
+            await _copy_of(session_factory, task_world, tmp_path)
+
+        asked.assert_not_called()
+        assert _dropped_lines(logs) == []
+
+    async def test_one_read_asks_for_every_place_with_the_course_of_the_submission(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        task_world: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        places = await _seed_places(session_factory, task_world)
+        first = await _first_review(session_factory, task_world, tmp_path)
+        await _give_the_source_links(
+            session_factory,
+            first,
+            new_remarks=[
+                _course_link(_DELETED_TITLE, places.deleted),
+                _course_link(_LIVE_TITLE, places.live),
+                Reference(title=_OUTSIDE_TITLE, url=_OUTSIDE_URL),
+            ],
+            open_remarks=[_course_link(_HIDDEN_TITLE, places.hidden)],
+        )
+        original = DocumentSegmentRepository.still_candidates
+
+        with patch.object(
+            DocumentSegmentRepository,
+            "still_candidates",
+            autospec=True,
+            side_effect=original,
+        ) as asked:
+            second = await _copy_of(session_factory, task_world, tmp_path)
+
+        asked.assert_awaited_once()
+        assert asked.call_args.kwargs["course_root_id"] == task_world["node_id"]
+        assert set(asked.call_args.kwargs["segment_ids"]) == {
+            places.deleted,
+            places.live,
+            places.hidden,
+        }
+        submission = await _row(session_factory, second.id)
+        assert submission.course_node_id == task_world["node_id"]

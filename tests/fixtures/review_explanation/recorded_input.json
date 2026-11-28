@@ -122,7 +122,7 @@
             "id": "c4",
             "text": "Функцію задокументовано.",
             "evidence": "Докстрінг із прикладом.",
-            "weight": "may",
+            "weight": "should",
             "check_method": "model_verdict",
             "soft_descent": false,
             "concepts": [],

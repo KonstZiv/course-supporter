@@ -186,6 +186,10 @@ class Tenant(SoftDeleteMixin, Base):
             "deleted_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        CheckConstraint(
+            "promotion_path IN ('own_course', 'school', 'author')",
+            name="ck_tenants_promotion_path",
+        ),
         {"comment": "Multi-tenant organizations"},
     )
 
@@ -207,6 +211,14 @@ class Tenant(SoftDeleteMixin, Base):
         String(10),
         comment="мова сторінок панелі автора, обрана автором; ISO 639-3, "
         "нормалізована на вході; NULL — ще не обирав",
+    )
+    promotion_path: Mapped[str | None] = mapped_column(
+        String(20),
+        comment="Promotion path the tenant belongs to (Б-4): own_course — the "
+        "platform's own courses, school — a partner school (a legal person), "
+        "author — an author who is a natural person. NULL = not set. Set by "
+        "scripts/billing_admin.py set-promotion-path; read by the funnel. "
+        "CHECK-guarded.",
     )
 
     # Relationships
@@ -2310,6 +2322,10 @@ class PortalSignup(Base):
             "text_sha256 ~ '^[0-9a-f]{64}$'",
             name="ck_portal_signups_text_sha256",
         ),
+        CheckConstraint(
+            "source_tag ~ '^[a-z0-9_-]{1,40}$'",
+            name="ck_portal_signups_source_tag",
+        ),
         Index("uq_portal_signups_token_hash", "token_hash", unique=True),
         Index(
             "uq_portal_signups_pending_login",
@@ -2382,6 +2398,14 @@ class PortalSignup(Base):
         comment="SHA-256 hex of the raw confirm token (hash_api_key); the raw "
         "token lives only in the mailed link. Replaced on resend.",
     )
+    source_tag: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+        comment="Campaign tag of the page the visitor came from (the src "
+        "parameter of the join link, Б-4): a-z, 0-9, '-', '_', 1-40 chars "
+        "(CHECK). NULL = none, or an invalid one ignored at signup. Copied to "
+        "the enrollment event at confirm.",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -2407,6 +2431,80 @@ class PortalSignup(Base):
             f"PortalSignup(id={self.id!r}, tenant_id={self.tenant_id!r}, "
             f"course_node_id={self.course_node_id!r}, "
             f"confirmed_at={self.confirmed_at!r})"
+        )
+
+
+class EnrollmentEvent(Base):
+    """A student was enrolled in a course — the fact, kept for the funnel (Б-4).
+
+    Written in the same transaction as the ``StudentEnrollment`` it records
+    (``StudentEnrollmentRepository.bind`` is the one door for both), by an
+    author's grant and by self-enrollment alike. Unlike the grant it is
+    history: unbinding, or deleting the student on request, removes the
+    grant and leaves the event. Enrolled again after an unbind — a new event.
+
+    Insert-only (``billing_refuse_update`` trigger refuses UPDATE). No personal
+    data: ids, the grant's source and a campaign tag. ``student_id`` has no ON
+    DELETE action — a deleted student's row stays as an anonymized marker
+    (soft delete), and the event keeps pointing at it.
+    """
+
+    __tablename__ = "enrollment_events"
+    __table_args__ = (
+        CheckConstraint(
+            "source IN ('author', 'self')",
+            name="ck_enrollment_events_source",
+        ),
+        CheckConstraint(
+            "source_tag ~ '^[a-z0-9_-]{1,40}$'",
+            name="ck_enrollment_events_source_tag",
+        ),
+        {
+            "comment": "Enrollment facts for the promotion funnel (Б-4); "
+            "insert-only, outlive the grant and the student's deletion"
+        },
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid7)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → the tenant whose course was joined.",
+    )
+    course_node_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("course_nodes.id", ondelete="CASCADE"),
+        index=True,
+        comment="FK → root CourseNode (the course).",
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("students.id"),
+        index=True,
+        comment="FK → Student, no ON DELETE action: a deleted student stays "
+        "as an anonymized row and the event keeps pointing at it.",
+    )
+    source: Mapped[str] = mapped_column(
+        Text,
+        comment="Who made the grant, as student_enrollments.source: 'author' "
+        "or 'self'. CHECK-guarded.",
+    )
+    source_tag: Mapped[str | None] = mapped_column(
+        String(40),
+        nullable=True,
+        comment="Campaign tag of a self-enrollment (the join link's src), "
+        "same rule as portal_signups.source_tag. NULL = none or an author's "
+        "grant.",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+        comment="When the student was enrolled; the funnel's period reads it.",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"EnrollmentEvent(id={self.id!r}, course_node_id={self.course_node_id!r}, "
+            f"student_id={self.student_id!r}, source={self.source!r})"
         )
 
 

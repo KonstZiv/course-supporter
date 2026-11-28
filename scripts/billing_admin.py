@@ -164,6 +164,26 @@ task rows: reviews, units_per_review, students_money_minor and gift_units
 the report says how many reviews that was, until --include-test-students:
     costs --by author --include-test-students
 
+Promotion paths (Б-4, 2026-11-26). Which way a tenant's students come:
+own_course (the platform's own courses), school (a partner school, a legal
+person), author (an author who is a natural person); none clears it. The same
+value again writes nothing; a change is a structured log line with the
+--actor (tenant_promotion_path_set), not an audit entry — the path is on the
+tenant, not on a billing account:
+    set-promotion-path --tenant "Python Academy" --path school --actor kostiantyn
+    set-promotion-path --tenant "Python Academy" --path none --actor kostiantyn
+
+The funnel (Б-4). Enrollment events of an inclusive UTC calendar interval —
+enrolled → first submission in the course → first paid purchase in the tenant
+→ repeat purchase, with the money of the purchases — grouped by the tenant's
+path, the tenant, the course or the source (the grant's source and the join
+link's campaign tag). Read-only; ids, titles, tags and numbers only, no names
+or e-mails of students (``funnel --help`` says what each field is):
+    funnel --from 2026-12-01 --to 2026-12-31 --by path
+    funnel --from 2026-12-01 --to 2026-12-31 --by source --format csv
+    funnel --from 2026-12-01 --to 2026-12-31 --by tenant --include-test-students \
+        --format json
+
 The partner's report (Б-3, operator 2026-11-27). INTERNAL: what of it a
 school is shown is the product owner's decision. The school's share rate is
 kept in its author settings — a percent with at most two decimals, 0 to 100,
@@ -227,6 +247,7 @@ from course_supporter.billing import (
     testmark,
 )
 from course_supporter.billing import costs as billing_costs
+from course_supporter.billing import funnel as billing_funnel
 from course_supporter.billing.errors import (
     BillingError,
     BillingInvalidError,
@@ -238,6 +259,7 @@ from course_supporter.billing.payments.creem import CREEM, CreemProvider
 from course_supporter.billing.payments.port import TransactionLookup
 from course_supporter.billing.payments.registry import PaymentConfigError, adapters
 from course_supporter.billing.periodic import BILLING_TASKS
+from course_supporter.billing.promotion import PromotionPath, set_promotion_path
 from course_supporter.config import get_settings
 from course_supporter.periodic.runner import TaskRun, run_task
 from course_supporter.storage.orm import (
@@ -1465,6 +1487,185 @@ async def costs_cmd(session: AsyncSession, args: argparse.Namespace) -> str:
     return _render_cost_table(report, tenant_label=tenant_label)
 
 
+async def set_promotion_path_cmd(
+    session: AsyncSession, args: argparse.Namespace
+) -> str:
+    """Set or clear a tenant's promotion path (Б-4); the same value writes
+    nothing."""
+    tenant_id = await resolve_tenant_id(session, args.tenant)
+    path = None if args.path == PATH_NONE else PromotionPath(args.path)
+    change = await set_promotion_path(
+        session, tenant_id=tenant_id, path=path, actor=args.actor
+    )
+    before = change.before.value if change.before else PATH_NONE
+    after = change.after.value if change.after else PATH_NONE
+    if not change.changed:
+        return f"unchanged (already so): tenant {tenant_id}  promotion_path={after}"
+    return f"changed: tenant {tenant_id}  promotion_path {before} → {after}"
+
+
+PATH_NONE = "none"
+"""``--path none`` clears the tenant's path."""
+
+_FUNNEL_COUNTS = ("enrolled", "first_submission", "first_purchase", "repeat_purchase")
+_FUNNEL_GROUP_FIELDS: dict[billing_funnel.FunnelScope, tuple[str, ...]] = {
+    "path": ("path",),
+    "tenant": ("tenant_id", "tenant_name"),
+    "course": ("tenant_id", "tenant_name", "course_id", "course_title"),
+    "source": ("source", "source_tag"),
+}
+UNSET = "-"
+"""A group value that is not set: a tenant without a path, an event without a
+campaign tag."""
+
+
+def _group_cells(
+    group: billing_funnel.FunnelGroup, by: billing_funnel.FunnelScope
+) -> list[str]:
+    cells = []
+    for name in _FUNNEL_GROUP_FIELDS[by]:
+        value = getattr(group, name)
+        cells.append(UNSET if value is None else str(value))
+    return cells
+
+
+def _money_text(money: billing_funnel.Money | None) -> str:
+    """``EUR 1500; USD 300`` (minor units); empty where the scope has none."""
+    if money is None:
+        return ""
+    return "; ".join(f"{currency} {minor}" for currency, minor in money) or "0"
+
+
+def _funnel_excluded_line(report: billing_funnel.FunnelReport) -> str:
+    line = f"excluded: {report.excluded_test_students} test students"
+    if report.include_test_students:
+        line += " (--include-test-students)"
+    return line
+
+
+def _row_counts(row: billing_funnel.FunnelRow) -> list[str]:
+    return [str(getattr(row, name)) for name in _FUNNEL_COUNTS]
+
+
+def _render_funnel_text(report: billing_funnel.FunnelReport) -> str:
+    group_headers = list(_FUNNEL_GROUP_FIELDS[report.by])
+    headers = [*group_headers, *_FUNNEL_COUNTS, "purchased_money"]
+    rows = [
+        [
+            *_group_cells(r.group, report.by),
+            *_row_counts(r),
+            _money_text(r.purchased_money),
+        ]
+        for r in report.rows
+    ]
+    total = report.total
+    total_row = [
+        "total",
+        *[""] * (len(group_headers) - 1),
+        *_row_counts(total),
+        _money_text(total.purchased_money),
+    ]
+    first_count = len(group_headers)
+    lines = [
+        f"Funnel (UTC): {report.from_date.isoformat()} .. "
+        f"{report.to_date.isoformat()} (inclusive) | by: {report.by}",
+        *_format_ascii_table(
+            headers,
+            rows,
+            total_row,
+            right_align=set(range(first_count, first_count + len(_FUNNEL_COUNTS))),
+        ),
+        _funnel_excluded_line(report),
+    ]
+    if report.by not in billing_funnel.MONEY_SCOPES:
+        lines.append(
+            "purchased_money: only by path or tenant (a tenant's money is not "
+            "split between its courses)"
+        )
+    return "\n".join(lines)
+
+
+def _render_funnel_csv(report: billing_funnel.FunnelReport) -> str:
+    group_fields = _FUNNEL_GROUP_FIELDS[report.by]
+    fieldnames = ["row_kind", *group_fields, *_FUNNEL_COUNTS, "purchased_money", "note"]
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(fieldnames)
+    for r in report.rows:
+        writer.writerow(
+            [
+                "row",
+                *_group_cells(r.group, report.by),
+                *_row_counts(r),
+                _money_text(r.purchased_money),
+                "",
+            ]
+        )
+    writer.writerow(
+        [
+            "total",
+            *[""] * len(group_fields),
+            *_row_counts(report.total),
+            _money_text(report.total.purchased_money),
+            _funnel_excluded_line(report),
+        ]
+    )
+    return buf.getvalue().rstrip("\n")
+
+
+def _funnel_json_row(
+    row: billing_funnel.FunnelRow, by: billing_funnel.FunnelScope | None
+) -> dict[str, object]:
+    out: dict[str, object] = {}
+    if by is not None:
+        for name in _FUNNEL_GROUP_FIELDS[by]:
+            value = getattr(row.group, name)
+            out[name] = None if value is None else str(value)
+    out.update({name: getattr(row, name) for name in _FUNNEL_COUNTS})
+    out["purchased_money"] = (
+        None if row.purchased_money is None else dict(row.purchased_money)
+    )
+    return out
+
+
+def _render_funnel_json(report: billing_funnel.FunnelReport) -> str:
+    return json.dumps(
+        {
+            "from": report.from_date.isoformat(),
+            "to": report.to_date.isoformat(),
+            "by": report.by,
+            "include_test_students": report.include_test_students,
+            "excluded_test_students": report.excluded_test_students,
+            "rows": [_funnel_json_row(r, report.by) for r in report.rows],
+            "total": _funnel_json_row(report.total, None),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+async def funnel_cmd(session: AsyncSession, args: argparse.Namespace) -> str:
+    """The promotion funnel of a period (Б-4), in a READ ONLY transaction."""
+    await session.execute(text("SET TRANSACTION READ ONLY"))
+    if args.from_date > args.to_date:
+        raise BillingInvalidError(
+            f"--from ({args.from_date.isoformat()}) must be <= "
+            f"--to ({args.to_date.isoformat()})"
+        )
+    report = await billing_funnel.build_funnel(
+        session,
+        from_date=args.from_date,
+        to_date=args.to_date,
+        by=args.by,
+        include_test_students=args.include_test_students,
+    )
+    if args.fmt == "csv":
+        return _render_funnel_csv(report)
+    if args.fmt == "json":
+        return _render_funnel_json(report)
+    return _render_funnel_text(report)
+
+
 def creem_lookup() -> TransactionLookup:
     """Creem's adapter with the application's keys (a test replaces it)."""
     settings = get_settings()
@@ -1729,6 +1930,8 @@ COMMANDS: dict[str, Handler] = {
     "balance": balance,
     "statement": statement,
     "costs": costs_cmd,
+    "set-promotion-path": set_promotion_path_cmd,
+    "funnel": funnel_cmd,
     "set-partner-share": set_partner_share,
     "creem-sync": creem_sync,
     "partner-report": partner_report_cmd,
@@ -1759,6 +1962,34 @@ Refunds (billing_refunds) are not subtracted from students_money_minor and are
 not counted in gift_units.
 Test students (students.is_test_student) are left out of these fields and of
 the students' units unless --include-test-students.
+"""
+
+
+_FUNNEL_FIELDS_HELP = """\
+the promotion funnel of the enrollment events (enrollment_events) whose time
+falls in --from .. --to (UTC dates, inclusive). Read-only. Per row:
+
+  enrolled          enrollment events: an author's grant or a self-enrollment;
+                    enrolled again after a withdrawal is a new event. A
+                    deleted student's events stay.
+  first_submission  of them, events whose student has a homework submission
+                    in that course at or after the event.
+  first_purchase    of them, events whose student's account in that tenant
+                    has a paid purchase at or after the event (up to now, not
+                    only in the period). A gift (admin credit) and a purchase
+                    marked as a test one are not purchases.
+  repeat_purchase   of them, events with two or more such purchases.
+  purchased_money   the sum of those purchases of the row's distinct students,
+                    each from their earliest event in the row, per currency
+                    in minor units, tax included; refunds are not subtracted.
+
+A student enrolled in two courses of one tenant counts in each course, while
+the tenant's money is not split between courses: purchased_money is given by
+path and by tenant only, and is empty by course and by source.
+--by source groups by the grant's source (author | self) and the join link's
+campaign tag (src; "-" = none). --by path: a tenant without a path is "-".
+Test students (students.is_test_student) are left out unless
+--include-test-students; the "excluded" line counts them.
 """
 
 
@@ -1961,6 +2192,59 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.formatter_class = argparse.RawDescriptionHelpFormatter
     p.description = _COSTS_FIELDS_HELP
+
+    p = command(
+        "set-promotion-path", "set or clear a tenant's promotion path", changes=True
+    )
+    p.add_argument("--tenant", required=True, help="tenant id or name")
+    p.add_argument(
+        "--path",
+        required=True,
+        choices=[*(path.value for path in PromotionPath), PATH_NONE],
+        help="own_course | school | author; none clears it",
+    )
+
+    p = command(
+        "funnel",
+        "the promotion funnel: enrolled -> submission -> purchase -> repeat",
+        changes=False,
+    )
+    p.add_argument(
+        "--from",
+        dest="from_date",
+        required=True,
+        type=_utc_date,
+        help="start UTC date YYYY-MM-DD, inclusive",
+    )
+    p.add_argument(
+        "--to",
+        dest="to_date",
+        required=True,
+        type=_utc_date,
+        help="end UTC date YYYY-MM-DD, inclusive",
+    )
+    p.add_argument(
+        "--by",
+        choices=billing_funnel.FUNNEL_SCOPES,
+        default="path",
+        help="grouping (default: path)",
+    )
+    p.add_argument(
+        "--include-test-students",
+        dest="include_test_students",
+        action="store_true",
+        help="count the events of test students too (default: left out and "
+        "counted in the 'excluded' line)",
+    )
+    p.add_argument(
+        "--format",
+        dest="fmt",
+        choices=("text", "csv", "json"),
+        default="text",
+        help="output format (default: text)",
+    )
+    p.formatter_class = argparse.RawDescriptionHelpFormatter
+    p.description = _FUNNEL_FIELDS_HELP
 
     p = command(
         "set-partner-share",

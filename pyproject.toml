@@ -145,6 +145,11 @@ ignore = [
 "tests/integration/test_open_courses_*.py" = ["RUF002", "RUF003"]
 "tests/integration/test_billing_students_money_db.py" = ["RUF002", "RUF003"]
 "tests/integration/test_login_by_email_db.py" = ["RUF002", "RUF003"]
+# Б-4: the task's locks are lettered (а)-(е) in Ukrainian; the migration test
+# runs alembic on a fresh database in a child process (fixed argv, no input).
+"tests/integration/test_enrollment_events_db.py" = ["RUF002", "RUF003"]
+"tests/integration/test_promotion_funnel_db.py" = ["RUF002", "RUF003"]
+"tests/integration/test_promotion_funnel_migration_db.py" = ["RUF002", "S603"]
 # Б-2: the locks of the student deletion are lettered (а)-(є) in Ukrainian.
 "tests/integration/test_student_deletion_db.py" = ["RUF002", "RUF003"]
 "tests/unit/test_review_unchanged_note.py" = ["RUF002"]

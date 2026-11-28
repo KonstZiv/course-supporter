@@ -599,6 +599,49 @@ async def test_gg_another_tenants_courses_and_students_are_not_seen(
     assert their_body["unlinked"] == NOTHING
 
 
+async def test_gg_own_courses_excludes_other_tenants_courses(
+    session_factory: Factory, worlds: list[World]
+) -> None:
+    ours = await _world(session_factory, worlds, ["Наш курс"], {})
+    theirs = await _world(session_factory, worlds, ["Чужий курс"], {})
+    our_course = ours.courses["Наш курс"].node_id
+    their_course = theirs.courses["Чужий курс"].node_id
+
+    async with session_factory() as session:
+        titles = await students_money._own_courses(
+            session, ours.tenant_id, {our_course, their_course}
+        )
+
+    assert their_course not in titles
+    assert titles == {our_course: "Наш курс"}
+
+
+async def test_gg_own_students_excludes_other_tenants_students(
+    session_factory: Factory, worlds: list[World]
+) -> None:
+    ours = await _world(
+        session_factory,
+        worlds,
+        ["Наш курс"],
+        {"alice": Who("Аліса"), "gone": Who("Видалений", deleted=True)},
+    )
+    theirs = await _world(session_factory, worlds, ["Чужий курс"], {"eve": Who("Єва")})
+    alice_id = ours.learners["alice"].student_id
+    gone_id = ours.learners["gone"].student_id
+    eve_id = theirs.learners["eve"].student_id
+
+    async with session_factory() as session:
+        students = await students_money._own_students(
+            session, ours.tenant_id, {alice_id, gone_id, eve_id}
+        )
+
+    assert eve_id not in students
+    assert students == {
+        alice_id: ("Аліса", False),
+        gone_id: (None, True),
+    }
+
+
 # ── (д) the period: both days included, invalid_period, an empty period ──────────
 
 

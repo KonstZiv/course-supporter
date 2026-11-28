@@ -21,12 +21,14 @@ Interface:
     made mandatory themselves (2026-11-17). Pure, as :func:`apply_edit`.
 
 The rules:
-    * Nothing is composed here. No route composes a list (``TASK.md``
-      section 9, decision 1): it is composed at the first submission of a
-      student's work, and until then the reading says so and an edit is
-      refused — there is nothing to edit yet.
+    * Nothing is composed here. A list is composed by the first submission of
+      a student's work (``TASK.md`` section 9, decision 1) or — since DD-SP-DR,
+      when the author asks — by the work :meth:`CriteriaEditService.compose_asked`
+      reads the state for; until one of them has, the reading says so and an
+      edit is refused — there is nothing to edit yet.
     * While no list is in force, the reading says truthfully why — not yet
-      asked for, being composed, or not composed and for what reason — how
+      asked for, being composed (a composition's claim, or the author's request
+      queued and not yet claimed), or not composed and for what reason — how
       many students' works wait for it, and what the author can do
       (:class:`CriteriaReasonCode`; task 09b, ``PRE-FLIGHT.md`` 9.2).
     * Which list is in force is
@@ -54,6 +56,15 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
+from sqlalchemy import func, select
+
+from course_supporter.billing.charging import charging_possible
+from course_supporter.billing.estimates import (
+    criteria_decomposition_task_chars,
+    preparation_e_usd,
+)
+from course_supporter.billing.kinds import ActionKind
+from course_supporter.billing.quotes import author_quote, require_enough
 from course_supporter.concept_dedup import normalization_key
 from course_supporter.criteria_kinds import WeightCategory
 from course_supporter.criteria_list_state import CriteriaListState
@@ -71,16 +82,26 @@ from course_supporter.homework.criteria_form import (
 from course_supporter.homework.criteria_list_service import (
     CriteriaInForce,
     choose_in_force,
+    claim_is_abandoned,
     has_ready_summary,
+    node_description_of,
     recorded_stop,
 )
+from course_supporter.homework.task_context import load_task_context
+from course_supporter.jobs.job_type import JOB_SUBJECT_TYPE, JobType
 from course_supporter.llm.error_categories import LadderStop
 from course_supporter.models.source import AssignmentType
 from course_supporter.storage.homework_repository import HomeworkRepository
+from course_supporter.storage.job_repository import JobRepository
 from course_supporter.storage.node_summary_final_repository import (
     NodeSummaryFinalRepository,
 )
-from course_supporter.storage.orm import AuthoredDocument, CourseNode, NodeSummaryFinal
+from course_supporter.storage.orm import (
+    AuthoredDocument,
+    CourseNode,
+    Job,
+    NodeSummaryFinal,
+)
 from course_supporter.storage.task_criteria_list_repository import (
     TaskCriteriaListRepository,
 )
@@ -114,7 +135,8 @@ class CriteriaRefusalCode(StrEnum):
     """Not a short task, a task or a project: a test is checked by its key."""
 
     TASK_NOT_READY = "TASK_NOT_READY"
-    """The task has not finished processing: it has no version yet."""
+    """The task has not finished processing: it has no version yet, or no ready
+    summary to compose a list from."""
 
     AWAITING_FIRST_SUBMISSION = "AWAITING_FIRST_SUBMISSION"
     """No list is in force yet: there is nothing to edit (the reading says why)."""
@@ -193,11 +215,14 @@ class CriteriaReasonCode(StrEnum):
 
 AWAITING_FIRST_SUBMISSION_MESSAGE: Final = (
     "Перелік критеріїв буде складено після першої подачі роботи студентом на "
-    "перевірку, після цього його можна поправити."
+    "перевірку, після цього його можна поправити. Ви можете скласти його й "
+    "зараз, не чекаючи першої подачі."
 )
 """What the author reads while no list is in force (``TASK.md`` section 9,
-decision 1) — a sentence in Ukrainian, as the decision sets it; the status
-beside it is the code a surface picks its own words by."""
+decision 1) — Ukrainian, as the decision sets it; the status beside it is the
+code a surface picks its own words by. The last sentence is DD-SP-DR's (the
+operator, 2026-11-27): the author may compose the list before the first
+submission, and edit it after."""
 
 COMPOSING_MESSAGE: Final = (
     "Перелік критеріїв складається зараз. Роботи студентів, що чекають на "
@@ -313,8 +338,33 @@ class _Task:
     task_type: str
 
 
+class ComposeAction(StrEnum):
+    """What a request to compose the list does, given the task's state now."""
+
+    ALREADY_IN_FORCE = "already_in_force"
+    """A list is in force: answer with it, queue nothing."""
+
+    UNDER_WAY = "under_way"
+    """One is being composed — a claim's or the request's own job: queue nothing."""
+
+    TASK_BUSY = "task_busy"
+    """Another job of the task is in flight (its processing, a key's
+    explanations): the database allows one, so this request is early."""
+
+    QUEUE = "queue"
+    """Queue one composition for the task's current version."""
+
+
+@dataclass(frozen=True, slots=True)
+class ComposeAsk:
+    """What :meth:`CriteriaEditService.compose_asked` decided, and the reading."""
+
+    action: ComposeAction
+    view: CriteriaView
+
+
 class CriteriaEditService:
-    """What the author's three routes answer about a task's criteria list."""
+    """What the author's routes answer about a task's criteria list."""
 
     def __init__(self, session: AsyncSession) -> None:
         """Bind the service to the request's session; the caller commits."""
@@ -386,6 +436,109 @@ class CriteriaEditService:
         await TaskCriteriaOverrideRepository(self._session).reset(task.document.id)
         return await self._view(task)
 
+    async def compose_asked(self, authored_document_id: uuid.UUID) -> ComposeAsk:
+        """What a request to compose the task's list must do now (DD-SP-DR).
+
+        Reads, in this order, and writes nothing: a list in force — nothing to
+        do; a composition under way — a live claim's or the request's own job —
+        nothing to add (a claim whose claimer has been silent so long that a
+        submission would take it over, :func:`claim_is_abandoned`, is not under
+        way: the work this request queues takes it over by the same road, and
+        that is how the author's request gets past a dead claim); another job
+        of the task in flight — it cannot be
+        queued, the database allows one job per task; the task not processed —
+        there is nothing to compose from; otherwise queue it.
+
+        Raises:
+            CriteriaRefusedError: ``NOT_A_TEXT_TASK``; ``TASK_NOT_READY`` — the
+                task has no version, or no ready summary and nothing in flight
+                that would make one.
+        """
+        task = await self._require_text_task(authored_document_id)
+        view = await self._view(task)
+        if view.in_force is not None:
+            return ComposeAsk(ComposeAction.ALREADY_IN_FORCE, view)
+        if view.status is CriteriaStatus.COMPOSING and not await self._abandoned(task):
+            return ComposeAsk(ComposeAction.UNDER_WAY, view)
+        if await self._in_flight_job(task.document.id) is not None:
+            return ComposeAsk(ComposeAction.TASK_BUSY, view)
+        if not await has_ready_summary(self._session, task.document.id):
+            raise CriteriaRefusedError(
+                CriteriaRefusalCode.TASK_NOT_READY,
+                "the task has no ready summary yet — its text is not processed, "
+                "so there is nothing to compose a list from",
+            )
+        return ComposeAsk(ComposeAction.QUEUE, view)
+
+    async def _abandoned(self, task: _Task) -> bool:
+        """Is the task version's pending claim one a submission would take over?
+
+        False while the request's own job is in flight — it is the one that
+        will take the claim over — and when the version has no pending claim.
+        """
+        document = task.document
+        if await self._composition_in_flight(document.id):
+            return False
+        attempt = await TaskCriteriaListRepository(
+            self._session
+        ).get_latest_for_version(
+            document.id,
+            source_content_hash=task.content_hash,
+            source_task_type=task.task_type,
+        )
+        if (
+            attempt is None
+            or attempt.deleted_at is not None
+            or attempt.state != CriteriaListState.PENDING
+        ):
+            return False
+        # The database's clock, the one ``claimed_at`` is written by.
+        now = (await self._session.execute(select(func.now()))).scalar_one()
+        return claim_is_abandoned(attempt.claimed_at, now)
+
+    async def require_units_to_compose(self, authored_document_id: uuid.UUID) -> None:
+        """The threshold of the author's own action, before the work is queued.
+
+        Composing from the author's button is the author's own action
+        (``charging.threshold_applies``, ``own_action=True``): an author
+        without credit starts it only when ``available >= P``, P the price of
+        the composition as the work will reserve it (same E, same characters:
+        :func:`criteria_decomposition_task_chars`). An author with credit is
+        never stopped; with charging off, nothing is checked. The work itself
+        is unchanged — a composition a submission starts has no threshold.
+
+        Raises:
+            UnitsRefusedError: the author cannot cover P (the route answers
+                **402** ``insufficient_units``, as a submission's refusal).
+        """
+        if not charging_possible():
+            return
+        document = await self._session.get(AuthoredDocument, authored_document_id)
+        if document is None:  # pragma: no cover — read just before
+            return
+        node = await self._session.get(CourseNode, document.course_node_id)
+        if node is None:  # pragma: no cover — a document always has its node
+            return
+        title, description, text = await load_task_context(
+            self._session, authored_document_id
+        )
+        final = await NodeSummaryFinalRepository(self._session).get_by_course_node_id(
+            document.course_node_id
+        )
+        quote = await author_quote(
+            self._session,
+            action_kind=ActionKind.TASK_PREPARATION,
+            tenant_id=node.tenant_id,
+            course_node_id=document.course_root_id,
+            e_usd=preparation_e_usd(
+                kind="criteria_decomposition",
+                task_chars=criteria_decomposition_task_chars(
+                    title, description, text, node_description_of(final)
+                ),
+            ),
+        )
+        require_enough(quote, "the criteria list cannot be composed")
+
     async def _require_text_task(self, authored_document_id: uuid.UUID) -> _Task:
         """The task, if it is a live text task that has a version."""
         document = await self._session.get(AuthoredDocument, authored_document_id)
@@ -447,10 +600,14 @@ class CriteriaEditService:
     ) -> tuple[CriteriaStatus, CriteriaReasonCode | None]:
         """Why no list is in force for the task's version, read from its rows.
 
-        In this order: an attempt under way; the last attempt failed — by how
-        it ended; works wait with no attempt — by whether the task is
-        processed; otherwise nothing has asked for a list yet.
+        In this order: the author's request queued or running (a ``Job`` of its
+        own, so the state is truthful before the work has claimed the list); an
+        attempt under way; the last attempt failed — by how it ended; works
+        wait with no attempt — by whether the task is processed; otherwise
+        nothing has asked for a list yet.
         """
+        if await self._composition_in_flight(task.document.id):
+            return CriteriaStatus.COMPOSING, None
         attempt = await TaskCriteriaListRepository(
             self._session
         ).get_latest_for_version(
@@ -479,6 +636,18 @@ class CriteriaEditService:
                 else CriteriaReasonCode.TASK_NOT_PROCESSED
             )
         return CriteriaStatus.AWAITING_FIRST_SUBMISSION, None
+
+    async def _composition_in_flight(self, authored_document_id: uuid.UUID) -> bool:
+        """Is the author's request for a list queued or running for this task?"""
+        job = await self._in_flight_job(authored_document_id)
+        return job is not None and job.job_type == JobType.CRITERIA_COMPOSITION.value
+
+    async def _in_flight_job(self, authored_document_id: uuid.UUID) -> Job | None:
+        """The task's in-flight job, whichever it is — the one
+        ``uq_jobs_subject_in_flight`` allows."""
+        return await JobRepository(self._session).get_inflight_job_for_subject(
+            JOB_SUBJECT_TYPE[JobType.CRITERIA_COMPOSITION], authored_document_id
+        )
 
     async def _waiting(self, document: AuthoredDocument) -> int:
         """How many live revisions of the task wait for its criteria list."""

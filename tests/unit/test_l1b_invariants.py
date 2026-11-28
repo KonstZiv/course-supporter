@@ -33,13 +33,14 @@ _SRC = Path(course_supporter.__file__).parent
 _VERSIONS = Path(course_supporter.__file__).parents[2] / "migrations" / "versions"
 _MIGRATION = _VERSIONS / "l1b_job_subject.py"
 # The authority for ck_jobs_subject_type_legal is whichever migration re-added
-# it LAST: №21 took it from l1b with the document_preparation pair, and
-# mentor-rebuild task 06 took it from №21 with the key_explanation pair. l1b
+# it LAST: №21 took it from l1b with the document_preparation pair,
+# mentor-rebuild task 06 took it from №21 with the key_explanation pair, and
+# DD-SP-DR took it from task 06 with the criteria_composition pair. l1b
 # stays the authority for the uq_jobs_subject_in_flight index it also froze
 # (untouched by either). Moving this pointer is how a widening is declared —
 # leaving it behind would let code and DB drift apart while the lock stayed
 # green against a superseded snapshot.
-_PREP_MIGRATION = _VERSIONS / "key_explanation_jobtype.py"
+_PREP_MIGRATION = _VERSIONS / "criteria_composition_jobtype.py"
 
 
 def _load_module(path: Path, name: str) -> ModuleType:
@@ -183,9 +184,9 @@ def test_migration_pairs_match_code() -> None:
     """The authority migration's frozen legal-pair CHECK == JOB_SUBJECT_TYPE_PAIRS.
 
     The authority is the migration that re-added the constraint LAST — today
-    task 06's ``key_explanation_jobtype`` — through its
+    DD-SP-DR's ``criteria_composition_jobtype`` — through its
     ``_SUBJECT_TYPE_CONDITION_NEW`` (the SQL it re-adds), not l1b's superseded
-    ``_TYPE_CONDITION`` nor №21's, which task 06 in turn superseded.
+    ``_TYPE_CONDITION`` nor №21's or task 06's, which it in turn superseded.
     """
     mig = _load_prep_migration()
     assert _legal_pairs_from_check(mig._SUBJECT_TYPE_CONDITION_NEW) == set(

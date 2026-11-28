@@ -2460,3 +2460,43 @@ router=..., config=...)`) питає модель рішень Gemini Decision 1
 Замки — `tests/unit/test_homework/test_attempt_memory.py`, `test_attempt_memory_measure.py`,
 `tests/unit/test_prompts/test_text_stage_inputs_unchanged.py`,
 `test_calibrated_prompts_unchanged.py`, `tests/integration/test_attempt_memory_db.py`.
+
+---
+
+## Огляд курсу для автора — двадцять перша частина (М-10)
+
+### 21. Огляд курсу — `api/routes/course_homework.py`, `storage/course_homework_repository.py`
+
+**Вхід.** Ключ орендаря зі сферою `prep` і курс (кореневий вузол). **Вихід.** Два читання, лише
+читання: результати по завданнях і таблиця «студенти й завдання». Нічого не пишуть і не рахують
+наново правила заліку: усе, що тут «зараховано» чи «бал», — те, що бачить студент.
+
+| маршрут | що дає |
+|---|---|
+| `GET /api/v1/nodes/{course_id}/homework/summary?include_test_students=` | по завданню курсу (`task`, `short_task`, `project`, `test`) у порядку курсу: `students_submitted`, `submissions`, `pass_share`, `average_score`, `attempts_to_pass` (медіана, середнє), до трьох `hardest_criteria` |
+| `GET /api/v1/nodes/{course_id}/homework/students?include_test_students=&limit=&offset=` | `tasks` — стовпці (ті самі, що в зведенні, в тому самому порядку); `students` — рядки за іменем, у кожному `cells` за `task_id`: `state` (`not_submitted`, `in_review`, `passed`, `not_passed`), `best_score`, `attempts`, `last_submitted_at` |
+
+**Межа даних — одна для обох** (`_work_conditions`, `_roster_conditions`): курс і вузли — орендаря
+ключа (чужий, дочірній, видалений чи невідомий — один 404 «Course not found.», як в
+`enrollment_links`); студент не видалений, а службовий (`students.is_test_student`) — лише з
+`include_test_students=true`, і скільки їх виключено, сказано у відповіді (`excluded_test_students`);
+робота — на завдання цього курсу (`course_node_id` — корінь), не видалена й **з рецензією**
+(`homework_repository.ATTEMPT_STATUSES` — «спроба» задачі 13; копія рецензії теж спроба). Подача «в
+роботі» (клітинка `in_review`) — будь-який стан, що не є спробою й не є відмовою, невідповідністю чи
+збоєм (`IN_FLIGHT_STATUSES`; дві затримки — `awaiting_funds`, `awaiting_criteria` — теж у ній).
+
+**«Зараховано» і бал** — одне визначення з екраном здач студента й порталом: `curated_verdict`
+(`_portal_shared`) і колонка `score`; `review_result` окремо не читається. Тексти робіт, рецензій і
+цитат у відповідь не потрапляють; єдиний текст — формулювання критерію з переліку в силі.
+
+**Критерії, які студенти не виконують.** З **останньої** спроби студента, проти переліку в силі
+(`choose_in_force`), лише `must` і `should` (`may` — не вада). Остання спроба, що є копією рецензії
+(`dedup_of`), власних вердиктів не має й стоїть на спробі, яку повторює. Спроба, оцінена за раніше
+чинним переліком, або без вердиктів (тест, стара рецензія), не додає нічого: ідентифікатори
+стійкі лише в межах одного переліку. Основа частки — студенти, чия остання спроба оцінена за цим
+переліком (`judged_students`).
+
+**Швидкодія.** Фіксоване число запитів на маршрут, не залежне від числа студентів і завдань:
+зведення — 8 (курс, дерево, завдання, два переліки, роботи, підсумок вердиктів, виключені службові),
+таблиця — 7 (курс, дерево, завдання, сторінка студентів, їх число, виключені службові, роботи
+сторінки). Замок — `tests/integration/test_course_homework_overview_db.py::TestQueries`.

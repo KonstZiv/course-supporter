@@ -238,6 +238,58 @@ class TestOnlyTheFailedCriteriaAreLinked:
         ]
 
 
+class TestAMayTheWorkLacksIsNotLookedUp:
+    """DD-SP-DQ (2026-11-27): c3, a "may" not met, gets no search of the course.
+
+    Its row stays "not met"; the course teaches what it is about, so a search
+    would find a place — and the search is not made, for no remark is written
+    on it.
+    """
+
+    async def test_the_finder_is_not_asked_about_it(
+        self,
+        db_session: AsyncSession,
+        world: _World,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        spy = _SpyFinder()
+        monkeypatch.setattr(_FINDER, lambda _session: spy)
+        await _verdicts(db_session, world, unmet=("c1", "c3"))
+
+        found = await look_up_course_links(db_session, world.submission)
+
+        ((_, failed),) = spy.asked
+        assert [c.id for c in failed] == ["c1"]
+        assert [c.item_id for c in found.criteria] == ["c1"]
+        assert await _kept(db_session, world) == found
+
+    async def test_a_taught_may_gets_no_place_from_the_real_finder(
+        self, db_session: AsyncSession, world: _World
+    ) -> None:
+        await _verdicts(db_session, world, unmet=("c1", "c3"))
+
+        found = await look_up_course_links(db_session, world.submission)
+
+        assert [c.item_id for c in found.criteria] == ["c1"]
+        assert len(found.candidates_of("c1")) == 1
+        assert found.candidates_of("c3") == ()
+
+    async def test_nothing_but_a_may_not_met_is_nothing_failed(
+        self,
+        db_session: AsyncSession,
+        world: _World,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        spy = _SpyFinder()
+        monkeypatch.setattr(_FINDER, lambda _session: spy)
+        await _verdicts(db_session, world, unmet=("c3",))
+
+        found = await look_up_course_links(db_session, world.submission)
+
+        assert found == FoundCourseLinks(criteria=())
+        assert spy.asked == []
+
+
 class TestNothingFailed:
     async def test_an_empty_result_is_kept_and_the_finder_is_never_asked(
         self,

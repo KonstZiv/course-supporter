@@ -32,6 +32,7 @@ from course_supporter.homework.text_result import (
     FixedWords,
     build_text_review,
     link_authenticity,
+    unmet_criteria,
 )
 from course_supporter.homework.verdict_explanation import (
     CriterionRemark,
@@ -449,6 +450,36 @@ class TestLinkAuthenticity:
 
     def test_nothing_unmet_is_no_claim(self) -> None:
         assert link_authenticity([], {"c1": ["a"]}) is None
+
+
+class TestTheCriteriaTheReviewRemarksOn:
+    """DD-SP-DQ (2026-11-27): a "may" the work lacks is none of them."""
+
+    def test_a_may_not_met_is_not_among_them(self) -> None:
+        rows = [
+            _criterion("c1", WeightCategory.MUST, VerdictValue.NOT_MET),
+            _criterion("c2", WeightCategory.MAY, VerdictValue.NOT_MET),
+            _criterion("c3", WeightCategory.SHOULD, VerdictValue.NOT_MET),
+            _point("c3.p1", VerdictValue.NOT_MET),
+        ]
+
+        assert unmet_criteria(rows) == ["c1", "c3"]
+
+    def test_a_met_may_and_a_met_should_are_not_either(self) -> None:
+        rows = [
+            _criterion("c1", WeightCategory.MAY, VerdictValue.MET),
+            _criterion("c2", WeightCategory.SHOULD, VerdictValue.MET),
+        ]
+
+        assert unmet_criteria(rows) == []
+
+    def test_the_authenticity_does_not_count_it(self) -> None:
+        rows = [
+            _criterion("c1", WeightCategory.SHOULD, VerdictValue.NOT_MET),
+            _criterion("c2", WeightCategory.MAY, VerdictValue.NOT_MET),
+        ]
+
+        assert link_authenticity(unmet_criteria(rows), {"c1": ["a link"]}) == 1.0
 
 
 class TestDocstrings:

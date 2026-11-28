@@ -446,6 +446,62 @@ class TestACriterionCheckedByPoints:
         assert remark.position == Position(kind="file", value="app.py:7")
 
 
+class TestNoPlaceForAMayTheWorkLacks:
+    """DD-SP-DQ (2026-11-27): a "may" not met has no remark, so no place."""
+
+    @staticmethod
+    def _located(
+        item_id: str, weight: WeightCategory | None, kind: Any
+    ) -> VerdictRecord:
+        return VerdictRecord(
+            item_id,
+            kind,
+            weight,
+            NOT_MET,
+            NOT_MET,
+            quote="a line",
+            quote_file="app.py",
+            quote_lines=(7, 7),
+        )
+
+    def test_a_may_with_a_place_gets_none(self) -> None:
+        rows = [self._located("c3", WeightCategory.MAY, CRITERION)]
+
+        assert problem_positions(rows) == {}
+
+    def test_the_points_of_a_may_get_none_either(self) -> None:
+        rows = [
+            VerdictRecord("c3", CRITERION, WeightCategory.MAY, NOT_MET, None),
+            self._located("c3.p1", None, POINT),
+        ]
+
+        assert problem_positions(rows) == {}
+
+    def test_a_should_beside_it_keeps_its_place(self) -> None:
+        rows = [
+            self._located("c2", WeightCategory.SHOULD, CRITERION),
+            self._located("c3", WeightCategory.MAY, CRITERION),
+        ]
+
+        assert problem_positions(rows) == {
+            "c2": Position(kind="file", value="app.py:7")
+        }
+
+    def test_a_met_may_has_no_problem_place_either(self) -> None:
+        met = VerdictRecord(
+            "c3",
+            CRITERION,
+            WeightCategory.MAY,
+            MET,
+            MET,
+            quote="a line",
+            quote_file="app.py",
+            quote_lines=(7, 7),
+        )
+
+        assert problem_positions([met]) == {}
+
+
 @dataclass(frozen=True)
 class _Earlier:
     """An earlier verdict, as ``previous_verdicts`` returns its rows."""

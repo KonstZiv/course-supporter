@@ -325,6 +325,11 @@ class TestShippedFile:
         shared, went 10 -> 11, so the project's version
         ``ev1:31e41e982208fcef`` -> ``ev1:035d4e8fb7fe6854``; its prompts did
         not move, and its evaluation is shown no memory.
+        Moved on purpose by DD-SP-DQ (the operator's decision of 2026-11-27),
+        rules 11 -> 12: a "may" the work does not have no longer lowers the
+        score and gets no remark — the verdict rules, shared, went 11 -> 12,
+        so the project's version ``ev1:035d4e8fb7fe6854`` ->
+        ``ev1:523bf33c6ff37d36``; its prompts did not move.
         """
         shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
         before = shipped_with_todays_mentor_for(AssignmentType.PROJECT)
@@ -333,10 +338,10 @@ class TestShippedFile:
             return evaluator_version(task_type, config, prompt_base_path=_REPO_ROOT)
 
         assert version(AssignmentType.PROJECT, before) is None
-        assert version(AssignmentType.PROJECT, shipped) == "ev1:035d4e8fb7fe6854"
+        assert version(AssignmentType.PROJECT, shipped) == "ev1:523bf33c6ff37d36"
         for text_type in (AssignmentType.TASK, AssignmentType.SHORT_TASK):
             assert version(text_type, shipped) == version(text_type, before)
-        assert criteria_verdicts.VERDICT_RULES_VERSION == 11
+        assert criteria_verdicts.VERDICT_RULES_VERSION == 12
 
     def test_the_text_types_version_is_unchanged_by_the_traces(self) -> None:
         """Lock (2026-11-16): the call traces leave the evaluator as it was.
@@ -374,11 +379,17 @@ class TestShippedFile:
         request about a repeated attempt sees the difference from the earlier
         attempt and its earlier verdicts, so the verdict rules went 10 -> 11
         and the version ``ev1:b7d174917a859921`` -> ``ev1:f260114be44c51bd``.
+
+        Moved on purpose by DD-SP-DQ (the operator's decision of 2026-11-27),
+        rules 11 -> 12: a "may" the work does not have no longer lowers the
+        score and gets no remark, so the verdict rules went 11 -> 12 and the
+        version ``ev1:f260114be44c51bd`` -> ``ev1:3c4b6b79794ffb49``. No prompt
+        and no first rung moved: the code's share alone.
         """
         shipped = load_path_config(_REPO_ROOT / "config" / "submission_paths.yaml")
 
         assert (
             evaluator_version(AssignmentType.TASK, shipped, prompt_base_path=_REPO_ROOT)
-            == "ev1:f260114be44c51bd"
+            == "ev1:3c4b6b79794ffb49"
         )
-        assert criteria_verdicts.VERDICT_RULES_VERSION == 11
+        assert criteria_verdicts.VERDICT_RULES_VERSION == 12
